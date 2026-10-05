@@ -109,7 +109,12 @@ from experiments.grug.fast_track.model import (
     write_ngram_stats,
 )
 from experiments.grug.fast_track.muon_probe import MuonProbe
-from experiments.grug.fast_track.optimizer import expert_consistency_metrics, magma_metrics, optimizer_diagnostics
+from experiments.grug.fast_track.optimizer import (
+    expert_consistency_metrics,
+    hyperball_metrics,
+    magma_metrics,
+    optimizer_diagnostics,
+)
 from experiments.grug.fast_track.snr_probe import SnrProbe
 from experiments.grug.fast_track.stiefel import _msign
 from experiments.grug.fast_track.weight_attribution import AttributionWriter, leaf_name, per_layer_sum, rails_by_name
@@ -1616,6 +1621,7 @@ def _make_train_step(
             updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
             metrics.update(optimizer_diagnostics(opt_state))
             metrics.update(magma_metrics(opt_state))
+            metrics.update(hyperball_metrics(opt_state))
             metrics.update(expert_consistency_metrics(opt_state))
             params = optax.apply_updates(qb_params, updates)
             if params.config.dual_attn_prev:

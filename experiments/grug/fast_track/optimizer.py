@@ -15,7 +15,7 @@ from levanter.optim.config import OptimizerConfig, _convert_frac_or_steps
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
-from experiments.grug.fast_track.adamh import scale_by_adamh
+from experiments.grug.fast_track.adamh import ScaleByAdamHState, scale_by_adamh
 from experiments.grug.fast_track.eig_muon import EIG_MODES, scale_by_eig_direction
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _target_named_sharding
 from experiments.grug.fast_track.okls import OKLS_MATMUL_DTYPES, scale_with_grug_okls
@@ -61,8 +61,44 @@ def _pin_sharding(x, ref):
     return jax.sharding.reshard(x, sharding) if sharding is not None else x
 
 
+class _StepWithStats(NamedTuple):
+    """One leaf's hyperball update and its per-sphere stats (a distinct type: optax's MaskedNode is a tuple too)."""
+
+    update: jax.Array
+    stats: jax.Array
+
+
+HYPERBALL_STATS = ("decay", "cos", "rescale")
+
+
+def _hyperball_sphere_axes(param: jax.Array, per_expert: bool) -> tuple[int, ...]:
+    """Axes one hyperball sphere spans: the whole matrix, each stacked layer, or each (layer, expert)."""
+    if param.ndim == 2:
+        return (0, 1)
+    return (2, 3) if per_expert and param.ndim == 4 else tuple(range(1, param.ndim))
+
+
+def _hyperball_stats_init(params, per_expert: bool):
+    """Zero ``[3, *sphere]`` (decay, radial cosine, rescale) per leaf; see ``_scale_invariant_hyperball_updates``."""
+
+    def leaf(p):
+        if p is None or not hasattr(p, "ndim"):
+            return None
+        axes = _hyperball_sphere_axes(p, per_expert)
+        sphere = tuple(1 if i in axes else d for i, d in enumerate(p.shape))
+        return jnp.zeros((len(HYPERBALL_STATS), *sphere), jnp.float32)
+
+    return jax.tree.map(leaf, params, is_leaf=lambda x: x is None)
+
+
 def _scale_invariant_hyperball_updates(
-    params, direction_updates, learning_rate, per_expert: bool = False, lr_mults=None, cautious_wd: float = 0.0
+    params,
+    direction_updates,
+    learning_rate,
+    per_expert: bool = False,
+    lr_mults=None,
+    cautious_wd: float = 0.0,
+    with_stats: bool = False,
 ):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update). Stacked leaves take one sphere per layer, and
@@ -70,7 +106,15 @@ def _scale_invariant_hyperball_updates(
     ``lr_mults`` (a tree like ``params``, leaves broadcastable per sphere, or None) scales each step's
     learning rate; a zero multiplier leaves that sphere where it is. ``cautious_wd`` > 0 adds cautious weight decay
     inside the sphere (arXiv 2510.12402): the coordinates whose update agrees in sign with the weight shrink by
-    ``lr * cautious_wd`` before the re-projection, which reshapes the matrix at a fixed norm."""
+    ``lr * cautious_wd`` before the re-projection, which reshapes the matrix at a fixed norm.
+
+    ``with_stats`` also returns, per sphere, ``HYPERBALL_STATS`` = ``[decay, cos, rescale]``: the re-projection
+    multiplies the stepped matrix ``W + u`` by ``1 - decay = |W| / |W + u|``, the weight decay the hyperball implies
+    on that step; ``cos = <W, u> / (|W| |u|)`` is the step's radial cosine; and ``rescale = lr |W| / |d|`` is the
+    factor the step multiplies the incoming direction ``d`` by (``u = -rescale * d``).
+    ``|W + u|^2 = |W|^2 + 2 <W, u> + |u|^2``, so an orthogonal step decays only by its second-order
+    ``|u|^2 / 2|W|^2``, an outward one more, an inward one less (negative decay: the projection grows the matrix
+    back)."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
     if lr_mults is None:
         lr_mults = jax.tree.map(lambda _: None, params)
@@ -81,6 +125,8 @@ def _scale_invariant_hyperball_updates(
         if not hasattr(param, "ndim"):
             return update
         lr = learning_rate if lr_mult is None else learning_rate * lr_mult
+        if with_stats:
+            return _hyperball_step_with_stats(param, update, lr, per_expert, cautious_wd)
         if param.ndim == 2:
             # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
             # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
@@ -103,7 +149,37 @@ def _scale_invariant_hyperball_updates(
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-    return jax.tree.map(scale_invariant_update, params, direction_updates, lr_mults, is_leaf=lambda x: x is None)
+    out = jax.tree.map(scale_invariant_update, params, direction_updates, lr_mults, is_leaf=lambda x: x is None)
+    if not with_stats:
+        return out
+    is_pair = lambda x: x is None or isinstance(x, _StepWithStats)  # noqa: E731
+    updates = jax.tree.map(lambda x: x.update if isinstance(x, _StepWithStats) else x, out, is_leaf=is_pair)
+    stats = jax.tree.map(lambda x: x.stats if isinstance(x, _StepWithStats) else x, out, is_leaf=is_pair)
+    return updates, stats
+
+
+def _hyperball_step_with_stats(param, update, lr, per_expert: bool, cautious_wd: float):
+    """``_scale_invariant_hyperball_updates``'s step for one leaf, plus its ``[3, *sphere]`` ``HYPERBALL_STATS``."""
+    axes = _hyperball_sphere_axes(param, per_expert)
+
+    def sphere_sum(x):
+        return jnp.sum(x, axis=axes, keepdims=True)
+
+    w32 = param.astype(jnp.float32)
+    param_norm = jnp.sqrt(sphere_sum(jnp.square(w32)))
+    update_norm = jnp.sqrt(sphere_sum(jnp.square(update.astype(jnp.float32))))
+    rescale = lr * param_norm / jnp.maximum(update_norm, 1e-10)
+    new_param = param - update * rescale
+    if cautious_wd:
+        new_param = new_param - lr * cautious_wd * jnp.where(update * param > 0, param, 0)
+    new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
+    new_param_norm = jnp.sqrt(sphere_sum(jnp.square(new_param.astype(jnp.float32))))
+    step = new_param.astype(jnp.float32) - w32
+    step_norm = jnp.sqrt(sphere_sum(jnp.square(step)))
+    decay = 1.0 - param_norm / jnp.maximum(new_param_norm, 1e-10)
+    cos = sphere_sum(w32 * step) / jnp.maximum(param_norm * step_norm, 1e-20)
+    stats = jax.lax.stop_gradient(jnp.stack([decay, cos, jnp.broadcast_to(rescale, decay.shape)]))
+    return _StepWithStats(new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param, stats)
 
 
 MUONH_RETRACTIONS = ("frobenius", "spectral")
@@ -722,6 +798,32 @@ def magma_metrics(opt_state) -> dict[str, jax.Array]:
     return {"train/magma_scale_mean": jnp.mean(flat), "train/magma_scale_min": jnp.min(flat)}
 
 
+def hyperball_metrics(opt_state) -> dict[str, jax.Array]:
+    """``train/hyperball/<matrix>[/L<i>]/<stat>`` for every ``HYPERBALL_STATS`` from the MuonH
+    (``MuonHState.hyperball``) and AdamH (``ScaleByAdamHState.hyperball``) states, one per stacked layer;
+    per-expert spheres log the per-layer mean plus ``decay_max``."""
+    is_state = lambda x: isinstance(x, (MuonHState, ScaleByAdamHState))  # noqa: E731
+    trees = [
+        x.hyperball for x in jax.tree.leaves(opt_state, is_leaf=is_state) if is_state(x) and x.hyperball is not None
+    ]
+    metrics = {}
+    for tree in trees:
+        for path, stats in jax.tree_util.tree_flatten_with_path(tree)[0]:
+            name = jax.tree_util.keystr(path, simple=True, separator=".")
+            if stats.ndim <= 3:  # an unstacked matrix: one sphere
+                for k, stat in enumerate(HYPERBALL_STATS):
+                    metrics[f"train/hyperball/{name}/{stat}"] = stats[k].reshape(())
+                continue
+            per_layer = stats.reshape(stats.shape[0], stats.shape[1], -1)
+            for i in range(per_layer.shape[1]):
+                prefix = f"train/hyperball/{name}/L{i}"
+                for k, stat in enumerate(HYPERBALL_STATS):
+                    metrics[f"{prefix}/{stat}"] = jnp.mean(per_layer[k, i])
+                if per_layer.shape[2] > 1:
+                    metrics[f"{prefix}/decay_max"] = jnp.max(per_layer[0, i])
+    return metrics
+
+
 class MuonHState(NamedTuple):
     """MuonH state when the momentum runs outside Newton-Schulz (scheduled momentum, Bi-Maxwell or Magma)."""
 
@@ -730,6 +832,8 @@ class MuonHState(NamedTuple):
     magma: MagmaState | None
     sphere: SpectralSphereState | None
     """MuonSphere state (``retraction="spectral"``)."""
+    hyperball: optax.Updates | None = None
+    """Last step's per-sphere ``[decay, cos]`` (``log_hyperball_decay``; see ``hyperball_metrics``)."""
 
 
 def scale_with_grug_muonh(
@@ -754,6 +858,7 @@ def scale_with_grug_muonh(
     magma_seed: int = 0,
     retraction: str = "frobenius",
     spectral_radius_c: float | None = 2.0,
+    log_hyperball_decay: bool = False,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
 
@@ -771,11 +876,16 @@ def scale_with_grug_muonh(
     (``_spectral_sphere_updates``, radius from ``spectral_radius_c``); Magma's multipliers then scale the
     spectral step. Without the external momentum stage the state gains a trailing ``SpectralSphereState``
     (``(core, sphere)``); with it the sphere state is ``MuonHState.sphere``.
+
+    ``log_hyperball_decay`` keeps each step's per-sphere hyperball decay and radial cosine in
+    ``MuonHState.hyperball`` (Frobenius retraction with the external momentum stage only).
     """
     if retraction not in MUONH_RETRACTIONS:
         raise ValueError(f"retraction must be one of {MUONH_RETRACTIONS}, got {retraction!r}")
     spectral = retraction == "spectral"
     external_momentum = momentum_schedule is not None or bimaxwell_switch_step is not None or magma_keep_prob is not None
+    if log_hyperball_decay and (spectral or not external_momentum):
+        raise ValueError("log_hyperball_decay needs the Frobenius retraction and the external momentum stage")
     muon_transform = _grug_scale_with_muon(
         momentum=0.0 if external_momentum else momentum,
         nesterov=nesterov,
@@ -815,7 +925,8 @@ def scale_with_grug_muonh(
         if momentum_stage is None:
             return core_init(params) if sphere is None else (core_init(params), sphere)
         magma = _magma_init(params) if magma_keep_prob is not None else None
-        return MuonHState(momentum_stage.init(params), core_init(params), magma, sphere)
+        hyperball = _hyperball_stats_init(params, hyperball_per_expert) if log_hyperball_decay else None
+        return MuonHState(momentum_stage.init(params), core_init(params), magma, sphere, hyperball)
 
     def retract(params, directions, lr_mults, sphere):
         if sphere is None:
@@ -867,6 +978,11 @@ def scale_with_grug_muonh(
                 keep_prob=magma_keep_prob,
                 seed=magma_seed,
             )
+        if log_hyperball_decay:
+            muonh_updates, hyperball = _scale_invariant_hyperball_updates(
+                params, directions, learning_rate, hyperball_per_expert, lr_mults, cautious_wd, with_stats=True
+            )
+            return muonh_updates, MuonHState(momentum_state, core_state, magma_state, None, hyperball)
         muonh_updates, sphere = retract(params, directions, lr_mults, state.sphere)
         return muonh_updates, MuonHState(momentum_state, core_state, magma_state, sphere)
 
@@ -1404,6 +1520,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     pinned, so it only reshapes each matrix toward the update's sign-agreeing coordinates being smaller."""
     hyperball_per_expert: bool = False
     """One MuonH hyperball (Frobenius sphere) per routed expert instead of per layer's expert stack."""
+    log_hyperball_decay: bool = False
+    """Log each MuonH / AdamH matrix's per-step hyperball decay, radial cosine and update rescale
+    (``hyperball_metrics``)."""
     neuron_norm_beta2: float | None = None
     """NorMuon neuron-wise normalization of the MuonH direction with this second-moment decay (None: off)."""
     """Orthogonalize the attention projections per head of this width (None: whole matrices)."""
@@ -1596,6 +1715,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         bimaxwell_rails=rails,
                         magma_keep_prob=self.magma_keep_prob if self.magma else None,
                         magma_seed=magma_seed,
+                        log_hyperball_decay=self.log_hyperball_decay,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -1605,7 +1725,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1 if beta1 is None else beta1, self.beta2, self.epsilon, lr))
+                components.append(
+                    scale_by_adamh(
+                        self.beta1 if beta1 is None else beta1,
+                        self.beta2,
+                        self.epsilon,
+                        lr,
+                        log_hyperball=self.log_hyperball_decay,
+                    )
+                )
                 return optax.chain(*components)
 
             def adam_core(beta1, beta2):
