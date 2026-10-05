@@ -54,7 +54,7 @@ def native_student_collection_step(
             model=policy,
             seed=seed,
         ),
-        COLLECTION_EXECUTION,
+        replace(COLLECTION_EXECUTION, coordinator_timeout_hours=48, job_timeout_seconds=48 * 60 * 60),
     )
 
 
