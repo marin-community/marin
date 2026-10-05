@@ -63,6 +63,7 @@ REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 REMOTE_MCP_AUTH_NONE = "none"
 REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
 REMOTE_MCP_AUTH_IAP = "iap"
+WATCH_MAX_SECONDS = 24 * 60 * 60
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -155,7 +156,12 @@ class AgentWatchConfig:
         if not isinstance(enabled, bool) or policy not in {"skip", "coalesce"}:
             raise ValueError("enabled must be boolean and misfirePolicy must be skip or coalesce")
         grace, timeout = value.get("lateGraceSeconds", 600), value.get("runTimeoutSeconds", 300)
-        if type(grace) is not int or not 0 <= grace <= 86400 or type(timeout) is not int or not 1 <= timeout <= 86400:
+        if (
+            type(grace) is not int
+            or not 0 <= grace <= WATCH_MAX_SECONDS
+            or type(timeout) is not int
+            or not 1 <= timeout <= WATCH_MAX_SECONDS
+        ):
             raise ValueError("invalid watch late grace or run timeout")
         return cls(name.strip(), profile, repo, prompt, trigger, tuple(channels), enabled, policy, grace, timeout)
 
