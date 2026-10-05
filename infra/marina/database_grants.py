@@ -9,7 +9,9 @@ connect but cannot create schemas, so the Marina service account gets every priv
 the ``marina`` database. This script also installs the restricted function that creates
 one role and schema for a generated applet UUID. The Loom VM gets CREATE on ``context``'s
 public schema for the codehealth workbench tables. It also installs the pgvector extension
-Echo needs, which only the Cloud SQL superuser may do. Every statement is idempotent.
+Echo needs, which only the Cloud SQL superuser may do. Legacy admin-owned lint
+findings need a DELETE grant for the Loom VM's refreshed telemetry sync. The
+table may not exist during initial deployment. Every statement is idempotent.
 
     uv run infra/marina/database_grants.py
 """
@@ -32,7 +34,14 @@ GRANTS = {
         "CREATE EXTENSION IF NOT EXISTS vector",
         *applet_provisioning_statements(MARINA_SERVICE_ROLE),
     ],
-    "context": ['GRANT CREATE ON SCHEMA public TO "loom-vm@hai-gcp-models.iam"'],
+    "context": [
+        'GRANT CREATE ON SCHEMA public TO "loom-vm@hai-gcp-models.iam"',
+        """DO $$ BEGIN
+            IF to_regclass('public.codehealth_lint_findings') IS NOT NULL THEN
+                GRANT DELETE ON TABLE public.codehealth_lint_findings TO "loom-vm@hai-gcp-models.iam";
+            END IF;
+        END $$""",
+    ],
 }
 
 
