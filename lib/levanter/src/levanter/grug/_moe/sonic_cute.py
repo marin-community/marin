@@ -11,11 +11,11 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 ``ragged_dot``, reached through its transpose, which is where the contraction runs over the
 ragged dimension. QuACK covers ~2/3 of the MoE FLOPs.
 
-``_expert_mlp_quack_wgrad`` computes the same active rows with those two weight gradients also on
-QuACK, through its varlen-k grouping, which is faster than ``ragged_dot`` at the hero shapes. It
-leaves rows past the last expert segment unspecified instead of zeroing them. That is the path the
-ragged all-to-all EP backend takes, so on the hero every grouped GEMM in the expert MLP is one
-kernel family.
+``_expert_mlp_quack_wgrad_fwd`` and ``_expert_mlp_quack_wgrad_backward`` compute the same active
+rows with those two weight gradients also on QuACK, through its varlen-k grouping, which is faster
+than ``ragged_dot`` at the hero shapes. They leave rows past the last expert segment unspecified
+instead of zeroing them. The ragged all-to-all EP backend calls them inside its own VJP, so on the
+hero every grouped GEMM in the expert MLP is one kernel family.
 """
 
 import jax
@@ -32,6 +32,7 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _prepare_moe_dispatch,
     _swiglu_gate_up_backward,
+    _unpack_pairs_u32,
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
 )
@@ -48,11 +49,11 @@ from levanter.grug._moe.quack_moe_cute import (
 # grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
 # All of this is scheduling, so none of it changes the computed function.
 #
-# These reach `_expert_mlp_quack_wgrad` only. `_expert_mlp` -- the local FSDP path, used by the
-# `fsdp-nodrop` and `fsdp-chunk4` ablation arms -- still calls the GEMMs at their defaults, as it
-# did before this tuning existed, so nothing regressed. It is untuned rather than deliberately
-# tuned differently: the measurements above were taken at the i3072 hero shapes and the FSDP arms
-# run d768, so the numbers do not transfer without re-measuring.
+# `_expert_mlp` -- the local FSDP path, used by the `fsdp-nodrop` and `fsdp-chunk4` ablation arms --
+# does not use these: it still calls the GEMMs at their defaults, as it did before this tuning
+# existed, so nothing regressed. It is untuned rather than deliberately tuned differently: the
+# measurements above were taken at the i3072 hero shapes and the FSDP arms run d768, so the
+# numbers do not transfer without re-measuring.
 # TODO: re-measure these at the FSDP ablation shapes and either extend the tuning to
 # `_expert_mlp` or record why the defaults win there.
 _QUACK_TILE_MN = (256, 256)
@@ -108,39 +109,38 @@ def _expert_mlp_bwd(res, dy):
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
-@jax.custom_vjp
-def _expert_mlp_quack_wgrad(x_dispatch, w13_il, moe_w2, cu):
-    """``_expert_mlp`` with the two weight-gradient GEMMs on QuACK's varlen-k grouping.
-
-    Every grouped GEMM here is driven by ``cu`` alone, so unlike ``_expert_mlp`` -- whose weight
-    gradients go through ``ragged_dot`` -- this one never needs the per-expert sizes.
-
-    Rows past ``cu[-1]`` are unspecified in both the output and input gradient, so a caller
-    must read only the active rows. Every grouped GEMM here bounds its reads by ``cu``.
-    """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
-
-
 def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
+    """The expert MLP forward, plus the residuals ``_expert_mlp_quack_wgrad_backward`` reads.
+
+    Every grouped GEMM is driven by ``cu`` alone. Rows past ``cu[-1]`` are unspecified in the
+    output, and every grouped GEMM bounds its reads by ``cu``.
+    """
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
-def _expert_mlp_quack_wgrad_bwd(res, dy):
+def _expert_mlp_quack_wgrad_backward(res, dy):
+    """The backward of ``_expert_mlp_quack_wgrad_fwd``, plus each row's ``<y, dy>``.
+
+    ``y = h @ W2`` row by row, so ``<y, dy> = <h, dy @ W2^T> = <h, dh>``: the backward already
+    holds both factors and never needs ``y``. ``h`` is recomputed in fp32 from the gate/up
+    preactivations that the SwiGLU backward reads anyway, so XLA fuses the row dot into that
+    pass; reading the saved ``h`` instead costs a separate pass and more peak memory. The dot
+    accumulates in fp32. Rows past ``cu[-1]`` are unspecified in every row-indexed output.
+
+    Returns ``(dx, dw13_il, dw2, output_dot_cotangent)``.
+    """
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
+    gate, up = _unpack_pairs_u32(gu)
+    h_fp32 = jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
+    output_dot_cotangent = jnp.sum(dh.astype(jnp.float32) * h_fp32, axis=-1)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
-    # the int-typed routing arg gets a float0 zero cotangent
-    cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
-    return dx, dw13_il, dw2, cu_ct
-
-
-_expert_mlp_quack_wgrad.defvjp(_expert_mlp_quack_wgrad_fwd, _expert_mlp_quack_wgrad_bwd)
+    return dx, dw13_il, dw2, output_dot_cotangent
 
 
 def _moe_mlp_local_sonic_cute(

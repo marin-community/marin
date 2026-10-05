@@ -168,8 +168,8 @@ def _runtime_row() -> RuntimeRow:
         jax_version=jax.__version__,
         device_kind=jax.devices()[0].device_kind,
         quack_grouped_gemm_available=_quack_grouped_gemm_available(),
-        expert_mlp_silu=_select_expert_mlp(jax.nn.silu, ungated=False).__name__,
-        expert_mlp_gelu=_select_expert_mlp(jax.nn.gelu, ungated=False).__name__,
+        expert_mlp_silu=type(_select_expert_mlp(jax.nn.silu, ungated=False)).__name__,
+        expert_mlp_gelu=type(_select_expert_mlp(jax.nn.gelu, ungated=False)).__name__,
         xla_flags=os.environ.get("XLA_FLAGS", ""),
     )
 
