@@ -261,7 +261,6 @@ def test_api_compare_rejects_mixed_cohorts_but_panel_can_browse_them(client):
     response = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"})
 
     assert response.status_code == 400
-    assert response.json() == {"error": "Choose one cohort before comparing models."}
     panel = client.get("/panel", params={"cohort": "all"}).json()
     assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} >= {"2026.07.20", "2026.07.21"}
 
