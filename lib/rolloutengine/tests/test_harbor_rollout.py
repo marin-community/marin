@@ -16,7 +16,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import ExitReason, Result, ShellSimBuiltins
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import Outcome
+from taskcompendium.grading import GradingFailure, Outcome
 from taskcompendium.importers.harbor import harbor_task
 from taskcompendium.models import Source, TaskSpec
 
@@ -199,9 +199,9 @@ async def test_harbor_package_grades_private_files_after_json_reload(
         ("mean", "first", "valid", 0.5, Outcome.GRADED, 2),
         ("final", "first", "valid", 0.75, Outcome.GRADED, 2),
         ("mean", "wrong", "valid", 0.0, Outcome.GRADED, 1),
-        ("mean", "first", "broken", 0.25, Outcome.GRADED, 2),
+        ("mean", "first", "broken", None, Outcome.INFRA_ERROR, 2),
         ("final", "first", "broken", None, Outcome.INFRA_ERROR, 2),
-        ("mean", "first", "setup_failed", 0.25, Outcome.GRADED, 2),
+        ("mean", "first", "setup_failed", None, Outcome.UNAVAILABLE, 2),
         ("final", "first", "setup_failed", None, Outcome.UNAVAILABLE, 2),
     ],
 )
@@ -304,3 +304,9 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
                 "reward": reward,
                 "safety": 0.0 if first_answer == "wrong" else 0.5 if last_grader == "valid" else 1.0,
             }
+    else:
+        assert sum(step.transition.reward for step in result.steps) == 0
+        assert result.steps[0].transition.grade.reward == 0.25
+        assert result.grade.diagnostics["stages"][0]["reward"] == 0.25
+        if last_grader == "broken":
+            assert result.grade.failure == GradingFailure.INVALID_REWARD
