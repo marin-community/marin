@@ -300,20 +300,13 @@ def _emit_messages(node: CCNode) -> Iterator[dict]:
         "file_idx": node["file_idx"],
     }
 
-    # 2. Propagate component ID to neighbors
-    # Use [""] instead of [] so Arrow infers list<string> consistently
-    # with the self-message's adjacency_list, avoiding schema evolution.
+    # 2. Propagate component ID to neighbors. Labels only decrease, and a node
+    # re-sends whenever its label drops, so an unchanged node's neighbors
+    # already hold a label <= the one it would re-send.
+    if not node["changed"]:
+        return
     for neighbor_id in node["adjacency_list"]:
-        yield {
-            "key": neighbor_id,
-            "is_self": False,
-            "record_id": node["record_id"],
-            "id_norm": "",
-            "adjacency_list": [""],
-            "component_id": node["component_id"],
-            "changed": False,
-            "file_idx": 0,
-        }
+        yield {"key": neighbor_id, "is_self": False, "component_id": node["component_id"]}
 
 
 def _reduce_node_step(key: str, incoming: Iterator[dict]) -> CCNode:
