@@ -20,6 +20,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     restored_round,
     write_once,
 )
+from experiments.post_training.russell_rsi.collection_recovery import CollectionRecovery, StudentContextAmendment
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     StudyBaseline,
@@ -228,6 +229,39 @@ def run_four_pass_collection_remote(config: FourPassCollectionConfig) -> None:
     )(config)
 
 
+@dataclass(frozen=True)
+class RecoveryFourPassCollectionConfig:
+    original: FourPassCollectionConfig
+    recovery: CollectionRecovery
+    context_amendment: StudentContextAmendment
+
+
+def run_recovery_four_pass_collection(config: RecoveryFourPassCollectionConfig) -> None:
+    original = config.original
+    decision = require_four_pass_condition(original.study)
+    write_once(StoragePath(original.collection.output_path) / "four-pass-study.json", original.study)
+    collect_teacher_dataset(
+        original.collection,
+        decision,
+        StudentTrainingTemplate(
+            original.study["student_training_template_uri"],
+            original.study["student_training_template_sha256"],
+        ),
+        "continuation_selection_sha256",
+        config.recovery,
+        config.context_amendment,
+    )
+
+
+def run_recovery_four_pass_collection_remote(config: RecoveryFourPassCollectionConfig) -> None:
+    remote(
+        run_recovery_four_pass_collection,
+        resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
+        pip_packages=list(TEACHER_PIP_PACKAGES),
+        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
+    )(config)
+
+
 def four_pass_teacher_workflow(config: dict) -> dict[str, ArtifactStep]:
     require_four_pass_condition(config)
     collection = {
@@ -235,6 +269,16 @@ def four_pass_teacher_workflow(config: dict) -> dict[str, ArtifactStep]:
         "dose_decision_uri": config["continuation_selection_uri"],
         "dose_decision_sha256": config["continuation_selection_sha256"],
     }
+    if ("collection_recovery" in config) != ("student_context_amendment" in config):
+        raise ValueError("Teacher recovery requires its explicit prospective context amendment")
+    if "collection_recovery" in config:
+        recovery = CollectionRecovery(**config["collection_recovery"])
+        amendment = StudentContextAmendment(**config["student_context_amendment"])
+        binding = CollectionBinding(
+            lambda base: RecoveryFourPassCollectionConfig(FourPassCollectionConfig(base, config), recovery, amendment),
+            run_recovery_four_pass_collection_remote,
+        )
+        return teacher_sft_steps(collection, binding, 4, "teacher-four-pass", amendment.context_tokens)
     return teacher_sft_steps(
         collection,
         CollectionBinding(lambda base: FourPassCollectionConfig(base, config), run_four_pass_collection_remote),

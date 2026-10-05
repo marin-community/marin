@@ -37,6 +37,7 @@ from taskcompendium.parquet import read_tasks
 from experiments.evaluation.pipeline import eval_step
 from experiments.post_training.glm import resolve_glm_base_url
 from experiments.post_training.russell_rsi.bootstrap_loop import checkpoint_score, promotes, write_once
+from experiments.post_training.russell_rsi.collection_recovery import CollectionRecovery, StudentContextAmendment
 from experiments.post_training.russell_rsi.launch import CLUSTER, evaluation_model
 from experiments.post_training.russell_rsi.launch_dose_comparison import selected_dose
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
@@ -101,6 +102,8 @@ def collect_teacher_dataset(
     decision: dict,
     training_template: StudentTrainingTemplate | None = None,
     condition_hash_field: str = "dose_decision_sha256",
+    recovery: CollectionRecovery | None = None,
+    context_amendment: StudentContextAmendment | None = None,
 ) -> None:
     """Collect the frozen dataset after the caller verifies its study condition."""
     selection = config.selection
@@ -173,6 +176,8 @@ def collect_teacher_dataset(
                         EnvironmentKind.DOCKER: qemu_factory(runtime, config.runtime_bundle),
                     },
                     output,
+                    recovery=recovery,
+                    context_amendment=context_amendment,
                 )
 
         result = asyncio.run(collect())
@@ -220,6 +225,7 @@ def teacher_sft_steps(
     collection: CollectionBinding[CollectionConfig],
     updates: int,
     namespace: str,
+    context_tokens: int = STUDENT_CONTEXT_TOKENS,
 ) -> dict[str, ArtifactStep]:
     version = config["version"]
     parent_spec = config["parent"]
@@ -279,7 +285,7 @@ def teacher_sft_steps(
             dcn_axes={"replica_dcn": 1},
             compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
         ),
-        seq_len=STUDENT_CONTEXT_TOKENS,
+        seq_len=context_tokens,
         pack=False,
         batch_size=STUDENT_ROWS,
         num_train_steps=updates,

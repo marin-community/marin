@@ -32,6 +32,12 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.collection_recovery import (
+    CollectionRecovery,
+    StudentContextAmendment,
+    collection_recovery_evidence,
+    student_context_amendment_record,
+)
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.rollout_eval import rollout_evidence
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
@@ -140,6 +146,8 @@ class TeacherTurnProvider:
         issued = directory / "issued.json"
         response_path = directory / "response.json"
         request_path = directory / "request.json"
+        wire_path = directory / "request-wire.bin"
+        wire_record_path = directory / "request-wire.json"
         if issued.exists():
             if json.loads(issued.read_text()) != identity:
                 raise ValueError("Saved teacher issuance has a different request identity")
@@ -147,14 +155,29 @@ class TeacherTurnProvider:
                 raise ValueError("Saved teacher request differs from its reserved request")
             if not response_path.exists():
                 raise RuntimeError("Teacher request is ambiguous; no replacement request is permitted")
+            wire = wire_path.read_bytes()
+            wire_record = json.loads(wire_record_path.read_text())
+            if hashlib.sha256(wire).hexdigest() != wire_record["sha256"] or json.loads(wire) != body:
+                raise ValueError("Saved teacher wire bytes differ from their request identity")
             record = json.loads(response_path.read_text())
         else:
             if response_path.exists():
                 raise ValueError("Saved teacher response lacks its request reservation")
             write_once(request_path, body)
             url = self.resolve_base_url().rstrip("/") + "/chat/completions"
+            outbound = self.client.build_request("POST", url, json=body)
+            wire = outbound.content
+            if wire_path.exists():
+                if wire_path.read_bytes() != wire:
+                    raise ValueError("Saved teacher wire bytes differ from the pending request")
+            else:
+                wire_path.write_bytes(wire)
+            write_once(
+                wire_record_path,
+                {"sha256": hashlib.sha256(wire).hexdigest(), "content_type": outbound.headers["Content-Type"]},
+            )
             write_once(issued, identity)
-            response = await self.client.post(url, json=body)
+            response = await self.client.send(outbound)
             record = {
                 "identity": identity,
                 "url": url,
@@ -253,6 +276,8 @@ async def collect_teacher_rows(
     model: TeacherModelConfig,
     factories: Mapping[EnvironmentKind, MachineFactory],
     directory: StoragePath,
+    recovery: CollectionRecovery | None = None,
+    context_amendment: StudentContextAmendment | None = None,
 ) -> dict:
     """Collect at most two trajectories per frozen family and retain eight full rows.
 
@@ -286,12 +311,32 @@ async def collect_teacher_rows(
         if failure["plan_sha256"] != plan_sha256:
             raise ValueError("Saved teacher contract failure differs from the collection plan")
         raise RolloutContractError(failure["exception_message"])
-    preflight = await teacher_preflight(
-        client,
-        resolve_base_url,
-        replace(model, session_identity=f"{model.session_identity}-preflight"),
-        directory / "preflight",
-    )
+    if (recovery is None) != (context_amendment is None):
+        raise ValueError("Teacher recovery and prospective context amendment must be supplied together")
+    context_tokens = STUDENT_CONTEXT_TOKENS
+    amendment_record = None
+    if context_amendment is not None and recovery is not None:
+        amendment_record = student_context_amendment_record(context_amendment, recovery, plan)
+        context_tokens = context_amendment.context_tokens
+    recovery_evidence = collection_recovery_evidence(recovery, plan) if recovery is not None else None
+    if recovery_evidence is None:
+        preflight = await teacher_preflight(
+            client,
+            resolve_base_url,
+            replace(model, session_identity=f"{model.session_identity}-preflight"),
+            directory / "preflight",
+        )
+    else:
+        assert context_amendment is not None
+        write_once(
+            directory / "recovery-lineage.json",
+            {
+                **recovery_evidence.lineage,
+                "context_amendment": asdict(context_amendment),
+                "amendment_record": amendment_record,
+            },
+        )
+        preflight = recovery_evidence.preflight
     convention = SubmissionConvention(id="russell-teacher", answer_format=AnswerFormat.PLAIN)
     accepted: list[dict] = []
     attempts: list[dict] = []
@@ -300,6 +345,9 @@ async def collect_teacher_rows(
         task = tasks[entry.task_id]
         options = session_start(task, convention).options
         for attempt in range(TEACHER_ATTEMPTS_PER_FAMILY):
+            if recovery_evidence is not None and family_index == 0 and attempt == 0:
+                attempts.append(recovery_evidence.consumed_attempt)
+                continue
             slot = directory / "trajectories" / f"{family_index:02d}-{attempt}"
             reservation = slot / "trajectory.json"
             rollout_path = slot / "rollout.json"
@@ -360,7 +408,7 @@ async def collect_teacher_rows(
                 row = student_row(record["messages"], options, tokenizer)
                 status.update(tokens=len(row.input_ids), assistant_targets=sum(row.assistant_mask))
                 row_sha = compact_json_sha256(row.example)
-                if len(row.input_ids) > STUDENT_CONTEXT_TOKENS:
+                if len(row.input_ids) > context_tokens:
                     status["status"] = "student_context_overflow"
                 elif not any(row.assistant_mask):
                     status["status"] = "no_assistant_targets"

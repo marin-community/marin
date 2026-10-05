@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from levanter.testing.tokenizer import stage_gpt2_tokenizer
 from levanter.tokenizers import load_tokenizer
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.contracts import ModelRequest, RolloutContractError
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -18,7 +20,13 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
+from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.collection_recovery import (
+    REASONING_MAPPING_VERSION,
+    CollectionRecovery,
+    StudentContextAmendment,
+)
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_collection import (
@@ -61,6 +69,10 @@ def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_p
         body = json.loads(request.content)
         assert json.loads((directory / "request.json").read_text()) == body
         assert (directory / "issued.json").exists()
+        assert (directory / "request-wire.bin").read_bytes() == request.content
+        wire_record = json.loads((directory / "request-wire.json").read_text())
+        assert wire_record["sha256"] == hashlib.sha256(request.content).hexdigest()
+        assert request.headers["Content-Type"] == wire_record["content_type"] == "application/json"
         requests.append(body)
         if index == 0:
             assert "48213" not in request.content.decode()
@@ -385,3 +397,266 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
         row = json.loads((tmp_path / "collection/trajectories" / f"{index:02d}-{attempt}/student-row.json").read_text())
         assert len(row["input_ids"]) <= 4096
         assert sum(row["assistant_mask"]) > 0
+
+
+@pytest.mark.parametrize("tamper", [None, "exhausted", "marker", "plan", "proof", "reservation", "preflight"])
+def test_counted_recovery_retires_first_slot_and_reuses_exact_preflight(tmp_path, student_tokenizer, tamper):
+    source = tmp_path / "predecessor"
+    source.mkdir()
+    tasks = {}
+    selected = []
+    for index in range(10):
+        task = preflight_task(
+            index + 10, PREFLIGHT_INSTRUCTION + (" public context " * 500 if index == 0 else ""), 80000 + index
+        )
+        tasks[task.id] = task
+        selected.append(TeacherTask(f"family-{index}", "boundaries", task.id, digest(task.model_dump(mode="json"))))
+    capabilities = {"skills": [{"label": "boundaries"}]}
+    plan = {
+        "selected": [asdict(entry) for entry in selected],
+        "capabilities": capabilities,
+        "model": asdict(config()),
+        "student_tokenizer_identity": "test-tokenizer-identity",
+        "student_template_sha256": hashlib.sha256(MARIN_CHAT_TEMPLATE.encode()).hexdigest(),
+    }
+
+    def save(name, value):
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = value.encode() if isinstance(value, str) else json.dumps(value, sort_keys=True).encode()
+        path.write_bytes(raw)
+        return hashlib.sha256(raw).hexdigest()
+
+    info_hash = save(
+        ".executor_info",
+        {"name": "collection", "output_path": str(source), "config": {"version": "v1", "fingerprint": "abcd"}},
+    )
+    status_hash = save(".executor_status", "FAILED")
+    plan_hash = save("plan.json", plan)
+    marker = {
+        "task": asdict(selected[0]),
+        "attempt": 0,
+        "slot": "00-0",
+        "exception_type": "RolloutContractError",
+        "exception_message": "Native GLM chat changed the served token prefix",
+        "plan_sha256": compact_json_sha256(plan),
+    }
+    marker_hash = save("contract-failure.json", marker)
+    reservation_hash = save("trajectories/00-0/trajectory.json", {"task": asdict(selected[0]), "attempt": 0})
+    preflight_identity = f"{config().session_identity}-preflight"
+    preflight_reservation_hash = save(
+        "preflight/reservation.json", {**asdict(config()), "session_identity": preflight_identity}
+    )
+    request = {
+        "model": GLM_MODEL,
+        "prompt_cache_key": preflight_identity,
+        "max_tokens": config().max_tokens,
+        "temperature": config().temperature,
+        "chat_template_kwargs": {"reasoning_effort": config().reasoning_effort},
+        "return_token_ids": True,
+    }
+    preflight_hash = save(
+        "preflight/token-preflight.json",
+        {
+            "status": "passed",
+            "attempts": [
+                {
+                    "status": "passed",
+                    "requests": [{"request": request}] * 2,
+                    "rollout": {"grade": {"status": "graded", "reward": 1}},
+                }
+                for _ in range(2)
+            ],
+        },
+    )
+    artifacts = {}
+    for name, filename, value in (
+        ("source_request", "request.json", {"model": GLM_MODEL}),
+        ("source_issued", "issued.json", {"prefix_token_ids": [100, 101]}),
+        ("source_raw_response", "response.json", {"status_code": 200}),
+    ):
+        relative = f"trajectories/00-0/turns/003/{filename}"
+        artifacts[name] = {"path": str(source / relative), "sha256": save(relative, value)}
+    for name in (
+        "original_tokenizer_request",
+        "original_tokenizer_response",
+        "mapped_tokenizer_request",
+        "mapped_tokenizer_response",
+    ):
+        artifacts[name] = {"path": str(source / f"{name}.json"), "sha256": save(f"{name}.json", {"tokens": [100, 101]})}
+    declaration = {
+        "request_limit": 2,
+        "maximum_total_output_tokens": 2,
+        "http_retries": 0,
+        "failed_teacher_slot": "00-0",
+        "scientific_trajectory_budget_remaining": 19,
+        "settings": {"model": GLM_MODEL, "max_tokens": 1, "temperature": 0, "return_token_ids": True},
+    }
+    artifacts["declaration"] = {
+        "path": str(source / "diagnostic-declaration.json"),
+        "sha256": save("diagnostic-declaration.json", declaration),
+    }
+    proof = {
+        "status": "passed",
+        "model": GLM_MODEL,
+        "mapping_version": REASONING_MAPPING_VERSION,
+        "proof_method": "bounded-real-relay-transport",
+        "generation_requests": 2,
+        "diagnostic_generation_requests": 2,
+        "diagnostic_output_tokens": 2,
+        "teacher_generation_requests": 0,
+        "tokenizer_requests": 7,
+        "tokenizer_successful_renders": 4,
+        "http_retries": 0,
+        "outputs_reused": False,
+        "scientific_trajectory_budget_remaining": 19,
+        "transport_diagnostic_declared_and_issued_before_send": True,
+        "scientific_plan_unchanged": True,
+        "scientific_trajectory_budget_unchanged": True,
+        "failed_teacher_slot_still_consumed": True,
+        "request_pair_difference_only_alias_mapping": True,
+        "endpoint_identity": {"url": "https://teacher.test/v1/chat/completions"},
+        "original_render_matches_saved_prompt": True,
+        "mapped_render_preserves_expected_prefix": True,
+        "reasoning_insertion_only": True,
+        "expected_prefix_token_count": 2,
+        "artifacts": artifacts,
+        **{
+            field: artifacts[name]["sha256"]
+            for name, field in (
+                ("source_request", "source_request_sha256"),
+                ("source_issued", "source_issued_sha256"),
+                ("source_raw_response", "source_raw_response_sha256"),
+            )
+        },
+    }
+    proof_hash = save("token-proof.json", proof)
+    recovery = CollectionRecovery(
+        str(source),
+        "collection@v1:abcd",
+        info_hash,
+        status_hash,
+        plan_hash,
+        marker_hash,
+        reservation_hash,
+        preflight_identity,
+        preflight_reservation_hash,
+        preflight_hash,
+        str(source / "token-proof.json"),
+        proof_hash,
+        REASONING_MAPPING_VERSION,
+        "00-0",
+    )
+    amendment_record = {
+        "protocol": "champion-rsi-teacher-sixteen-k-context-amendment-v1",
+        "previous_context_tokens": 4096,
+        "context_tokens": 16384,
+        "predecessor_identity": recovery.predecessor_identity,
+        "predecessor_plan_sha256": recovery.plan_sha256,
+        "fatal_marker_sha256": recovery.fatal_marker_sha256,
+        "plan_sha256": compact_json_sha256(plan),
+        "consumed_slot": "00-0",
+        "consumed_trajectories": 1,
+        "remaining_trajectories": 19,
+        "student_rows": 8,
+        "sft_updates": 4,
+        "assistant_only_loss": True,
+        "full_untruncated_rows": True,
+    }
+    amendment = StudentContextAmendment(
+        str(source / "context-amendment.json"),
+        save("context-amendment.json", amendment_record),
+        amendment_record["protocol"],
+        4096,
+        16384,
+    )
+    if tamper not in (None, "exhausted"):
+        target = {
+            "marker": "contract-failure.json",
+            "plan": "plan.json",
+            "proof": "token-proof.json",
+            "reservation": "trajectories/00-0/trajectory.json",
+            "preflight": "preflight/token-preflight.json",
+        }[tamper]
+        save(target, {"changed": True})
+    sent = []
+
+    async def send(request):
+        body = json.loads(request.content)
+        sent.append(body)
+        assert not body["prompt_cache_key"].endswith("-preflight")
+        if body["messages"][-1]["role"] == "tool":
+            answer = "0" if tamper == "exhausted" else json.loads(body["messages"][-1]["content"])["stdout"].strip()
+            return httpx.Response(
+                200, json=model_response([100, 101, 102], [103], {"role": "assistant", "content": answer})
+            )
+        return httpx.Response(
+            200,
+            json=model_response(
+                [100],
+                [101],
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "shell",
+                            "type": "function",
+                            "function": {
+                                "name": "shell",
+                                "arguments": json.dumps({"command": "cat /workspace/preflight-value.txt"}),
+                            },
+                        }
+                    ],
+                },
+                "tool_calls",
+            ),
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
+            return await collect_teacher_rows(
+                tuple(selected),
+                tasks,
+                capabilities,
+                student_tokenizer,
+                "test-tokenizer-identity",
+                client,
+                lambda: "https://teacher.test/v1",
+                config(),
+                {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+                StoragePath(str(tmp_path / "amended")),
+                recovery,
+                amendment,
+            )
+
+    if tamper not in (None, "exhausted"):
+        with pytest.raises(ValueError):
+            asyncio.run(run())
+        assert sent == []
+        return
+    result = asyncio.run(run())
+    if tamper == "exhausted":
+        assert result["status"] == "insufficient_rows"
+        assert len(result["attempts"]) == 20
+        assert len(sent) == 38
+        assert result["attempts"][0]["status"] == "contract_failure_predecessor"
+        assert result["attempts"][-1]["task"] == asdict(selected[-1])
+        assert result["attempts"][-1]["attempt"] == 1
+        return
+    assert result["status"] == "passed"
+    assert result["attempts"][0]["status"] == "contract_failure_predecessor"
+    assert result["accepted"][0]["task"] == asdict(selected[0])
+    assert result["accepted"][0]["attempt"] == 1
+    assert [row["task"]["family"] for row in result["accepted"]] == [f"family-{i}" for i in range(8)]
+    assert sent[0]["prompt_cache_key"].endswith("-00-1")
+    assert len(sent) == 16
+    assert len(result["attempts"]) == 9
+    assert not (tmp_path / "amended/trajectories/00-0").exists()
+    lineage = json.loads((tmp_path / "amended/recovery-lineage.json").read_text())
+    assert lineage["cumulative_attempt_limit"] == 20
+    assert lineage["recovery"] == asdict(recovery)
+    assert lineage["context_amendment"] == asdict(amendment)
+    first_row = json.loads((tmp_path / "amended/trajectories/00-1/student-row.json").read_text())
+    assert 4096 < len(first_row["input_ids"]) <= 16384
+    assert any(first_row["assistant_mask"])

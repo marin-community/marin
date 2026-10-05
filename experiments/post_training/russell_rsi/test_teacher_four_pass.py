@@ -7,12 +7,18 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.russell_rsi import test_rsi_continuation
 from experiments.post_training.russell_rsi.bootstrap_loop import CheckpointScore, QualifiedTask
+from experiments.post_training.russell_rsi.collection_recovery import (
+    REASONING_MAPPING_VERSION,
+    CollectionRecovery,
+    StudentContextAmendment,
+)
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     SelectionConfig,
@@ -483,3 +489,56 @@ def test_teacher_expansion_preserves_retained_tasks_and_independent_additions(st
     study["selection"]["bank_sha256"] = study["bank_record_sha256"]
     with pytest.raises(ValueError, match=r"retain all 28|new independent API"):
         four_pass_teacher_workflow(study)
+
+
+def test_recovery_wrapper_changes_only_explicit_collection_fingerprint(study_inputs):
+    study, _ = study_inputs
+    original = four_pass_teacher_workflow(study)["collect"]
+    original_payload = original.fingerprint_payload()
+    recovery = CollectionRecovery(
+        predecessor_uri="/predecessor",
+        predecessor_identity="collection@v1:abcd",
+        executor_info_sha256="a" * 64,
+        executor_status_sha256="a" * 64,
+        plan_sha256="a" * 64,
+        fatal_marker_sha256="a" * 64,
+        slot_reservation_sha256="a" * 64,
+        preflight_identity="preflight",
+        preflight_reservation_sha256="b" * 64,
+        preflight_result_sha256="c" * 64,
+        token_proof_uri="/proof.json",
+        token_proof_sha256="d" * 64,
+        mapping_version=REASONING_MAPPING_VERSION,
+        consumed_slot="00-0",
+    )
+    amendment = StudentContextAmendment(
+        "/amendment.json",
+        "e" * 64,
+        "champion-rsi-teacher-sixteen-k-context-amendment-v1",
+        4096,
+        16384,
+    )
+    outputs = four_pass_teacher_workflow(
+        {
+            **study,
+            "collection_recovery": asdict(recovery),
+            "student_context_amendment": asdict(amendment),
+        }
+    )
+    amended = outputs["collect"]
+    trained = outputs["train"]
+    train_config = trained.build_config(
+        StepContext.for_fingerprint(trained.runtime_args.keys(), trained.deps)
+    ).train_config
+    assert train_config.train_seq_len == amendment.context_tokens
+    assert train_config.trainer.num_train_steps == 4
+    assert train_config.trainer.train_batch_size == 8
+    config = amended.build_config(StepContext.for_fingerprint(amended.runtime_args.keys(), amended.deps))
+    assert asdict(config)["recovery"] == asdict(recovery)
+    assert config.context_amendment.context_tokens == train_config.train_seq_len
+    assert amended.fingerprint() != original.fingerprint()
+    assert four_pass_teacher_workflow(study)["collect"].fingerprint_payload() == original_payload
+    assert set(json.loads(original_payload)) == {"collection", "study"}
+    assert canonical_json(config.original.collection) == canonical_json(
+        original.build_config(StepContext.for_fingerprint(original.runtime_args.keys(), original.deps)).collection
+    )
