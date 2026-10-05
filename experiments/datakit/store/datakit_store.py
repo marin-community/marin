@@ -40,7 +40,7 @@ from levanter.store.cache import (
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import write_artifact
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+from marin.processing.classification.deduplication.cluster_verify import (
     VerifiedFuzzyDupsArtifact,
     VerifiedFuzzyDupsPerSource,
 )
