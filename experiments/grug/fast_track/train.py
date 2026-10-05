@@ -1005,8 +1005,9 @@ def _loss_and_grads(
     route_key = None
     cfg = params.config
     mtp_subsample = cfg.mtp_mode != MtpMode.OFF and cfg.mtp_position_frac < 1.0
-    # dual_attn_prev only needs a key to tell training from evaluation (its odd-row branch is training-only).
-    if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample or cfg.dual_attn_prev):
+    # dual_attn_prev and sublayer_dropout need a key to tell training from evaluation (both are training-only).
+    training_key = cfg.dual_attn_prev or cfg.sublayer_dropout > 0
+    if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample or training_key):
         route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
 
     def loss_fn(model):

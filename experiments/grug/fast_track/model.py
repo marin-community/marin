@@ -280,7 +280,7 @@ class NormGainFn(StrEnum):
     """``2 sigmoid(w)``, init 0: bounded in (0, 2); 0.5x step at init, slowing toward the bounds."""
     SIGMOID = "sigmoid"
     """``sigmoid(w)``, init 0 (a gain of 0.5, not 1): bounded in (0, 1), for norms whose gains settle below 1;
-    0.25x step at init. Only through ``sigmoid_gain_norms``, since it changes the model at init."""
+    0.25x step at init. Only through ``norm_gain_overrides``, since it changes the model at init."""
 
 
 _GAIN_INIT = {
@@ -291,8 +291,8 @@ _GAIN_INIT = {
     NormGainFn.SIGMOID: 0.0,
 }
 
-# Norms ``sigmoid_gain_norms`` can name: the input embedding norms, MLA's kv-latent norm and KDA's output norm.
-SIGMOID_GAIN_ROLES = ("embed", "embed2", "kv_latent", "kda_o_norm")
+# Norms ``norm_gain_overrides`` can name.
+NORM_GAIN_ROLES = ("embed", "embed2", "kv_latent", "kda_o_norm", "final", "rms_attn", "rms_mlp", "moe_latent")
 
 
 def apply_gain_fn(fn: NormGainFn, w: jax.Array) -> jax.Array:
@@ -773,9 +773,9 @@ class GrugModelConfig:
     sublayer_scale_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
     """How ``sublayer_scales`` reads each scalar from its parameter (``sigmoid2``: ``2 sigmoid(w)``, in (0, 2))."""
     norm_gain_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
-    sigmoid_gain_norms: tuple[str, ...] = ()
-    """Norms (``SIGMOID_GAIN_ROLES``) whose gain is ``sigmoid(w)`` (0.5 at init, in (0, 1)) instead of ``norm_gain_fn``:
-    for the norms whose learned gains stay below 1 (``embed``, ``embed2``, ``kv_latent``, ``kda_o_norm``)."""
+    norm_gain_overrides: tuple[str, ...] = ()
+    """``role:fn`` entries giving one norm (``NORM_GAIN_ROLES``) its own ``NormGainFn`` instead of ``norm_gain_fn``,
+    e.g. ``final:exp`` or ``embed:sigmoid``."""
     """How every learned RMSNorm gain is read from its parameter (``exp``: ``e^w``, ...); 1 at init in every case."""
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
@@ -1214,6 +1214,10 @@ class GrugModelConfig:
     """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
     shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
     the model is unchanged at init. Added before QB, which then balances it. 0: off."""
+    sublayer_dropout: float = 0.0
+    """Element-wise dropout (survivors scaled by ``1 / (1 - p)``) on every attention and MLP output before it enters
+    the AttnRes history, the analogue of MAI-Thinking-1's dropout on each layer's output before the residual add.
+    Training only (evals pass no route key). AttnRes only."""
     dual_attn_prev: bool = False
     """Two weight sets for every MLA attention module: the current weights and a frozen copy of the previous step's
     (``Block.attn_prev``, refreshed by the trainer). In training, odd batch rows run attention with the previous
@@ -1602,11 +1606,13 @@ class GrugModelConfig:
             raise ValueError("moe_shadow_width / moe_compress need a MoE with shared experts and no moe_shared_overlap")
         if (self.moe_compress != MoeCompress.NONE) != (self.moe_compress_weight > 0):
             raise ValueError("moe_compress and moe_compress_weight > 0 go together")
-        unknown = set(self.sigmoid_gain_norms) - set(SIGMOID_GAIN_ROLES)
-        if unknown:
-            raise ValueError(f"sigmoid_gain_norms: unknown norms {sorted(unknown)}; choose from {SIGMOID_GAIN_ROLES}")
+        overrides = _norm_gain_overrides(self)
+        if overrides.keys() - set(NORM_GAIN_ROLES):
+            raise ValueError(f"norm_gain_overrides: unknown norms {sorted(overrides.keys() - set(NORM_GAIN_ROLES))}")
         if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
             raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
+        if not 0.0 <= self.sublayer_dropout < 1.0 or (self.sublayer_dropout and not self.attn_res):
+            raise ValueError("sublayer_dropout must be in [0, 1) and needs AttnRes")
         if self.dual_attn_prev and (not self.attn_res or not self.mla):
             raise ValueError("dual_attn_prev needs AttnRes and MLA attention")
         if self.router_on_embed and (
@@ -2966,9 +2972,18 @@ def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float, role: str | No
         if cfg.norm_gain_fn != NormGainFn.LINEAR:
             raise ValueError("zero_centered_gains already reparameterizes the gain (1 + gamma); use norm_gain_fn=linear")
         return ZeroCenteredRMSNorm.init(dim, eps)
-    if role is not None and role in cfg.sigmoid_gain_norms:
-        return RMSNorm.init(dim, eps, NormGainFn.SIGMOID)
-    return RMSNorm.init(dim, eps, cfg.norm_gain_fn)
+    return RMSNorm.init(dim, eps, _norm_gain_overrides(cfg).get(role, cfg.norm_gain_fn))
+
+
+def _norm_gain_overrides(cfg: "GrugModelConfig") -> dict[str, NormGainFn]:
+    """``norm_gain_overrides`` as ``{role: NormGainFn}``; raises on a malformed entry or an unknown function."""
+    out = {}
+    for entry in cfg.norm_gain_overrides:
+        role, sep, fn = entry.partition(":")
+        if not sep:
+            raise ValueError(f"norm_gain_overrides entries are role:fn, got {entry!r}")
+        out[role] = NormGainFn(fn)
+    return out
 
 
 def _zero_centered_gammas(module: eqx.Module | None) -> list[jax.Array]:
@@ -3291,7 +3306,9 @@ class MoEMLP(eqx.Module):
                 if latent is None or (selects and not cfg.latent_select_plus_proj)
                 else reshard(_latent_proj_init(cfg, k_down, (d, latent)), P(_FSDP_AXES, "model"))
             ),
-            latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
+            latent_norm=(
+                None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps, role="moe_latent")
+            ),
             w_latent_up=(
                 reshard(_latent_proj_init(cfg, k_up, (out_width, d)), P("model", _FSDP_AXES))
                 if cfg.has_latent_up
@@ -4057,6 +4074,18 @@ def _branch_output_stats(attn_out: jax.Array, mlp_out: jax.Array) -> dict[str, j
     return out
 
 
+_ATTN_DROPOUT_SALT, _MLP_DROPOUT_SALT = 0xD1, 0xD2
+
+
+def _sublayer_dropout(cfg: "GrugModelConfig", x: jax.Array, noise_key: jax.Array | None, salt: int) -> jax.Array:
+    """``sublayer_dropout`` on one sublayer output; identity in evaluation (no key) or at p = 0."""
+    p = cfg.sublayer_dropout
+    if not p or noise_key is None:
+        return x
+    keep = jax.random.bernoulli(jax.random.fold_in(noise_key, salt), 1.0 - p, x.shape, out_sharding=_batch_spec())
+    return jnp.where(keep, x / (1.0 - p), jnp.zeros_like(x)).astype(x.dtype)
+
+
 def refresh_attn_prev(new: "Transformer", old: "Transformer") -> "Transformer":
     """``new`` with every ``Block.attn_prev`` set to ``old``'s current attention weights (``dual_attn_prev``)."""
     is_block = lambda x: isinstance(x, Block)  # noqa: E731
@@ -4474,7 +4503,7 @@ class Block(eqx.Module):
             rms_attn=(
                 DyT.init(cfg.hidden_dim, cfg.dyt_alpha_attn)
                 if cfg.dyt_norm
-                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps)
+                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_attn")
             ),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=attn,
@@ -4482,7 +4511,7 @@ class Block(eqx.Module):
             rms_mlp=(
                 DyT.init(cfg.hidden_dim, cfg.dyt_alpha_mlp)
                 if cfg.dyt_norm
-                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps)
+                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_mlp")
             ),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=mlp,
@@ -5544,6 +5573,7 @@ def _attn_res_layer(
         )
         odd = reshard((jnp.arange(attn_out.shape[0]) % 2 == 1)[:, None, None], P(_BATCH_AXES, None, None))
         attn_out = jnp.where(odd, old_out, attn_out)
+    attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
     shortcut_partial = partial
     partial = attn_out if partial is None else partial + attn_out
     mlp_partial = shortcut_partial if cfg.moe_shortcut else partial
@@ -5554,6 +5584,7 @@ def _attn_res_layer(
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
+    mlp_out = _sublayer_dropout(cfg, mlp_out, noise_key, _MLP_DROPOUT_SALT)
     if cfg.layer_output_stats:
         router_stats = {**router_stats, **_branch_output_stats(attn_out, mlp_out)}
     spot = _probe_spot()
@@ -6078,7 +6109,7 @@ class Transformer(eqx.Module):
             kda_blocks=stack(kda_layers, True) if kda_layers else None,
             stacked_blocks_tail=stack(softmax_tail, False, tail_cfg) if softmax_tail else None,
             kda_blocks_tail=stack(kda_tail, True, tail_cfg) if kda_tail else None,
-            final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
+            final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="final"),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
             ),

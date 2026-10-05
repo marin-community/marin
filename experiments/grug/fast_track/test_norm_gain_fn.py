@@ -70,14 +70,17 @@ def test_norm_gain_lr_mult_scales_only_the_norm_gains():
     )
 
 
-def test_sigmoid_gain_norms_put_only_the_named_norms_on_a_sigmoid_at_half():
-    mesh, model = t._model(ngram_stat_rows=0, sigmoid_gain_norms=("embed",))
+def test_norm_gain_overrides_change_only_the_named_norms():
+    mesh, model = t._model(ngram_stat_rows=0, norm_gain_overrides=("embed:sigmoid", "final:exp"))
     with jax.set_mesh(mesh):
         np.testing.assert_allclose(np.asarray(model.embed_norm.gain()), 0.5, rtol=1e-6)
-        np.testing.assert_allclose(np.asarray(model.final_norm.gain()), 1.0, rtol=1e-6)
-    assert model.embed_norm.gain_fn == NormGainFn.SIGMOID and model.final_norm.gain_fn == NormGainFn.LINEAR
+        np.testing.assert_allclose(np.asarray(model.final_norm.gain()), 1.0, rtol=1e-6)  # e^0
+    assert model.embed_norm.gain_fn == NormGainFn.SIGMOID and model.final_norm.gain_fn == NormGainFn.EXP
+    assert model.stacked_blocks.stacked.rms_mlp.gain_fn == NormGainFn.LINEAR
 
 
-def test_sigmoid_gain_norms_rejects_unknown_names():
+def test_norm_gain_overrides_reject_unknown_norms_and_malformed_entries():
     with pytest.raises(ValueError, match="unknown norms"):
-        t._config(sigmoid_gain_norms=("final",))
+        t._config(norm_gain_overrides=("lm_head:exp",))
+    with pytest.raises(ValueError, match="role:fn"):
+        t._config(norm_gain_overrides=("final",))
