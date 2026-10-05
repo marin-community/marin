@@ -68,3 +68,16 @@ def test_norm_gain_lr_mult_scales_only_the_norm_gains():
     np.testing.assert_allclose(
         np.asarray(fast.stacked_blocks.stacked.attn.w_q), np.asarray(base.stacked_blocks.stacked.attn.w_q), rtol=1e-5
     )
+
+
+def test_sigmoid_gain_norms_put_only_the_named_norms_on_a_sigmoid_at_half():
+    mesh, model = t._model(ngram_stat_rows=0, sigmoid_gain_norms=("embed",))
+    with jax.set_mesh(mesh):
+        np.testing.assert_allclose(np.asarray(model.embed_norm.gain()), 0.5, rtol=1e-6)
+        np.testing.assert_allclose(np.asarray(model.final_norm.gain()), 1.0, rtol=1e-6)
+    assert model.embed_norm.gain_fn == NormGainFn.SIGMOID and model.final_norm.gain_fn == NormGainFn.LINEAR
+
+
+def test_sigmoid_gain_norms_rejects_unknown_names():
+    with pytest.raises(ValueError, match="unknown norms"):
+        t._config(sigmoid_gain_norms=("final",))

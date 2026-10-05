@@ -278,6 +278,9 @@ class NormGainFn(StrEnum):
     """``softplus(w)``, init ``log(e - 1)``: positive, ~linear above 1, exponential-like near 0; 0.63x step at init."""
     SIGMOID2 = "sigmoid2"
     """``2 sigmoid(w)``, init 0: bounded in (0, 2); 0.5x step at init, slowing toward the bounds."""
+    SIGMOID = "sigmoid"
+    """``sigmoid(w)``, init 0 (a gain of 0.5, not 1): bounded in (0, 1), for norms whose gains settle below 1;
+    0.25x step at init. Only through ``sigmoid_gain_norms``, since it changes the model at init."""
 
 
 _GAIN_INIT = {
@@ -285,7 +288,11 @@ _GAIN_INIT = {
     NormGainFn.EXP: 0.0,
     NormGainFn.SOFTPLUS: math.log(math.e - 1.0),
     NormGainFn.SIGMOID2: 0.0,
+    NormGainFn.SIGMOID: 0.0,
 }
+
+# Norms ``sigmoid_gain_norms`` can name: the input embedding norms, MLA's kv-latent norm and KDA's output norm.
+SIGMOID_GAIN_ROLES = ("embed", "embed2", "kv_latent", "kda_o_norm")
 
 
 def apply_gain_fn(fn: NormGainFn, w: jax.Array) -> jax.Array:
@@ -298,6 +305,8 @@ def apply_gain_fn(fn: NormGainFn, w: jax.Array) -> jax.Array:
         return jax.nn.softplus(w)
     if fn == NormGainFn.SIGMOID2:
         return 2.0 * jax.nn.sigmoid(w)
+    if fn == NormGainFn.SIGMOID:
+        return jax.nn.sigmoid(w)
     raise ValueError(f"unknown NormGainFn {fn!r}")
 
 
@@ -761,6 +770,9 @@ class GrugModelConfig:
     sublayer_scale_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
     """How ``sublayer_scales`` reads each scalar from its parameter (``sigmoid2``: ``2 sigmoid(w)``, in (0, 2))."""
     norm_gain_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
+    sigmoid_gain_norms: tuple[str, ...] = ()
+    """Norms (``SIGMOID_GAIN_ROLES``) whose gain is ``sigmoid(w)`` (0.5 at init, in (0, 1)) instead of ``norm_gain_fn``:
+    for the norms whose learned gains stay below 1 (``embed``, ``embed2``, ``kv_latent``, ``kda_o_norm``)."""
     """How every learned RMSNorm gain is read from its parameter (``exp``: ``e^w``, ...); 1 at init in every case."""
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
@@ -1573,6 +1585,9 @@ class GrugModelConfig:
             raise ValueError("moe_shadow_width / moe_compress need a MoE with shared experts and no moe_shared_overlap")
         if (self.moe_compress != MoeCompress.NONE) != (self.moe_compress_weight > 0):
             raise ValueError("moe_compress and moe_compress_weight > 0 go together")
+        unknown = set(self.sigmoid_gain_norms) - set(SIGMOID_GAIN_ROLES)
+        if unknown:
+            raise ValueError(f"sigmoid_gain_norms: unknown norms {sorted(unknown)}; choose from {SIGMOID_GAIN_ROLES}")
         if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
             raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
@@ -1810,7 +1825,7 @@ class CausalSelfAttention(eqx.Module):
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(_init_weight(k_dkv, (cfg.kv_in_dim, kvl), std), P(_FSDP_AXES, None)),
-                kv_latent_norm=_learned_rms_norm(cfg, kvl, cfg.layer_norm_eps),
+                kv_latent_norm=_learned_rms_norm(cfg, kvl, cfg.layer_norm_eps, role="kv_latent"),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
                 w_uv=reshard(_init_weight(k_uv, (kvl, n * h), std), P(None, "model")),
                 value_embed=(
@@ -2642,7 +2657,7 @@ class KimiDeltaAttention(eqx.Module):
                     P(None, None),
                 )
             ),
-            o_norm=_learned_rms_norm(cfg, h, 1e-6),
+            o_norm=_learned_rms_norm(cfg, h, 1e-6, role="kda_o_norm"),
             bias_qkv=jnp.zeros((3, n * h)) if "qkv" in cfg.proj_biases else None,
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
@@ -2895,12 +2910,14 @@ class ZeroCenteredRMSNorm(eqx.Module):
 LearnedRMSNorm = RMSNorm | ZeroCenteredRMSNorm
 
 
-def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float) -> LearnedRMSNorm:
+def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float, role: str | None = None) -> LearnedRMSNorm:
     """A learned-gain RMSNorm, zero-centered under ``cfg.zero_centered_gains``."""
     if cfg.zero_centered_gains:
         if cfg.norm_gain_fn != NormGainFn.LINEAR:
             raise ValueError("zero_centered_gains already reparameterizes the gain (1 + gamma); use norm_gain_fn=linear")
         return ZeroCenteredRMSNorm.init(dim, eps)
+    if role is not None and role in cfg.sigmoid_gain_norms:
+        return RMSNorm.init(dim, eps, NormGainFn.SIGMOID)
     return RMSNorm.init(dim, eps, cfg.norm_gain_fn)
 
 
@@ -5912,7 +5929,7 @@ class Transformer(eqx.Module):
         tail_cfg = _tail_layer_config(cfg)
         model = Transformer(
             token_embed=token_embed,
-            embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed"),
             embed_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key) if cfg.embed_gated_norm else None
             ),
@@ -5997,7 +6014,9 @@ class Transformer(eqx.Module):
                 if cfg.second_embed and cfg.second_embed_mode == "input"
                 else None
             ),
-            embed2_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
+            embed2_norm=(
+                _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed2") if cfg.second_embed else None
+            ),
             bigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.bigram_gate else None,
             bigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.bigram_gate else None,
             trigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.trigram_gate else None,
