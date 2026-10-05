@@ -1,6 +1,10 @@
 # TaskCompendium
 
-The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every input, source locator, edit and rejection reason. Recipe families declare inputs, normalization and rubrics; the experiment binds download artifacts and inference clients.
+The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every selected input, source locator, edit and rejection reason. Library families define normalization, checks and rubrics; the experiment binds pinned inputs, intended use, download artifacts and inference clients.
+
+For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
+and the [experiment flow](../../experiments/post_training/task_curation/README.md).
+The sections below describe the task model and its presentation and grading contracts.
 
 ## What problem does it solve?
 
