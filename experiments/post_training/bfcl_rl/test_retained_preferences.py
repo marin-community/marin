@@ -114,14 +114,18 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
     # The teacher's IDs intentionally lie outside this student's small vocabulary.
     teacher_record = _record("teacher", 1.0)
-    teacher_record["response"]["token_ids"] = [248000, 248001, 248002, 248003]
-    teacher_record["response"]["step_boundaries"][1]["prompt_token_ids"] = [1, 2, 248000, 248001, 99]
+    teacher_record["response"] = {
+        "token_ids": [9, 248000, 248001, 99, 248002, 248003, 42],
+        "loss_mask": [0, 1, 1, 0, 0, 1, 0],
+        "step_boundaries": [{"prompt_token_ids": [1, 2], "token_start": 0, "token_end": 7}],
+    }
     identity = replace(_identity("teacher"), harness="opencode@1.18.2")
     trial = {
         "task_name": TASK.name,
         "exception_info": None,
         "verifier_result": {"rewards": {"reward": 1.0}},
-        "config": {"agent": {"name": "opencode", "version": "1.18.2"}},
+        "config": {"agent": {"name": "opencode"}},
+        "agent_info": {"name": "opencode", "version": "1.18.2"},
         "agent_result": {"metadata": {"rollout_correlation_id": "native-trial"}},
     }
     entries = [
@@ -131,7 +135,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
             "status_code": 200,
             "request": {"messages": messages[:2] if index == 0 else messages[:-1], "tools": tools},
             "literal": {
-                "prompt_token_ids": teacher_record["response"]["step_boundaries"][index]["prompt_token_ids"],
+                "prompt_token_ids": [1, 2, 9] if index == 0 else [1, 2, 9, 248000, 248001, 99, 248002],
                 "completion_token_ids": tokens,
                 "assistant_message": assistant,
             },
@@ -155,7 +159,20 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         partition=PARTITION,
         assistant_prefill="<think>\n",
     )
-    assert trace is not None
+    assert trace.messages == messages
+    assert trace.initial_messages == messages[:2]
+    with pytest.raises(ValueError, match="differ from retained trainable"):
+        native_model_trace(
+            identity=identity,
+            seed=7,
+            retained_record=teacher_record,
+            retained_uri="retained",
+            native_trace_uri="literal",
+            trial_result=trial,
+            literal_entries=[entries[-1]],
+            partition=PARTITION,
+            assistant_prefill="<think>\n",
+        )
     duplicate = replace(
         trace,
         seed=8,
@@ -427,7 +444,8 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
         "task_name": TASK.name,
         "exception_info": None,
         "verifier_result": {"rewards": {"reward": 1.0}},
-        "config": {"agent": {"name": "opencode", "version": "1.18.2"}},
+        "config": {"agent": {"name": "opencode"}},
+        "agent_info": {"name": "opencode", "version": "1.18.2"},
         "agent_result": {"metadata": {"rollout_correlation_id": "correct-trial"}},
     }
     trial_path = tmp_path / "attempts/trace_jobs/eval_sessions/native/task/result.json"
@@ -447,7 +465,7 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
             "status_code": 200,
             "request": {"messages": messages[:1]},
             "literal": {
-                "prompt_token_ids": boundary["prompt_token_ids"],
+                "prompt_token_ids": boundary["prompt_token_ids"] + ([20] if index else []),
                 "completion_token_ids": completion,
                 "assistant_message": messages[1],
             },
@@ -520,7 +538,8 @@ def _native_pair_collection(
                 "task_name": task.name,
                 "exception_info": None,
                 "verifier_result": {"rewards": {"reward": score or 0.0}},
-                "config": {"agent": {"name": profile["name"], "version": profile["version"]}},
+                "config": {"agent": {"name": profile["name"]}},
+                "agent_info": {"name": profile["name"], "version": profile["version"]},
                 "agent_result": {"metadata": {"rollout_correlation_id": trial_id}},
             }
             if model == "student" and index == 0 and fault == "agent_error":
@@ -591,7 +610,9 @@ def _native_pair_collection(
                                 "tools": tools,
                             },
                             "literal": {
-                                "prompt_token_ids": boundary["prompt_token_ids"],
+                                "prompt_token_ids": (
+                                    boundary["prompt_token_ids"] + ([response[0]] if masks[0] == 0 else [])
+                                ),
                                 "completion_token_ids": completion,
                                 "assistant_message": assistant if step == 0 else final,
                             },

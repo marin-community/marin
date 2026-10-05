@@ -72,7 +72,7 @@ def native_model_trace(
     score = 1.0 if retained.rollout.outcome is RolloutOutcome.CORRECT else 0.0
     if trial_result["exception_info"] is not None or trial_result["verifier_result"]["rewards"] != {"reward": score}:
         raise ValueError("Native trial does not confirm the retained verifier outcome")
-    agent = trial_result["config"]["agent"]
+    agent = trial_result["agent_info"]
     if identity.harness != f"{agent['name']}@{agent['version']}":
         raise ValueError("Native trial and collection harness differ")
     correlation_id = trial_result["agent_result"]["metadata"]["rollout_correlation_id"]
@@ -91,16 +91,28 @@ def native_model_trace(
     )
     selected = []
     for step in retained.steps:
-        trainable = [token for token, mask in zip(step.response_token_ids, step.loss_mask, strict=True) if mask]
-        matches = [
-            entry
-            for entry in entries
-            if entry["literal"]["prompt_token_ids"] == list(step.prompt_token_ids)
-            and entry["literal"]["completion_token_ids"] == trainable
-        ]
-        if len(matches) != 1:
-            raise ValueError("Native literal completions differ from retained trainable teacher tokens")
-        selected.append(matches[0])
+        # One Harbor environment step can contain several model calls. Its exact
+        # served stream includes masked generation prefixes, tool observations,
+        # and optional trailing template tokens after the final sampled EOS.
+        stream = [*step.prompt_token_ids, *step.response_token_ids]
+        covered = [0] * len(step.response_token_ids)
+        matches = []
+        for entry in entries:
+            prompt = entry["literal"]["prompt_token_ids"]
+            completion = entry["literal"]["completion_token_ids"]
+            start = len(prompt) - len(step.prompt_token_ids)
+            end = start + len(completion)
+            if start < 0 or end > len(covered) or stream[: len(prompt)] != prompt:
+                continue
+            if list(step.response_token_ids[start:end]) != completion or not all(step.loss_mask[start:end]):
+                continue
+            if any(covered[start:end]):
+                raise ValueError("Native literal completions ambiguously cover retained trainable tokens")
+            covered[start:end] = [1] * len(completion)
+            matches.append(entry)
+        if not matches or covered != list(step.loss_mask):
+            raise ValueError("Native literal completions differ from retained trainable tokens")
+        selected.extend(matches)
     if not selected or any(a["timestamp"] >= b["timestamp"] for a, b in pairwise(selected)):
         raise ValueError("Retained native steps lack an ordered literal chain")
     final = selected[-1]
