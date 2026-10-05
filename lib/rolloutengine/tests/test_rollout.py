@@ -5,15 +5,15 @@
 
 import asyncio
 import json
-import math
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, Result, ShellSimBuiltins
 from taskcompendium.environment import (
     ArtifactKind,
+    DockerBuild,
     EnvironmentCommand,
     EnvironmentFile,
     EnvironmentKind,
@@ -34,7 +34,10 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FunctionDefinition,
     Source,
+    StageRewardStrategy,
+    StageVerifierSpec,
     TaskSpec,
+    TaskStage,
     TextMessage,
     VerifierKind,
     VerifierSpec,
@@ -86,13 +89,15 @@ def arithmetic_task() -> TaskSpec:
     )
 
 
-def engine(model, factories) -> ShellboxRolloutEngine:
+def engine(model, factories, *, cleanup_timeout=5, sessions=None, max_turns=3) -> ShellboxRolloutEngine:
     return ShellboxRolloutEngine(
         model.complete,
         factories,
-        max_turns=3,
+        max_turns=max_turns,
         command_timeout=5,
+        cleanup_timeout=cleanup_timeout,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        sessions=sessions,
     )
 
 
@@ -141,6 +146,7 @@ async def test_executable_answer_call_keeps_submission_tool_and_finishes():
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
         max_turns=3,
         command_timeout=5,
+        cleanup_timeout=5,
         convention=SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
     )
 
@@ -326,12 +332,10 @@ async def test_custom_session_uses_prepared_machine_and_releases_it_after_sessio
             assert result.exit_code == 0
 
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    runner = ShellboxRolloutEngine(
-        model.complete,
+    runner = engine(
+        model,
         {EnvironmentKind.SHELLSIM: factory},
         max_turns=2,
-        command_timeout=5,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         sessions={"file-answer": FileAnswerSession},
     )
     pending = asyncio.create_task(runner.run(task))
@@ -407,9 +411,34 @@ async def test_failed_shell_grader_has_no_reward():
     assert (result.grade.status, result.grade.reward) == (Outcome.INFRA_ERROR, None)
 
 
-async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine():
+@pytest.mark.parametrize("timeout_phase", ["model", "advance"])
+@pytest.mark.parametrize("staged", [False, True])
+async def test_agent_deadline_grades_the_workspace_and_preserves_tokens(timeout_phase, staged):
     factory = RecordingShellSimFactory()
     machines = factory.machines
+
+    class SlowMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            result = await self.machine.run(command)
+            if timeout_phase == "advance" and command.argv == ("sh", "-c", "echo 12 > /workspace/answer"):
+                await asyncio.Future()
+            return result
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            return SlowMachine(await factory.create(spec))
 
     class StalledModel(ReplayModel):
         async def complete(self, request):
@@ -432,16 +461,158 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
         ]
     )
     task = file_task().model_copy(update={"agent_timeout": 1.0})
-    with pytest.raises(RolloutInterrupted) as failure:
-        await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task)
-    assert isinstance(failure.value.__cause__, TimeoutError)
-    assert failure.value.operation == RolloutOperation.MODEL
-    rollout = failure.value.rollout
+    if staged:
+        task = task.model_copy(
+            update={
+                "stages": (
+                    TaskStage(name="first", verifier=task.verifier),
+                    TaskStage(name="not-attempted", verifier=task.verifier),
+                ),
+                "verifier": VerifierSpec(
+                    kind=VerifierKind.STAGED,
+                    parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+                ),
+            }
+        )
+    rollout = await engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(task)
+    assert rollout.stop_reason == "agent_timeout"
+    assert rollout.failure is None
     assert rollout.response_token_ids == (20,)
     assert rollout.loss_mask == (1,)
+    assert rollout.logprobs == (-0.5,)
+    assert rollout.messages[-1]["tool_calls"][0]["id"] == "write"
+    assert len(rollout.steps) == 1
+    assert rollout.steps[0].transition.metrics == ({"advance_incomplete": 1.0} if timeout_phase == "advance" else {})
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
+    if staged:
+        assert [stage["name"] for stage in rollout.grade.diagnostics["stages"]] == ["first"]
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(("true",)))
+
+
+async def test_model_failure_grading_keeps_its_own_deadline_and_original_cause():
+    grading_started = asyncio.Event()
+    release_grade = asyncio.Event()
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Continue."},), {})
+
+        async def advance(self, turn):
+            return Transition(done=False)
+
+        async def grade(self, messages):
+            grading_started.set()
+            await release_grade.wait()
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    class FailedModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise ConnectionError("Serving failed")
+            return await super().complete(request)
+
+    task = arithmetic_task().model_copy(
+        update={"agent_timeout": 1, "environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="fixture")}
+    )
+    runner = engine(
+        FailedModel([{"role": "assistant", "content": "12"}]),
+        {},
+        sessions={"fixture": lambda task, machine: Session()},
+    )
+    pending = asyncio.create_task(runner.run(task))
+    await asyncio.wait_for(grading_started.wait(), timeout=5)
+    # The verifier remains active beyond the agent deadline.
+    asyncio.get_running_loop().call_later(1.1, release_grade.set)
+    with pytest.raises(RolloutInterrupted) as failure:
+        await pending
+    assert failure.value.operation == RolloutOperation.MODEL
+    assert isinstance(failure.value.__cause__, ConnectionError)
+    assert failure.value.rollout.grade.reward == 1.0
+    assert failure.value.rollout.response_token_ids == (20,)
+
+
+@pytest.mark.parametrize("staged", [False, True])
+async def test_agent_deadline_without_a_response_does_not_grade_an_untouched_workspace(staged):
+    factory = RecordingShellSimFactory()
+    task = file_task().model_copy(
+        update={
+            "agent_timeout": 0.05,
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                files=(EnvironmentFile(path="/workspace/answer", content=b"12\n"),),
+            ),
+        }
+    )
+    if staged:
+        task = task.model_copy(
+            update={
+                "stages": (
+                    TaskStage(name="first", verifier=task.verifier),
+                    TaskStage(name="second", verifier=task.verifier),
+                ),
+                "verifier": VerifierSpec(
+                    kind=VerifierKind.STAGED,
+                    parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+                ),
+            }
+        )
+
+    class Model:
+        async def complete(self, _request):
+            await asyncio.Future()
+
+    record = await engine(Model(), {EnvironmentKind.SHELLSIM: factory}).run(task)
+    assert (record.grade.status, record.grade.reward) == (Outcome.UNAVAILABLE, None)
+    assert record.stop_reason == "agent_timeout"
+    assert record.response_token_ids == record.loss_mask == ()
+    assert record.steps == ()
+    if staged:
+        assert [stage["name"] for stage in record.grade.diagnostics["stages"]] == ["first"]
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
+
+
+async def test_agent_timeout_grades_the_recorded_transcript_without_unserved_observations():
+    class Session:
+        def __init__(self, _task, _machine):
+            pass
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
+
+        async def grade(self, messages):
+            return GradeResult(
+                Outcome.GRADED,
+                float(messages[-1]["content"] == "12"),
+                diagnostics={"graded_messages": messages},
+            )
+
+        async def close(self):
+            pass
+
+    class Model(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                await asyncio.Future()
+            return await super().complete(request)
+
+    task = arithmetic_task().model_copy(
+        update={"agent_timeout": 0.05, "environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="fixture")}
+    )
+    record = await engine(Model([{"role": "assistant", "content": "12"}]), {}, sessions={"fixture": Session}).run(task)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.stop_reason == "agent_timeout"
+    assert record.grade.diagnostics["graded_messages"] == record.messages
+    assert record.messages[-1] == {"role": "assistant", "content": "12"}
+    assert record.response_token_ids == (20,)
+    assert record.loss_mask == (1,)
 
 
 @pytest.mark.parametrize(
@@ -647,7 +818,7 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
             await machine.run(Command(("true",)))
 
 
-async def test_attempt_deadline_and_cancellation_wait_for_machine_cleanup():
+async def test_cancellation_waits_for_machine_cleanup_after_startup_failure():
     loop = asyncio.get_running_loop()
     close_started = loop.create_future()
     machine = await ShellSimMachineFactory().create(MachineSpec(source=ShellSimBuiltins()))
@@ -673,8 +844,7 @@ async def test_attempt_deadline_and_cancellation_wait_for_machine_cleanup():
                 kind=EnvironmentKind.SHELLSIM,
                 files=(EnvironmentFile(path="/input", content=b"input"),),
             ),
-            # The positive deadline expires before the first suspension in machine cleanup.
-            "attempt_timeout": math.nextafter(0.0, 1.0),
+            "attempt_timeout": 1,
         }
     )
     runner = engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: Factory()})
@@ -686,6 +856,291 @@ async def test_attempt_deadline_and_cancellation_wait_for_machine_cleanup():
         await pending
     with pytest.raises(RuntimeError, match="closed"):
         await machine.run(Command(("true",)))
+
+
+@pytest.mark.parametrize("operation", ["machine_close", "session_close"])
+@pytest.mark.parametrize("model_failed", [False, True])
+async def test_cleanup_errors_preserve_completed_grades_and_the_primary_failure(operation, model_failed):
+    factory = RecordingShellSimFactory()
+    secret = "private-cleanup-detail"
+
+    class Machine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def close(self):
+            await self.machine.close()
+            if operation == "machine_close":
+                raise OSError(secret)
+
+    class Factory:
+        async def create(self, spec):
+            return Machine(await factory.create(spec))
+
+    class Session:
+        def __init__(self, _task, _machine):
+            pass
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=not model_failed)
+
+        async def grade(self, _messages):
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            if operation == "session_close":
+                raise OSError(secret)
+
+    class Model(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise TimeoutError("Model server deadline expired")
+            return await super().complete(request)
+
+    task = arithmetic_task().model_copy(
+        update={"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, interaction="fixture")}
+    )
+    model = Model([{"role": "assistant", "content": "12"}])
+    runner = engine(
+        model,
+        {EnvironmentKind.SHELLSIM: Factory()},
+        cleanup_timeout=1,
+        sessions={"fixture": Session},
+    )
+    if model_failed:
+        with pytest.raises(RolloutInterrupted) as caught:
+            await runner.run(task)
+        assert caught.value.operation == RolloutOperation.MODEL
+        assert isinstance(caught.value.__cause__, TimeoutError)
+        record = caught.value.rollout
+    else:
+        record = await runner.run(task)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.response_token_ids == (20,)
+    assert record.loss_mask == (1,)
+    assert record.grade.diagnostics["cleanup_errors"] == [{"operation": operation, "exception_type": "OSError"}]
+    assert record.metrics["cleanup_error_count"] == 1.0
+    assert secret not in json.dumps(record.grade.diagnostics)
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_cleanup_deadline_bounds_a_close_that_suppresses_cancellation(cancel):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+    factory = RecordingShellSimFactory()
+
+    class Machine:
+        async def close(self):
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            await factory.machines[0].close()
+            closed.set()
+
+    class Factory:
+        async def create(self, spec):
+            await factory.create(spec)
+            return Machine()
+
+    runner = engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        {EnvironmentKind.SHELLSIM: Factory()},
+        cleanup_timeout=0.05,
+    )
+    task = arithmetic_task().model_copy(update={"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM)})
+    pending = asyncio.create_task(runner.run(task))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        if cancel:
+            pending.cancel()
+            asyncio.get_running_loop().call_soon(pending.cancel)
+        done, _ = await asyncio.wait((pending,), timeout=1)
+        assert pending in done
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        else:
+            record = pending.result()
+            assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+            assert record.response_token_ids == (20,)
+            assert record.grade.diagnostics["cleanup_errors"] == [
+                {"operation": "machine_close", "exception_type": "TimeoutError"}
+            ]
+    finally:
+        release.set()
+        await asyncio.wait_for(closed.wait(), timeout=5)
+        if not pending.done():
+            pending.cancel()
+        try:
+            await pending
+        except asyncio.CancelledError:
+            pass
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
+
+
+@pytest.mark.parametrize("interruption", ["startup", "attempt", "cancel"])
+async def test_cancelled_creation_keeps_build_files_and_disposes_the_late_machine(interruption):
+    started = asyncio.Event()
+    closed = asyncio.Event()
+    release = threading.Event()
+    machines = []
+    contexts = []
+
+    class Machine:
+        async def close(self):
+            await machines[0].close()
+            closed.set()
+
+    class Factory:
+        async def create(self, spec):
+            contexts.append(spec.source.context)
+            machine = await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
+            machines.append(machine)
+            started.set()
+
+            def finish_creation():
+                release.wait()
+                assert spec.source.dockerfile.read_bytes() == b"FROM fixture\n"
+                return Machine()
+
+            return await asyncio.to_thread(finish_creation)
+
+    task = arithmetic_task().model_copy(
+        update={
+            "attempt_timeout": 1 if interruption == "attempt" else None,
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.DOCKER,
+                image=DockerBuild(files=(EnvironmentFile(path="/Dockerfile", content=b"FROM fixture\n"),)),
+                startup_timeout=1 if interruption == "startup" else None,
+            ),
+        }
+    )
+    runner = engine(ReplayModel([]), {EnvironmentKind.DOCKER: Factory()})
+    pending = asyncio.create_task(runner.run(task))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        if interruption == "cancel":
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        else:
+            with pytest.raises(RolloutInterrupted) as caught:
+                await pending
+            assert caught.value.operation == (
+                RolloutOperation.START if interruption == "startup" else RolloutOperation.ATTEMPT
+            )
+            assert isinstance(caught.value.__cause__, TimeoutError)
+            assert caught.value.rollout.response_token_ids == ()
+        assert contexts[0].exists()
+    finally:
+        release.set()
+        await asyncio.wait_for(closed.wait(), timeout=5)
+    assert not contexts[0].exists()
+    with pytest.raises(RuntimeError, match="closed"):
+        await machines[0].run(Command(("true",)))
+
+
+@pytest.mark.parametrize("model_failed", [False, True])
+@pytest.mark.parametrize("stage_chain", ["next", "last", "failed_gate"])
+async def test_private_grader_removal_failure_stops_only_a_continuing_chain_and_preserves_the_cause(
+    model_failed, stage_chain
+):
+    factory = RecordingShellSimFactory()
+
+    class Machine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv == ("rm", "-f", "/private/grade"):
+                raise OSError("Cannot remove private grader")
+            return await self.machine.run(command)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            return Machine(await factory.create(spec))
+
+    class Model(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise TimeoutError("Model server deadline expired")
+            return await super().complete(request)
+
+    verifier = VerifierSpec(
+        kind=VerifierKind.SHELL,
+        parameters_json=ShellVerifierSpec(
+            argv=("cat", "/private/grade"),
+            files=(EnvironmentFile(path="/private/grade", content=b"0.3\n"),),
+            timeout=5,
+        ).model_dump_json(),
+    )
+    task = arithmetic_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+            "stages": (
+                (
+                    TaskStage(
+                        name="first",
+                        verifier=verifier,
+                        minimum_rewards={"reward": 1} if stage_chain == "failed_gate" else {},
+                    ),
+                )
+                + (() if stage_chain == "last" else (TaskStage(name="second", verifier=verifier),))
+            ),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.STAGED,
+                parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.FINAL).model_dump_json(),
+            ),
+        }
+    )
+    message = (
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "work", "type": "function", "function": {"name": "shell", "arguments": '{"command":"true"}'}}
+            ],
+        }
+        if model_failed
+        else {"role": "assistant", "content": "Completed."}
+    )
+    model = Model([message])
+    runner = engine(model, {EnvironmentKind.SHELLSIM: Factory()})
+    if model_failed or stage_chain == "next":
+        with pytest.raises(RolloutInterrupted) as caught:
+            await runner.run(task)
+        assert caught.value.operation == (RolloutOperation.MODEL if model_failed else RolloutOperation.CLEANUP)
+        assert isinstance(caught.value.__cause__, TimeoutError if model_failed else OSError)
+        record = caught.value.rollout
+    else:
+        record = await runner.run(task)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 0.3)
+    assert record.response_token_ids == (20,)
+    assert record.loss_mask == (1,)
+    assert [stage["name"] for stage in record.grade.diagnostics["stages"]] == ["first"]
+    assert record.grade.diagnostics["cleanup_errors"] == [
+        {"operation": "stage_grader_remove", "exception_type": "OSError"}
+    ]
+    assert len(model.requests) == 1
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
 
 
 @pytest.mark.parametrize("answer,expected_reward", [(b"\x00\xff\r\n", 1.0), (b"incorrect", 0.0)])

@@ -28,6 +28,7 @@ from taskcompendium.submission import (
     submission_request,
 )
 
+from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
@@ -82,6 +83,7 @@ class _ShellboxTaskSession:
         convention: Submission,
         command_timeout: float,
         factories: Mapping[EnvironmentKind, MachineFactory],
+        cleanup: _Cleanup,
         stage: TaskStage | None = None,
     ):
         self.task = task
@@ -89,6 +91,7 @@ class _ShellboxTaskSession:
         self.convention = _task_submission(task, convention)
         self.command_timeout = command_timeout
         self.factories = factories
+        self.cleanup = cleanup
         self.stage = stage
 
     async def prepare(self) -> SessionStart:
@@ -170,7 +173,7 @@ class _ShellboxTaskSession:
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult:
-        return await _grade_rollout(self.task, self.convention, messages, self.machine, self.factories)
+        return await _grade_rollout(self.task, self.convention, messages, self.machine, self.factories, self.cleanup)
 
     async def close(self) -> None:
         pass
