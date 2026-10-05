@@ -93,6 +93,27 @@ class RolloutInterrupted(RuntimeError):
         super().__init__(f"Rollout interrupted during {operation}")
 
 
+class TaskSetupError(RuntimeError):
+    """A task's environment setup, healthcheck, or capability declaration failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str | None,
+        command: tuple[str, ...] | None = None,
+        exit_code: int | None = None,
+    ):
+        self.stage = stage
+        self.command = command
+        self.exit_code = exit_code
+        super().__init__(message)
+
+
+class TaskSetupTimeout(TaskSetupError):
+    """A task setup or healthcheck command exceeded its command timeout."""
+
+
 class RolloutContractError(ValueError):
     """Rollout evidence violates the exact-token contract."""
 

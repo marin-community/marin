@@ -19,7 +19,6 @@ from shellbox.machine import Command, ExitReason, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
 from taskcompendium.environment import (
     ArtifactKind,
-    EnvironmentCommand,
     EnvironmentFile,
     EnvironmentKind,
     ExitCodeReward,
@@ -36,7 +35,7 @@ from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardSt
 from taskcompendium.submission import Submission
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
+from rolloutengine.machines import _install_files, _machine_command, _task_machine
 
 MISSING_FILE_EXIT = 44
 
@@ -113,6 +112,14 @@ async def _grade_rollout(
         return await _shell_grade(verifier, messages, grading_machine, task.verifier.files)
 
 
+async def _remove_artifact_archive(machine: Machine, path: str, timeout: float) -> None:
+    result = await machine.run(Command(argv=("rm", "-f", path), timeout=timeout, user="0"))
+    if result.reason == ExitReason.TIMED_OUT:
+        raise TimeoutError("Artifact archive removal timed out")
+    if result.exit_code != 0:
+        raise RuntimeError(f"Artifact archive removal failed: {result.reason}, exit={result.exit_code}")
+
+
 async def _download_artifact(
     machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float, cleanup: _Cleanup
 ) -> bool:
@@ -169,12 +176,7 @@ async def _download_artifact(
     finally:
         await cleanup.run(
             "artifact_archive_remove",
-            partial(
-                _run_setup_commands,
-                machine,
-                (EnvironmentCommand(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"),),
-                "Artifact archive removal",
-            ),
+            partial(_remove_artifact_archive, machine, remote_archive, timeout),
         )
     return True
 
