@@ -20,6 +20,7 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.contract_tasks import digest
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_collection import (
     TeacherModelConfig,
     TeacherTask,
@@ -213,7 +214,10 @@ def test_student_row_masks_observations_keeps_code_and_does_not_truncate(student
     assert messages[2]["reasoning_content"] == "REASONINGMARKER"
 
 
-def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_families(tmp_path, student_tokenizer):
+@pytest.mark.parametrize("contract_failure", [False, True])
+def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_families(
+    tmp_path, student_tokenizer, contract_failure
+):
     selected = []
     tasks = {}
     for index in range(9):
@@ -234,6 +238,8 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
     async def send(request):
         body = json.loads(request.content)
         sent.append(body)
+        if contract_failure and not body["prompt_cache_key"].endswith("-preflight"):
+            return httpx.Response(200, json=model_response([], [101], {"role": "assistant", "content": "invalid"}))
         if body["messages"][-1]["role"] == "tool":
             answer = json.loads(body["messages"][-1]["content"])["stdout"].strip()
             if body["prompt_cache_key"].endswith("-01-0"):
@@ -293,6 +299,27 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
             assert sent == []
             assert not (tmp_path / "collection/plan.json").exists()
             tasks[admitted_task.id] = admitted_task
+            if contract_failure:
+                with pytest.raises(RolloutContractError, match="exact prompt and response token IDs"):
+                    await collect_teacher_rows(*args)
+                marker_path = tmp_path / "collection/contract-failure.json"
+                marker = json.loads(marker_path.read_text())
+                assert marker["task"] == asdict(selected[1])
+                assert marker["slot"] == "01-0"
+                assert marker["attempt"] == 0
+                assert marker["exception_type"] == "RolloutContractError"
+                assert marker["plan_sha256"] == compact_json_sha256(
+                    json.loads((tmp_path / "collection/plan.json").read_text())
+                )
+                assert not (tmp_path / "collection/trajectories/01-0/rollout.json").exists()
+                assert not (tmp_path / "collection/trajectories/01-0/qualification.json").exists()
+                count = len(sent)
+                saved_marker = marker_path.read_bytes()
+                with pytest.raises(RolloutContractError, match=marker["exception_message"]):
+                    await collect_teacher_rows(*args)
+                assert len(sent) == count
+                assert marker_path.read_bytes() == saved_marker
+                return None
             result = await collect_teacher_rows(*args)
             assert len(sent) == 22  # Four preflight requests, eight successes, and one failed two-turn attempt.
             assert await collect_teacher_rows(*args) == result
@@ -300,6 +327,9 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
             return result
 
     result = asyncio.run(run())
+    if contract_failure:
+        return
+    assert result is not None
     assert result["status"] == "passed"
     assert [row["task"]["family"] for row in result["accepted"]] == [f"family-{index}" for index in range(1, 9)]
     assert len(result["attempts"]) == 11

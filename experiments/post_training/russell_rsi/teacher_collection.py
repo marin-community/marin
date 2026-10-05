@@ -257,16 +257,21 @@ async def collect_teacher_rows(
             raise ValueError("Teacher task is not bound to an accepted canonical capability")
         if digest(tasks[entry.task_id].model_dump(mode="json")) != entry.task_sha256:
             raise ValueError("Teacher task differs from the frozen admitted task")
-    write_once(
-        directory / "plan.json",
-        {
-            "selected": [asdict(entry) for entry in selected],
-            "capabilities": capabilities,
-            "model": asdict(model),
-            "student_tokenizer_identity": tokenizer_identity,
-            "student_template_sha256": hashlib.sha256(MARIN_CHAT_TEMPLATE.encode()).hexdigest(),
-        },
-    )
+    plan = {
+        "selected": [asdict(entry) for entry in selected],
+        "capabilities": capabilities,
+        "model": asdict(model),
+        "student_tokenizer_identity": tokenizer_identity,
+        "student_template_sha256": hashlib.sha256(MARIN_CHAT_TEMPLATE.encode()).hexdigest(),
+    }
+    write_once(directory / "plan.json", plan)
+    plan_sha256 = compact_json_sha256(plan)
+    contract_failure_path = directory / "contract-failure.json"
+    if contract_failure_path.exists():
+        failure = json.loads(contract_failure_path.read_text())
+        if failure["plan_sha256"] != plan_sha256:
+            raise ValueError("Saved teacher contract failure differs from the collection plan")
+        raise RolloutContractError(failure["exception_message"])
     preflight = await teacher_preflight(
         client,
         resolve_base_url,
@@ -310,12 +315,25 @@ async def collect_teacher_rows(
                 def record_startup_failure(index: int, evidence: dict, attempt_directory: StoragePath = slot) -> None:
                     write_once(attempt_directory / f"startup-{index}.json", evidence)
 
-                _, record = await rollout_evidence(
-                    engine,
-                    task,
-                    startup_attempts=TEACHER_STARTUP_ATTEMPTS,
-                    record_startup_failure=record_startup_failure,
-                )
+                try:
+                    _, record = await rollout_evidence(
+                        engine,
+                        task,
+                        startup_attempts=TEACHER_STARTUP_ATTEMPTS,
+                        record_startup_failure=record_startup_failure,
+                    )
+                except RolloutContractError as error:
+                    write_once(
+                        contract_failure_path,
+                        {
+                            "plan_sha256": plan_sha256,
+                            "slot": f"{family_index:02d}-{attempt}",
+                            **identity,
+                            "exception_type": type(error).__name__,
+                            "exception_message": str(error),
+                        },
+                    )
+                    raise
                 write_once(rollout_path, record)
             record = json.loads(rollout_path.read_text())
             status = {**identity, "status": "failed", "rollout_sha256": compact_json_sha256(record)}
