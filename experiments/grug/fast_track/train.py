@@ -104,6 +104,7 @@ from experiments.grug.fast_track.model import (
     ZeroCenteredRMSNorm,
     forward_probe,
     ngram_stat_table_add,
+    refresh_attn_prev,
     tie_routers,
     write_ngram_stats,
 )
@@ -1004,7 +1005,8 @@ def _loss_and_grads(
     route_key = None
     cfg = params.config
     mtp_subsample = cfg.mtp_mode != MtpMode.OFF and cfg.mtp_position_frac < 1.0
-    if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample):
+    # dual_attn_prev only needs a key to tell training from evaluation (its odd-row branch is training-only).
+    if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample or cfg.dual_attn_prev):
         route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
 
     def loss_fn(model):
@@ -1346,7 +1348,7 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
 
 
 # Matrix leaves that are lookup tables, not projections (rows are read, never multiplied through).
-_NOT_PROJECTION = re.compile(r"embed|ngram_stat_table|router_bias|expert_visit_bias|null_const")
+_NOT_PROJECTION = re.compile(r"embed|ngram_stat_table|router_bias|expert_visit_bias|null_const|attn_prev")
 
 
 def _expert_axis_only(leaf: jax.Array) -> P:
@@ -1615,6 +1617,8 @@ def _make_train_step(
             metrics.update(magma_metrics(opt_state))
             metrics.update(expert_consistency_metrics(opt_state))
             params = optax.apply_updates(qb_params, updates)
+            if params.config.dual_attn_prev:
+                params = refresh_attn_prev(params, qb_params)
             master_params = None
         if params.ngram_stat_table is not None:
             # Write after read: this batch's targets enter the statistic table only once its step is done.

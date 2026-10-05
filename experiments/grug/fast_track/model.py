@@ -1214,6 +1214,11 @@ class GrugModelConfig:
     """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
     shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
     the model is unchanged at init. Added before QB, which then balances it. 0: off."""
+    dual_attn_prev: bool = False
+    """Two weight sets for every MLA attention module: the current weights and a frozen copy of the previous step's
+    (``Block.attn_prev``, refreshed by the trainer). In training, odd batch rows run attention with the previous
+    weights and even rows with the current ones; both rows' gradients reach the current weights, so each update uses
+    the gradient at both ends of the last step (about its midpoint). Evals use the current weights only. AttnRes only."""
     router_on_embed: bool = False
     """Every MoE router reads only the token's input embedding (RMS-normed, the first AttnRes source) instead of
     the layer's MLP input: routing by learned token identity, one router per layer. AttnRes only."""
@@ -1602,6 +1607,8 @@ class GrugModelConfig:
             raise ValueError(f"sigmoid_gain_norms: unknown norms {sorted(unknown)}; choose from {SIGMOID_GAIN_ROLES}")
         if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
             raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
+        if self.dual_attn_prev and (not self.attn_res or not self.mla):
+            raise ValueError("dual_attn_prev needs AttnRes and MLA attention")
         if self.router_on_embed and (
             self.router_on_latent
             or self.dense_mlp
@@ -4050,6 +4057,18 @@ def _branch_output_stats(attn_out: jax.Array, mlp_out: jax.Array) -> dict[str, j
     return out
 
 
+def refresh_attn_prev(new: "Transformer", old: "Transformer") -> "Transformer":
+    """``new`` with every ``Block.attn_prev`` set to ``old``'s current attention weights (``dual_attn_prev``)."""
+    is_block = lambda x: isinstance(x, Block)  # noqa: E731
+
+    def refresh(nb, ob):
+        if not is_block(nb) or nb.attn_prev is None:
+            return nb
+        return eqx.tree_at(lambda blk: blk.attn_prev, nb, jax.tree.map(jax.lax.stop_gradient, ob.attn))
+
+    return jax.tree.map(refresh, new, old, is_leaf=is_block)
+
+
 def _sconv_segment_ids(mask: AttentionMask | jax.Array) -> jax.Array | None:
     """segment_ids (packed-document boundaries) for the SConvs and KDA; None when unpacked."""
     segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -4380,6 +4399,8 @@ class Block(eqx.Module):
     rms_attn: LearnedRMSNorm | DyT
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention | KimiDeltaAttention
+    attn_prev: "CausalSelfAttention | None"
+    """The previous step's MLA attention weights (``dual_attn_prev``), frozen to the optimizer."""
     rms_mlp: LearnedRMSNorm | DyT
     mlp_gated_norm: GatedNorm
     mlp: "MoEMLP | DenseMLP"
@@ -4457,6 +4478,7 @@ class Block(eqx.Module):
             ),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=attn,
+            attn_prev=attn if cfg.dual_attn_prev and not use_kda else None,
             rms_mlp=(
                 DyT.init(cfg.hidden_dim, cfg.dyt_alpha_mlp)
                 if cfg.dyt_norm
@@ -5496,6 +5518,32 @@ def _attn_res_layer(
     )
     # The MLP re-attends over the history including this layer's attention write, or without it
     # (moe_shortcut) so the MoE does not wait on the attention.
+    if layer.attn_prev is not None and noise_key is not None:
+        # dual_attn_prev (training only: evals pass no route key): odd rows run attention at the previous step's
+        # weights. Their value is the old weights, their gradient goes to the current ones (identity Jacobian).
+        old_attn = jax.tree.map(
+            lambda prev, cur: (
+                jax.lax.stop_gradient(prev) + (cur - jax.lax.stop_gradient(cur)) if eqx.is_inexact_array(cur) else cur
+            ),
+            layer.attn_prev,
+            layer.attn,
+        )
+        old_out, _ = attn_branch(
+            eqx.tree_at(lambda blk: blk.attn, layer, old_attn),
+            h,
+            mask,
+            use_long,
+            use_long,
+            token_ids,
+            kv_share,
+            v_stream,
+            ("v",) if v_stream is not None else (),
+            kda_ablation,
+            physical in cfg.value_residual_layers,
+            _kv_stream_input(logit_bias),
+        )
+        odd = reshard((jnp.arange(attn_out.shape[0]) % 2 == 1)[:, None, None], P(_BATCH_AXES, None, None))
+        attn_out = jnp.where(odd, old_out, attn_out)
     shortcut_partial = partial
     partial = attn_out if partial is None else partial + attn_out
     mlp_partial = shortcut_partial if cfg.moe_shortcut else partial

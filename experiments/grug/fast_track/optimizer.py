@@ -475,7 +475,7 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
 LATENT_PROJ_UPDATES = ("muonh", "frozen", "stiefel")
 _LATENT_PROJ = re.compile(r"(?:^|\.)w_latent_(down|up)$")
-_FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask|embed2_sign_table)$")
+_FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask|embed2_sign_table)$|\.attn_prev\.")
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
 _MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk", "muonh_qk"})
 _HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
