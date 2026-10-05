@@ -32,6 +32,7 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.rollout_eval import rollout_evidence
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.token_preflight import run_token_preflight
@@ -254,7 +255,7 @@ async def collect_teacher_rows(
     for entry in selected:
         if entry.capability not in labels:
             raise ValueError("Teacher task is not bound to an accepted canonical capability")
-        if compact_json_sha256(tasks[entry.task_id].model_dump(mode="json")) != entry.task_sha256:
+        if digest(tasks[entry.task_id].model_dump(mode="json")) != entry.task_sha256:
             raise ValueError("Teacher task differs from the frozen admitted task")
     write_once(
         directory / "plan.json",

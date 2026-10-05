@@ -19,7 +19,7 @@ from taskcompendium.environment import EnvironmentKind
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
-from experiments.post_training.russell_rsi.sources import compact_json_sha256
+from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.teacher_collection import (
     TeacherModelConfig,
     TeacherTask,
@@ -219,9 +219,7 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
     for index in range(9):
         task = preflight_task(index + 10, PREFLIGHT_INSTRUCTION, 80000 + index)
         tasks[task.id] = task
-        selected.append(
-            TeacherTask(f"family-{index}", "boundaries", task.id, compact_json_sha256(task.model_dump(mode="json")))
-        )
+        selected.append(TeacherTask(f"family-{index}", "boundaries", task.id, digest(task.model_dump(mode="json"))))
     directory = StoragePath(str(tmp_path / "collection"))
     for attempt in range(2):
         write_once(
@@ -288,6 +286,13 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
                 {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
                 directory,
             )
+            admitted_task = tasks[selected[0].task_id]
+            tasks[admitted_task.id] = admitted_task.model_copy(update={"tags": ("changed-task",)})
+            with pytest.raises(ValueError, match="differs from the frozen admitted task"):
+                await collect_teacher_rows(*args)
+            assert sent == []
+            assert not (tmp_path / "collection/plan.json").exists()
+            tasks[admitted_task.id] = admitted_task
             result = await collect_teacher_rows(*args)
             assert len(sent) == 22  # Four preflight requests, eight successes, and one failed two-turn attempt.
             assert await collect_teacher_rows(*args) == result
