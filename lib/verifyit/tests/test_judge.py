@@ -36,6 +36,7 @@ class FakeJudgeServer(ThreadingHTTPServer):
     message_fields: dict
     response_fields: dict
     raw_body: str | None
+    usage: list[dict]
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -64,6 +65,7 @@ class _Handler(BaseHTTPRequestHandler):
                         ),
                     }
                 ],
+                **({"usage": server.usage[min(len(server.prompts) - 1, len(server.usage) - 1)]} if server.usage else {}),
             }
         ).encode()
         if self.path.endswith("/responses"):
@@ -107,6 +109,7 @@ def fake_judge(monkeypatch):
     server.message_fields = {}
     server.response_fields = {}
     server.raw_body = None
+    server.usage = []
     server.finish_reason = "stop"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -291,6 +294,81 @@ def test_incomplete_judge_score_is_unscored_and_removes_stale_rewards(tmp_path, 
     assert json.loads((logs / "verdict.json").read_text())["status"] == "infra_error"
     assert not (logs / "reward.json").exists()
     assert not (logs / "reward.txt").exists()
+
+
+def _usage(completion_tokens: int) -> dict:
+    return {"prompt_tokens": 100, "completion_tokens": completion_tokens, "total_tokens": 100 + completion_tokens}
+
+
+def test_checklist_sends_the_output_budget_and_records_each_criterion_call(tmp_path, fake_judge):
+    fake_judge.replies = ["Three steps.\nSCORE: 1", "Casual.\nSCORE: 0", "Names her.\nSCORE: 1"]
+    fake_judge.usage = [_usage(40), _usage(55), _usage(31)]
+    spec = _checklist(max_completion_tokens=131072, reasoning_effort="high")
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
+    assert (reward.status, reward.reward) == (Status.SCORED, pytest.approx(2 / 3))
+    assert [(request["max_completion_tokens"], request["reasoning_effort"]) for request in fake_judge.requests] == [
+        (131072, "high")
+    ] * 3
+    criteria = reward.detail["criteria"]
+    assert [criterion["completion"] for criterion in criteria] == fake_judge.replies
+    assert [criterion["calls"] for criterion in criteria] == [
+        [{"max_completion_tokens": 131072, "finish_reason": "stop", "completion_tokens": tokens}]
+        for tokens in (40, 55, 31)
+    ]
+
+
+def test_reference_retries_a_truncated_reply_with_the_larger_budget(tmp_path, fake_judge):
+    fake_judge.replies = ["The candidate", "Same answer.\nSCORE: 1"]
+    fake_judge.finish_reasons = ["length", "stop"]
+    fake_judge.usage = [_usage(1024), _usage(1500)]
+    spec = JudgeSpec(references=(REFERENCE,), exact_gate=False, max_completion_tokens=1024, incomplete_retry_tokens=4096)
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
+    assert (reward.status, reward.reward) == (Status.SCORED, 1.0)
+    assert "reasoning_effort" not in fake_judge.requests[0]
+    assert reward.detail["completion"] == "Same answer.\nSCORE: 1"
+    assert reward.detail["calls"] == [
+        {"max_completion_tokens": 1024, "finish_reason": "length", "completion_tokens": 1024},
+        {"max_completion_tokens": 4096, "finish_reason": "stop", "completion_tokens": 1500},
+    ]
+
+
+@pytest.mark.parametrize("rubric", ["reference", "checklist"])
+def test_reply_truncated_at_the_retry_budget_is_unscored(tmp_path, fake_judge, rubric):
+    fake_judge.replies = ["SCORE: 1"]
+    fake_judge.finish_reason = "length"
+    spec = JudgeSpec(
+        rubric=rubric,
+        references=(REFERENCE,),
+        criteria=("Be correct",),
+        exact_gate=False,
+        max_completion_tokens=1024,
+        incomplete_retry_tokens=4096,
+    )
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
+    assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
+    assert [request["max_completion_tokens"] for request in fake_judge.requests] == [1024, 4096]
+
+
+@pytest.mark.parametrize("rubric", ["reference", "checklist"])
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"max_completion_tokens": 0},
+        {"incomplete_retry_tokens": 8192},
+        {"request_timeout": float("inf")},
+    ],
+)
+def test_score_rubric_invalid_budget_never_calls_model(tmp_path, fake_judge, rubric, overrides):
+    spec = JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=("Be correct",), exact_gate=False, **overrides)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
+    assert reward.status is Status.INVALID_TASK
+    assert fake_judge.requests == []
 
 
 @pytest.mark.parametrize(

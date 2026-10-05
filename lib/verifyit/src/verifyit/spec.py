@@ -267,6 +267,10 @@ class JudgeSpec:
     question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside the
     answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
+
+    Every rubric sends ``max_completion_tokens`` and, when set, ``reasoning_effort`` with each
+    request. A reply truncated at that budget is requested again once with
+    ``incomplete_retry_tokens`` when it is nonzero; otherwise the grade is an infrastructure error.
     """
 
     references: tuple[str, ...] = ()
