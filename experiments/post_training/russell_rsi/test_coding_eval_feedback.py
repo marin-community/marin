@@ -10,6 +10,15 @@ from types import SimpleNamespace
 import pytest
 
 from experiments.post_training.russell_rsi import coding_eval_feedback as feedback_module
+from experiments.post_training.russell_rsi.coding_analysis_recovery import (
+    MERGE_RULE,
+    PARTITION_ALGORITHM,
+    PARTITION_PROTOCOL,
+    PartitionedCodingAnalysisConfig,
+    analyze_partitioned_coding_eval_failures,
+    complete_failure_partitions,
+    failure_key,
+)
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CODING_ANALYSIS_CONTEXT_PROTOCOL,
     CODING_SUITES,
@@ -315,3 +324,223 @@ def test_oversized_archived_test_stops_before_api_issuance(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="Complete coding evidence exceeds"):
         asyncio.run(analyze_coding_failures(config))
     assert not (output_dir / "private-analysis-issued.json").exists()
+
+
+def partitioned_analysis_fixture(tmp_path):
+    records, archives, panel = panel_fixture()
+    evidence = evidence_fixture(records, archives, panel)
+    evidence["static_test_evidence"]["items"][0]["test_source"] = "x" * 600_000
+    source = tmp_path / "evidence"
+    source.mkdir()
+    evidence_bytes = json.dumps(evidence).encode()
+    (source / "coding-evidence.json").write_bytes(evidence_bytes)
+    analysis = CodingAnalysisConfig(
+        str(source), "complete-evidence-v1", "relay", str(tmp_path / "analysis"), maximum_evidence_bytes=1_048_576
+    )
+    full_request = coding_analysis_request(evidence, maximum_evidence_bytes=1_048_576)
+    partitions = complete_failure_partitions(evidence, full_request)
+    manifest = {
+        "protocol": PARTITION_PROTOCOL,
+        "algorithm": PARTITION_ALGORITHM,
+        "merge_rule": MERGE_RULE,
+        "evidence_identity": analysis.evidence_identity,
+        "original_evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "original_request_sha256": compact_json_sha256(full_request),
+        "maximum_evidence_bytes": 1_048_576,
+        "maximum_failed_rows": 64,
+        "partitions": [],
+    }
+    requests = []
+    for part, partition in enumerate(partitions, 1):
+        request = coding_analysis_request(partition, maximum_evidence_bytes=1_048_576)
+        requests.append(request)
+        partition_sha = compact_json_sha256(partition)
+        preflight = {
+            "verified": True,
+            "request_sha256": compact_json_sha256(request),
+            "partition_evidence_sha256": partition_sha,
+            "evidence_identity": analysis.evidence_identity,
+            "evidence_sha256": manifest["original_evidence_sha256"],
+            "served_model": request["model"],
+            "prompt_tokens": 1000,
+            "max_output_tokens": 2048,
+            "context_limit": 4096,
+            "tokenizer_evidence": {
+                "method": "served_vllm_tokenize_and_chat_render",
+                "token_ids_sha256": "b" * 64,
+                "direct_server_evidence": {
+                    "render_error": None,
+                    "render_request_sha256": "a" * 64,
+                    "render_response_sha256": "b" * 64,
+                    "model_max_model_len": 4096,
+                    "tokenizer_max_model_len": 4096,
+                    "token_vectors": [{"equals_tokenize": True, "count": 1000, "sha256": "b" * 64}],
+                },
+            },
+        }
+        path = tmp_path / f"preflight-{part}.json"
+        path.write_text(json.dumps(preflight))
+        manifest["partitions"].append(
+            {
+                "part": part,
+                "failure_keys": [failure_key(row) for row in partition["rows"]],
+                "partition_evidence_sha256": partition_sha,
+                "request_sha256": compact_json_sha256(request),
+                "preflight_uri": str(path),
+                "preflight_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    config = PartitionedCodingAnalysisConfig(analysis, str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+    return evidence, config, requests, manifest
+
+
+def partition_response_fixture(part):
+    labels = (
+        [("types", 0.8), ("boundaries", 0.93), ("state", 0.91), ("ordering", 0.8)]
+        if part == 1
+        else [("types", 0.96), ("parsing", 0.9), ("error_handling", 0.9), ("change_scope", 0.69)]
+    )
+    content = {
+        "skills": [
+            {"skill": label, "confidence": confidence, "evidence": f"private part-{part} citation"}
+            for label, confidence in labels
+        ]
+    }
+    return {"choices": [{"message": {"content": json.dumps(content)}}]}
+
+
+def test_partitioned_analysis_keeps_complete_pairs_and_merges_four_raw_labels(tmp_path, monkeypatch):
+    evidence, config, requests, _manifest = partitioned_analysis_fixture(tmp_path)
+    full = json.loads(coding_analysis_request(evidence, maximum_evidence_bytes=1_048_576)["messages"][1]["content"])
+    first, second = [json.loads(request["messages"][1]["content"]) for request in requests]
+    assert first["failures"] == full["failures"][:1]
+    assert second["failures"] == full["failures"][1:]
+    assert (
+        first["static_test_evidence"]["items"] + second["static_test_evidence"]["items"]
+        == full["static_test_evidence"]["items"]
+    )
+    assert first["evaluation_context"] == second["evaluation_context"] == evidence["evaluation_context"]
+    failed_dir = tmp_path / "original-analysis"
+    failed_dir.mkdir()
+    with pytest.raises(ValueError, match="Complete coding evidence exceeds"):
+        asyncio.run(
+            analyze_coding_failures(
+                CodingAnalysisConfig(config.analysis.evidence_path, "original", "relay", str(failed_dir))
+            )
+        )
+    requests_sent = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["max_retries"] == 0
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def create(self, **request):
+            requests_sent.append(request)
+            response = partition_response_fixture(len(requests_sent))
+            return SimpleNamespace(model_dump=lambda **_kwargs: response)
+
+    monkeypatch.setattr(feedback_module, "AsyncOpenAI", Client)
+    monkeypatch.setattr(feedback_module, "resolve_glm_base_url", lambda _job: "https://relay.test")
+    monkeypatch.setenv(feedback_module.GLM_TOKEN_ENV, "test-token")
+    analyze_partitioned_coding_eval_failures(config)
+    analyze_partitioned_coding_eval_failures(config)
+    assert requests_sent == requests
+    capabilities = json.loads((tmp_path / "analysis/capabilities.json").read_text())
+    assert capabilities == {
+        "skills": [
+            {"label": label, "description": feedback_module.SKILL_DESCRIPTIONS[label]}
+            for label in ("boundaries", "error_handling", "state", "types")
+        ]
+    }
+    private = json.loads((tmp_path / "analysis/private-merged-analysis.json").read_text())
+    assert private["review_status"] == "raw-unreviewed"
+    assert len(private["entries"]) == 8
+    assert private["ranked_selected_labels"] == ["types", "boundaries", "state", "error_handling"]
+    assert {entry["disposition"] for entry in private["entries"]} == {
+        "selected",
+        "duplicate-label",
+        "below-confidence-threshold",
+        "four-label-limit",
+    }
+    assert not (failed_dir / "private-analysis-issued.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mismatch", ["request_sha256", "evidence_sha256", "context_limit", "file_pin", "failure_keys", "token_vector"]
+)
+def test_second_partition_mismatch_stops_before_either_request(tmp_path, monkeypatch, mismatch):
+    _evidence, config, _requests, manifest = partitioned_analysis_fixture(tmp_path)
+    second = manifest["partitions"][1]
+    path = tmp_path / "preflight-2.json"
+    preflight = json.loads(path.read_text())
+    if mismatch == "failure_keys":
+        second["failure_keys"] = []
+    elif mismatch == "token_vector":
+        preflight["tokenizer_evidence"]["direct_server_evidence"]["token_vectors"][0]["equals_tokenize"] = False
+    elif mismatch == "context_limit":
+        preflight[mismatch] = preflight["max_output_tokens"]
+    elif mismatch != "file_pin":
+        preflight[mismatch] = "changed"
+    path.write_text(json.dumps(preflight))
+    if mismatch != "file_pin":
+        second["preflight_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    else:
+        path.write_text(path.read_text() + "\n")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    config = PartitionedCodingAnalysisConfig(
+        config.analysis, str(manifest_path), hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    )
+
+    class NoCallClient:
+        def __init__(self, **_kwargs):
+            pytest.fail("Both partitions must pass preflight before either request")
+
+    monkeypatch.setattr(feedback_module, "AsyncOpenAI", NoCallClient)
+    with pytest.raises(ValueError):
+        analyze_partitioned_coding_eval_failures(config)
+    assert not (tmp_path / "analysis/capabilities.json").exists()
+    assert not list((tmp_path / "analysis").rglob("private-analysis-issued.json"))
+
+
+@pytest.mark.parametrize("failed_part", [1, 2])
+def test_ambiguous_partition_never_reissues_or_merges_partial_feedback(tmp_path, monkeypatch, failed_part):
+    _evidence, config, requests, _manifest = partitioned_analysis_fixture(tmp_path)
+    calls = []
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def create(self, **request):
+            calls.append(request)
+            if len(calls) == failed_part:
+                raise ConnectionError("transport closed after request send")
+            response = partition_response_fixture(len(calls))
+            return SimpleNamespace(model_dump=lambda **_kwargs: response)
+
+    monkeypatch.setattr(feedback_module, "AsyncOpenAI", Client)
+    monkeypatch.setattr(feedback_module, "resolve_glm_base_url", lambda _job: "https://relay.test")
+    monkeypatch.setenv(feedback_module.GLM_TOKEN_ENV, "test-token")
+    with pytest.raises(ConnectionError):
+        analyze_partitioned_coding_eval_failures(config)
+    with pytest.raises(ValueError, match="outcome is ambiguous"):
+        analyze_partitioned_coding_eval_failures(config)
+    assert calls == requests[:failed_part]
+    assert not (tmp_path / "analysis/capabilities.json").exists()
+    assert not (tmp_path / "analysis/private-merged-analysis.json").exists()

@@ -33,6 +33,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     round_plan,
     seal_round,
 )
+from experiments.post_training.russell_rsi.coding_analysis_recovery import CodingAnalysisAmendment
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CODING_ANALYSIS_CONTEXT_PROTOCOL,
     CodingPanel,
@@ -449,6 +450,37 @@ def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_r
         "max_staleness_steps": 0,
         "batch_policy": "full_batch",
     }
+
+    amended = bootstrap_round_workflow(
+        training,
+        retention,
+        parent,
+        "2026.10.04",
+        runtime,
+        {"backend": "qemu"},
+        round_number=2,
+        panel=CodingPanel((), {}),
+        relay_job="relay",
+        calibration=calibration,
+        sampling_mode=russell_launch.SamplingMode.CALIBRATED_REPLAY,
+        analysis_amendment=CodingAnalysisAmendment(1_048_576, "budget-recovery-v1", "/tmp/preflight.json", "a" * 64),
+    )
+    # These identities are the cache keys of the completed training and evaluation work.
+    for key in ("rl", "reload", "coding-development", "coding-evidence"):
+        assert artifact_identity(amended[key]) == artifact_identity(replay_terminals[key])
+        assert amended[key].fingerprint_payload() == replay_terminals[key].fingerprint_payload()
+    assert artifact_identity(amended["capabilities"]) != artifact_identity(replay_terminals["capabilities"])
+    assert amended["capabilities"].deps[0] is amended["coding-evidence"]
+    assert amended["capabilities"].deps[1].adopt_source == "/tmp/preflight.json"
+    expected_default = {
+        "evidence_path": f"{replay_terminals['coding-evidence'].name}@2026.10.04",
+        "evidence_identity": artifact_identity(replay_terminals["coding-evidence"]),
+        "relay_job": "relay",
+        "output_path": "<output_path>",
+        "maximum_failed_rows": 64,
+        "maximum_evidence_bytes": 524288,
+    }
+    assert json.loads(replay_terminals["capabilities"].fingerprint_payload()) == expected_default
 
 
 def test_replay_signal_stop_records_failure_without_advancing_pilot_counts(tmp_path):

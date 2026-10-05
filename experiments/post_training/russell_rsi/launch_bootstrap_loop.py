@@ -25,6 +25,7 @@ from experiments.post_training.russell_rsi.calibration_recovery import (
     calibration_recovery_step,
     grade_only_recovery_step,
 )
+from experiments.post_training.russell_rsi.coding_analysis_recovery import CodingAnalysisAmendment
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch import (
@@ -56,6 +57,12 @@ def canonical_labels(capabilities_bytes: bytes) -> tuple[str, ...]:
 def execute_loop(config: dict) -> None:
     """Resolve reviewed bank inputs and seal progress at each stage boundary."""
     reviewed_feedback_by_pilot = config["reviewed_feedback"]
+    amendment_values = config.get("analysis_amendments")
+    analysis_amendments = (
+        {int(number): CodingAnalysisAmendment(**value) for number, value in amendment_values.items()}
+        if amendment_values is not None
+        else None
+    )
 
     def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
         return ArtifactStep.adopt(
@@ -181,6 +188,7 @@ def execute_loop(config: dict) -> None:
         initial_calibration=initial_calibration,
         predecessor=predecessor,
         continuation_calibration=continuation_calibration,
+        **({"analysis_amendments": analysis_amendments} if analysis_amendments is not None else {}),
     )
 
 

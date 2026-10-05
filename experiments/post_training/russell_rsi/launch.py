@@ -64,6 +64,11 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     seal_round,
     write_once,
 )
+from experiments.post_training.russell_rsi.coding_analysis_recovery import (
+    CodingAnalysisAmendment,
+    PartitionedCodingAnalysisConfig,
+    analyze_partitioned_coding_eval_failures,
+)
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CODING_ANALYSIS_CONTEXT_PROTOCOL,
     CodingAnalysisConfig,
@@ -541,6 +546,7 @@ def coding_feedback_steps(
     version: str,
     label: str,
     relay_job: str,
+    analysis_amendment: CodingAnalysisAmendment | None = None,
 ) -> dict[str, ArtifactStep]:
     """Validate coding eval archives before the private capability analyst."""
 
@@ -565,6 +571,35 @@ def coding_feedback_steps(
         build_config=evidence_config,
         run=collect_coding_eval_evidence,
     )
+    if analysis_amendment is not None:
+        preflight = ArtifactStep.adopt(
+            f"documents/russell-rsi-{label}-analysis-preflight-{analysis_amendment.preflight_sha256}",
+            version,
+            analysis_amendment.preflight_uri,
+            config={"manifest_sha256": analysis_amendment.preflight_sha256},
+        )
+        analysis = ArtifactStep(
+            name=(
+                f"documents/russell-rsi-{label}-capabilities-{CODING_ANALYSIS_CONTEXT_PROTOCOL}"
+                f"-{analysis_amendment.artifact_name_suffix}"
+            ),
+            version=version,
+            artifact_type=Artifact,
+            deps=(evidence, preflight),
+            build_config=lambda ctx: PartitionedCodingAnalysisConfig(
+                analysis=CodingAnalysisConfig(
+                    evidence_path=ctx.artifact_path(evidence),
+                    evidence_identity=artifact_identity(evidence),
+                    relay_job=relay_job,
+                    output_path=ctx.output_path,
+                    maximum_evidence_bytes=analysis_amendment.maximum_evidence_bytes,
+                ),
+                manifest_path=ctx.artifact_path(preflight),
+                manifest_sha256=analysis_amendment.preflight_sha256,
+            ),
+            run=analyze_partitioned_coding_eval_failures,
+        )
+        return {"coding-evidence": evidence, "capabilities": analysis}
     analysis = ArtifactStep(
         name=f"documents/russell-rsi-{label}-capabilities-{CODING_ANALYSIS_CONTEXT_PROTOCOL}",
         version=version,
@@ -710,8 +745,11 @@ def bootstrap_round_workflow(
     calibration: ArtifactStep[Artifact],
     scale: str = "pilot",
     sampling_mode: SamplingMode = SamplingMode.FROZEN_ROUND,
+    analysis_amendment: CodingAnalysisAmendment | None = None,
 ) -> dict[str, ArtifactStep]:
     """Bind one new protocol round to coding eval feedback, without a parent rerun."""
+    if analysis_amendment is not None and round_number != 2:
+        raise ValueError("The coding analysis amendment applies only to round two")
     if scale == "smoke":
         label = "bootstrap-initial-replay-v1" if sampling_mode is SamplingMode.CALIBRATED_REPLAY else "bootstrap-initial"
     else:
@@ -760,7 +798,7 @@ def bootstrap_round_workflow(
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    outputs = coding_feedback_steps(coding, trained, panel, version, label, relay_job)
+    outputs = coding_feedback_steps(coding, trained, panel, version, label, relay_job, analysis_amendment)
     outputs.update({"rl": trained, "reload": reload, "coding-development": coding})
     return outputs
 
@@ -1003,8 +1041,11 @@ def run_bootstrap_loop(
     initial_calibration: ArtifactStep[Artifact] | None = None,
     predecessor: LoopPredecessor | None = None,
     continuation_calibration: ArtifactStep[Artifact] | None = None,
+    analysis_amendments: dict[int, CodingAnalysisAmendment] | None = None,
 ) -> LoopState:
     """Execute bounded artifact rounds with reviewed construction inputs."""
+    if analysis_amendments is not None and set(analysis_amendments) != {2}:
+        raise ValueError("The coding analysis amendment applies only to round two")
     heldout_manifest = json.loads(pinned_bytes(heldout_manifest_uri, heldout_manifest_sha256))
     final_size = final_evaluation_size(panel, heldout_manifest)
     heldout = {"manifest_sha256": heldout_manifest_sha256, "development": asdict(panel)}
@@ -1305,6 +1346,7 @@ def run_bootstrap_loop(
             relay_job=relay_job,
             calibration=difficulty,
             sampling_mode=(SamplingMode.CALIBRATED_REPLAY if replay_enabled else SamplingMode.FROZEN_ROUND),
+            analysis_amendment=analysis_amendments.get(number) if analysis_amendments is not None else None,
         )
         if not smoke_complete:
             smoke = bootstrap_round_workflow(
