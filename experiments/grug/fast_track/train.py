@@ -96,6 +96,7 @@ from experiments.grug.fast_track.model import (
     NEWTON_GRAM_KEY,
     DenseMLP,
     ForwardProbe,
+    FutureAux,
     GrugModelConfig,
     HeadReplay,
     MtpMode,
@@ -1010,6 +1011,7 @@ def _loss_and_grads(
     byte_table: jax.Array | None = None,
     byte_weight: jax.Array | None = None,
     router_tie_active: bool | None = None,
+    future_weight: jax.Array | None = None,
 ):
     """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``);
     ``router_tie_active`` statically applies the router ties (see ``GrugModelConfig.router_embed_tie_release_step``)."""
@@ -1039,6 +1041,7 @@ def _loss_and_grads(
             byte_table=byte_table,
             byte_aux_weight=byte_weight,
             router_tie_active=router_tie_active,
+            future_aux_weight=future_weight,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -1550,11 +1553,13 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     byte_table: jax.Array | None = None,
     byte_aux_steps: int = 0,
+    future_aux_steps: int | None = None,
     grad_accum_microbatches: int = 1,
 ):
     """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches (``_accumulated_loss_and_grads``).
     ``byte_table`` (with ``byte_aux_steps``) turns on the byte-level auxiliary loss, its weight decaying
-    linearly from the model's ``byte_aux_weight`` to 0 at ``byte_aux_steps``."""
+    linearly from the model's ``byte_aux_weight`` to 0 at ``byte_aux_steps``. The ``future_aux`` weight decays
+    the same way to 0 at ``future_aux_steps`` (None: constant)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -1586,7 +1591,15 @@ def _make_train_step(
         if byte_table is not None:
             progress = state.step.astype(jnp.float32) / max(byte_aux_steps, 1)
             byte_weight = qb_params.config.byte_aux_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
+        future_weight = None
+        if qb_params.config.future_aux != FutureAux.NONE:
+            future_weight = jnp.asarray(qb_params.config.future_aux_weight, jnp.float32)
+            if future_aux_steps is not None:
+                progress = state.step.astype(jnp.float32) / max(future_aux_steps, 1)
+                future_weight = future_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
         if grad_accum_microbatches > 1:
+            if future_weight is not None:
+                raise ValueError("grad_accum_microbatches does not support future_aux")
             if head_replay is not None or byte_table is not None or state.newton_muon is not None:
                 raise ValueError("grad_accum_microbatches needs no head replay, byte aux loss or Newton-Muon")
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
@@ -1604,6 +1617,7 @@ def _make_train_step(
                 byte_table,
                 byte_weight,
                 router_tie_active,
+                future_weight,
             )
         final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
         newton_muon = state.newton_muon
@@ -2187,6 +2201,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         watch_config=inline_watch_config,
         byte_table=byte_table,
         byte_aux_steps=int(config.model.byte_aux_decay_frac * trainer.num_train_steps),
+        future_aux_steps=(
+            None
+            if config.model.future_aux_decay_frac is None
+            else int(config.model.future_aux_decay_frac * trainer.num_train_steps)
+        ),
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
     )
 

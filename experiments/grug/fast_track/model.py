@@ -186,6 +186,33 @@ class MtpMode(StrEnum):
     """DeepSeek-V3 depth-1 MTP (arXiv 2412.19437 sec. 2.2) with an attention-free block (``MtpHead``)."""
 
 
+class FutureAux(StrEnum):
+    """Cheap multi-token prediction (training only): an extra head on the final hidden that predicts the future
+    beyond the next token, without a second vocabulary softmax or an extra block."""
+
+    NONE = "none"
+    HASH_T2 = "hash_t2"
+    """Softmax over ``future_aux_buckets`` hash buckets of the token at t+2."""
+    HASH_BIGRAM = "hash_bigram"
+    """Hash bucket of the (t+1, t+2) bigram."""
+    HASH_TRIGRAM = "hash_trigram"
+    """Hash bucket of the (t+1, t+2, t+3) trigram."""
+    LOWDIM_T2 = "lowdim_t2"
+    """The t+2 hash bucket through a ``future_aux_lowdim``-wide SiLU bottleneck (a little head capacity)."""
+    EMBED = "embed"
+    """Cosine regression onto the mean (stop-gradient) input embedding of the tokens at t+2 and t+3."""
+
+
+_FUTURE_OFFSETS = {
+    FutureAux.HASH_T2: (2,),
+    FutureAux.HASH_BIGRAM: (1, 2),
+    FutureAux.HASH_TRIGRAM: (1, 2, 3),
+    FutureAux.LOWDIM_T2: (2,),
+    FutureAux.EMBED: (2, 3),
+}
+_FUTURE_HASH_MULTS = (0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D)
+
+
 class NgramStatMode(StrEnum):
     """Where the n-gram statistic reader's output enters the model."""
 
@@ -899,6 +926,13 @@ class GrugModelConfig:
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
     """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
+    future_aux: FutureAux = FutureAux.NONE
+    """Cheap multi-token prediction head (``FutureAux``); its weight comes from ``future_aux_weight``."""
+    future_aux_buckets: int = 16384
+    future_aux_weight: float = 0.05
+    future_aux_decay_frac: float | None = None
+    """Linear decay of the ``future_aux`` weight to 0 at this fraction of training (None: constant)."""
+    future_aux_lowdim: int = 128
     mtp_mode: MtpMode = MtpMode.OFF
     """Depth-1 multi-token prediction (``MtpMode``): position t also predicts token t+2 of its document from
     ``W_proj [rms(h_t); rms(Emb(x_{t+1}))]`` through one extra block and the shared embedding and lm_head."""
@@ -6177,6 +6211,10 @@ class Transformer(eqx.Module):
     ngram_stat_gate_b: Float[Array, ""] | None
     token_embed_window: jax.Array | None
     byte_head: jax.Array | None
+    future_head: jax.Array | None
+    """``future_aux``: ``[D or lowdim, buckets]`` hash head, or ``[D, D]`` embedding predictor."""
+    future_down: jax.Array | None
+    """``future_aux=lowdim_t2``: ``[D, lowdim]`` bottleneck."""
     window_proj: jax.Array | None
     window_norm: LearnedRMSNorm | None
     embed2_up: jax.Array | None
@@ -6486,6 +6524,17 @@ class Transformer(eqx.Module):
                     P(None, None),
                 )
                 if cfg.byte_aux_bytes
+                else None
+            ),
+            future_head=_future_head_init(cfg, random.fold_in(out_key, 12)),
+            future_down=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(out_key, 13), (cfg.hidden_dim, cfg.future_aux_lowdim), cfg.initializer_std
+                    ),
+                    P(None, None),
+                )
+                if cfg.future_aux == FutureAux.LOWDIM_T2
                 else None
             ),
             embed2_up=(
@@ -7412,6 +7461,51 @@ class Transformer(eqx.Module):
         assert self.output_bigram_u is not None
         return rms_norm(_embedding_gather(self.output_bigram_u, token_ids)).astype(dtype)
 
+    def _future_aux_loss(
+        self,
+        hidden: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        segment_ids: Int[Array, "B S"] | None,
+        loss_dtype: jnp.dtype,
+    ) -> jax.Array:
+        """The ``future_aux`` objective (``FutureAux``) on the final hidden, mean over valid positions."""
+        cfg = self.config
+        assert self.future_head is not None
+        futures, weight, buckets = _future_targets(
+            cfg.future_aux, token_ids, loss_weight, segment_ids, cfg.future_aux_buckets
+        )
+        if cfg.future_aux == FutureAux.EMBED:
+            if self.token_embed.shape[-1] != hidden.shape[-1]:
+                raise ValueError("future_aux=embed needs the token embedding as wide as the hidden")
+            table = self.token_embed.astype(hidden.dtype)
+            target = jax.lax.stop_gradient(sum(_embedding_gather(table, f).astype(jnp.float32) for f in futures))
+            pred = jnp.einsum(
+                "bsd,de->bse", hidden, self.future_head.astype(hidden.dtype), out_sharding=_batch_spec()
+            ).astype(jnp.float32)
+            cos = jnp.sum(pred * target, axis=-1) * jax.lax.rsqrt(
+                jnp.sum(jnp.square(pred), axis=-1) * jnp.sum(jnp.square(target), axis=-1) + 1e-12
+            )
+            w = weight.astype(jnp.float32)
+            return (jnp.sum((1.0 - cos) * w) / jnp.maximum(jnp.sum(w), 1.0)).astype(loss_dtype)
+        head_in = hidden
+        if cfg.future_aux == FutureAux.LOWDIM_T2:
+            assert self.future_down is not None
+            low = jnp.einsum("bsd,dr->bsr", hidden, self.future_down.astype(hidden.dtype), out_sharding=_batch_spec())
+            head_in = rms_norm(jax.nn.silu(low)).astype(hidden.dtype)
+        return fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            self.future_head,
+            buckets,
+            weight=weight,
+            reduction="mean",
+            logsumexp_weight=None,
+            dtype=loss_dtype,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+            logit_soft_cap=None,
+        )
+
     def _lm_head_operands(
         self, hidden: Float[Array, "... D"], bigram_ids: Int[Array, "..."] | None
     ) -> tuple[Float[Array, "... E"], Float[Array, "E V"]]:
@@ -7517,6 +7611,7 @@ class Transformer(eqx.Module):
         byte_table: Int[Array, "V N"] | None = None,
         byte_aux_weight: jax.Array | None = None,
         router_tie_active: bool | None = None,
+        future_aux_weight: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
@@ -7645,6 +7740,10 @@ class Transformer(eqx.Module):
                 byte_in,
             )
             loss = loss + byte_aux_weight.astype(loss_dtype) * byte_loss.astype(loss_dtype)
+        future_loss = None
+        if self.future_head is not None and future_aux_weight is not None and train_terms:
+            future_loss = self._future_aux_loss(hidden, token_ids, loss_weight, _sconv_segment_ids(mask), loss_dtype)
+            loss = loss + future_aux_weight.astype(loss_dtype) * future_loss
         erc_loss, erc_ratios = None, {}
         if self.config.erc_loss_weight > 0 and train_terms:
             if route_key is None:
@@ -7695,6 +7794,9 @@ class Transformer(eqx.Module):
                 summarized_metrics.update(_mtp_knob_stats(self.mtp))
             if byte_loss is not None:
                 summarized_metrics["train/aux/byte_loss"] = byte_loss
+            if future_loss is not None:
+                summarized_metrics["train/aux/future_loss"] = future_loss
+                summarized_metrics["train/aux/future_weight"] = future_aux_weight
             if simbal_loss is not None:
                 summarized_metrics["train/aux/simbal_loss"] = simbal_loss
             if erc_loss is not None:
@@ -7972,6 +8074,48 @@ def _share_routers(model: "Transformer", block: int) -> "Transformer":
 
 
 _BYTE_CLASSES = 256
+
+
+def _future_head_init(cfg: GrugModelConfig, key: PRNGKeyArray) -> jax.Array | None:
+    if cfg.future_aux == FutureAux.NONE:
+        return None
+    if cfg.future_aux == FutureAux.EMBED:
+        shape = (cfg.hidden_dim, cfg.hidden_dim)
+    else:
+        rows = cfg.future_aux_lowdim if cfg.future_aux == FutureAux.LOWDIM_T2 else cfg.hidden_dim
+        shape = (rows, cfg.future_aux_buckets)
+    return reshard(_init_weight(key, shape, cfg.initializer_std), P(None, None))
+
+
+def _future_targets(
+    mode: FutureAux,
+    token_ids: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+    buckets: int,
+) -> tuple[list[jax.Array], jax.Array, jax.Array | None]:
+    """The future tokens at ``_FUTURE_OFFSETS[mode]``, their hash bucket (None for ``EMBED``) and the weight that
+    drops positions whose future runs past the sequence or into the next document."""
+    offsets = _FUTURE_OFFSETS[mode]
+    seq = token_ids.shape[1]
+    position = jnp.arange(seq)[None, :]
+
+    def shifted(x: jax.Array, offset: int) -> jax.Array:
+        return jnp.pad(x[:, offset:], ((0, 0), (0, offset)))
+
+    futures = [shifted(token_ids, o) for o in offsets]
+    valid = position < seq - max(offsets)
+    if segment_ids is not None:
+        for o in offsets:
+            valid = valid & (shifted(segment_ids, o) == segment_ids)
+    weight = loss_weight * valid.astype(loss_weight.dtype)
+    if mode == FutureAux.EMBED:
+        return futures, weight, None
+    h = jnp.zeros(token_ids.shape, jnp.uint32)
+    for future, mult in zip(futures, _FUTURE_HASH_MULTS, strict=False):
+        h = (h ^ future.astype(jnp.uint32)) * jnp.uint32(mult)
+        h = h ^ (h >> 15)
+    return futures, weight, (h % jnp.uint32(buckets)).astype(jnp.int32)
 
 
 def _byte_aux_loss(

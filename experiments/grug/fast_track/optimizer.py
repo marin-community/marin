@@ -2296,7 +2296,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
-            if "output_proj" in path_lower or "lm_head" in path_lower:
+            if "output_proj" in path_lower or "lm_head" in path_lower or path_lower.endswith("future_head"):
+                # ``future_head`` (cheap MTP) is a small output head: the lm_head's group.
                 return self.lm_head_group
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
