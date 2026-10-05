@@ -126,6 +126,9 @@ message Controller {
     // job back only to that requester) and runs the job in its own DAG on its own
     // backends. Absent for an ordinary local submission.
     FederationHandoff federation = 38;
+
+    // Optional application health contract for every task attempt.
+    iris.job.TaskHealthCheck health_check = 39;
   }
 
   // Attribution carried on a federated handoff (LaunchJobRequest.federation).

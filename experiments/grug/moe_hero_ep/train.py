@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -23,6 +23,7 @@ import levanter.tracker
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
+from fray.types import TaskHealthCheck
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -52,12 +53,14 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
+from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from rigging.timing import Duration
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
@@ -79,6 +82,13 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+HERO_EP_TASK_HEALTH = TaskHealthCheck(
+    startup_timeout=Duration.from_minutes(30),
+    period=Duration.from_seconds(10),
+    request_timeout=Duration.from_seconds(3),
+    failure_threshold=13,
+)
 
 HERO_EP_RUNTIME_ENV = {
     "LD_PRELOAD": "libjemalloc.so.2",
@@ -966,11 +976,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # Armed before the state is built or restored. The watchdog's step and process deadlines only
     # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
     # in initialization, checkpoint restore, cache construction or compilation.
-    progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(), diagnostic=capture_stall_diagnostics
+    )
 
     checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-    dashboard = (
-        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    dashboard = TrainingDashboard(
+        config,
+        checkpointer.request_checkpoint if checkpointer is not None else None,
+        run_id,
+        watchdog=progress_watchdog,
     )
     with set_mesh(mesh), dashboard, ExitStack() as gc_resources:
         batch_schedule = trainer.batch_schedule
@@ -1327,6 +1342,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
+        health_check=HERO_EP_TASK_HEALTH if trainer.progress_watchdog.is_enabled else None,
     )
 
 

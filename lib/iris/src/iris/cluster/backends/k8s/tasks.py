@@ -57,6 +57,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.health import validate_task_health_check
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
@@ -134,6 +135,7 @@ from iris.cluster.stats.tables import (
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
+from iris.runtime.health import HEALTH_TERMINATION_FILE
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -925,6 +927,42 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
+    if run_req.HasField("health_check"):
+        try:
+            validate_task_health_check(run_req.health_check)
+        except ValueError as error:
+            raise PodManifestError(str(error)) from error
+
+        health = run_req.health_check
+        startup_timeout = health.startup_timeout.milliseconds // 1000
+        period = health.period.milliseconds // 1000
+        request_timeout = health.request_timeout.milliseconds // 1000
+        startup_failures = (startup_timeout + period - 1) // period + 1
+        probe_python = (
+            'if [ -x "$IRIS_VENV/bin/python" ]; then probe_python="$IRIS_VENV/bin/python"; '
+            'else probe_python="$IRIS_PYTHON"; fi; exec "$probe_python" -m iris.runtime.health_probe'
+        )
+        probe_base = {"periodSeconds": period, "timeoutSeconds": request_timeout + 1}
+        container["startupProbe"] = {
+            **probe_base,
+            "exec": {"command": ["bash", "-lc", f"{probe_python} --phase startup --timeout {request_timeout}"]},
+            "initialDelaySeconds": 0,
+            "failureThreshold": startup_failures,
+        }
+        container["livenessProbe"] = {
+            **probe_base,
+            "exec": {
+                "command": [
+                    "bash",
+                    "-lc",
+                    f"{probe_python} --phase live --timeout {request_timeout} "
+                    f"--failure-threshold {health.failure_threshold}",
+                ]
+            },
+            "initialDelaySeconds": 0,
+            "failureThreshold": health.failure_threshold,
+        }
+        container["terminationMessagePath"] = HEALTH_TERMINATION_FILE
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
     if config.env_secret_name:

@@ -25,6 +25,7 @@ import pytest
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
@@ -355,7 +356,11 @@ def _runtime_env_config(
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            trainer=SimpleNamespace(
+                id="test-run",
+                watch=WatchConfig(interval=watch_interval),
+                progress_watchdog=ProgressWatchdogConfig(),
+            ),
             watch_mode=watch_mode,
         ),
         model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),

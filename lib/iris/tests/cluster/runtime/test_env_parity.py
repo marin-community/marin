@@ -10,7 +10,9 @@ before the shared function was introduced.
 """
 
 import json
+from types import SimpleNamespace
 
+import iris.cluster.worker.task_attempt as task_attempt
 import pytest
 from google.protobuf import json_format as jf
 from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
@@ -275,6 +277,26 @@ def test_ports_set_to_zero():
     env = _common_env(_make_req(ports=["coordinator", "debug"]))
     assert env["IRIS_PORT_COORDINATOR"] == "0"
     assert env["IRIS_PORT_DEBUG"] == "0"
+
+
+def test_worker_health_env_uses_the_allocated_port_only(monkeypatch):
+    req = _make_req(ports=["healthz"])
+    req.health_check.SetInParent()
+    task = SimpleNamespace(
+        request=req,
+        attempt_id=req.attempt_id,
+        attempt_uid=req.attempt_uid,
+        num_tasks=req.num_tasks,
+        ports={"healthz": 43210},
+    )
+    monkeypatch.setattr(task_attempt, "probe_outbound_ip", lambda: "127.0.0.1")
+
+    env = task_attempt.build_iris_env(task, worker_id="worker", controller_address="http://controller")
+
+    assert env["IRIS_PORT_HEALTHZ"] == "43210"
+    assert "IRIS_HEALTH_PORT_FILE" not in env
+    assert "IRIS_HEALTH_FAILURE_COUNT_FILE" not in env
+    assert "IRIS_HEALTH_TERMINATION_FILE" not in env
 
 
 # ---------------------------------------------------------------------------

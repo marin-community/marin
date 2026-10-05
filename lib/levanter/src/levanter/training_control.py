@@ -13,8 +13,9 @@ import os
 import secrets
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Generic, TypeVar, cast
@@ -29,7 +30,10 @@ from levanter.checkpoint import CheckpointRetention
 
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.health import HEALTH_PATH, publish_task_health, task_health_enabled, task_health_port
 from iris.cluster.types import EndpointAccess
+from iris.jax.multigpu import IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV
+from levanter.callbacks.progress_watchdog import ProgressState, ProgressWatchdog
 
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,8 @@ _PROGRAMMATIC_ACTION_RETENTION = {
     "request-checkpoint": CheckpointRetention.TEMPORARY,
     "request-permanent-checkpoint": CheckpointRetention.PERMANENT,
 }
+_PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'"
+_JSON_CSP = "default-src 'none'; base-uri 'none'"
 ConfigT = TypeVar("ConfigT")
 
 
@@ -79,9 +85,51 @@ class _TrainingSnapshot:
         )
 
 
-def _render_page(snapshot: _TrainingSnapshot, action_token: str) -> str:
+@dataclass(frozen=True)
+class _HealthReport:
+    """Fixed-shape report for the task health route."""
+
+    run_id: str
+    job_id: str
+    task_id: str
+    monitored: bool
+    state: str | None
+    event: str | None
+    elapsed: float | None
+    timeout: float | None
+
+    @classmethod
+    def capture(
+        cls,
+        *,
+        run_id: str,
+        job_id: str,
+        task_id: str,
+        watchdog: ProgressWatchdog | None,
+    ) -> _HealthReport:
+        health = watchdog.health() if watchdog is not None else None
+        return cls(
+            run_id=run_id,
+            job_id=job_id,
+            task_id=task_id,
+            monitored=health is not None,
+            state=str(health.state) if health is not None else None,
+            event=str(health.event) if health is not None and health.event is not None else None,
+            elapsed=health.elapsed if health is not None else None,
+            timeout=health.timeout if health is not None else None,
+        )
+
+    @property
+    def status(self) -> HTTPStatus:
+        if self.state == ProgressState.STALLED:
+            return HTTPStatus.SERVICE_UNAVAILABLE
+        return HTTPStatus.OK
+
+
+def _render_page(snapshot: _TrainingSnapshot, action_token: str, health: _HealthReport) -> str:
     configuration = html.escape(snapshot.configuration)
     environment = html.escape(json.dumps(snapshot.environment, indent=2))
+    progress = html.escape(json.dumps(asdict(health), indent=2))
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -104,6 +152,8 @@ def _render_page(snapshot: _TrainingSnapshot, action_token: str) -> str:
     <input type="hidden" name="token" value="{html.escape(action_token, quote=True)}">
     <button type="submit">Save checkpoint</button>
   </form>
+  <h2>Progress</h2>
+  <pre>{progress}</pre>
   <h2>Resolved configuration</h2>
   <pre>{configuration}</pre>
   <h2>Environment</h2>
@@ -113,37 +163,89 @@ def _render_page(snapshot: _TrainingSnapshot, action_token: str) -> str:
 """
 
 
-class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
+class _HealthRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def __init__(
         self,
         *args,
+        run_id: str,
+        job_id: str,
+        task_id: str,
+        watchdog: ProgressWatchdog | None,
+        **kwargs,
+    ):
+        self._run_id = run_id
+        self._job_id = job_id
+        self._task_id = task_id
+        self._watchdog = watchdog
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self) -> None:
+        if urlsplit(self.path).path != HEALTH_PATH:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        report = self._health_report()
+        self._send(json.dumps(asdict(report)).encode(), "application/json", report.status, _JSON_CSP)
+
+    def do_POST(self) -> None:
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _health_report(self) -> _HealthReport:
+        return _HealthReport.capture(
+            run_id=self._run_id,
+            job_id=self._job_id,
+            task_id=self._task_id,
+            watchdog=self._watchdog,
+        )
+
+    def _send(self, body: bytes, content_type: str, status: HTTPStatus, csp: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", csp)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args) -> None:
+        logger.debug("Task health HTTP request: " + format, *args)
+
+
+class _TrainingDashboardRequestHandler(_HealthRequestHandler):
+    def __init__(
+        self,
+        *args,
         snapshot: _TrainingSnapshot,
-        request_checkpoint: Callable[[CheckpointRetention], None],
+        request_checkpoint: Callable[[CheckpointRetention], None] | None,
+        watchdog: ProgressWatchdog | None,
         action_token: str,
         **kwargs,
     ):
         self._snapshot = snapshot
         self._request_checkpoint = request_checkpoint
         self._action_token = action_token
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            *args,
+            run_id=snapshot.run_id,
+            job_id=snapshot.job_id,
+            task_id=snapshot.task_id,
+            watchdog=watchdog,
+            **kwargs,
+        )
 
     def do_GET(self) -> None:
-        body = _render_page(self._snapshot, self._action_token).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
-        )
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+        if urlsplit(self.path).path == HEALTH_PATH:
+            super().do_GET()
+            return
+        body = _render_page(self._snapshot, self._action_token, self._health_report()).encode()
+        self._send(body, "text/html; charset=utf-8", HTTPStatus.OK, _PAGE_CSP)
 
     def do_POST(self) -> None:
+        if self._request_checkpoint is None:
+            self.send_error(404)
+            return
         path = urlsplit(self.path).path.rstrip("/")
         if path == "/checkpoint":
             retention = _PROGRAMMATIC_ACTION_RETENTION.get(self.headers.get(_PROGRAMMATIC_ACTION_HEADER, ""))
@@ -176,20 +278,15 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _serve_status_page(
-    snapshot: _TrainingSnapshot, request_checkpoint: Callable[[CheckpointRetention], None]
+def _serve_http(
+    handler: Callable[..., BaseHTTPRequestHandler],
+    *,
+    bind_host: str,
+    bind_port: int,
+    thread_name: str,
 ) -> Iterator[int]:
-    action_token = secrets.token_urlsafe(32)
-    handler = partial(
-        _TrainingDashboardRequestHandler,
-        snapshot=snapshot,
-        request_checkpoint=request_checkpoint,
-        action_token=action_token,
-    )
-    with ThreadingHTTPServer(("0.0.0.0", 0), handler) as server:
-        thread = Thread(
-            target=server.serve_forever, name=f"training-dashboard-{server.server_address[1]}", daemon=True
-        )
+    with ThreadingHTTPServer((bind_host, bind_port), handler) as server:
+        thread = Thread(target=server.serve_forever, name=f"{thread_name}-{server.server_address[1]}", daemon=True)
         thread.start()
         try:
             yield int(server.server_address[1])
@@ -198,61 +295,148 @@ def _serve_status_page(
             thread.join()
 
 
-class TrainingDashboard(Generic[ConfigT]):
-    """Publish the process-zero training status page through Iris."""
+@contextmanager
+def _serve_status_page(
+    snapshot: _TrainingSnapshot,
+    request_checkpoint: Callable[[CheckpointRetention], None] | None,
+    watchdog: ProgressWatchdog | None,
+    *,
+    bind_port: int,
+) -> Iterator[int]:
+    action_token = secrets.token_urlsafe(32)
+    handler = partial(
+        _TrainingDashboardRequestHandler,
+        snapshot=snapshot,
+        request_checkpoint=request_checkpoint,
+        watchdog=watchdog,
+        action_token=action_token,
+    )
+    with _serve_http(handler, bind_host="0.0.0.0", bind_port=bind_port, thread_name="training-dashboard") as port:
+        yield port
 
-    def __init__(self, config: ConfigT, request_checkpoint: Callable[[CheckpointRetention], None], run_id: str):
+
+@contextmanager
+def _serve_task_health(
+    *,
+    run_id: str,
+    job_id: str,
+    task_id: str,
+    watchdog: ProgressWatchdog,
+    bind_port: int,
+) -> Iterator[int]:
+    handler = partial(
+        _HealthRequestHandler,
+        run_id=run_id,
+        job_id=job_id,
+        task_id=task_id,
+        watchdog=watchdog,
+    )
+    with _serve_http(handler, bind_host="127.0.0.1", bind_port=bind_port, thread_name="training-health") as port:
+        yield port
+
+
+class TrainingDashboard(Generic[ConfigT]):
+    """Serve task-local health and publish the global process-zero dashboard through Iris."""
+
+    def __init__(
+        self,
+        config: ConfigT,
+        request_checkpoint: Callable[[CheckpointRetention], None] | None,
+        run_id: str,
+        watchdog: ProgressWatchdog | None = None,
+    ):
         self._config = config
         self._request_checkpoint = request_checkpoint
         self._run_id = run_id
-        self._stack: ExitStack | None = None
+        self._watchdog = watchdog
+        self._local_process_index = int(os.environ.get(IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV, "0"))
+        self._server_stack: ExitStack | None = None
+        self._registry_stack: ExitStack | None = None
 
     def __enter__(self) -> TrainingDashboard:
-        if jax.process_index() != 0:
+        health_enabled = task_health_enabled()
+        if health_enabled and self._watchdog is None:
+            raise RuntimeError("Iris task health requires a progress watchdog")
+        if jax.process_index() != 0 and (not health_enabled or self._local_process_index != 0):
             return self
 
         try:
             self._publish()
         except Exception:
+            if health_enabled:
+                raise
             logger.warning("Training dashboard failed to start; training will continue", exc_info=True)
         return self
 
     def _publish(self) -> None:
-        context = get_iris_ctx()
         job_info = get_job_info()
-        if context is None or job_info is None:
+        if job_info is None:
+            if task_health_enabled():
+                raise RuntimeError("Iris task health requires task metadata")
             return
-        snapshot = _TrainingSnapshot.capture(
-            self._config,
-            run_id=self._run_id,
-            job_id=str(job_info.job_id),
-            task_id=str(job_info.task_id),
-        )
-        stack = ExitStack()
+        health_enabled = task_health_enabled()
+        serves_health = health_enabled and self._local_process_index == 0
+        serves_dashboard = jax.process_index() == 0
+        server_stack = ExitStack()
         try:
-            port = stack.enter_context(_serve_status_page(snapshot, self._request_checkpoint))
-            endpoint_name = f"{job_info.job_id}/{TRAINING_CONTROL_ENDPOINT}"
-            address = f"http://{job_info.advertise_host}:{port}"
-            stack.enter_context(
-                context.registry.registered(
-                    endpoint_name,
-                    address,
-                    access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+            if serves_dashboard:
+                snapshot = _TrainingSnapshot.capture(
+                    self._config,
+                    run_id=self._run_id,
+                    job_id=str(job_info.job_id),
+                    task_id=str(job_info.task_id),
                 )
-            )
+                server = _serve_status_page(
+                    snapshot,
+                    self._request_checkpoint,
+                    self._watchdog,
+                    bind_port=task_health_port() if serves_health else 0,
+                )
+            else:
+                assert self._watchdog is not None
+                server = _serve_task_health(
+                    run_id=self._run_id,
+                    job_id=str(job_info.job_id),
+                    task_id=str(job_info.task_id),
+                    watchdog=self._watchdog,
+                    bind_port=task_health_port(),
+                )
+            port = server_stack.enter_context(server)
+            if serves_health:
+                publish_task_health(port)
         except Exception:
-            stack.close()
+            server_stack.close()
             raise
 
-        self._stack = stack
+        self._server_stack = server_stack
+        if not serves_dashboard:
+            return
+
+        context = get_iris_ctx()
+        if context is None:
+            return
+        endpoint_name = f"{job_info.job_id}/{TRAINING_CONTROL_ENDPOINT}"
+        address = f"http://{job_info.advertise_host}:{port}"
+        registry_stack = ExitStack()
+        try:
+            registry_stack.enter_context(
+                context.registry.registered(endpoint_name, address, access=EndpointAccess.ENDPOINT_ACCESS_LINK)
+            )
+        except Exception:
+            registry_stack.close()
+            logger.warning("Training dashboard endpoint registration failed", exc_info=True)
+            return
+
+        self._registry_stack = registry_stack
         logger.info("Training dashboard: %s/", proxy_path(endpoint_name))
 
     def __exit__(self, *_: object) -> None:
-        if self._stack is None:
-            return
-        stack = self._stack
-        self._stack = None
-        try:
-            stack.close()
-        except Exception:
-            logger.warning("Training dashboard failed to stop", exc_info=True)
+        for name in ("_registry_stack", "_server_stack"):
+            stack = getattr(self, name)
+            if stack is None:
+                continue
+            setattr(self, name, None)
+            try:
+                stack.close()
+            except Exception:
+                logger.warning("Training dashboard failed to stop", exc_info=True)
