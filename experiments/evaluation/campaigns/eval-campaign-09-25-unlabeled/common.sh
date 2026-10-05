@@ -174,6 +174,7 @@ prepare_judge_environment() {
   resolve_together_api_key
   export JUDGE_API_KEY="$TOGETHER_API_KEY"
   export JUDGE_BASE_URL
+  export JUDGE_MODEL="openai/gpt-oss-120b"
   export OPENAI_API_KEY="$TOGETHER_API_KEY" OPENAI_BASE_URL="$JUDGE_BASE_URL"
   export TAU2_USER_MODEL="$TAU2_JUDGE_MODEL"
   export TAU2_NL_ASSERTIONS_MODEL="$TAU2_JUDGE_MODEL"
