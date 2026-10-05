@@ -8,6 +8,7 @@ import json
 import math
 import tarfile
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -18,6 +19,7 @@ from shellbox.machine import Command, ExitReason, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
 from taskcompendium.environment import (
     ArtifactKind,
+    EnvironmentCommand,
     EnvironmentKind,
     ExitCodeReward,
     FileReward,
@@ -30,23 +32,14 @@ from taskcompendium.grading import GradeResult, GradingFailure, Outcome, grade_a
 from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.submission import Submission
 
-from rolloutengine.machines import _install_files, _machine_command, _task_machine
+from rolloutengine.cleanup import _Cleanup
+from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
 
 MISSING_FILE_EXIT = 44
 
 
 def _validate_task(task: TaskSpec) -> None:
     """Reject task features that this engine cannot execute."""
-    requirements = task.environment_requirements
-    if (
-        requirements.docker_image is not None
-        or requirements.working_directory is not None
-        or requirements.setup_commands
-        or requirements.environment_variables
-        or requirements.tool_providers
-        or any((task.resources.all, task.resources.worker, task.resources.oracle, task.resources.verifier))
-    ):
-        raise ValueError("The rollout engine requires machine inputs in environment")
     if task.verifier.kind == VerifierKind.EXTERNAL and task.environment.interaction is None:
         raise ValueError("External verifiers require an interaction session")
     for specification in (task.verifier, *(stage.verifier for stage in task.stages)):
@@ -59,6 +52,7 @@ async def _grade_rollout(
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[EnvironmentKind, MachineFactory],
+    cleanup: _Cleanup,
 ) -> GradeResult:
     """Grade the final transcript and task filesystem without model access to private files."""
     if task.verifier.kind == VerifierKind.SKIPPED:
@@ -78,17 +72,19 @@ async def _grade_rollout(
             )
     if verifier.environment is None:
         return await _shell_grade(verifier, messages, machine)
-    async with _task_machine(verifier.environment, factories) as grading_machine:
+    async with _task_machine(verifier.environment, factories, cleanup) as grading_machine:
         assert grading_machine is not None
         with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
             for index, artifact in enumerate(verifier.artifacts):
                 path = Path(directory) / str(index)
-                if await _download_artifact(machine, artifact, path, verifier.timeout):
+                if await _download_artifact(machine, artifact, path, verifier.timeout, cleanup):
                     await grading_machine.upload(path, artifact.target)
         return await _shell_grade(verifier, messages, grading_machine)
 
 
-async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
+async def _download_artifact(
+    machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float, cleanup: _Cleanup
+) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
     kind = artifact.kind
     if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
@@ -117,7 +113,6 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         await machine.download(artifact.source, target)
         return True
     remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
-    primary_error: BaseException | None = None
     try:
         result = await machine.run(
             Command(
@@ -140,17 +135,16 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         await machine.download(remote_archive, archive_path)
         with tarfile.open(archive_path) as archive:
             archive.extractall(target, filter="data")
-    except BaseException as error:
-        primary_error = error
-        raise
     finally:
-        try:
-            removed = await machine.run(Command(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"))
-            if removed.exit_code != 0 and primary_error is None:
-                raise RuntimeError(f"Cannot remove grading artifact archive: exit={removed.exit_code}")
-        except BaseException:
-            if primary_error is None:
-                raise
+        await cleanup.run(
+            "artifact_archive_remove",
+            partial(
+                _run_setup_commands,
+                machine,
+                (EnvironmentCommand(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"),),
+                "Artifact archive removal",
+            ),
+        )
     return True
 
 

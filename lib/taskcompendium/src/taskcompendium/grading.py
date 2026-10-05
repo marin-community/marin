@@ -23,7 +23,6 @@ from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationTrace,
-    EnvironmentRequirements,
     SkippedVerifierSpec,
     StageVerifierSpec,
     TaskSpec,
@@ -65,7 +64,7 @@ class GradeResult:
 
 def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
     """Validate and return the pure candidate grader for a verifier spec."""
-    if specification.environment_requirements != EnvironmentRequirements():
+    if specification.environment_requirements.capabilities:
         raise NotImplementedError("Pure verifiers cannot satisfy private environment requirements")
     try:
         return candidate_spec(specification.kind, json.loads(specification.parameters_json))
@@ -88,9 +87,7 @@ def validate_verifier(specification: VerifierSpec) -> None:
 
 
 def supports_verifier(specification: VerifierSpec) -> bool:
-    if specification.environment_requirements != EnvironmentRequirements() or not supports_candidate_mode(
-        specification.kind
-    ):
+    if specification.environment_requirements.capabilities or not supports_candidate_mode(specification.kind):
         return False
     validate_verifier(specification)
     return True

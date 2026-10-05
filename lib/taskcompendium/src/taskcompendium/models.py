@@ -3,16 +3,12 @@
 
 """Private semantics for one deterministic task and its final submission."""
 
-import base64
-import binascii
 import json
 from enum import StrEnum
 from math import isfinite
-from pathlib import PurePosixPath
 from typing import Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
-from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 
 from taskcompendium.environment import (
     EnvironmentCommand,
@@ -22,8 +18,7 @@ from taskcompendium.environment import (
     HealthcheckSpec,
 )
 
-SCHEMA_VERSION = "0.22"
-DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
+SCHEMA_VERSION = "0.23"
 FILESYSTEM_CAPABILITY = "filesystem"
 SHELL_CAPABILITY = "shell"
 
@@ -230,94 +225,12 @@ class ConversationTrace(BaseModel):
         return self
 
 
-class InlineFile(BaseModel):
-    """File bytes encoded as canonical base64, including UTF-8 text files."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["inline_file"] = "inline_file"
-    content_base64: str
-
-    @field_validator("content_base64")
-    @classmethod
-    def validate_base64(cls, value: str) -> str:
-        try:
-            payload = base64.b64decode(value, validate=True)
-        except (ValueError, binascii.Error) as error:
-            raise ValueError("Invalid base64 resource content") from error
-        if base64.b64encode(payload).decode("ascii") != value:
-            raise ValueError("Base64 resource content must be canonical")
-        return value
-
-
-class TaskResource(BaseModel):
-    """One inline file copied into a role's workspace."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    path: str
-    source: InlineFile
-    mode: str | None = Field(default=None, pattern=r"^[0-7]{3,4}$")
-    mtime_ns: int | None = Field(default=None, strict=True)
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, value: str) -> str:
-        validate_relative_file_path(value)
-        return value
-
-
-class ResourceGroups(BaseModel):
-    """Shared inputs and role-specific mounts, with independent private roots."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    all: tuple[TaskResource, ...] = ()
-    worker: tuple[TaskResource, ...] = ()
-    oracle: tuple[TaskResource, ...] = ()
-    verifier: tuple[TaskResource, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_destinations(self) -> "ResourceGroups":
-        for resources in (self.worker, self.oracle, self.verifier):
-            validate_relative_file_paths(resource.path for resource in self.all + resources)
-        return self
-
-
-class ProviderRequirement(BaseModel):
-    """One versioned action interface and literal JSON initial state."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    action_interface: str = Field(min_length=1)
-    initial_state: JsonValue = Field(repr=False)
-
-    @field_validator("initial_state")
-    @classmethod
-    def validate_initial_state(cls, value: JsonValue) -> JsonValue:
-        json.dumps(value, allow_nan=False)
-        return value
-
-
-def validate_workspace_path(path: str) -> PurePosixPath:
-    """Require an absolute POSIX workspace path interpreted by the runtime."""
-    workspace = PurePosixPath(path)
-    if not workspace.is_absolute():
-        raise ValueError(f"Workspace path must be absolute: {path!r}")
-    return workspace
-
-
 class EnvironmentRequirements(BaseModel):
-    """Operations, pinned initial workspace, and named tool-provider contracts."""
+    """Capabilities that the task or its private verifier requires."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
-    docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
-    working_directory: str | None = None
-    setup_commands: tuple[str, ...] = ()
-    environment_variables: dict[str, str] = Field(default_factory=dict)
-    tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
@@ -325,12 +238,6 @@ class EnvironmentRequirements(BaseModel):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):
             raise ValueError("Capabilities must be unique")
-        if any(not name for name in self.tool_providers):
-            raise ValueError("Provider requirement names must be nonempty")
-        if any(not command.strip() for command in self.setup_commands):
-            raise ValueError("Setup commands must be nonempty")
-        if self.working_directory is not None:
-            validate_workspace_path(self.working_directory)
         return self
 
 
@@ -412,7 +319,6 @@ class TaskSpec(BaseModel):
     source: Source
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
-    resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
 
     @model_validator(mode="after")
