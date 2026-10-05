@@ -266,7 +266,7 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
             train_config=replace(
                 train,
                 data=replace(train.data, mixture_block_size=STUDENT_ROWS),
-                trainer=replace(train.trainer, watch=watch),
+                trainer=replace(train.trainer, id=f"russell-rsi-teacher-sft-{version}", watch=watch),
             ),
         )
 
