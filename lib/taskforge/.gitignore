@@ -1,0 +1,6 @@
+# Live-validation evidence is local only; the README documents the convention.
+.evidence/*
+!.evidence/README.md
+# The root .gitignore ignores build/ directories; these are the taskforge.build package and its tests.
+!src/taskforge/build/
+!tests/build/

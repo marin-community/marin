@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-taskforge"
+version = "0.1.0"
+description = "Task-generation pipeline: proposals, builder programs, RolloutEngine validation, and review"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "taskcompendium",
+    "marin-rolloutengine",
+    "marin-shellbox[shellsim]",
+    "verifyit[answer,judge,schema]",
+    "marin-rigging",
+    "marin-finelog",
+    "marin-iris",
+    "httpx>=0.27,<1",  # prerelease = "allow" otherwise resolves httpx 1.0.dev, which has no AsyncClient
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+]
+
+[dependency-groups]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+
+[tool.uv.workspace]
+
+[tool.uv]
+prerelease = "allow"
+# taskcompendium pins a marin-rigging dev release that PyPI no longer serves; use the sibling checkout.
+override-dependencies = ["marin-rigging"]
+# Newer marin-finelog-server releases ship no arm64 macOS wheel or sdist; the root workspace pins this one.
+constraint-dependencies = ["marin-finelog-server==0.2.46.dev33324331711"]
+
+[tool.uv.sources]
+marin-rigging = { path = "../rigging", editable = true }
+taskcompendium = { path = "../taskcompendium", editable = true }
+marin-rolloutengine = { path = "../rolloutengine", editable = true }
+marin-shellbox = { path = "../shellbox", editable = true }
+verifyit = { path = "../verifyit", editable = true }
+marin-finelog = { path = "../finelog", editable = true }
+marin-iris = { path = "../iris", editable = true }
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taskforge"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 60
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = [
+    "slow: long-running test",
+    "integration: external service",
+    "data_integration: external data",
+    "cluster: live cluster",
+    "requires_cluster: live cluster",
+    "docker: Docker daemon",
+    "manual: explicit validation",
+    "live_glm: calls the live GLM-5.3 endpoint; skips unless TASKFORGE_GLM_BASE_URL and TASKFORGE_GLM_TOKEN_FILE are set",
+]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["taskforge"]
+
+[tool.pyrefly]
+disable-project-excludes-heuristics = true
+project-includes = ["src"]
+search-path = ["src", "../taskcompendium/src", "../rolloutengine/src", "../shellbox/src", "../verifyit/src", "../rigging/src", "../finelog/src", "../iris/src"]
+python-interpreter = ".venv/bin/python"
