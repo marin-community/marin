@@ -113,6 +113,11 @@ def test_saved_four_export_reads_immutable_request_and_waits_for_completion(tmp_
         assert argv[argv.index("--request") + 1] == str(checkpoint)
         assert "--no-wait" not in argv
         assert yaml.safe_load(Path(argv[argv.index("--launch-config") + 1]).read_text()) == launch_config
+        # The pinned export subprocess changes to its installed package directory.
+        with monkeypatch.context() as exporter:
+            exporter.chdir(tmp_path)
+            for option in ("--cluster-config", "--parent-cluster-config"):
+                assert yaml.safe_load(Path(argv[argv.index(option) + 1]).read_text())
         request_file.write_text(json.dumps({**request, "status": "complete", "last_exit_code": 0}))
 
     monkeypatch.setattr("experiments.post_training.russell_rsi.launch_dose_comparison.subprocess.run", completed_export)
