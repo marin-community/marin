@@ -584,6 +584,7 @@ def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_c
         ("construction_pending", "incomplete_recovery"),
         ("plan", "normal"),
         ("continuation", "normal"),
+        ("continuation", "grade_only"),
     ],
 )
 def test_driver_validates_calibration_and_feedback_before_training_or_resume(
@@ -876,7 +877,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
                 "retention_baseline_sha256": hashes[2],
             },
         )
-    initial_calibration = None if calibration_source in {"normal", "incomplete_recovery"} else difficulty
+    initial_calibration = None if calibration_source in {"normal", "incomplete_recovery", "grade_only"} else difficulty
     if calibration_source == "changed_recovery":
         initial_calibration = ArtifactStep.adopt(
             "evals/difficulty", "2026.10.04", "/tmp/difficulty", config={"review": "changed"}
@@ -914,6 +915,13 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         directory = StoragePath(str(tmp_path / "continuation-manifests"))
         version = "2026.10.05.1"
 
+    if calibration_source == "grade_only":
+        monkeypatch.setattr(
+            russell_launch,
+            "development_step",
+            lambda *args, **kwargs: pytest.fail("Continuation requested another model calibration"),
+        )
+
     def resume():
         return russell_launch.run_bootstrap_loop(
             seed,
@@ -934,6 +942,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             next_construction_inputs,
             initial_calibration=initial_calibration,
             predecessor=predecessor,
+            continuation_calibration=difficulty if calibration_source == "grade_only" else None,
         )
 
     with expected:

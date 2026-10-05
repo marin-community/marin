@@ -993,6 +993,7 @@ def run_bootstrap_loop(
     next_construction_inputs: Callable[[str, bytes, LoopState, int], ReviewedConstructionInputs | None],
     initial_calibration: ArtifactStep[Artifact] | None = None,
     predecessor: LoopPredecessor | None = None,
+    continuation_calibration: ArtifactStep[Artifact] | None = None,
 ) -> LoopState:
     """Execute bounded artifact rounds with reviewed construction inputs."""
     heldout_manifest = json.loads(pinned_bytes(heldout_manifest_uri, heldout_manifest_sha256))
@@ -1042,8 +1043,15 @@ def run_bootstrap_loop(
     smoke_path = manifest_directory / "smoke.json"
     smoke_complete = smoke_path.exists()
     feedback_labels: set[str] = set()
+    precomputed_calibrations = {}
+    if initial_calibration is not None:
+        precomputed_calibrations[1] = initial_calibration
+    if continuation_calibration is not None and predecessor is None:
+        raise ValueError("Recovered continuation calibration requires a predecessor")
     if predecessor is not None:
         state = predecessor.round.state
+        if continuation_calibration is not None:
+            precomputed_calibrations[state.completed_pilots + 1] = continuation_calibration
         if (
             state.parent != parent_score
             or state.working != parent_score
@@ -1080,6 +1088,11 @@ def run_bootstrap_loop(
                 "bank_identity": artifact_identity(bank_handle),
                 "runtime_identity": runtime_identity,
                 "heldout_manifest_sha256": heldout_manifest_sha256,
+                **(
+                    {"continuation_calibration_identity": artifact_identity(continuation_calibration)}
+                    if continuation_calibration is not None
+                    else {}
+                ),
             },
         )
     while state.stop_reason is None:
@@ -1108,10 +1121,9 @@ def run_bootstrap_loop(
         calibration_label = f"bootstrap-round-{number}-bank-difficulty{'-replay-v1' if number >= 2 else ''}"
         if predecessor is not None:
             calibration_label += f"-startup{CONTINUATION_STARTUP_ATTEMPTS}-v1"
-        difficulty = (
-            initial_calibration
-            if number == 1 and initial_calibration is not None
-            else development_step(
+        difficulty = precomputed_calibrations.get(number)
+        if difficulty is None:
+            difficulty = development_step(
                 bank_handle,
                 current,
                 version,
@@ -1124,7 +1136,6 @@ def run_bootstrap_loop(
                 limit=len(bank),
                 startup_attempts=CONTINUATION_STARTUP_ATTEMPTS if predecessor is not None else 1,
             )
-        )
         inputs = round_inputs(
             state,
             bank,

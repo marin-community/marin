@@ -147,6 +147,7 @@ def _execute_callback(
         next_construction_inputs,
         initial_calibration=None,
         predecessor=None,
+        continuation_calibration=None,
     ):
         result.append(next_construction_inputs(artifact_identity(raw_feedback), raw_bytes, state, 24))
 

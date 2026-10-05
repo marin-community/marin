@@ -20,8 +20,11 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
-from experiments.post_training.russell_rsi.bootstrap_loop import LoopState, restored_round
-from experiments.post_training.russell_rsi.calibration_recovery import calibration_recovery_step
+from experiments.post_training.russell_rsi.bootstrap_loop import MAX_GLM_RESPONSES, LoopState, restored_round
+from experiments.post_training.russell_rsi.calibration_recovery import (
+    calibration_recovery_step,
+    grade_only_recovery_step,
+)
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch import (
@@ -142,6 +145,22 @@ def execute_loop(config: dict) -> None:
             pinned_bytes(predecessor_value["raw_capabilities_uri"], predecessor_value["raw_capabilities_sha256"]),
             predecessor_value["round_file_sha256"],
         )
+    continuation_calibration = None
+    recovery = config.get("continuation_calibration_recovery")
+    if recovery is not None:
+        if predecessor is None:
+            raise ValueError("Grade-only continuation recovery requires a predecessor")
+        construction = next_construction_inputs(
+            predecessor.round.result.feedback_identity,
+            predecessor.raw_capabilities,
+            predecessor.round.state,
+            MAX_GLM_RESPONSES,
+        )
+        if construction is None or construction.bank is None:
+            raise ValueError("Grade-only continuation recovery requires a reviewed successor bank")
+        continuation_calibration = grade_only_recovery_step(
+            recovery, config["version"], construction.bank, parent, RuntimeBundle(**config["runtime_bundle"])
+        )
     run_bootstrap_loop(
         seed,
         parent,
@@ -161,6 +180,7 @@ def execute_loop(config: dict) -> None:
         next_construction_inputs,
         initial_calibration=initial_calibration,
         predecessor=predecessor,
+        continuation_calibration=continuation_calibration,
     )
 
 
