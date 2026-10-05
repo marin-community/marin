@@ -101,6 +101,9 @@ destinations are refused on subsequent runs.
 
 ## Hero cutovers and W&B lineage
 
+Hero launchers disable W&B source capture (`save_code=False`). The git commit remains
+run metadata; startup does not scan the bundled working directory for source files.
+
 ```python
 from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
 

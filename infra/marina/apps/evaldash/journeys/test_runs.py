@@ -8,6 +8,7 @@ from typing import Any, cast
 from urllib.parse import unquote
 
 from marina.journeys import Journey
+from playwright.sync_api import expect
 
 API = "/evaldash/api"
 
@@ -53,3 +54,42 @@ def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey
     assert "gsm8k-0shot" in unquote(journey.page.url)
     journey.page.reload(wait_until="domcontentloaded")
     assert picker.input_value() == "gsm8k-0shot"
+
+
+def test_panel_cohort_survives_reload_and_navigation_to_compare(journey: Journey) -> None:
+    journey.visit("/?cohort=2026.07.21")
+    cohort = journey.page.locator("label").filter(has_text="Cohort").locator("select")
+    expect(cohort).to_have_value("2026.07.21")
+    expect(journey.page.locator("tr").filter(has_text="qwen3-8b")).to_have_count(2)
+    expect(journey.page.locator("tr").filter(has_text="snowball")).to_have_count(0)
+
+    cohort.select_option("2026.07.20")
+    journey.page.wait_for_url(re.compile(r"[?&]cohort=2026.07.20"))
+    journey.page.reload(wait_until="domcontentloaded")
+    expect(cohort).to_have_value("2026.07.20")
+    expect(journey.page.locator("tr").filter(has_text="snowball")).to_have_count(2)
+    expect(journey.page.locator("tr").filter(has_text="qwen3-8b")).to_have_count(0)
+
+    journey.page.get_by_role("link", name="Compare", exact=True).click()
+    journey.page.wait_for_url(re.compile(r"/compare\?cohort=2026.07.20"))
+    expect(journey.page.get_by_role("button", name="snowball", exact=True)).to_be_visible()
+    expect(journey.page.get_by_role("button", name="qwen3-8b", exact=True)).to_have_count(0)
+
+
+def test_compare_picker_excludes_zero_scores_and_other_cohorts(journey: Journey) -> None:
+    panel = cast(dict[str, Any], journey.api(f"{API}/panel?cohort=2026.07.20"))
+    snowball = next(row for row in panel["rows"] if row["model"] == "snowball")
+    panel["rows"].append(
+        {
+            **snowball,
+            "model": "zero-only",
+            "cells": {name: {**cell, "value": 0.0} for name, cell in snowball["cells"].items()},
+        }
+    )
+    journey.page.route(f"**{API}/panel?**", lambda route: route.fulfill(json=panel))
+
+    journey.visit("/compare?cohort=2026.07.20&models=snowball,zero-only,qwen3-8b")
+    expect(journey.page.get_by_role("button", name="snowball", exact=True)).to_be_visible()
+    expect(journey.page.get_by_role("button", name="zero-only", exact=True)).to_have_count(0)
+    expect(journey.page.get_by_role("button", name="qwen3-8b", exact=True)).to_have_count(0)
+    journey.sees("Pick at least two models to compare.")

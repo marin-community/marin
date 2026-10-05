@@ -174,7 +174,7 @@ def run_metadata(records: list[EvalRunRecord]) -> dict[str, dict[str, str]]:
     return {record.run_id: {facet: _attribute(record, path) for facet, path in RUN_FACETS.items()} for record in records}
 
 
-def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
+def _panel_records(records: list[EvalRunRecord], cohort_version: str | None = None) -> list[EvalRunRecord]:
     """Only policy-compliant, non-smoke records, with configuration-specific model identities."""
     return [
         record.model_copy(
@@ -182,6 +182,7 @@ def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
         )
         for record in records
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
+        if cohort_version is None or record.version == cohort_version
         if not record_policy_violations(record)
     ]
 
@@ -268,8 +269,8 @@ def _missing_cells(
 ) -> dict[str, dict[str, dict]]:
     """Why each ``(model, benchmark)`` without an admitted cell has none, keyed model then benchmark.
 
-    A gap is either a run the request rejected (a failed status, coverage below the gate, the wrong
-    cohort) or a run that reached no metric at all, which never becomes a measurement. Both keep the
+    A gap is either a run the request rejected (a failed status or coverage below the gate) or a run
+    that reached no metric at all, which never becomes a measurement. Both keep the
     newest offending run, so an empty cell links the run behind it instead of rendering blank.
     """
     reasons = {rejection.run_id: rejection.reason for rejection in rejections}
@@ -307,7 +308,7 @@ def build_panel(
     variants and controls coverage, completeness, and aggregation. ``benchmarks`` and ``cells`` retain
     every admitted variant under its exact eval name.
     """
-    eligible = _panel_records(records)
+    eligible = _panel_records(records, request.cohort_version)
     metadata = run_metadata(eligible)
     measurements = measurements_from_records(eligible)
     protocols = declared_protocols(measurements)
@@ -396,7 +397,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     ``require_complete``: a model missing one of them is not scored rather than scored on a smaller
     panel that would not be the same quantity.
     """
-    eligible = _panel_records(records)
+    eligible = _panel_records(records, request.cohort_version)
     metadata = run_metadata(eligible)
     measurements = measurements_from_records(eligible)
     selection = select(

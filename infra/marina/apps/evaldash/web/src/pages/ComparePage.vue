@@ -15,7 +15,7 @@ import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/util
 import { scoreTint } from '@/utils/score'
 import { cohortWarning, isPartialCoverage } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
-import type { Comparison, ComparisonRow, Meta, PanelCell } from '@/types/api'
+import type { Comparison, ComparisonRow, Meta, Panel, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
@@ -23,22 +23,40 @@ import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
 const route = useRoute()
 const router = useRouter()
 
-const selected = ref<string[]>([])
+const requestedModels = ref<string[]>([])
+const selected = computed(() => requestedModels.value.filter((model) => availableModels.value.includes(model)))
 const comparing = computed(() => selected.value.length >= 2)
 
 // The panel's selection travels in the route, so a comparison launched from a narrowed panel keeps
 // its benchmark set, cohort, and filters. Anything else in the query string is ignored.
-const SELECTION_PARAMS = ['benchmarks', 'cohort', 'complete', 'min_coverage', 'include_flagged', ...FACETS] as const
+const SELECTION_PARAMS = [
+  'benchmarks', 'cohort', 'complete', 'min_coverage', 'min_benchmark_coverage', 'include_flagged', ...FACETS,
+] as const
 
-const { data, error, refresh } = useApi<Comparison>(() => {
-  const params = new URLSearchParams({ models: selected.value.join(',') })
+const selectionQuery = computed(() => {
+  const params = new URLSearchParams()
   for (const name of SELECTION_PARAMS) {
     const raw = route.query[name]
     const value = Array.isArray(raw) ? raw[0] : raw
     if (value) params.set(name, value)
   }
-  return `api/compare?${params.toString()}`
+  if (!params.has('cohort') && meta.value) params.set('cohort', meta.value.default_cohort)
+  return params.toString()
 })
+const { data, loading, error, refresh } = useApi<Comparison>(() =>
+  `api/compare?${selectionQuery.value}&models=${encodeURIComponent(selected.value.join(','))}`,
+)
+const { data: panel, loading: loadingModels, error: modelsError, refresh: refreshModels } = useApi<Panel>(() =>
+  `api/panel?${selectionQuery.value}&include_archived=1`,
+)
+const mixedCohorts = computed(() => new URLSearchParams(selectionQuery.value).get('cohort') === 'all')
+const availableModels = computed(() =>
+  loadingModels.value || modelsError.value || mixedCohorts.value
+    ? []
+    : (panel.value?.rows ?? [])
+        .filter((row) => Object.values(row.cells).some((cell) => cell.value !== 0))
+        .map((row) => row.model),
+)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
 const comparabilityWarning = computed(() => {
   if (!meta.value) return null
@@ -69,20 +87,27 @@ function load() {
 }
 
 onMounted(() => {
-  selected.value = fromQuery()
-  load()
+  requestedModels.value = fromQuery()
+  refreshModels()
   refreshMeta()
 })
 watch(
-  () => route.query,
+  () => route.query.models,
   () => {
-    selected.value = fromQuery()
-    load()
+    requestedModels.value = fromQuery()
   },
   { deep: true },
 )
+watch(selectionQuery, refreshModels)
+watch(selected, load)
+watch(
+  () => meta.value?.default_cohort,
+  (cohort) => {
+    if (cohort && !route.query.cohort) void router.replace({ query: { ...route.query, cohort } })
+  },
+)
 onViewRefresh(() => {
-  load()
+  refreshModels()
   refreshMeta()
 })
 
@@ -95,11 +120,11 @@ function syncQuery() {
   router.replace({ path: '/compare', query })
 }
 function toggle(model: string) {
-  const at = selected.value.indexOf(model)
-  if (at >= 0) selected.value.splice(at, 1)
-  else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
+  requestedModels.value = [...selected.value]
+  const at = requestedModels.value.indexOf(model)
+  if (at >= 0) requestedModels.value.splice(at, 1)
+  else if (selected.value.length < MAX_COMPARE) requestedModels.value.push(model)
   syncQuery()
-  load()
 }
 
 const shared = computed(() => data.value?.shared ?? [])
@@ -155,9 +180,13 @@ const chartSeries = computed(() =>
       <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted mb-2">
         Models ({{ selected.length }}/{{ MAX_COMPARE }})
       </div>
+      <p v-if="mixedCohorts" class="text-sm text-status-warning">Choose one cohort on the Panel before comparing models.</p>
+      <p v-else-if="loadingModels" class="text-sm text-text-muted">Loading models…</p>
+      <p v-else-if="modelsError" class="text-sm text-status-danger">{{ modelsError }}</p>
+      <p v-else-if="!availableModels.length" class="text-sm text-text-muted">No models have non-zero scores in this selection.</p>
       <div class="flex flex-wrap gap-2">
         <button
-          v-for="m in meta?.models ?? []"
+          v-for="m in availableModels"
           :key="m"
           class="font-mono text-xs px-2.5 py-1 rounded-full border"
           :class="
@@ -184,7 +213,7 @@ const chartSeries = computed(() =>
 
     <EmptyState v-if="!comparing" icon="⚖" message="Pick at least two models to compare." />
 
-    <div v-else-if="data" class="space-y-6">
+    <div v-else-if="data && !loading && !error" class="space-y-6">
       <PolicyRejections :rejections="data.policy_rejections" scope="this comparison" />
       <!-- shared-benchmark ranking -->
       <div>

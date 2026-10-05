@@ -7,8 +7,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from tasktrove_verify.grade import Status, grade
-from tasktrove_verify.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec, parse_spec
+from verifyit.grade import Status, grade
+from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus

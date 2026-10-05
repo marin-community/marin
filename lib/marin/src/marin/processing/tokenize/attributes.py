@@ -348,6 +348,7 @@ def tokenize_attributes_step(
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that tokenizes :class:`NormalizedData` source(s) into attribute parquet.
@@ -375,6 +376,7 @@ def tokenize_attributes_step(
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
         zephyr_context: Optional shared Zephyr context.
+        output_path_prefix: Optional output root in place of ``MARIN_PREFIX``.
         override_output_path: Optional explicit output path.
     """
     if train_normalize is None and validation_normalize is None:
@@ -419,5 +421,6 @@ def tokenize_attributes_step(
         deps=deps,
         fn=_fn,
         hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

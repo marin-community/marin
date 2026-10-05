@@ -47,6 +47,8 @@ export interface AssistantMessage {
   rawReasoning?: string
   thinkingSeconds: number | null
   error: string | null
+  /** The model request finished; partial or failed responses stay unrated. */
+  completed?: boolean
   toolCalls?: ToolCall[]
   requestDebug?: VllmRequestDebug
 }
