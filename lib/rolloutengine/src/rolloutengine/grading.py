@@ -323,7 +323,7 @@ async def _remove_stage_grader(stage: TaskStage, machine: Machine) -> None:
 
 def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrategy) -> GradeResult:
     final = grades[-1]
-    if strategy == StageRewardStrategy.FINAL:
+    if strategy == StageRewardStrategy.FINAL or final.status not in {Outcome.GRADED, Outcome.SKIPPED}:
         return final
     valid = [(grade, grade.reward) for grade in grades if grade.status == Outcome.GRADED and grade.reward is not None]
     if not valid:
