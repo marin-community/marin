@@ -39,6 +39,14 @@ def test_quantize_matches_numpy_reference_under_jit_and_keeps_blocks_independent
     assert rel.max() <= 2.0**-4 + 1e-6
 
 
+def test_scales_are_exact_powers_of_two_so_rounding_ties_stay_ties():
+    """bf16 inputs over a power-of-two scale often land exactly on an e4m3 rounding tie; an inexact scale
+    (GPU exp2/log2) would tip every such tie the same way. Small-magnitude weights hit this most."""
+    x = jax.random.normal(jax.random.PRNGKey(4), (64, 256), jnp.float32).astype(jnp.bfloat16) * 0.02
+    got = np.asarray(mx_quantize_dequantize(x, -1).astype(jnp.float32))
+    np.testing.assert_array_equal(got, _e4m3_reference(np.asarray(x.astype(jnp.float32))))
+
+
 def test_quantize_along_a_middle_axis_with_padding():
     x = jax.random.normal(jax.random.PRNGKey(1), (3, 40, 8), jnp.float32)
     got = np.asarray(mx_quantize_dequantize(x, 1))

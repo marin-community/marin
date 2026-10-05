@@ -32,13 +32,20 @@ def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:
     if pad:
         moved = jnp.pad(moved, [(0, 0)] * (moved.ndim - 1) + [(0, pad)])
     blocks = moved.reshape(*moved.shape[:-1], -1, MX_BLOCK)
-    amax = jnp.max(jnp.abs(blocks), axis=-1, keepdims=True)
-    # e8m0 scale rounded up so the block amax lands in e4m3's top binade without overflowing.
-    scale = jnp.where(amax > 0, jnp.exp2(jnp.ceil(jnp.log2(amax / _E4M3_MAX))), 1.0)
+    scale = _e8m0_scale(jnp.max(jnp.abs(blocks), axis=-1, keepdims=True))
     # The barrier keeps XLA from folding the f32 -> f8 -> f32 round trip away under excess-precision rules.
     q = jax.lax.optimization_barrier((blocks / scale).astype(_E4M3))
     out = (q.astype(jnp.float32) * scale).reshape(moved.shape)[..., :length]
     return jnp.moveaxis(out, -1, axis).astype(x.dtype)
+
+
+def _e8m0_scale(amax: jax.Array) -> jax.Array:
+    """``2^ceil(log2(amax / 448))`` from the f32 bits, so it is an exact power of two on every backend (GPU
+    ``exp2``/``log2`` are approximate); 1 for all-zero blocks."""
+    bits = jax.lax.bitcast_convert_type(amax / _E4M3_MAX, jnp.int32)
+    exponent = ((bits >> 23) & 0xFF) + ((bits & 0x7FFFFF) != 0).astype(jnp.int32)
+    exponent = jnp.where(amax > 0, jnp.clip(exponent, 1, 254), 127)
+    return jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
 
 
 def _spec(x: jax.Array) -> P:
