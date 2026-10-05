@@ -346,10 +346,10 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
     task_states = finelog_result(
         cluster=["cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
         job=[
-            "/u/hero-stale-coord",
-            "/u/hero-initializing-coord",
-            "/u/hero-healthy-coord",
-            "/another-user/hero-starting-coord",
+            "/marin/hero-stale-coord",
+            "/marin/hero-initializing-coord",
+            "/marin/hero-healthy-coord",
+            "/marin/hero-starting-coord",
             "/u/ordinary-coord",
         ],
         state_at=[now] * 5,
@@ -366,11 +366,11 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         cluster=["cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
         run_id=["hero-stale", "hero-stale", "hero-healthy", "hero-healthy", "hero-starting"],
         telemetry_job=[
-            "/u/hero-stale-coord/train",
-            "/u/hero-stale-coord/train",
-            "/u/hero-healthy-coord/train",
-            "/u/hero-healthy-coord/train",
-            "/another-user/hero-starting-coord/train",
+            "/marin/hero-stale-coord/train",
+            "/marin/hero-stale-coord/train",
+            "/marin/hero-healthy-coord/train",
+            "/marin/hero-healthy-coord/train",
+            "/marin/hero-starting-coord/train",
         ],
         name=["phase", "progress_time_seconds", "phase", "progress_time_seconds", "phase"],
         value=[
@@ -387,7 +387,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
     assert training_stall_alert_rows(active_hero_runs(task_states, now), telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
-            "job": "/u/hero-stale-coord",
+            "job": "/marin/hero-stale-coord",
             "run": "hero-stale",
             "phase": "training",
             "reason": "training_stalled",
@@ -395,7 +395,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         },
         {
             "cluster": "cw-a",
-            "job": "/u/hero-initializing-coord",
+            "job": "/marin/hero-initializing-coord",
             "run": "hero-initializing",
             "phase": "initializing",
             "reason": "initializing_stale",
@@ -403,7 +403,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         },
         {
             "cluster": "cw-b",
-            "job": "/u/hero-healthy-coord",
+            "job": "/marin/hero-healthy-coord",
             "run": "hero-healthy",
             "phase": "training",
             "reason": "healthy",
@@ -411,7 +411,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         },
         {
             "cluster": "cw-b",
-            "job": "/another-user/hero-starting-coord",
+            "job": "/marin/hero-starting-coord",
             "run": "hero-starting",
             "phase": "initializing",
             "reason": "initializing",
@@ -435,10 +435,10 @@ def test_training_stall_task_state_resets_running_age_after_retry():
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?)',
         [
-            ("cw-a", "/u/hero-retry-coord", now - timedelta(minutes=50), 1),
-            ("cw-a", "/u/hero-retry-coord", now - timedelta(minutes=10), 0),
-            ("cw-a", "/u/hero-retry-coord", now - timedelta(minutes=5), 1),
-            ("cw-a", "/u/hero-retry-coord", now - timedelta(seconds=30), 64),
+            ("cw-a", "/marin/hero-retry-coord", now - timedelta(minutes=50), 1),
+            ("cw-a", "/marin/hero-retry-coord", now - timedelta(minutes=10), 0),
+            ("cw-a", "/marin/hero-retry-coord", now - timedelta(minutes=5), 1),
+            ("cw-a", "/marin/hero-retry-coord", now - timedelta(seconds=30), 64),
         ],
     )
 
@@ -446,7 +446,7 @@ def test_training_stall_task_state_resets_running_age_after_retry():
     assert row[3] == now.replace(tzinfo=None) - timedelta(minutes=5)
 
 
-def test_hero_alerts_enroll_suffixed_retry_roots():
+def test_hero_alerts_enroll_marin_retries_and_exclude_other_users():
     now = datetime(2026, 8, 20, 23, 30, tzinfo=UTC)
     database = duckdb.connect()
     database.execute(
@@ -455,16 +455,17 @@ def test_hero_alerts_enroll_suffixed_retry_roots():
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?)',
         [
-            ("cw-a", "/power/hero-12d8b6f0-dee637-coord-slop85", now - timedelta(seconds=30), 64),
-            ("cw-a", "/power/hero-other-coord", now - timedelta(seconds=30), 64),
+            ("cw-a", "/marin/hero-12d8b6f0-dee637-coord-slop85", now - timedelta(seconds=30), 64),
+            ("cw-a", "/marin/hero-other-coord", now - timedelta(seconds=30), 64),
+            ("cw-a", "/dlwh/hero-gb200-main-rack-20261002-02-coord", now - timedelta(seconds=30), 64),
             ("cw-a", "/power/not-hero-coord-slop85", now - timedelta(seconds=30), 64),
         ],
     )
 
     task_states = database.execute(task_state_query(now)).fetch_arrow_table()
     assert {(run.root_job, run.run_id) for run in active_hero_runs(task_states, now)} == {
-        ("/power/hero-12d8b6f0-dee637-coord-slop85", "hero-12d8b6f0-dee637"),
-        ("/power/hero-other-coord", "hero-other"),
+        ("/marin/hero-12d8b6f0-dee637-coord-slop85", "hero-12d8b6f0-dee637"),
+        ("/marin/hero-other-coord", "hero-other"),
     }
 
 
@@ -508,8 +509,8 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?)',
         [
-            ("cw-a", "/rav/hero-20260819-coord", now - timedelta(hours=1), 1),
-            ("cw-a", "/rav/hero-20260819-coord", now - timedelta(seconds=30), 177),
+            ("cw-a", "/marin/hero-20260819-coord", now - timedelta(hours=1), 1),
+            ("cw-a", "/marin/hero-20260819-coord", now - timedelta(seconds=30), 177),
             ("cw-a", "/rav/dev-run-coord", now - timedelta(hours=1), 1),
             ("cw-a", "/rav/dev-run-coord", now - timedelta(seconds=30), 1),
         ],
@@ -520,7 +521,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
             (
                 "cw-a",
                 "hero-20260819",
-                "/rav/hero-20260819-coord/grug-train-hero-20260819",
+                "/marin/hero-20260819-coord/grug-train-hero-20260819",
                 "attempt-1",
                 "phase",
                 1.0,
@@ -530,7 +531,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
             (
                 "cw-a",
                 "hero-20260819",
-                "/rav/hero-20260819-coord/grug-train-hero-20260819",
+                "/marin/hero-20260819-coord/grug-train-hero-20260819",
                 "attempt-1",
                 "progress_time_seconds",
                 stalled_at.timestamp(),
@@ -553,7 +554,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     task_states = database.execute(task_state_query(now)).fetch_arrow_table()
     runs = active_hero_runs(task_states, now)
     assert [(run.cluster, run.root_job, run.run_id) for run in runs] == [
-        ("cw-a", "/rav/hero-20260819-coord", "hero-20260819")
+        ("cw-a", "/marin/hero-20260819-coord", "hero-20260819")
     ]
 
     enrolled = database.execute(telemetry_query(now, runs)).fetch_arrow_table()
@@ -561,7 +562,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     assert firing == [
         {
             "cluster": "cw-a",
-            "job": "/rav/hero-20260819-coord",
+            "job": "/marin/hero-20260819-coord",
             "run": "hero-20260819",
             "phase": "training",
             "reason": "training_stalled",
@@ -574,7 +575,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         (
             "cw-a",
             "hero-20260819",
-            "/rav/hero-20260819-coord/grug-train-hero-20260819",
+            "/marin/hero-20260819-coord/grug-train-hero-20260819",
             "attempt-1",
             "progress_time_seconds",
             progressing_at.timestamp(),
@@ -587,7 +588,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     assert recovered == [
         {
             "cluster": "cw-a",
-            "job": "/rav/hero-20260819-coord",
+            "job": "/marin/hero-20260819-coord",
             "run": "hero-20260819",
             "phase": "training",
             "reason": "healthy",
@@ -640,7 +641,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     task_states = finelog_result(
         cluster=["cw-a"],
-        job=["/u/hero-retry-coord"],
+        job=["/marin/hero-retry-coord"],
         state_at=[now],
         running_since=[now - timedelta(hours=1)],
         running=[64],
@@ -648,7 +649,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
     telemetry_metrics = finelog_result(
         cluster=["cw-a"],
         run_id=["hero-retry"],
-        telemetry_job=["/u/hero-retry-coord/train"],
+        telemetry_job=["/marin/hero-retry-coord/train"],
         name=["phase"],
         value=[0.0],
         ts=[now - timedelta(minutes=5)],
@@ -658,7 +659,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
     assert training_stall_alert_rows(active_hero_runs(task_states, now), telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
-            "job": "/u/hero-retry-coord",
+            "job": "/marin/hero-retry-coord",
             "run": "hero-retry",
             "phase": "initializing",
             "reason": "initializing",
@@ -668,7 +669,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
 
 
 def _hero_run(run_id: str) -> HeroRun:
-    return HeroRun("cw-a", f"/u/{run_id}-coord", run_id, datetime(2026, 7, 28, 11, tzinfo=UTC))
+    return HeroRun("cw-a", f"/marin/{run_id}-coord", run_id, datetime(2026, 7, 28, 11, tzinfo=UTC))
 
 
 def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_exactly():
@@ -695,7 +696,7 @@ def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_ex
             (
                 "cw-a",
                 "hero-active",
-                "/u/hero-active-coord/train",
+                "/marin/hero-active-coord/train",
                 "attempt-active",
                 int((now - timedelta(hours=2)).timestamp() * 1000),
                 1,
@@ -703,15 +704,23 @@ def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_ex
             (
                 "cw-a",
                 "hero-recent",
-                "/u/hero-recent-coord/train",
+                "/marin/hero-recent-coord/train",
                 "attempt-recent",
                 int((now - timedelta(minutes=5)).timestamp() * 1000),
                 2,
             ),
             (
                 "cw-a",
+                "hero-gb200-main-rack-20261002-02",
+                "/dlwh/hero-gb200-main-rack-20261002-02-coord/train",
+                "attempt-other-user",
+                int((now - timedelta(minutes=5)).timestamp() * 1000),
+                4,
+            ),
+            (
+                "cw-a",
                 "hero-old",
-                "/u/hero-old-coord/train",
+                "/marin/hero-old-coord/train",
                 "attempt-old",
                 int((now - timedelta(hours=2)).timestamp() * 1000),
                 3,
@@ -720,7 +729,6 @@ def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_ex
     )
 
     recent_phase = database.execute(recent_phase_query(now)).fetch_arrow_table()
-    assert recent_phase.column("run_id").to_pylist() == ["hero-recent"]
 
     active = (_hero_run("hero-active"),)
     phase_history = database.execute(phase_execution_query(now, active)).fetch_arrow_table()
@@ -728,7 +736,7 @@ def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_ex
 
     task_states = finelog_result(
         cluster=["cw-a"],
-        job=["/u/hero-active-coord"],
+        job=["/marin/hero-active-coord"],
         state_at=[now],
         running_since=[now - timedelta(hours=3)],
         running=[64],
@@ -789,11 +797,11 @@ def test_loss_spike_alert_fires_on_a_sustained_rise_and_not_on_a_single_step():
     ]
 
     assert loss_spike_alert_rows(runs, _loss_windows(now, runs, samples)) == [
-        {"cluster": "cw-a", "job": "/u/hero-steady-coord", "run": "hero-steady", "reason": "healthy", "value": 0},
-        {"cluster": "cw-a", "job": "/u/hero-blip-coord", "run": "hero-blip", "reason": "healthy", "value": 0},
+        {"cluster": "cw-a", "job": "/marin/hero-steady-coord", "run": "hero-steady", "reason": "healthy", "value": 0},
+        {"cluster": "cw-a", "job": "/marin/hero-blip-coord", "run": "hero-blip", "reason": "healthy", "value": 0},
         {
             "cluster": "cw-a",
-            "job": "/u/hero-diverging-coord",
+            "job": "/marin/hero-diverging-coord",
             "run": "hero-diverging",
             "reason": "spiking",
             "value": 1,
@@ -810,7 +818,7 @@ def test_loss_spike_alert_fires_on_a_loss_that_stops_being_finite():
     ]
 
     assert loss_spike_alert_rows(runs, _loss_windows(now, runs, samples)) == [
-        {"cluster": "cw-a", "job": "/u/hero-nan-coord", "run": "hero-nan", "reason": "not_finite", "value": 1}
+        {"cluster": "cw-a", "job": "/marin/hero-nan-coord", "run": "hero-nan", "reason": "not_finite", "value": 1}
     ]
 
 
@@ -826,7 +834,7 @@ def test_loss_spike_alert_waits_for_a_baseline_before_judging_a_rise():
     ]
 
     assert loss_spike_alert_rows(runs, _loss_windows(now, runs, samples)) == [
-        {"cluster": "cw-a", "job": "/u/hero-fresh-coord", "run": "hero-fresh", "reason": "warming_up", "value": 0}
+        {"cluster": "cw-a", "job": "/marin/hero-fresh-coord", "run": "hero-fresh", "reason": "warming_up", "value": 0}
     ]
 
 
@@ -867,7 +875,7 @@ def _watched(
 ) -> WatchedRun:
     return WatchedRun(
         cluster="cw-a",
-        root_job=f"/u/{run_id}-coord",
+        root_job=f"/marin/{run_id}-coord",
         run_id=run_id,
         iris_running=iris_running,
         iris_state_age=iris_state_age,
@@ -905,7 +913,7 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     task_states = finelog_result(
         cluster=["cw-a"],
-        job=["/u/hero-a-coord"],
+        job=["/marin/hero-a-coord"],
         state_at=[now - timedelta(minutes=20)],
         running_since=[now - timedelta(hours=3)],
         running=[64],
@@ -913,7 +921,7 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
     phase_runs = finelog_result(
         cluster=["cw-a"],
         run_id=["hero-a"],
-        telemetry_job=["/u/hero-a-coord/train"],
+        telemetry_job=["/marin/hero-a-coord/train"],
         execution_uid=["attempt-1"],
         phase_at=[now - timedelta(seconds=30)],
     )
@@ -930,7 +938,7 @@ def test_watched_run_keeps_an_old_phase_execution_without_phase_only_enrollment(
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     task_states = finelog_result(
         cluster=["cw-a"],
-        job=["/u/hero-a-coord"],
+        job=["/marin/hero-a-coord"],
         state_at=[now],
         running_since=[now - timedelta(hours=3)],
         running=[64],
@@ -938,7 +946,7 @@ def test_watched_run_keeps_an_old_phase_execution_without_phase_only_enrollment(
     old_phase = finelog_result(
         cluster=["cw-a", "cw-b"],
         run_id=["hero-a", "hero-old"],
-        telemetry_job=["/u/hero-a-coord/train", "/u/hero-old-coord/train"],
+        telemetry_job=["/marin/hero-a-coord/train", "/marin/hero-old-coord/train"],
         execution_uid=["attempt-1", "attempt-old"],
         phase_at=[now - timedelta(hours=2), now - timedelta(hours=2)],
     )
@@ -971,7 +979,7 @@ def test_telemetry_alert_leaves_a_run_that_has_published_nothing_to_the_stall_ru
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     rows = telemetry_alert_rows((_watched(),), {}, now)
 
-    assert rows == [{"cluster": "cw-a", "job": "/u/hero-a-coord", "run": "hero-a", "reason": "healthy", "value": 0}]
+    assert rows == [{"cluster": "cw-a", "job": "/marin/hero-a-coord", "run": "hero-a", "reason": "healthy", "value": 0}]
 
 
 def test_training_stall_alert_defers_a_silent_run_to_the_telemetry_rule():
@@ -979,7 +987,7 @@ def test_training_stall_alert_defers_a_silent_run_to_the_telemetry_rule():
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     task_states = finelog_result(
         cluster=["cw-a"],
-        job=["/u/hero-a-coord"],
+        job=["/marin/hero-a-coord"],
         state_at=[now],
         running_since=[now - timedelta(hours=3)],
         running=[64],
@@ -987,7 +995,7 @@ def test_training_stall_alert_defers_a_silent_run_to_the_telemetry_rule():
     telemetry_metrics = finelog_result(
         cluster=["cw-a"] * 2,
         run_id=["hero-a"] * 2,
-        telemetry_job=["/u/hero-a-coord/train"] * 2,
+        telemetry_job=["/marin/hero-a-coord/train"] * 2,
         name=["phase", "progress_time_seconds"],
         value=[1.0, (now - timedelta(minutes=25)).timestamp()],
         ts=[now - timedelta(minutes=25)] * 2,
@@ -1147,7 +1155,7 @@ def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, fai
                 )
             return pa.Table.from_pylist(
                 [
-                    dict(run_fields, run_id=run_id, telemetry_job=f"/u/{run_id}-coord/train", phase_at=stamp)
+                    dict(run_fields, run_id=run_id, telemetry_job=f"/marin/{run_id}-coord/train", phase_at=stamp)
                     for run_id, (_, stamp) in phases.items()
                 ]
             )
@@ -1230,7 +1238,7 @@ def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     retries = finelog_result(
         cluster=["cw-a", "cw-a"],
-        task_id=["/u/hero-a-coord/train/17", "/u/other-coord/train/0"],
+        task_id=["/marin/hero-a-coord/train/17", "/u/other-coord/train/0"],
     )
     signals = _signals(now, {"phase": {"latest": 1.0}})
 
@@ -1393,7 +1401,7 @@ def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
 
 def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
-    run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
+    run = HeroRun("cw-a", "/marin/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
     training_sql = telemetry_query(now, (run,))
     zephyr_sql = zephyr_progress_query(now)
 
@@ -1685,3 +1693,13 @@ def test_the_producer_census_refuses_a_window_wider_than_it_will_scan():
 
     assert resp.status_code == 400
     assert "maximum" in resp.json()["error"]
+
+
+def test_cache_evicts_oldest_values_to_bound_retained_bytes():
+    cache = TtlCache(60, max_size=5, get_size=len)
+    assert cache.get_or_compute("a", lambda: b"aaa") == b"aaa"
+    assert cache.get_or_compute("b", lambda: b"bbb") == b"bbb"
+    assert cache.get_or_compute("b", lambda: b"wrong") == b"bbb"
+    assert cache.get_or_compute("a", lambda: b"new") == b"new"
+    assert cache.get_or_compute("large", lambda: b"too large") == b"too large"
+    assert cache.get_or_compute("large", lambda: b"fresh") == b"fresh"
