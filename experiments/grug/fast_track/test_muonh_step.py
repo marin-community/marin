@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """``muonh_step``: every mode keeps each matrix's norm; ``spectral`` takes Muon's own step size and ``grad`` scales
-the relative step by the momentum norm over its early mean."""
+the relative step by the smoothed gradient norm over its early mean."""
 
 import equinox as eqx
 import jax
@@ -55,7 +55,7 @@ def test_spectral_step_ignores_the_matrix_norm():
     np.testing.assert_allclose(rel[MuonHStep.SPECTRAL], 0.5, rtol=2e-2)
 
 
-def test_grad_step_follows_the_momentum_norm_after_the_reference_window():
+def test_grad_step_follows_the_smoothed_gradient_norm_after_the_reference_window():
     base = jax.random.normal(jax.random.PRNGKey(4), (16, 32))
     grads = [base] * 3 + [0.25 * base]
     _, rel_ups, _ = _run(MuonHStep.RELATIVE, grads)
@@ -63,7 +63,8 @@ def test_grad_step_follows_the_momentum_norm_after_the_reference_window():
     for r, g in zip(rel_ups[:3], grad_ups[:3], strict=True):
         np.testing.assert_allclose(g, r, rtol=1e-5, atol=1e-8)
     ratio = float(jnp.linalg.norm(grad_ups[3]) / jnp.linalg.norm(rel_ups[3]))
-    np.testing.assert_allclose(ratio, 0.25, rtol=2e-2)
+    # The gradient-norm EMA (0.95) moves 5% of the way toward the quartered gradient.
+    np.testing.assert_allclose(ratio, 0.95 + 0.05 * 0.25, rtol=2e-2)
     assert int(state.step_count) == 4
 
 
