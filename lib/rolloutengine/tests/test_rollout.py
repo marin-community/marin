@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import tarfile
 import threading
 from dataclasses import dataclass, field, replace
 
@@ -1200,3 +1201,73 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(answ
     for machine in machines:
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(argv=("true",)))
+
+
+@pytest.mark.parametrize("download_failed", [False, True])
+async def test_artifact_archive_cleanup_failure_retains_the_grade_or_primary_error(tmp_path, download_failed):
+    answer = tmp_path / "answer"
+    answer.write_bytes(b"12\n")
+    factory = RecordingShellSimFactory()
+
+    class Machine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv[:2] == ("tar", "-cf"):
+                return Result(0, b"", b"", False, False, ExitReason.EXITED)
+            if command.argv[:2] == ("rm", "-f") and command.argv[2].startswith("/tmp/taskcompendium-artifact-"):
+                raise OSError("Cannot remove artifact archive")
+            return await self.machine.run(command)
+
+        async def download(self, source, target):
+            if source.startswith("/tmp/taskcompendium-artifact-"):
+                if download_failed:
+                    raise ConnectionError("Artifact download failed")
+                with tarfile.open(target, "w") as archive:
+                    archive.add(answer, arcname="answer")
+                return
+            await self.machine.download(source, target)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            return Machine(await factory.create(spec))
+
+    verifier = ShellVerifierSpec(
+        argv=("sh", "-c", 'test "$(cat /workspace/project/answer)" = 12'),
+        timeout=5,
+        reward=ExitCodeReward(),
+        environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+        artifacts=(
+            VerifierArtifact(
+                source="/workspace/project", target="/workspace/project", kind=ArtifactKind.DIRECTORY, exclude=("cache",)
+            ),
+        ),
+    )
+    task = file_task().model_copy(
+        update={"verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json())}
+    )
+    runner = engine(ReplayModel([{"role": "assistant", "content": "Completed."}]), {EnvironmentKind.SHELLSIM: Factory()})
+    if download_failed:
+        with pytest.raises(RolloutInterrupted) as caught:
+            await runner.run(task)
+        assert caught.value.operation == RolloutOperation.GRADE
+        assert isinstance(caught.value.__cause__, ConnectionError)
+        record = caught.value.rollout
+        assert (record.grade.status, record.grade.reward) == (Outcome.UNAVAILABLE, None)
+    else:
+        record = await runner.run(task)
+        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.response_token_ids == (20,)
+    assert record.grade.diagnostics["cleanup_errors"] == [
+        {"operation": "artifact_archive_remove", "exception_type": "OSError"}
+    ]
+    for machine in factory.machines:
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
