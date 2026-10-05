@@ -8,13 +8,14 @@ TaskCompendium defines executable tasks. The `marin-rolloutengine` package owns 
 
 `TaskSpec.model_dump_json()` serializes a task.
 `TaskSpec.model_validate_json()` validates a serialized task.
-Schema `0.23` stores the session selector only in `environment.interaction` and removes the legacy machine fields.
+Schema `0.24` uses one machine description and stores execution deadlines separately from `TaskSpec`.
 Rebuild task files created with older schemas before launch.
 TaskCompendium and the rollout engine do not select a dataset file format.
 SkyRL converts source rows through Hugging Face `Dataset.map` without an
 intermediate Parquet file. The prepared dataset stays in memory.
 Explicit SkyRL exports and Harbor caches use a
 `task_spec` string column with one serialized task per row.
+SkyRL stores an optional serialized `TaskExecution` in the separate `task_execution` column.
 
 The serialized task contains private grading inputs. The model request contains
 the public conversation, submission instructions, and tool definitions.
@@ -25,20 +26,18 @@ the public conversation, submission instructions, and tool definitions.
 | `environment.kind` | `null`, `shellsim`, or `docker`. |
 | `environment.image` | Docker source: `RegistryImage` or `DockerBuild`. |
 | `environment.workdir` | Working directory for commands. The default is `/workspace`. An empty value uses the Docker image's working directory. |
-| `environment.files` | Files that the engine installs before inference. JSON uses base64 content and retains permission bits. |
+| `environment.files` | Files that the engine installs before inference. JSON uses base64 content and retains permission bits. Explicit `mtime_ns` values require Docker. |
 | `environment.env` | Environment variables for task commands. Entire values `${VAR}` and `${VAR:-default}` resolve from the rollout process environment. |
 | `environment.setup` | Commands that prepare a fresh task machine. |
 | `environment.healthcheck` | Readiness command, startup grace period, interval, and retry limit. |
 | `environment.network` | Network access. The default is disabled. |
 | `environment.startup_timeout` | Optional deadline for machine creation, file upload, setup, and health checks. |
-| `attempt_timeout` | Optional deadline for one complete attempt, from machine creation through grading. |
 | `environment.memory_mb` | Optional memory limit for the machine factory. |
 | `environment.cpus`, `environment.storage_mb`, `environment.gpus` | CPU, storage, and GPU settings. Backends reject settings they cannot apply. |
 | `environment.interaction` | Optional application-supplied task session. |
-| `verifier` | Private verifier kind and serialized parameters. |
-| `agent_timeout` | Optional elapsed-time limit for model requests and task transitions. Grading has its own timeout. |
-| `agent_user` | Optional execution user for agent shell commands. Docker accepts a username or numeric UID as a string. |
-| `stages` | Ordered phases with separate instructions, setup, graders, and minimum reward requirements. All phases use the same machine. |
+| `verifier` | Private verifier kind, serialized parameters, files, and an optional isolated grading environment. |
+| `oracle_files` | Private control files for curation checks. The agent does not receive them. |
+| `stages` | Ordered phases with instructions, graders, and minimum reward requirements. All phases use the same machine. |
 | `metadata` | Application data that does not change the execution contract. |
 
 `environment` is the single machine description. `environment_requirements` declares task capabilities only.
@@ -58,12 +57,30 @@ An `environment.interaction` value selects a factory from the engine's `sessions
 mapping. The callable receives the task and its Shellbox machine, then returns a fresh session.
 Null environments pass no machine. The engine closes the session before it closes the machine.
 Without that value, the engine uses its shell-tool session.
+Native curation providers and workspace graders require an application-supplied
+`TaskSession`. The default session rejects those contracts before inference.
+TaskCompendium's curation runtime supplies its native calendar and shell providers.
 
 The caller supplies a `MachineFactory` for each executable environment kind.
 Each task gets a fresh machine. The engine attempts machine cleanup after completion,
 failure, or cancellation.
 The default session exposes `shell(command: string)` for executable environments.
 Files persist between commands. Each command starts a new shell process.
+
+`ShellboxRolloutEngine.run(task, execution=...)` accepts a separate `TaskExecution`
+from `taskcompendium.execution`. One task definition can run with different execution settings.
+
+| Execution field | Contract |
+| --- | --- |
+| `attempt_timeout` | Optional deadline from machine creation through grading. |
+| `agent_timeout` | Optional elapsed-time limit for model requests and task transitions. Grading has its own timeout. |
+| `agent_user` | Optional user for agent shell commands. Docker accepts a username or numeric UID as a string. |
+| `stages` | A mapping with one `StageExecution` for every task stage. Missing or unknown names cause rejection. |
+
+`StageExecution` supplies files relative to the machine workdir, setup commands,
+readiness checks, and optional agent deadline and user overrides.
+The Harbor importer exposes `harbor_task` and `harbor_execution` separately.
+SkyRL applies launch-time deadline overrides to the execution settings.
 
 ## Grading
 
@@ -99,10 +116,10 @@ If the factory returns a machine after cancellation, the engine closes that mach
 Creation continues until the factory finishes because cancellation can lose a machine from a background thread.
 The cleanup deadline applies when the factory returns that machine.
 
-`ShellVerifierSpec` defines a command, private files, a timeout, environment
-variables, and a reward source. The engine installs private files after the last
+`ShellVerifierSpec` defines a command, a timeout, environment variables, and a reward source.
+`VerifierSpec.files` holds private files. The engine installs them after the last
 model response. The command receives the conversation as JSON on standard input.
-`ShellVerifierSpec.user` selects the verifier user separately from `agent_user`.
+`ShellVerifierSpec.user` selects the verifier user separately from `TaskExecution.agent_user`.
 Setup and collect commands can also select an execution user.
 
 The default `StdoutReward` requires a zero exit code and one finite numeric value
@@ -128,7 +145,7 @@ A command timeout has no grade. This contract supports Harbor reward files with
 `ExitCodeReward` gives reward `1` for exit code zero and reward `0` for a nonzero
 exit code. A command timeout has no grade.
 
-The optional `ShellVerifierSpec.environment` defines a fresh grading machine.
+The optional `VerifierSpec.environment` defines a fresh grading machine.
 The engine runs `collect` commands in the agent machine, then copies the declared
 `artifacts` to that grading machine. Each artifact identifies its source, target,
 and kind: file, directory, or automatic detection. Directory exclusions use
@@ -143,8 +160,8 @@ the result, and releases its resources. It does not call the model.
 model options. The engine owns conversation and token accumulation after that
 point so all session implementations use the same exact-token checks.
 
-Tasks with `stages` use a `staged` verifier. Each `TaskStage` defines its own
-verifier and can install files relative to the machine's working directory.
+Tasks with `stages` use a `staged` verifier. Each `TaskStage` defines its instructions,
+verifier, and reward gates. Its `StageExecution` supplies stage preparation.
 The first stage uses the task's public conversation. Later stages append their
 instructions to the conversation and retain the exact token prefix.
 The turn limit and agent deadline apply separately to each stage.
@@ -168,7 +185,8 @@ When the aggregate is graded, the engine assigns its reward to the last action
 with a valid grade.
 
 All other actions receive zero optimization reward and retain their stage grades.
-The engine masks tokens from a stage without a valid grade.
+The engine masks tokens from a stage without a valid grade, except for explicitly skipped grading.
+An explicitly skipped stage retains its token masks and supplies no score.
 Earlier valid stages keep their exact tokens and masks. When the aggregate has
 no grade, all actions receive zero optimization reward.
 When the aggregate has no grade, the caller decides if earlier valid stages can enter training.
@@ -202,7 +220,7 @@ A session can request a conversation reset through `Transition.reset_conversatio
 When another turn is available, that reset removes all earlier turns from the
 training record. Lean refinement uses this operation after a failed proof attempt.
 
-`ShellboxRolloutEngine.run(TaskSpec)` asynchronously returns one `RolloutData`.
+`ShellboxRolloutEngine.run(task, execution=...)` asynchronously returns one `RolloutData`.
 The caller starts one coroutine for each active task and controls concurrency.
 Model, machine, and session operations run on the caller's event loop. A caller
 cancels the task that awaits `run`. Each cleanup action has the caller-supplied
@@ -224,6 +242,7 @@ from collections.abc import Awaitable, Callable
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
+from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -244,7 +263,7 @@ async def run_task(
         cleanup_timeout=30,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
-    return await engine.run(task)
+    return await engine.run(task, execution=TaskExecution())
 ```
 
 Application-supplied sessions require an additional `sessions` mapping.

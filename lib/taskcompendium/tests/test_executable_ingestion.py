@@ -13,6 +13,7 @@ import pytest
 from shellbox.machine import DockerImage, ExitReason, MachineSpec, Result
 from verifyit.spec import StdioSpec, spec_to_table
 
+from taskcompendium.environment import EnvironmentFile
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.datasets.executable_tasks import normalize
 from taskcompendium.pipeline.models import RawRow
@@ -94,6 +95,18 @@ class GradingMachines:
 
 @pytest.mark.parametrize("program,reward", [(b"print(7)\n", 1.0), (b"print(0)\n", 0.0)])
 async def test_captured_submission_cannot_supply_its_own_reward(executable_task, program, reward):
+    executable_task = executable_task.model_copy(
+        update={
+            "environment": executable_task.environment.model_copy(
+                update={
+                    "files": (
+                        *executable_task.environment.files,
+                        EnvironmentFile(path="/tests/cases/output_1.txt", content=b"public replacement"),
+                    )
+                }
+            )
+        }
+    )
     machines = GradingMachines()
     grade = await grade_submission(
         executable_task,
@@ -107,3 +120,18 @@ async def test_captured_submission_cannot_supply_its_own_reward(executable_task,
     assert grade.reward == reward
     assert machines.machines[0].files["/tests/cases/output_1.txt"] == b"7\n"
     assert machines.machines[0].closed
+
+
+@pytest.mark.parametrize("settings", [{"env": {"MODE": "required"}}, {"network": True}, {"cpus": 2}])
+async def test_isolated_grading_rejects_environment_settings_it_cannot_apply(executable_task, settings):
+    environment = executable_task.verifier.environment
+    assert environment is not None
+    task = executable_task.model_copy(
+        update={
+            "verifier": executable_task.verifier.model_copy(
+                update={"environment": environment.model_copy(update=settings)}
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        await grade_submission(task, {"/app/solution.py": b"print(7)\n"}, GradingMachines())

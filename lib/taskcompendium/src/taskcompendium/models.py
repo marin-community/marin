@@ -11,14 +11,13 @@ from typing import Annotated, Literal, NoReturn
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from taskcompendium.environment import (
-    EnvironmentCommand,
     EnvironmentFile,
     EnvironmentKind,
     EnvironmentSpec,
-    HealthcheckSpec,
+    validate_environment_files,
 )
 
-SCHEMA_VERSION = "0.23"
+SCHEMA_VERSION = "0.24"
 FILESYSTEM_CAPABILITY = "filesystem"
 SHELL_CAPABILITY = "shell"
 
@@ -253,6 +252,8 @@ class VerifierSpec(BaseModel):
     kind: str = Field(min_length=1)
     parameters_json: str = Field(repr=False)
     environment_requirements: EnvironmentRequirements = Field(default_factory=EnvironmentRequirements)
+    files: tuple[EnvironmentFile, ...] = ()
+    environment: EnvironmentSpec | None = None
 
     @field_validator("parameters_json")
     @classmethod
@@ -262,20 +263,24 @@ class VerifierSpec(BaseModel):
             raise ValueError("Verifier configuration must be a JSON object")
         return value
 
+    @model_validator(mode="after")
+    def validate_environment(self) -> "VerifierSpec":
+        validate_environment_files(self.files)
+        if self.environment is not None and (
+            self.environment.kind == EnvironmentKind.NULL or self.environment.interaction is not None
+        ):
+            raise ValueError("A private grading environment requires a machine without a task session")
+        return self
+
 
 class TaskStage(BaseModel):
-    """One stage in a shared task machine. The first stage uses the task context."""
+    """Stage instructions, a private verifier, and reward gates."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(min_length=1)
     context: ConversationInput | None = None
     verifier: VerifierSpec
-    workdir_files: tuple[EnvironmentFile, ...] = ()
-    setup: tuple[EnvironmentCommand, ...] = ()
-    healthcheck: HealthcheckSpec | None = None
-    agent_timeout: float | None = Field(default=None, gt=0)
-    agent_user: str | None = None
     minimum_rewards: dict[str, Annotated[float, Field(allow_inf_nan=False)]] = Field(default_factory=dict)
 
 
@@ -311,12 +316,10 @@ class TaskSpec(BaseModel):
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     output_paths: tuple[str, ...] = ()
+    oracle_files: tuple[EnvironmentFile, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     environment: EnvironmentSpec = Field(default_factory=lambda: EnvironmentSpec(kind=EnvironmentKind.NULL))
-    attempt_timeout: float | None = Field(default=None, gt=0)
-    agent_timeout: float | None = Field(default=None, gt=0)
-    agent_user: str | None = None
     stages: tuple[TaskStage, ...] = ()
     source: Source
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
@@ -325,6 +328,7 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        validate_environment_files(self.oracle_files)
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:

@@ -33,8 +33,9 @@ Conversation events retain tool-call IDs and order. They exclude provider reason
 `answer_type` describes the result, independently of its submission format.
 Importers must remove source instructions that conflict with the supported conventions or reject the row.
 
-`environment` is the single machine description. Place public files in `environment.files` and private files in `ShellVerifierSpec.files`.
-Schema `0.23` removes the legacy machine fields and `resources`. `environment_requirements` declares capabilities only.
+`environment` is the single machine description. Place public files in `environment.files` and private files in `VerifierSpec.files`.
+Schema `0.24` removes the legacy machine fields and `resources`. `environment_requirements` declares capabilities only.
+`TaskExecution` stores attempt and agent deadlines, agent users, and stage preparation separately from the task definition.
 Rebuild earlier task exports with the current importer.
 See [task rollouts](../../docs/references/task-rollouts.md) for executable fields, stages, and token contracts.
 
@@ -131,7 +132,8 @@ The fork supplies [custom-verifier task loading](https://github.com/marin-commun
 From the Marin repository root:
 
 ```bash
-uv run --project lib/taskcompendium --frozen --extra harbor --group test pytest lib/taskcompendium/tests -q
+task_test_prefix=$(mktemp -d -t taskcompendium-tests.XXXXXX)
+MARIN_PREFIX="$task_test_prefix" uv run --project lib/taskcompendium --frozen --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
 ```
 
 Python 3.12 or 3.13 is required. Package dependencies and the Harbor revision are in [pyproject.toml](pyproject.toml).

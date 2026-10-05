@@ -28,7 +28,9 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.grading import GradeResult, Outcome, numeric_answer
+from taskcompendium.execution import StageExecution, TaskExecution
+from taskcompendium.grading import numeric_answer
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -106,7 +108,7 @@ def engine(model, factories, *, cleanup_timeout=5, sessions=None, max_turns=3) -
 async def test_serialized_task_produces_private_grade_and_training_tokens(answer, reward):
     task = TaskSpec.model_validate_json(arithmetic_task().model_dump_json())
     model = ReplayModel([{"role": "assistant", "content": answer}])
-    result = await engine(model, {}).run(task)
+    result = await engine(model, {}).run(task, execution=TaskExecution())
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert result.prompt_token_ids == (10, 11)
     assert result.response_token_ids == (20,)
@@ -119,7 +121,9 @@ async def test_executable_answer_task_keeps_submission_instruction_and_shell_too
     task = arithmetic_task().model_copy(update={"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM)})
     model = ReplayModel([{"role": "assistant", "content": "12"}])
 
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(task)
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        task, execution=TaskExecution()
+    )
 
     assert result.grade.reward == 1.0
     assert model.requests[0].messages[-1] == {"role": "user", "content": "Give your answer as plain text."}
@@ -151,7 +155,7 @@ async def test_executable_answer_call_keeps_submission_tool_and_finishes():
         convention=SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
     )
 
-    result = await runner.run(task)
+    result = await runner.run(task, execution=TaskExecution())
 
     assert result.grade.reward == 1.0
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == [
@@ -181,7 +185,9 @@ async def test_executable_native_action_keeps_final_and_shell_tools():
         ]
     )
 
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(task)
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        task, execution=TaskExecution()
+    )
 
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["finish", "shell"]
     assert result.response_token_ids == (20,)
@@ -199,7 +205,9 @@ async def test_unknown_executable_tool_returns_an_observation():
         ]
     )
 
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        file_task(), execution=TaskExecution()
+    )
 
     assert result.grade.reward == 0.0
     assert json.loads(model.requests[1].messages[-1]["content"])["error"]
@@ -221,7 +229,9 @@ async def test_malformed_assistant_message_is_a_graded_model_result():
         ]
     )
 
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        file_task(), execution=TaskExecution()
+    )
 
     assert result.grade.reward == 0.0
     assert result.metrics == {"invalid_assistant_message": 1.0}
@@ -230,18 +240,22 @@ async def test_malformed_assistant_message_is_a_graded_model_result():
 def file_task() -> TaskSpec:
     verifier = ShellVerifierSpec(
         argv=("sh", "/private/grade.sh"),
-        files=(
-            EnvironmentFile(
-                path="/private/grade.sh", content=b'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi'
-            ),
-        ),
         timeout=5,
     )
     return arithmetic_task().model_copy(
         update={
             "answer_type": AnswerType.FILE,
             "environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
-            "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=verifier.model_dump_json(),
+                files=(
+                    EnvironmentFile(
+                        path="/private/grade.sh",
+                        content=b'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi',
+                    ),
+                ),
+            ),
         }
     )
 
@@ -267,7 +281,9 @@ async def test_shellbox_tools_persist_files_and_mask_observations():
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        file_task(), execution=TaskExecution()
+    )
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
     assert result.response_token_ids == (20, 90, 91, 21)
     assert result.loss_mask == (1, 0, 0, 1)
@@ -330,7 +346,7 @@ async def test_custom_session_uses_prepared_machine_and_releases_it_after_sessio
         max_turns=2,
         sessions={"file-answer": FileAnswerSession},
     )
-    pending = asyncio.create_task(runner.run(task))
+    pending = asyncio.create_task(runner.run(task, execution=TaskExecution()))
     if interruption == "cancel":
         await asyncio.wait_for(entered.wait(), timeout=5)
         pending.cancel()
@@ -374,7 +390,9 @@ async def test_context_limit_grades_only_completed_shell_operations(completed_tu
             }
         ]
     )
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        file_task(), execution=TaskExecution()
+    )
     assert result.stop_reason == "length"
     if completed_turns:
         assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -399,8 +417,83 @@ async def test_failed_shell_grader_has_no_reward():
     result = await engine(
         ReplayModel([{"role": "assistant", "content": "Completed."}]),
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-    ).run(task)
+    ).run(task, execution=TaskExecution())
     assert (result.grade.status, result.grade.reward) == (Outcome.INFRA_ERROR, None)
+
+
+async def test_one_task_supports_independent_execution_deadlines():
+    release = asyncio.Event()
+
+    class Model:
+        async def complete(self, request):
+            await release.wait()
+            return ModelTurn({"role": "assistant", "content": "12"}, (10, 11), (20,), (-0.5,), "stop")
+
+    task = arithmetic_task()
+    original = task.model_dump_json()
+    runner = engine(Model(), {})
+    limited = asyncio.create_task(runner.run(task, execution=TaskExecution(agent_timeout=0.05)))
+    unlimited = asyncio.create_task(runner.run(task, execution=TaskExecution()))
+    try:
+        stopped = await asyncio.wait_for(limited, timeout=5)
+        assert stopped.stop_reason == "agent_timeout"
+        assert (stopped.grade.status, stopped.grade.reward) == (Outcome.UNAVAILABLE, None)
+        assert not unlimited.done()
+        release.set()
+        completed = await asyncio.wait_for(unlimited, timeout=5)
+        assert (completed.grade.status, completed.grade.reward) == (Outcome.GRADED, 1.0)
+        assert completed.response_token_ids == (20,)
+        assert task.model_dump_json() == original
+    finally:
+        release.set()
+        await asyncio.gather(limited, unlimited, return_exceptions=True)
+
+
+async def test_linux_files_keep_distinct_case_sensitive_paths():
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                files=(
+                    EnvironmentFile(path="/workspace/Makefile", content=b"upper\n"),
+                    EnvironmentFile(path="/workspace/makefile", content=b"lower\n"),
+                ),
+            ),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=ShellVerifierSpec(
+                    argv=(
+                        "sh",
+                        "-c",
+                        'test "$(cat /workspace/Makefile)" = upper && test "$(cat /workspace/makefile)" = lower',
+                    ),
+                    timeout=5,
+                    reward=ExitCodeReward(),
+                ).model_dump_json(),
+            ),
+        }
+    )
+    model = ReplayModel([{"role": "assistant", "content": "Done."}])
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+        task, execution=TaskExecution()
+    )
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_explicit_timestamps_cannot_silently_change_on_shellsim():
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                files=(EnvironmentFile(path="/workspace/answer", content=b"12\n", mtime_ns=1_234_567_890),),
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        await engine(
+            ReplayModel([{"role": "assistant", "content": "Done."}]),
+            {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        ).run(task, execution=TaskExecution())
 
 
 @pytest.mark.parametrize("timeout_phase", ["model", "advance"])
@@ -452,7 +545,7 @@ async def test_agent_deadline_grades_the_workspace_and_preserves_tokens(timeout_
             }
         ]
     )
-    task = file_task().model_copy(update={"agent_timeout": 1.0})
+    task = file_task()
     if staged:
         task = task.model_copy(
             update={
@@ -466,7 +559,9 @@ async def test_agent_deadline_grades_the_workspace_and_preserves_tokens(timeout_
                 ),
             }
         )
-    rollout = await engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(task)
+    rollout = await engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(
+        task, execution=TaskExecution(agent_timeout=1, stages={stage.name: StageExecution() for stage in task.stages})
+    )
     assert rollout.stop_reason == "agent_timeout"
     assert rollout.failure is None
     assert rollout.response_token_ids == (20,)
@@ -508,14 +603,14 @@ async def test_model_failure_grading_keeps_its_own_deadline_and_original_cause()
             return await super().complete(request)
 
     task = arithmetic_task().model_copy(
-        update={"agent_timeout": 1, "environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="fixture")}
+        update={"environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="fixture")}
     )
     runner = engine(
         FailedModel([{"role": "assistant", "content": "12"}]),
         {},
         sessions={"fixture": lambda task, machine: Session()},
     )
-    pending = asyncio.create_task(runner.run(task))
+    pending = asyncio.create_task(runner.run(task, execution=TaskExecution(agent_timeout=1)))
     await asyncio.wait_for(grading_started.wait(), timeout=5)
     # The verifier remains active beyond the agent deadline.
     asyncio.get_running_loop().call_later(1.1, release_grade.set)
@@ -532,7 +627,6 @@ async def test_agent_deadline_without_a_response_does_not_grade_an_untouched_wor
     factory = RecordingShellSimFactory()
     task = file_task().model_copy(
         update={
-            "agent_timeout": 0.05,
             "environment": EnvironmentSpec(
                 kind=EnvironmentKind.SHELLSIM,
                 files=(EnvironmentFile(path="/workspace/answer", content=b"12\n"),),
@@ -557,7 +651,10 @@ async def test_agent_deadline_without_a_response_does_not_grade_an_untouched_wor
         async def complete(self, _request):
             await asyncio.Future()
 
-    record = await engine(Model(), {EnvironmentKind.SHELLSIM: factory}).run(task)
+    record = await engine(Model(), {EnvironmentKind.SHELLSIM: factory}).run(
+        task,
+        execution=TaskExecution(agent_timeout=0.05, stages={stage.name: StageExecution() for stage in task.stages}),
+    )
     assert (record.grade.status, record.grade.reward) == (Outcome.UNAVAILABLE, None)
     assert record.stop_reason == "agent_timeout"
     assert record.response_token_ids == record.loss_mask == ()
@@ -596,9 +693,11 @@ async def test_agent_timeout_grades_the_recorded_transcript_without_unserved_obs
             return await super().complete(request)
 
     task = arithmetic_task().model_copy(
-        update={"agent_timeout": 0.05, "environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="fixture")}
+        update={"environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="fixture")}
     )
-    record = await engine(Model([{"role": "assistant", "content": "12"}]), {}, sessions={"fixture": Session}).run(task)
+    record = await engine(Model([{"role": "assistant", "content": "12"}]), {}, sessions={"fixture": Session}).run(
+        task, execution=TaskExecution(agent_timeout=0.05)
+    )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.stop_reason == "agent_timeout"
     assert record.grade.diagnostics["graded_messages"] == record.messages
@@ -624,7 +723,6 @@ async def test_agent_timeout_grades_the_recorded_transcript_without_unserved_obs
 async def test_file_grader_preserves_priority_and_rejects_agent_scores(script, status, reward):
     verifier = ShellVerifierSpec(
         argv=("sh", "/tests/test.sh"),
-        files=(EnvironmentFile(path="/tests/test.sh", content=script.encode()),),
         timeout=5,
         reward=FileReward(
             files=(
@@ -639,13 +737,17 @@ async def test_file_grader_preserves_priority_and_rejects_agent_scores(script, s
                 kind=EnvironmentKind.SHELLSIM,
                 files=(EnvironmentFile(path="/logs/verifier/reward.txt", content=b"1"),),
             ),
-            "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=verifier.model_dump_json(),
+                files=(EnvironmentFile(path="/tests/test.sh", content=script.encode()),),
+            ),
         }
     )
     result = await engine(
         ReplayModel([{"role": "assistant", "content": "Completed."}]),
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-    ).run(task)
+    ).run(task, execution=TaskExecution())
     assert (result.grade.status, result.grade.reward) == (status, reward)
 
 
@@ -658,7 +760,7 @@ async def test_model_failure_releases_the_shellbox_machine():
             raise ConnectionError("Inference endpoint unavailable")
 
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}).run(file_task())
+        await engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}).run(file_task(), execution=TaskExecution())
     assert isinstance(failure.value.__cause__, ConnectionError)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(argv=("true",)))
@@ -677,7 +779,7 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
         }
     )
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}).run(task)
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}).run(task, execution=TaskExecution())
     assert failure.value.operation == RolloutOperation.START
     assert failure.value.rollout.task_id == task.id
     assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
@@ -770,7 +872,6 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     task = file_task().model_copy(
         update={
             "environment": environment,
-            "attempt_timeout": 1 if phase in {"attempt_startup", "model", "grade"} else 10,
             "verifier": VerifierSpec(
                 kind=VerifierKind.SHELL,
                 parameters_json=ShellVerifierSpec(argv=("stall",), timeout=5).model_dump_json(),
@@ -779,7 +880,14 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     )
     model = Model([{"role": "assistant", "content": "Done."}])
     runner = engine(model, {EnvironmentKind.SHELLSIM: Factory()})
-    pending = asyncio.create_task(runner.run(task))
+    pending = asyncio.create_task(
+        runner.run(
+            task,
+            execution=TaskExecution(
+                attempt_timeout=1 if phase in {"attempt_startup", "model", "grade"} else 10,
+            ),
+        )
+    )
     await asyncio.wait_for(entered.wait(), timeout=5)
     if phase in {"cancel", "cleanup_cancel", "cancel_twice"}:
         try:
@@ -836,11 +944,10 @@ async def test_cancellation_waits_for_machine_cleanup_after_startup_failure():
                 kind=EnvironmentKind.SHELLSIM,
                 files=(EnvironmentFile(path="/input", content=b"input"),),
             ),
-            "attempt_timeout": 1,
         }
     )
     runner = engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: Factory()})
-    pending = asyncio.create_task(runner.run(task))
+    pending = asyncio.create_task(runner.run(task, execution=TaskExecution(attempt_timeout=1)))
     cleanup_loop, release = await asyncio.wait_for(close_started, timeout=5)
     pending.cancel()
     cleanup_loop.call_soon_threadsafe(release.set)
@@ -904,12 +1011,12 @@ async def test_cleanup_errors_preserve_completed_grades_and_the_primary_failure(
     )
     if model_failed:
         with pytest.raises(RolloutInterrupted) as caught:
-            await runner.run(task)
+            await runner.run(task, execution=TaskExecution())
         assert caught.value.operation == RolloutOperation.MODEL
         assert isinstance(caught.value.__cause__, TimeoutError)
         record = caught.value.rollout
     else:
-        record = await runner.run(task)
+        record = await runner.run(task, execution=TaskExecution())
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.response_token_ids == (20,)
     assert record.loss_mask == (1,)
@@ -948,7 +1055,7 @@ async def test_cleanup_deadline_bounds_a_close_that_suppresses_cancellation(canc
         cleanup_timeout=0.05,
     )
     task = arithmetic_task().model_copy(update={"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM)})
-    pending = asyncio.create_task(runner.run(task))
+    pending = asyncio.create_task(runner.run(task, execution=TaskExecution()))
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
         if cancel:
@@ -1008,7 +1115,6 @@ async def test_cancelled_creation_keeps_build_files_and_disposes_the_late_machin
 
     task = arithmetic_task().model_copy(
         update={
-            "attempt_timeout": 1 if interruption == "attempt" else None,
             "environment": EnvironmentSpec(
                 kind=EnvironmentKind.DOCKER,
                 image=DockerBuild(files=(EnvironmentFile(path="/Dockerfile", content=b"FROM fixture\n"),)),
@@ -1017,7 +1123,9 @@ async def test_cancelled_creation_keeps_build_files_and_disposes_the_late_machin
         }
     )
     runner = engine(ReplayModel([]), {EnvironmentKind.DOCKER: Factory()})
-    pending = asyncio.create_task(runner.run(task))
+    pending = asyncio.create_task(
+        runner.run(task, execution=TaskExecution(attempt_timeout=1 if interruption == "attempt" else None))
+    )
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
         if interruption == "cancel":
@@ -1080,9 +1188,9 @@ async def test_private_grader_removal_failure_stops_only_a_continuing_chain_and_
         kind=VerifierKind.SHELL,
         parameters_json=ShellVerifierSpec(
             argv=("cat", "/private/grade"),
-            files=(EnvironmentFile(path="/private/grade", content=b"0.3\n"),),
             timeout=5,
         ).model_dump_json(),
+        files=(EnvironmentFile(path="/private/grade", content=b"0.3\n"),),
     )
     task = arithmetic_task().model_copy(
         update={
@@ -1115,14 +1223,15 @@ async def test_private_grader_removal_failure_stops_only_a_continuing_chain_and_
     )
     model = Model([message])
     runner = engine(model, {EnvironmentKind.SHELLSIM: Factory()})
+    execution = TaskExecution(stages={stage.name: StageExecution() for stage in task.stages})
     if model_failed or stage_chain == "next":
         with pytest.raises(RolloutInterrupted) as caught:
-            await runner.run(task)
+            await runner.run(task, execution=execution)
         assert caught.value.operation == (RolloutOperation.MODEL if model_failed else RolloutOperation.CLEANUP)
         assert isinstance(caught.value.__cause__, TimeoutError if model_failed else OSError)
         record = caught.value.rollout
     else:
-        record = await runner.run(task)
+        record = await runner.run(task, execution=execution)
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 0.3)
     assert record.response_token_ids == (20,)
     assert record.loss_mask == (1,)
@@ -1137,28 +1246,28 @@ async def test_private_grader_removal_failure_stops_only_a_continuing_chain_and_
 
 @pytest.mark.parametrize("answer,expected_reward", [(b"\x00\xff\r\n", 1.0), (b"incorrect", 0.0)])
 async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(answer, expected_reward):
+    private_environment = EnvironmentSpec(
+        kind=EnvironmentKind.SHELLSIM,
+        setup=(EnvironmentCommand(argv=("sh", "-c", "echo clean > /workspace/baseline"), timeout=5),),
+    )
+    private_files = (
+        EnvironmentFile(path="/private/expected", content=b"\x00\xff\r\n"),
+        EnvironmentFile(
+            path="/private/grade.sh",
+            content=(
+                b'#!/bin/sh\ntest "$(cat /workspace/baseline)" = clean && '
+                b"cmp /private/expected /workspace/submission"
+            ),
+            mode=0o755,
+        ),
+    )
     verifier = ShellVerifierSpec(
         argv=("/private/grade.sh",),
         timeout=5,
         reward=ExitCodeReward(),
-        environment=EnvironmentSpec(
-            kind=EnvironmentKind.SHELLSIM,
-            setup=(EnvironmentCommand(argv=("sh", "-c", "echo clean > /workspace/baseline"), timeout=5),),
-        ),
         collect=(EnvironmentCommand(argv=("cp", "/workspace/answer", "/workspace/submission"), timeout=5),),
         artifacts=(
             VerifierArtifact(source="/workspace/submission", target="/workspace/submission", kind=ArtifactKind.FILE),
-        ),
-        files=(
-            EnvironmentFile(path="/private/expected", content=b"\x00\xff\r\n"),
-            EnvironmentFile(
-                path="/private/grade.sh",
-                content=(
-                    b'#!/bin/sh\ntest "$(cat /workspace/baseline)" = clean && '
-                    b"cmp /private/expected /workspace/submission"
-                ),
-                mode=0o755,
-            ),
         ),
     )
     task = file_task().model_copy(
@@ -1167,7 +1276,12 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(answ
                 kind=EnvironmentKind.SHELLSIM,
                 files=(EnvironmentFile(path="/workspace/input", content=answer),),
             ),
-            "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=verifier.model_dump_json(),
+                environment=private_environment,
+                files=private_files,
+            ),
         }
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
@@ -1194,7 +1308,7 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(answ
     factory = RecordingShellSimFactory()
     machines = factory.machines
 
-    result = await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task)
+    result = await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task, execution=TaskExecution())
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected_reward)
     assert len(machines) == 2
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
@@ -1243,7 +1357,6 @@ async def test_artifact_archive_cleanup_failure_retains_the_grade_or_primary_err
         argv=("sh", "-c", 'test "$(cat /workspace/project/answer)" = 12'),
         timeout=5,
         reward=ExitCodeReward(),
-        environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
         artifacts=(
             VerifierArtifact(
                 source="/workspace/project", target="/workspace/project", kind=ArtifactKind.DIRECTORY, exclude=("cache",)
@@ -1251,18 +1364,24 @@ async def test_artifact_archive_cleanup_failure_retains_the_grade_or_primary_err
         ),
     )
     task = file_task().model_copy(
-        update={"verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json())}
+        update={
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=verifier.model_dump_json(),
+                environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+            )
+        }
     )
     runner = engine(ReplayModel([{"role": "assistant", "content": "Completed."}]), {EnvironmentKind.SHELLSIM: Factory()})
     if download_failed:
         with pytest.raises(RolloutInterrupted) as caught:
-            await runner.run(task)
+            await runner.run(task, execution=TaskExecution())
         assert caught.value.operation == RolloutOperation.GRADE
         assert isinstance(caught.value.__cause__, ConnectionError)
         record = caught.value.rollout
         assert (record.grade.status, record.grade.reward) == (Outcome.UNAVAILABLE, None)
     else:
-        record = await runner.run(task)
+        record = await runner.run(task, execution=TaskExecution())
         assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.response_token_ids == (20,)
     assert record.grade.diagnostics["cleanup_errors"] == [

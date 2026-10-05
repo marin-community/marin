@@ -5,7 +5,8 @@
 
 from verifyit.spec import JsonSchemaSpec
 
-from taskcompendium.grader import GraderPackage, grader_package, script_package
+from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
+from taskcompendium.grader import grader_package, script_package
 from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor, read_specification
@@ -14,7 +15,6 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
-    ResourceGroups,
     Source,
     TaskSpec,
     TextMessage,
@@ -32,8 +32,7 @@ def _task(package, answer_type=AnswerType.TEXT):
         context=ConversationInput(events=(TextMessage(role="user", content="Submit an answer"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=answer_type,
-        verifier=package.verifier,
-        resources=ResourceGroups(verifier=package.resources),
+        verifier=package,
         source=Source(dataset="test", revision="1", row="1", importer_revision="1"),
     )
 
@@ -56,6 +55,23 @@ def test_json_schema_grader_reads_private_schema_and_scores_document(tmp_path):
 
     assert (good.status, good.reward) == (Outcome.GRADED, 1.0)
     assert (bad.status, bad.reward) == (Outcome.GRADED, 0.0)
+
+
+def test_public_files_cannot_replace_the_private_schema():
+    package = grader_package(
+        JsonSchemaSpec(schema="schema.json"),
+        (inline_resource("schema.json", b'{"type":"object","required":["value"]}'),),
+    )
+    task = _task(package).model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                files=(EnvironmentFile(path="/tests/schema.json", content=b"{}"),),
+            )
+        }
+    )
+    assert grade_task(task, PLAIN, _conversation(task, "{}")).reward == 0.0
+    assert grade_task(task, PLAIN, _conversation(task, '{"value":1}')).reward == 1.0
 
 
 def test_script_grader_reads_private_configuration_and_captured_state():
@@ -81,8 +97,8 @@ verdict = {
 (logs / 'verdict.json').write_text(json.dumps(verdict))
 """
     package = script_package(script, {"expected": 3})
-    config_resource = package.resources[1].model_copy(update={"mode": "0600", "mtime_ns": 1_234_567_890})
-    package = GraderPackage(package.verifier, (package.resources[0], config_resource))
+    config_resource = package.files[1].model_copy(update={"mode": 0o600, "mtime_ns": 1_234_567_890})
+    package = package.model_copy(update={"files": (package.files[0], config_resource)})
     original = _task(package, AnswerType.STATE)
     task = TaskSpec.model_validate_json(original.model_dump_json())
 

@@ -3,11 +3,14 @@
 
 """Serialized environment inputs for an isolated rollout."""
 
+import json
+from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from rigging.filesystem.path_validation import validate_relative_file_path
 
 
 class EnvironmentKind(StrEnum):
@@ -24,14 +27,28 @@ class EnvironmentFile(BaseModel):
     path: str
     content: bytes
     mode: int = Field(default=0o644, ge=0, le=0o777)
+    mtime_ns: int | None = Field(default=None, strict=True)
 
     @field_validator("path")
     @classmethod
     def absolute_path(cls, value: str) -> str:
         path = PurePosixPath(value)
-        if not path.is_absolute() or ".." in path.parts:
+        if not path.is_absolute():
             raise ValueError("Environment files require absolute paths without parent traversal")
+        validate_relative_file_path(value.removeprefix("/"))
         return value
+
+
+def validate_environment_files(files: Iterable[EnvironmentFile]) -> None:
+    """Reject duplicate files and file-directory collisions on Linux."""
+    paths: set[PurePosixPath] = set()
+    for file in files:
+        path = PurePosixPath(file.path)
+        if path in paths or any(parent in paths for parent in path.parents):
+            raise ValueError(f"Environment file collision: {file.path}")
+        if any(path in existing.parents for existing in paths):
+            raise ValueError(f"Environment file collision: {file.path}")
+        paths.add(path)
 
 
 class EnvironmentCommand(BaseModel):
@@ -67,8 +84,9 @@ class DockerBuild(BaseModel):
     @model_validator(mode="after")
     def validate_files(self) -> "DockerBuild":
         paths = {file.path for file in self.files}
-        if len(paths) != len(self.files) or self.dockerfile not in paths:
+        if self.dockerfile not in paths:
             raise ValueError("A build context requires unique file paths and its Dockerfile")
+        validate_environment_files(self.files)
         return self
 
 
@@ -85,6 +103,22 @@ class HealthcheckSpec(BaseModel):
     start_period: float = Field(ge=0)
     start_interval: float = Field(ge=0)
     retries: int = Field(gt=0)
+
+
+class ProviderRequirement(BaseModel):
+    """A versioned action interface and its initial JSON state."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action_interface: str = Field(min_length=1)
+    initial_state: JsonValue = Field(repr=False)
+
+    @field_validator("initial_state")
+    @classmethod
+    def validate_state(cls, value: JsonValue) -> JsonValue:
+        # JsonValue accepts floats. Serialized provider state must be finite.
+        json.dumps(value, allow_nan=False)
+        return value
 
 
 class EnvironmentSpec(BaseModel):
@@ -106,6 +140,7 @@ class EnvironmentSpec(BaseModel):
     storage_mb: int | None = Field(default=None, gt=0)
     gpus: int = Field(default=0, ge=0)
     interaction: str | None = None
+    tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_machine(self) -> "EnvironmentSpec":
@@ -123,8 +158,7 @@ class EnvironmentSpec(BaseModel):
             or self.gpus
         ):
             raise ValueError("Null environments cannot contain machine resources")
-        if len({file.path for file in self.files}) != len(self.files):
-            raise ValueError("Environment file paths must be unique")
+        validate_environment_files(self.files)
         return self
 
 
@@ -199,33 +233,20 @@ class FileReward(BaseModel):
 
 
 class ShellVerifierSpec(BaseModel):
-    """Private files, a verifier command, and its reward source.
+    """A verifier command and its reward source.
 
-    The engine installs private files after the final model response. For file
-    rewards, the command exit code does not supply the score.
+    For file rewards, the command exit code does not supply the score.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     argv: tuple[str, ...] = Field(min_length=1)
-    files: tuple[EnvironmentFile, ...] = ()
     timeout: float = Field(gt=0)
     env: dict[str, str] = Field(default_factory=dict)
     user: str | None = None
     reward: Annotated[StdoutReward | FileReward | ExitCodeReward, Field(discriminator="kind")] = StdoutReward()
-    environment: EnvironmentSpec | None = None
     collect: tuple[EnvironmentCommand, ...] = ()
     artifacts: tuple[VerifierArtifact, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_environment(self) -> "ShellVerifierSpec":
-        if self.environment is None:
-            if self.artifacts:
-                raise ValueError("Verifier artifacts require a separate grading environment")
-            return self
-        if self.environment.kind == EnvironmentKind.NULL or self.environment.interaction is not None:
-            raise ValueError("A private grading environment requires a machine without a task session")
-        return self
 
 
 class ExternalVerifierSpec(BaseModel):
