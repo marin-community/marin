@@ -298,18 +298,25 @@ def four_pass_teacher_workflow(config: dict) -> dict[str, ArtifactStep]:
 def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     """Use the fixed continuation bank after a qualified four-update SFT export."""
     study = pinned_record(config, "sft_config")
+    return validated_study_post_workflow(config, stage, study=study, study_protocol=PROTOCOL)
+
+
+def validated_study_post_workflow(
+    config: dict, stage: str, *, study: dict, study_protocol: str
+) -> dict[str, ArtifactStep]:
+    """Bind a separately validated SFT study to unchanged continuation gates."""
     decision = require_four_pass_condition(study)
     source_config = pinned_record(study, "continuation_config")
     for key in ("parent", "bank", "runtime_bundle"):
         if config[key] != study[key]:
-            raise ValueError(f"Four-pass post-SFT {key} differs from its SFT inputs")
+            raise ValueError(f"Teacher study post-SFT {key} differs from its SFT inputs")
     for key in ("retention", "machine_config", "panel_uri", "panel_sha256"):
         if config[key] != source_config[key]:
-            raise ValueError(f"Four-pass post-SFT {key} differs from the continuation")
+            raise ValueError(f"Teacher study post-SFT {key} differs from the continuation")
     completed = restored_round(pinned_record(source_config, "source_round"))
     source = pinned_record(source_config, "source_replay")
     if source != completed.replay_plan:
-        raise ValueError("Four-pass replay differs from its sealed source round")
+        raise ValueError("Teacher study replay differs from its sealed source round")
     validate_source_replay(source, completed.plan)
     bank_record = expanded_study_bank(study, source_config)
     retained_record = pinned_record(source_config, "bank_record")
@@ -317,7 +324,7 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     if tasks[: len(completed.plan.task_bank)] != completed.plan.task_bank or any(
         bank_record["family_by_task"][key] != value for key, value in source["family_by_task"].items()
     ):
-        raise ValueError("Four-pass bank changed a retained source task or family")
+        raise ValueError("Teacher study bank changed a retained source task or family")
     bank, retention = adopted(config["bank"]), adopted(config["retention"])
     calibrated = pinned_record(source_config, "calibration_decision")
     schedule = calibrated["schedule"]
@@ -330,15 +337,15 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
         or schedule["family_by_task"] != retained_record["family_by_task"]
         or len(schedule["sampling_spec"]["targeted_task_ids"]) != 2
     ):
-        raise ValueError("Four-pass source calibration differs from the sealed continuation bank")
+        raise ValueError("Teacher study source calibration differs from the sealed continuation bank")
     source_plan = replace(completed.plan, task_bank=tasks, bank_identity=artifact_identity(bank))
     sft = adopted(config["sft"], LevanterCheckpoint)
     qualification = pinned_record(config, "qualification")
     if qualification["source_config_sha256"] != config["sft_config_sha256"]:
-        raise ValueError("Four-pass qualification identifies different SFT configuration")
+        raise ValueError("Teacher study qualification identifies different SFT configuration")
     export = qualified_four_update_sft(qualification, identity=artifact_identity(sft), root=config["sft"]["uri"])
     model = ArtifactStep.adopt(
-        f"checkpoints/russell-rsi-{PROTOCOL}-qualified-hf",
+        f"checkpoints/russell-rsi-{study_protocol}-qualified-hf",
         config["version"],
         export,
         kind=LevanterCheckpoint,
@@ -361,7 +368,7 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
             )
             != score
         ):
-            raise ValueError("Four-pass baseline differs from its original evidence identity")
+            raise ValueError("Teacher study baseline differs from its original evidence identity")
     return post_sft_stages(
         config,
         stage,
@@ -371,5 +378,5 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
         source_plan=source_plan,
         source={**schedule, "family_by_task": bank_record["family_by_task"]},
         export_uri=export,
-        study=StudyBaseline(PROTOCOL, baseline, original_parent, retention_task_ids),
+        study=StudyBaseline(study_protocol, baseline, original_parent, retention_task_ids),
     )
