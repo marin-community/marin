@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
-from taskcompendium.grading import supports_verifier, validate_verifier
+from taskcompendium.grading import supports_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import (
     AnswerFormat,
@@ -142,7 +142,8 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_environment_config(specification, environment_config)
-    validate_verifier(specification.verifier)
+    if not supports_verifier(specification.verifier):
+        raise NotImplementedError("Direct chat cannot run this verifier")
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()

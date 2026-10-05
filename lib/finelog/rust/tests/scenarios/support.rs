@@ -216,8 +216,12 @@ pub async fn run_sql(store: &Store, sql: &str) -> Vec<RecordBatch> {
 }
 
 pub async fn try_run_sql(store: &Store, sql: &str) -> Result<Vec<RecordBatch>, String> {
-    let providers = store.query_providers().map_err(|error| error.to_string())?;
-    run_query_over(&make_ctx(), providers, sql)
+    let ctx = make_ctx();
+    let names = finelog::query::query_namespaces(&ctx, sql).map_err(|error| error.to_string())?;
+    let providers = store
+        .query_providers(&names)
+        .map_err(|error| error.to_string())?;
+    run_query_over(&ctx, providers, sql)
         .await
         .map(|result| result.batches)
         .map_err(|error| error.to_string())

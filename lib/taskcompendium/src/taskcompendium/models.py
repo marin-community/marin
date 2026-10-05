@@ -14,7 +14,7 @@ from typing import Annotated, Literal, NoReturn
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 
-SCHEMA_VERSION = "0.20"
+SCHEMA_VERSION = "0.21"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -342,6 +342,8 @@ class TaskSpec(BaseModel):
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
     final_tools: tuple[FunctionDefinition, ...] = ()
+    interaction_tools: tuple[FunctionDefinition, ...] = ()
+    output_paths: tuple[str, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source

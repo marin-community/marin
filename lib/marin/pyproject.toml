@@ -68,6 +68,7 @@ test = [
     "pytest-xdist",
     "pytest-timeout",
     "verifyit[answer,reasoning-gym,schema]",
+    "taskcompendium[pipeline]",
     # for scaling law plotting tests
     "plotly",
 ]
