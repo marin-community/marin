@@ -347,6 +347,7 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
             ".switch_o_gate",
             ".mix_gate",
             ".kv_mix_gate",
+            ".latent_up_gate",
             ".latent_mix_in_gate",
             ".latent_mix_out_gate",
         )
