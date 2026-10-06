@@ -58,7 +58,7 @@ Use `--stage select-recovered-retention --version 2026.10.06.13` only with a com
 The stage writes a separate derived retention summary and uses the unchanged promotion gate. It adopts completed coding evidence and schedules no evaluation, grading, serving, or training worker. Its selection record retains the original and derived retention producer identities. Calibration remains incomplete, with a null signal gate and no RL authorization.
 ## Next teacher diversity study
 
-Use `experiments.post_training.russell_rsi.launch_teacher_diversity_study` with protocol `champion-rsi-teacher-eight-family-diversity-v1`. The stages are `collect`, `sft`, `reload`, `calibrate`, `rl`, and `evaluate`. Run the artifact main without `--run` to inspect the graph.
+Use `experiments.post_training.russell_rsi.launch_teacher_diversity_study` with protocol `champion-rsi-teacher-eight-family-diversity-v1`. The stages are `collect`, `sft`, `reload`, `calibrate`, `rl`, and `evaluate`. Run the artifact main without `--run` to inspect the graph. Supply `--source-review-uri` and `--source-review-sha256` for the reviewed clean source and installed f124 runtime. Every stage uses the attached local foreground coordinator and its explicit CW02 client; collection does not submit an RL coordinator.
 
 The configuration pins the unchanged original study for lineage, the completed current coding evidence and selection, and a new canonical capability release and review. The selection must retain incumbent update8. Four retained qualified rows stay unchanged. Six additional eligible families must be distinct from those four and from acceptance and final families. The plan records their previous attempts.
 
