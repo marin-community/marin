@@ -84,8 +84,8 @@ If checkpoint times out, inspect controller logs for completed uploads and
 thread stacks for ongoing SQLite copies before retrying. The RPC
 timeout does not cancel the server-side copy, so retries can leave concurrent
 backups running. SQLite backups pin a read snapshot across page batches to
-avoid restarting under concurrent writes. Older controllers without this fix
-can fail to finish a backup under sustained writes. The read snapshot permits
+avoid restarting under concurrent writes. Without that snapshot, sustained
+writes can prevent the copy from finishing. The read snapshot permits
 writes but delays WAL reclamation until the copy completes.
 
 `iris cluster controller restart --skip-checkpoint` bypasses the pre-restart
