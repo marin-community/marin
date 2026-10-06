@@ -201,7 +201,7 @@ async def test_ids_that_disagree_with_usage_break_the_contract(fake_glm, fake_cl
 
 
 async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake_client):
-    # Recorded live (.evidence/validate/rollout_model/prefix-bug/record-1.json, turns 3-4): the model
+    # Recorded live from a GLM-5.3 rollout of the d01 task (turns 3-4): the model
     # sampled "1" ")," "(" "1" inside smul(2**(n-1),(1,0)); the re-rendered prompt encodes the same
     # text canonically as "1" "),(" "1".
     sampled = [12, 16, 701, 7, 16, 11, 15]
