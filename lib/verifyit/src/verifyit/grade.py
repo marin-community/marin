@@ -221,7 +221,7 @@ def finalize_preparation_failure(
 
 
 def numeric_tolerance(spec: NumericSpec) -> Fraction:
-    """Validate the reference and compare using the decimal spelling of float tolerances."""
+    """Validate the reference and return exact tolerance from float decimal spellings."""
     try:
         expected = numeric_literal(spec.expected)
         for tolerance in (spec.tolerance_abs, spec.tolerance_rel):
