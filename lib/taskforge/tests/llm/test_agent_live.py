@@ -12,7 +12,6 @@ Parallel key file (the ``parallel_key`` fixture in ``tests/conftest.py``).
 
 import asyncio
 import json
-import re
 import threading
 import time
 from collections.abc import Iterator, Sequence
@@ -44,7 +43,6 @@ from taskforge.llm.web import web_tools
 
 EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".evidence" / "llm" / "agent"
 PYPI_PACKAGE_URL = "https://pypi.org/pypi/shellsim/json"
-VERSION_PATTERN = re.compile(r"\b\d+\.\d+\.\d+\b")
 RUNS = TypeAdapter(tuple[AgentRun, ...])
 SHELL_TIMEOUT = 120.0
 MALFORMED_ARGUMENTS = '{"command": "ls -la /work'
@@ -265,11 +263,10 @@ def test_t1b_fix_loop_in_shellsim(glm_settings):
     assert rerun["stdout"].count("PASSED") >= 8
 
 
-def latest_releases(http: httpx.Client, count: int) -> list[str]:
-    """The ``count`` most recently uploaded shellsim versions, from PyPI's JSON API."""
-    releases = http.get(PYPI_PACKAGE_URL).raise_for_status().json()["releases"]
-    uploaded = {version: max(f["upload_time_iso_8601"] for f in files) for version, files in releases.items() if files}
-    return sorted(uploaded, key=uploaded.__getitem__, reverse=True)[:count]
+def stable_metadata(http: httpx.Client) -> tuple[str, str]:
+    """shellsim's license and repository URL from PyPI's JSON API; neither changes between releases."""
+    info = http.get(PYPI_PACKAGE_URL).raise_for_status().json()["info"]
+    return info["license_expression"], info["project_urls"]["Repository"]
 
 
 @pytest.mark.live_glm
@@ -281,8 +278,8 @@ def test_web_search_through_parallel(glm_settings, parallel_key):
         {
             "role": "user",
             "content": (
-                "Find the three most recent releases of the shellsim package on PyPI and the date of "
-                "each. Start with web_search to locate sources, then fetch what you need. Cite the URLs you used."
+                "Find the license and the source repository URL of the shellsim package on PyPI. Start with "
+                "web_search to locate sources, then fetch what you need. Cite the URLs you used."
             ),
         },
     ]
@@ -292,14 +289,12 @@ def test_web_search_through_parallel(glm_settings, parallel_key):
             tools = web_tools(http, parallel_key.value)
             return await timed_agent(client, policy, messages, tools, 20, ledger_record("web", "web"))
 
-    # Releases can land while the agent runs, so its answer may match PyPI before or after the run.
+    # Parallel serves cached pages, so the check uses metadata that does not change between releases.
     with httpx.Client(timeout=60.0) as http:
-        before = latest_releases(http, 3)
-        run, wall = asyncio.run(go())
-        after = latest_releases(http, 3)
+        license_expression, repository = stable_metadata(http)
+    run, wall = asyncio.run(go())
     searches = executed(run, "web_search")
     answer = str(run.messages[-1]["content"])
-    answered = set(VERSION_PATTERN.findall(answer))
     record(
         "web_parallel",
         "web search through Parallel /v1/search and /v1/extract; transcript must show search results",
@@ -309,11 +304,12 @@ def test_web_search_through_parallel(glm_settings, parallel_key):
         search_ids=[json.loads(s).get("search_id") for s in searches],
         extract_ids=[json.loads(f).get("extract_id") for f in executed(run, "web_fetch")],
         answer=answer,
-        pypi_latest_three={"before_run": before, "after_run": after},
+        pypi_metadata={"license_expression": license_expression, "repository": repository},
     )
     assert run.stop is AgentStop.ANSWERED
     assert searches and all(json.loads(s)["search_id"] for s in searches)
-    assert set(before) <= answered or set(after) <= answered, (answered, before, after)
+    assert license_expression in answer, (answer, license_expression)
+    assert repository.removeprefix("https://") in answer, (answer, repository)
 
 
 @pytest.fixture
