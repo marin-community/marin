@@ -64,6 +64,8 @@ CANDIDATE_MODES = frozenset(
         Mode.REASONING_GYM,
     }
 )
+# Candidate modes whose spec names private verifier files that the caller must pass as ``files``.
+FILE_BACKED_MODES = frozenset({Mode.JSON_SCHEMA, Mode.REASONING_GYM})
 NO_FILES: Mapping[str, bytes] = MappingProxyType({})
 
 

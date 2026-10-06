@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from rigging.filesystem.path_validation import validate_relative_file_path
 from shellbox.backends.docker.machine import DockerMachineFactory
 from verifyit.candidate import (
+    FILE_BACKED_MODES,
     candidate_spec,
     grade_text_candidate,
     supports_candidate_mode,
@@ -65,7 +66,8 @@ def resolve_verifier(specification: VerifierSpec) -> Spec:
         parameters = json.loads(specification.parameters_json)
         if "mode" in parameters:
             raise ValueError("Verifier parameters must not override the mode")
-        if supports_candidate_mode(specification.kind):
+        # File-backed candidate modes need the task's private files (#9764); they stay file graders here.
+        if supports_candidate_mode(specification.kind) and specification.kind not in FILE_BACKED_MODES:
             return candidate_spec(specification.kind, parameters)
         return spec_from_table({"mode": specification.kind, **parameters})
     except (ValueError, InvalidTask) as error:
