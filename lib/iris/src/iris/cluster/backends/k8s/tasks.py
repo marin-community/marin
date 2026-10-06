@@ -27,7 +27,6 @@ from finelog.client.log_client import Table
 from google.protobuf import json_format
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.k8s.logship import LOG_SERVER_ADDRESS_ENV
 from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_CONTAINER_NAME,
     OUTPUT_CONTROL_PATH,
@@ -524,9 +523,6 @@ class PodConfig:
     service_account: str = ""
     host_network: bool = False
     controller_address: str | None = None
-    # The finelog URL the log sidecar of a sandbox pod writes to directly; the
-    # sandbox NetworkPolicy blocks the controller it would otherwise resolve it through.
-    log_server_address: str = ""
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
     task_outputs: TaskOutputPolicy | None = None
@@ -643,7 +639,6 @@ def _build_init_container_spec(
 def _build_logship_sidecar(
     task_id_wire: str,
     controller_address: str | None,
-    log_server_address: str | None,
     logship_image: str,
 ) -> dict:
     """Build the native log-shipping sidecar container spec.
@@ -654,9 +649,8 @@ def _build_logship_sidecar(
     and the kubelet terminates the sidecar after it. The sidecar tails the task
     container's CRI log file from the node (mounted read-only via the
     ``varlogpods`` hostPath) and pushes lines to finelog. It resolves the log
-    server via the controller, or uses ``log_server_address`` directly when the
-    pod cannot reach the controller, and pushes unauthenticated — the finelog
-    log service performs no auth, matching the controller's own writes.
+    server via the controller and pushes unauthenticated — the finelog log
+    service performs no auth, matching the controller's own writes.
 
     Runs ``logship_image`` (the iris controller image) rather than the task
     image, which lacks the iris package until the task's own dependency sync.
@@ -666,9 +660,7 @@ def _build_logship_sidecar(
         {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
         {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
     ]
-    if log_server_address:
-        env.append({"name": LOG_SERVER_ADDRESS_ENV, "value": log_server_address})
-    elif controller_address:
+    if controller_address:
         env.append({"name": "IRIS_CONTROLLER_ADDRESS", "value": controller_address})
     return {
         "name": _LOGSHIP_CONTAINER_NAME,
@@ -1033,22 +1025,26 @@ def _build_pod_manifest(
     # excluded from pod-phase computation, so completion detection (which keys on
     # pod.status.phase) is unaffected. The hostPath volume gives it read-only
     # access to the node's pod log directory.
-    reaches_controller = isolation.network is TaskNetwork.CLUSTER
-    logship = _build_logship_sidecar(
-        iris_env["IRIS_TASK_ID"],
-        config.controller_address if reaches_controller else None,
-        None if reaches_controller else config.log_server_address,
-        config.logship_image,
-    )
-    volumes.append(
-        {
-            "name": _LOGSHIP_VOLUME_NAME,
-            "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
-        }
-    )
+    #
+    # A sandbox pod gets neither this nor the output uploader. Containers in a
+    # pod share its network, so the task can use any route a sidecar has: a
+    # finelog route exposes every job's logs, and the uploader needs the env
+    # Secret's object-store keys and a route to the object store.
+    sidecars = isolation.network is TaskNetwork.CLUSTER
+    init_containers: list[dict] = []
+    if sidecars:
+        init_containers.append(
+            _build_logship_sidecar(iris_env["IRIS_TASK_ID"], config.controller_address, config.logship_image)
+        )
+        volumes.append(
+            {
+                "name": _LOGSHIP_VOLUME_NAME,
+                "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
+            }
+        )
 
     containers = [container]
-    if config.task_outputs is not None:
+    if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         containers.append(
             _build_output_uploader(
@@ -1064,7 +1060,7 @@ def _build_pod_manifest(
     spec: dict = {
         "restartPolicy": "Never",
         "containers": containers,
-        "initContainers": [logship],
+        "initContainers": init_containers,
         "volumes": volumes,
     }
 
@@ -2981,10 +2977,13 @@ class K8sTaskProvider:
         policy = self.pods.task_outputs
         if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
             return None
+        # A running pod reports every container, so no status means no uploader (a sandbox pod).
+        uploader = _output_container_status(pod)
+        if uploader is None:
+            return None
 
         started = self._output_finalization_started.setdefault(entry, time.monotonic())
-        uploader = _output_container_status(pod)
-        uploader_running = uploader is not None and "running" in uploader.get("state", {})
+        uploader_running = "running" in uploader.get("state", {})
         if uploader_running and entry not in self._released_output_attempts:
             try:
                 release = self.kubectl.exec(

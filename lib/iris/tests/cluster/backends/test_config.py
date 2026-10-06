@@ -1934,7 +1934,6 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
         make_task_backend(
             config,
             descriptor=k8s_backend_descriptor(),
-            log_server_address="http://finelog:10001",
         )
 
 
@@ -1952,7 +1951,6 @@ def test_k8s_backend_uses_canonical_default_task_image():
     backend = make_task_backend(
         config,
         descriptor=k8s_backend_descriptor(),
-        log_server_address="http://finelog:10001",
     )
 
     assert isinstance(backend, K8sTaskProvider)

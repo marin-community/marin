@@ -1108,32 +1108,7 @@ _DNS_RULE = {
     "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
     "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
 }
-_FINELOG_RULE = {
-    "to": [
-        {
-            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "logs"}},
-            "podSelector": {"matchLabels": {"app": "finelog-test"}},
-        }
-    ],
-    "ports": [{"protocol": "TCP", "port": 10001}],
-}
 _PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
-
-
-def _finelog_cluster_config(tmp_path, service_cidr: str = "") -> IrisClusterConfig:
-    finelog_config = tmp_path / "finelog.yaml"
-    finelog_config.write_text(
-        "name: finelog-test\n"
-        "port: 10001\n"
-        "image: ghcr.io/marin-community/finelog:latest\n"
-        "deployment:\n"
-        "  k8s:\n"
-        "    namespace: logs\n"
-    )
-    cluster_config = _make_cluster_config()
-    cluster_config.finelog.config = str(finelog_config)
-    cluster_config.kubernetes_provider.service_cidr = service_cidr
-    return cluster_config
 
 
 @pytest.mark.parametrize(
@@ -1143,28 +1118,17 @@ def _finelog_cluster_config(tmp_path, service_cidr: str = "") -> IrisClusterConf
         pytest.param("198.18.0.0/15", [*_PRIVATE_RANGES, "198.18.0.0/15"], id="service-range-public"),
     ],
 )
-def test_start_controller_creates_one_sandbox_policy_per_egress_mode(tmp_path, service_cidr, blocked):
-    provider, k8s = _make_provider()
-    cluster_config = _finelog_cluster_config(tmp_path, service_cidr)
-    _seed_prerequisites(k8s, cluster_config)
-
-    provider.start_controller(cluster_config)
-
-    assert _sandbox_policy_egress(k8s, "none") == [_DNS_RULE, _FINELOG_RULE]
-    assert _sandbox_policy_egress(k8s, "internet") == [
-        _DNS_RULE,
-        _FINELOG_RULE,
-        {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
-    ]
-    provider.shutdown()
-
-
-def test_sandbox_policy_without_external_finelog_allows_only_dns():
+def test_start_controller_creates_one_sandbox_policy_per_egress_mode(service_cidr, blocked):
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.service_cidr = service_cidr
     _seed_prerequisites(k8s, cluster_config)
 
     provider.start_controller(cluster_config)
 
     assert _sandbox_policy_egress(k8s, "none") == [_DNS_RULE]
+    assert _sandbox_policy_egress(k8s, "internet") == [
+        _DNS_RULE,
+        {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
+    ]
     provider.shutdown()

@@ -19,7 +19,6 @@ import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 
-from finelog.deploy.config import K8S_APP_LABEL, FinelogConfig, load_finelog_config
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
@@ -419,11 +418,8 @@ _DNS_NAMESPACE = "kube-system"
 _DNS_PORT = 53
 
 
-def _namespace_pods(namespace: str, pod_labels: dict[str, str] | None = None) -> dict:
-    peer: dict = {"namespaceSelector": {"matchLabels": {_NAMESPACE_NAME_LABEL: namespace}}}
-    if pod_labels:
-        peer["podSelector"] = {"matchLabels": pod_labels}
-    return peer
+def _namespace_pods(namespace: str) -> dict:
+    return {"namespaceSelector": {"matchLabels": {_NAMESPACE_NAME_LABEL: namespace}}}
 
 
 # Destinations a sandbox with internet egress may not reach: private networks
@@ -447,18 +443,14 @@ def _internet_except(service_cidr: str) -> list[str]:
     return [str(network) for network in blocked]
 
 
-def build_sandbox_network_policy(
-    namespace: str, network: TaskNetwork, finelog: FinelogConfig | None, service_cidr: str = ""
-) -> dict:
+def build_sandbox_network_policy(namespace: str, network: TaskNetwork, service_cidr: str = "") -> dict:
     """Build the NetworkPolicy for sandbox pods whose egress label is ``network``.
 
-    Both policies deny all ingress and allow egress to DNS in kube-system and,
-    when the cluster runs an in-cluster finelog, to its pods on the finelog
-    port. INTERNET adds every IPv4 address outside ``SANDBOX_BLOCKED_CIDRS``
-    and ``service_cidr``. The task container shares the pod's network with the
-    log sidecar, so neither mode reaches the controller, worker RPC ports,
-    other pods, or the metadata server. ``kubectl exec`` goes through the
-    kubelet and is unaffected.
+    Both policies deny all ingress and allow egress to DNS in kube-system.
+    INTERNET adds every IPv4 address outside ``SANDBOX_BLOCKED_CIDRS`` and
+    ``service_cidr``. Neither mode reaches the controller, finelog, worker RPC
+    ports, other pods, or the metadata server. ``kubectl exec`` goes through
+    the kubelet and is unaffected.
     """
     if network is TaskNetwork.CLUSTER:
         raise ValueError("cluster-network pods carry no sandbox NetworkPolicy")
@@ -468,18 +460,6 @@ def build_sandbox_network_policy(
             "ports": [{"protocol": "UDP", "port": _DNS_PORT}, {"protocol": "TCP", "port": _DNS_PORT}],
         }
     ]
-    if finelog is not None:
-        if finelog.deployment.k8s is None:
-            raise InfraError(
-                f"finelog config {finelog.name!r} is not deployed on Kubernetes; "
-                "sandbox pods can only ship logs to an in-cluster finelog"
-            )
-        egress.append(
-            {
-                "to": [_namespace_pods(finelog.deployment.k8s.namespace, {K8S_APP_LABEL: finelog.name})],
-                "ports": [{"protocol": "TCP", "port": finelog.port}],
-            }
-        )
     if network is TaskNetwork.INTERNET:
         egress.append({"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": _internet_except(service_cidr)}}]})
     return {
@@ -1007,12 +987,9 @@ class K8sControllerProvider:
         Never deleted on stop: they select only sandbox pods, and removing one
         while such a pod runs would reconnect it to the controller.
         """
-        finelog = load_finelog_config(config.finelog.config) if config.finelog.config else None
-        if finelog is None:
-            logger.warning("No finelog.config: the log server runs inside the controller, and sandbox pods ship no logs")
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
-            self._kubectl.apply_json(build_sandbox_network_policy(self._namespace, network, finelog, service_cidr))
+            self._kubectl.apply_json(build_sandbox_network_policy(self._namespace, network, service_cidr))
 
     def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
         """Create the iris-controller-env Secret holding the controller's own credentials.

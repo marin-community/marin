@@ -104,9 +104,8 @@ itself (`IRIS_*` identity, the controller address, cache paths), and the job
 variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
 identity variables reach the task.
 
-The profile still supports `ExecInContainer` and log shipping: exec reaches
-the task through the worker or `kubectl exec`, and the Kubernetes log sidecar
-writes to finelog directly. The job cannot carry a workspace bundle, and
+The profile still supports `ExecInContainer`, which reaches the task through
+the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
 the client rejects `extras`, `pip_packages` and `sync_packages`; setup scripts
 run verbatim and default to none.
 
@@ -115,11 +114,11 @@ A sandbox job chooses its network egress with `LaunchJobRequest.sandbox_egress`
 
 | Egress | Reaches | Kubernetes | Docker workers |
 |---|---|---|---|
-| `SANDBOX_EGRESS_INTERNET` (default) | public IPv4 addresses, DNS, finelog | supported | rejected at submission |
-| `SANDBOX_EGRESS_NONE` | DNS and finelog on Kubernetes; nothing on Docker | supported | `--network none` |
+| `SANDBOX_EGRESS_INTERNET` (default) | public IPv4 addresses, DNS | supported | rejected at submission |
+| `SANDBOX_EGRESS_NONE` | DNS on Kubernetes; nothing on Docker | supported | `--network none` |
 
-Neither mode reaches the controller, worker RPC ports, other pods or the
-cloud metadata server. The controller rejects `sandbox_egress` on any other
+Neither mode reaches the controller, finelog, worker RPC ports, other pods or
+the cloud metadata server. The controller rejects `sandbox_egress` on any other
 profile.
 
 On Docker workers a `NONE` sandbox runs with `--network none`. It has only
@@ -135,19 +134,22 @@ On Kubernetes the pod drops host networking and carries the
 `iris.sandbox-egress` label with value `internet` or `none`. `iris cluster
 start` creates one NetworkPolicy per value, `iris-sandbox-egress-internet` and
 `iris-sandbox-egress-none`, in the Iris namespace. Both deny all ingress and
-allow egress to DNS in `kube-system` and to the finelog pods named by
-`finelog.config` on the finelog port. The internet policy also allows
+allow egress to DNS in `kube-system`. The internet policy also allows
 `0.0.0.0/0` except `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
 `100.64.0.0/10`, `169.254.0.0/16` and, when it lies outside those,
-`kubernetes_provider.service_cidr`. The task shares the pod network with the
-log sidecar, which writes to finelog at the URL the controller resolved
-instead of looking it up through the controller. `kubectl exec` goes through
-the kubelet and is unaffected. The policies have effect only on a cluster
-whose network plugin enforces NetworkPolicy. A cluster without
-`finelog.config` runs its log server inside the controller, so its sandbox
-pods ship no logs. Workdir files too large for the pod's ConfigMap are
-fetched from the controller by an init container and fail under either
-policy.
+`kubernetes_provider.service_cidr`. `kubectl exec` goes through the kubelet
+and is unaffected. The policies have effect only on a cluster whose network
+plugin enforces NetworkPolicy. Workdir files too large for the pod's
+ConfigMap are fetched from the controller by an init container and fail
+under either policy.
+
+A Kubernetes sandbox pod has no log-shipping or output-upload sidecar.
+Containers in a pod share its network, so a sidecar's route is also the
+task's: finelog serves every job's logs to private-network peers without a
+token, and the uploader needs the object-store keys and a route to the
+object store. The job's task logs are therefore not in finelog, and
+`/iris/outputs` is not archived. Docker workers ship logs and upload outputs
+from the worker process, outside the sandbox, so both keep working there.
 
 The controller still trusts its network. Every production cluster lists the
 private address ranges in `auth.trusted_cidrs`, and the controller

@@ -54,8 +54,8 @@ class TaskIsolation:
         network: What the task's network reaches. Outside CLUSTER, a Docker
             worker runs the task with no network (it rejects INTERNET), and a
             Kubernetes pod gets no host network, carries the label its
-            NetworkPolicy selects, and has its log sidecar write to finelog
-            directly instead of resolving it through the controller.
+            NetworkPolicy selects, and runs without the log-shipping and
+            output-upload sidecars, which would share the task's network.
     """
 
     include_cluster_env: bool

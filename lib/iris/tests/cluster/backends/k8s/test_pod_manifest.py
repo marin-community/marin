@@ -1045,10 +1045,10 @@ def test_gvisor_profile_sets_runtime_class_and_benign_context():
     [(job_pb2.SANDBOX_EGRESS_INTERNET, "internet"), (job_pb2.SANDBOX_EGRESS_NONE, "none")],
 )
 def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
-    """SANDBOX keeps the job's env and the log sidecar, and drops every cluster-held input.
+    """SANDBOX keeps the job's env and drops every cluster-held input.
 
-    The pod carries the label the sandbox NetworkPolicy selects, and its log
-    sidecar targets finelog directly because that policy blocks the controller.
+    The pod carries the label the sandbox NetworkPolicy selects and has no
+    sidecar, since a sidecar's network route would be the task's too.
     """
     req = make_run_req("/my-job/task-0")
     req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
@@ -1056,8 +1056,8 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     req.environment.env_vars["TASK_VAR"] = "1"
     config = pod_config(
         controller_address="http://ctrl:8080",
-        log_server_address="http://finelog:10001",
         task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        task_outputs=TaskOutputPolicy(),
         env_secret_name="iris-task-env",
         service_account="iris-task",
         host_network=True,
@@ -1076,22 +1076,9 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert spec["automountServiceAccountToken"] is False
     assert "hostNetwork" not in spec
     assert not [v for v in spec["volumes"] if "hostPath" in v and v["name"] in {m.name for m in STANDARD_MOUNTS}]
-    (logship,) = [c for c in spec["initContainers"] if c["name"] == "log-shipper"]
-    logship_env = {e["name"]: e.get("value") for e in logship["env"]}
-    assert logship_env["IRIS_LOG_SERVER_ADDRESS"] == "http://finelog:10001"
-    assert "IRIS_CONTROLLER_ADDRESS" not in logship_env
+    assert [c["name"] for c in spec["containers"]] == ["task"]
+    assert spec["initContainers"] == []
     assert manifest["metadata"]["labels"][SANDBOX_EGRESS_LABEL] == label
-
-
-def test_cluster_pod_ships_logs_through_the_controller_and_is_not_sandboxed():
-    config = pod_config(controller_address="http://ctrl:8080", log_server_address="http://finelog:10001")
-    manifest = _build_pod_manifest(make_run_req("/my-job/task-0"), config)
-
-    (logship,) = [c for c in manifest["spec"]["initContainers"] if c["name"] == "log-shipper"]
-    logship_env = {e["name"]: e.get("value") for e in logship["env"]}
-    assert logship_env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
-    assert "IRIS_LOG_SERVER_ADDRESS" not in logship_env
-    assert SANDBOX_EGRESS_LABEL not in manifest["metadata"]["labels"]
 
 
 # ---------------------------------------------------------------------------
