@@ -960,8 +960,9 @@ class IrisClient:
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
                 admin role at submission when auth is enabled. SANDBOX sends only
-                ``environment.env_vars`` and no workspace bundle, and skips parent
-                env inheritance (see ``EnvironmentSpec.to_sandbox_proto``).
+                ``environment.env_vars`` and ``environment.setup_scripts``, no
+                workspace bundle, and skips parent env inheritance (see
+                ``EnvironmentSpec.to_sandbox_proto``).
 
         Returns:
             Job handle for the submitted job

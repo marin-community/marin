@@ -313,8 +313,8 @@ def _task_with_attempts(
 def _authorize_task_owner(dependencies: AttemptDependencies, task_id: JobName) -> None:
     """Require the caller to own the task's job or be admin.
 
-    A federation peer acts for a job it handed off, not for its user; it is
-    scoped to those jobs by ``_authorize_federated_debug_target``.
+    A federation peer passes this check because it acts for the jobs it handed
+    off; callers limit it to those jobs separately.
     """
     identity = get_verified_identity()
     if identity is not None and identity.role == FEDERATION_PEER_ROLE:
