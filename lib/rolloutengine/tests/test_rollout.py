@@ -41,6 +41,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
+from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
     ModelRequest,
@@ -55,6 +56,29 @@ from rolloutengine.engine import ShellboxRolloutEngine
 
 async def run_task(runner: ShellboxRolloutEngine, task: TaskSpec):
     return await runner.run(task)
+
+
+@pytest.mark.asyncio
+async def test_resource_cleanup_retains_failure_cause_after_cancellation(tmp_path):
+    resource = tmp_path / "resource"
+    resource.write_text("open")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def close():
+        started.set()
+        await release.wait()
+        resource.unlink()
+        raise OSError("The resource closed but its cleanup report failed")
+
+    pending = asyncio.create_task(finish_cleanup(close, timeout=5))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    pending.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError) as interrupted:
+        await pending
+    assert not resource.exists()
+    assert isinstance(interrupted.value.__cause__, OSError)
 
 
 @dataclass

@@ -65,5 +65,14 @@ class _Cleanup:
             self.errors.append(_CleanupError(operation, type(failure).__name__))
             logger.warning("Cleanup failed during %s", operation, exc_info=failure)
         if cancellation is not None:
+            if failure is not None:
+                raise cancellation from failure
             raise cancellation
         return failure
+
+
+async def finish_cleanup(action: Callable[[], Coroutine[Any, Any, None]], *, timeout: float) -> None:
+    """Finish resource cleanup within its deadline and propagate failures or repeated cancellation."""
+    failure = await _Cleanup(timeout).run("resource_close", action)
+    if failure is not None:
+        raise failure
