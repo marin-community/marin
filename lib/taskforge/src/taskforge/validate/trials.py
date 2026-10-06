@@ -10,6 +10,12 @@ Every attempt of every trial is one ``TRIAL`` ledger span (``step`` is ``<kind>/
 ``Ungraded`` with a retryable cause, up to ``max_retries`` times, waiting ``plan.retry_backoff``
 between attempts.
 
+A sampled rollout breaks the exact-token contract when the model samples a token sequence the
+server does not reproduce when it re-renders the conversation (``llm.rollout_model``). That is
+sampling noise, so a ``TOKEN_CONTRACT`` attempt is retried on its own budget,
+``token_contract_retries``; each attempt's record keeps the traceback naming the divergent ids. A
+control replays fixed turns, so its plan has no such budget.
+
 Validation owns its trials' deadlines: ``TrialPlan.deadlines`` replaces the agent and attempt
 deadlines of the builder's ``TaskExecution`` (``Deadlines.apply``), so every trial is bounded
 whatever the builder set, and the ledger's ``input_hash`` covers the effective execution.
@@ -143,7 +149,8 @@ class TrialPlan:
     """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
     are recorded.
 
-    ``retry_backoff`` is a template: each trial waits on its own copy.
+    ``max_retries`` bounds retries of ``RETRYABLE`` causes and ``token_contract_retries`` those of
+    ``TOKEN_CONTRACT``. ``retry_backoff`` is a template: each trial waits on its own copy.
     """
 
     item_id: str
@@ -152,13 +159,16 @@ class TrialPlan:
     k: int
     deadlines: Deadlines
     max_retries: int
+    token_contract_retries: int
     retry_backoff: ExponentialBackoff
     evidence_dir: Path
     ledger: Ledger
 
     def __post_init__(self) -> None:
-        if self.k < 1 or self.max_retries < 0:
-            raise ValueError("A trial plan needs k >= 1 and max_retries >= 0")
+        if self.k < 1 or self.max_retries < 0 or self.token_contract_retries < 0:
+            raise ValueError("A trial plan needs k >= 1 and non-negative retry counts")
+        if self.kind is TrialKind.CONTROL and self.token_contract_retries:
+            raise ValueError("A control replays fixed turns, so a token contract break is not retried")
 
 
 async def run_trials(
@@ -182,7 +192,8 @@ async def run_trial(
     trial: str,
 ) -> Outcome:
     """Run one trial of ``task`` with ``execution`` under ``plan.deadlines`` and its ``task_convention``,
-    attempting it again after a backoff while it fails for a retryable cause."""
+    attempting it again after a backoff while it fails for a retryable cause or, within
+    ``plan.token_contract_retries``, a broken token contract."""
     execution = plan.deadlines.apply(execution)
     try:
         convention = task_convention(task, settings.conventions)
@@ -194,10 +205,16 @@ async def run_trial(
         return _refuse(task, execution, convention, plan, trial, outcome)
     engine = settings.engine(model, convention)
     backoff = copy.copy(plan.retry_backoff)
-    attempt = 0
+    retries = contract_retries = attempt = 0
     while True:
         outcome = await _attempt(engine, task, execution, convention, plan, trial, attempt)
-        if isinstance(outcome, Graded) or not outcome.retryable or attempt == plan.max_retries:
+        if isinstance(outcome, Graded):
+            return outcome
+        if outcome.retryable and retries < plan.max_retries:
+            retries += 1
+        elif outcome.cause is Cause.TOKEN_CONTRACT and contract_retries < plan.token_contract_retries:
+            contract_retries += 1
+        else:
             return outcome
         await asyncio.sleep(backoff.next_interval())
         attempt += 1

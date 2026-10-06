@@ -5,9 +5,10 @@
 
 import asyncio
 import json
+from dataclasses import dataclass
 
 from rigging.timing import ExponentialBackoff
-from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON
+from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, ModelRequest, ModelTurn, RolloutContractError
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import TaskExecution
 from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText, SubmissionConvention
@@ -38,7 +39,9 @@ def settings(factory, capabilities=None, conventions: tuple[SubmissionConvention
     )
 
 
-def plan(tmp_path, k: int = 3, max_retries: int = 2, deadlines: Deadlines = DEADLINES) -> TrialPlan:
+def plan(
+    tmp_path, k: int = 3, max_retries: int = 2, deadlines: Deadlines = DEADLINES, token_contract_retries: int = 0
+) -> TrialPlan:
     return TrialPlan(
         item_id="item",
         round=1,
@@ -46,6 +49,7 @@ def plan(tmp_path, k: int = 3, max_retries: int = 2, deadlines: Deadlines = DEAD
         k=k,
         deadlines=deadlines,
         max_retries=max_retries,
+        token_contract_retries=token_contract_retries,
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
         evidence_dir=tmp_path / "evidence",
         ledger=JsonlLedger(tmp_path / "ledger"),
@@ -221,3 +225,54 @@ async def test_the_ledger_input_hash_covers_the_convention(tmp_path, math_task, 
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
+
+
+DIVERGENCE = "Served prompt diverges from the replayed prefix at index 6689: sampled (701, 7), served (23482,)"
+
+
+@dataclass
+class ContractBreakingModel:
+    """Answers ``first``, then breaks the token contract on the next turn of the first ``broken``
+    attempts, as ``GlmRolloutModel`` does when GLM sampled a non-canonical tokenization, then ``last``."""
+
+    first: dict
+    last: dict
+    broken: int
+    breaks: int = 0
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        if not request.prefix_token_ids:
+            return ModelTurn(self.first, (10, 11), (20,), (-0.5,), "tool_calls")
+        if self.breaks < self.broken:
+            self.breaks += 1
+            raise RolloutContractError(DIVERGENCE)
+        return ModelTurn(self.last, (*request.prefix_token_ids, 90), (21,), (-0.5,), "stop")
+
+
+def attempt_records(tmp_path) -> list[dict]:
+    paths = sorted((tmp_path / "evidence" / "solver" / "0").glob("attempt-*.json"))
+    return [json.loads(path.read_bytes()) for path in paths]
+
+
+async def test_a_sampled_token_contract_break_is_retried_and_each_attempt_keeps_the_divergence(
+    tmp_path, file_task, fakes
+):
+    model = ContractBreakingModel(fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done."), broken=2)
+    trial_plan = plan(tmp_path, k=1, max_retries=0, token_contract_retries=2)
+
+    outcomes = await run_trials(file_task, EXECUTION, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+    records = attempt_records(tmp_path)
+    assert [record.get("cause") for record in records] == [Cause.TOKEN_CONTRACT, Cause.TOKEN_CONTRACT, None]
+    assert all(DIVERGENCE in record["detail"] for record in records[:2])
+
+
+async def test_token_contract_retries_stop_at_their_cap(tmp_path, file_task, fakes):
+    model = ContractBreakingModel(fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done."), broken=100)
+    trial_plan = plan(tmp_path, k=1, max_retries=5, token_contract_retries=1)
+
+    outcomes = await run_trials(file_task, EXECUTION, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.TOKEN_CONTRACT
+    assert model.breaks == 2

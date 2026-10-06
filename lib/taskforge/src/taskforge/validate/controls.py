@@ -176,6 +176,7 @@ class ControlPlan:
             k=1,
             deadlines=self.deadlines,
             max_retries=self.max_retries,
+            token_contract_retries=0,
             retry_backoff=self.retry_backoff,
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,

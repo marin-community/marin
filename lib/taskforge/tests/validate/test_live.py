@@ -44,6 +44,7 @@ LIVE_TIMEOUT = 1800
 RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
 EXECUTION = TaskExecution()
 DEADLINES = Deadlines(agent_timeout=900, attempt_timeout=1200)
+TOKEN_CONTRACT_RETRIES = 2
 
 
 def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings:
@@ -65,6 +66,7 @@ def plan(directory: Path, kind: TrialKind, item_id: str, k: int = K, max_retries
         k=k,
         deadlines=DEADLINES,
         max_retries=max_retries,
+        token_contract_retries=TOKEN_CONTRACT_RETRIES,
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
         ledger=JsonlLedger(directory / "ledger"),
