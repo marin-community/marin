@@ -4,8 +4,10 @@
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 from zipfile import ZipFile
 
 import pytest
@@ -221,12 +223,13 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         "UV_PROJECT_ENVIRONMENT": str(venv),
     }
 
+    # Each pytest worker needs its own materialized wrapper and setup-step files.
     setup = "\n".join(
         [
             "set -e",
             *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
         ]
-    )
+    ).replace("/tmp/iris-", f"{tmp_path}/iris-")
     completed = subprocess.run(
         ["bash", "-c", setup],
         env=env,
@@ -241,3 +244,81 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         assert (venv / "package-cache").read_text().strip() == expected_cache
     signals = list(shared_cache.glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"))
     assert len(signals) == int(shared_cache_fails and not local_cache_fails)
+
+
+@pytest.mark.parametrize(
+    "reinstall_option", ["", "--reinstall", "--force-reinstall", "--reinstall-package setup-payload"]
+)
+def test_uv_install_after_first_failure_reinstalls_with_real_uv(tmp_path, reinstall_option):
+    """A cache retry must reach installation instead of failing uv's argument parser."""
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    venv = tmp_path / "venv"
+    subprocess.run([real_uv, "venv", "--python", sys.executable, str(venv)], check=True)
+    wheel = tmp_path / "setup_payload-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("setup_payload/__init__.py", "value = 7\n")
+        archive.writestr("setup_payload-0.1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/METADATA", "Metadata-Version: 2.1\nName: setup-payload\nVersion: 0.1.0\n"
+        )
+        archive.writestr("setup_payload-0.1.0.dist-info/RECORD", "")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    shared_cache = tmp_path / "shared-cache"
+    shared_cache.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        """#!/bin/bash
+printf '%s\\n' "$UV_CACHE_DIR" >> "$UV_INVOCATIONS"
+if [ ! -f "$UV_FIRST_FAILURE" ]; then
+  touch "$UV_FIRST_FAILURE"
+  exit 19
+fi
+exec "$REAL_UV" "$@"
+"""
+    )
+    uv.chmod(0o755)
+    invocation_log = tmp_path / "invocations"
+    failure_marker = tmp_path / "first-failure"
+    # Keep the real shell wrapper isolated from other concurrent setup tests.
+    setup = "\n".join(
+        [
+            "set -e",
+            *render_setup_steps(
+                [
+                    f"uv pip install --offline --no-index --no-deps --python {shlex.quote(str(venv / 'bin/python'))} "
+                    f"{reinstall_option} {shlex.quote(str(wheel))}"
+                ]
+            ),
+        ]
+    ).replace("/tmp/iris-", f"{tmp_path}/iris-")
+    completed = subprocess.run(
+        ["bash", "-c", setup],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "IRIS_WORKDIR": str(workdir),
+            "IRIS_ATTEMPT_UID": "reinstall-retry",
+            "UV_CACHE_DIR": str(shared_cache),
+            "REAL_UV": real_uv,
+            "UV_INVOCATIONS": str(invocation_log),
+            "UV_FIRST_FAILURE": str(failure_marker),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert failure_marker.exists()
+    assert invocation_log.read_text().splitlines() == [str(shared_cache), str(workdir / ".uv-recovery-cache")]
+    imported = subprocess.run(
+        [venv / "bin/python", "-c", "import setup_payload; print(setup_payload.value)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert imported.stdout.strip() == "7"
+    assert (shared_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}reinstall-retry").exists()
