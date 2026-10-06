@@ -33,6 +33,8 @@ class Cause(StrEnum):
     MACHINE_START_TIMEOUT = "machine_start_timeout"
     MACHINE_UNSUPPORTED = "machine_unsupported"
     """The factories cannot provide what the task asks for (``task_refusals`` or ``UnsupportedMachineSpec``)."""
+    SUBMISSION_UNSUPPORTED = "submission_unsupported"
+    """No configured submission convention can carry the task's answer (``trials.task_convention``)."""
     TASK_SETUP = "task_setup"
     """The task's own setup failed: a setup command exited non-zero or timed out, a healthcheck never
     passed, or the environment lacks the capabilities the task requires. A task defect, not flakiness."""

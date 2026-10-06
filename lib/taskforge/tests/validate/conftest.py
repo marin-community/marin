@@ -1,17 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two small tasks shared by the unit and live validate tests, with a control set for each.
+"""Small tasks shared by the unit and live validate tests, with a control set for two of them.
 
 ``math_task`` is a null-environment numeric task graded by verifyit through TaskCompendium's
-registry. ``file_task`` is a ShellSim task whose private ``ShellVerifierSpec`` script checks a file
-the agent must create.
+registry; ``json_task`` is a null-environment task with a JSON answer. ``file_task`` is a ShellSim
+task whose private ``ShellVerifierSpec`` script checks a file the agent must create.
 """
 
 import asyncio
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -20,7 +20,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Machine, MachineSpec
 from taskcompendium.environment import EnvironmentKind, StdoutReward
 from taskcompendium.execution import TaskExecution
-from taskcompendium.grading import numeric_answer
+from taskcompendium.grading import numeric_answer, structured_exact
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 
@@ -55,6 +55,19 @@ def math_task() -> TaskSpec:
         environment(EnvironmentKind.NULL),
         numeric_answer(MATH_ANSWER, tolerance_abs=0, tolerance_rel=0),
         source("math"),
+        execution=TaskExecution(),
+    )
+
+
+@pytest.fixture
+def json_task() -> TaskSpec:
+    return assemble(
+        "validate-json",
+        "Report the sum of 12, 7, 30 and 11 as a JSON object whose only key is sum.",
+        AnswerType.JSON,
+        environment(EnvironmentKind.NULL),
+        structured_exact({"sum": NUMBERS_SUM}),
+        source("json"),
         execution=TaskExecution(),
     )
 
@@ -162,14 +175,17 @@ class ScriptModel:
     """Answers each request with the next of ``messages``, with ids that preserve the served prefix.
 
     From turn ``hang_from`` on, a request waits forever, so only a timeout ends it. With a
-    ``barrier``, every request waits until all of the barrier's parties are in flight.
+    ``barrier``, every request waits until all of the barrier's parties are in flight. ``requests``
+    collects every request served.
     """
 
     messages: list[dict[str, Any]]
     hang_from: int | None = None
     barrier: asyncio.Barrier | None = None
+    requests: list[ModelRequest] = field(default_factory=list)
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
         index = sum(message["role"] == "assistant" for message in request.messages)
         if self.hang_from is not None and index >= self.hang_from:
             await asyncio.Event().wait()
