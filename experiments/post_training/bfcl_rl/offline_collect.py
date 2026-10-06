@@ -40,7 +40,7 @@ ROLE_PLAN = SkyRLRolePlan(
 
 
 def offline_collection_step(
-    teacher_source: str, seed: int, task: str | None, images: tuple[str, str, str]
+    teacher_source: str, seed: int, task: str | None, images: tuple[str, str, str], generation_batch_size: int
 ) -> ArtifactStep:
     """Bind the pinned Qwen teacher and unchanged complement to a generation-only run."""
     spec = collection_spec("teacher", task, images)
@@ -59,6 +59,7 @@ def offline_collection_step(
     }
     # Seed the teacher engines independently for each collection pass.
     recipe["trainer"]["seed"] = seed
+    recipe["trainer"]["eval_batch_size"] = generation_batch_size
     model_step = ArtifactStep.adopt(
         user_owned_name("inputs/bfcl-rl-qwen36-teacher"),
         "2026.10.04",
@@ -83,6 +84,7 @@ def offline_collection_step(
 @click.command(help=__doc__)
 @click.option("--teacher-source", required=True, help="Completed region-local snapshot of the pinned teacher.")
 @click.option("--seed", type=click.IntRange(min=0, max=2**31 - 1), required=True)
+@click.option("--generation-batch-size", type=click.IntRange(min=1), required=True)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
@@ -91,12 +93,15 @@ def offline_collection_step(
 def main(
     teacher_source: str,
     seed: int,
+    generation_batch_size: int,
     task: str | None,
     python_image: str,
     java_image: str,
     javascript_image: str,
 ) -> ArtifactStep:
-    return offline_collection_step(teacher_source, seed, task, (python_image, java_image, javascript_image))
+    return offline_collection_step(
+        teacher_source, seed, task, (python_image, java_image, javascript_image), generation_batch_size
+    )
 
 
 if __name__ == "__main__":
