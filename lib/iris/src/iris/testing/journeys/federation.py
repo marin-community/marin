@@ -59,6 +59,13 @@ class InProcessPeerConnection:
         with identity_scope(_PEER_IDENTITY):
             self._controller.terminate_job(job_id.to_wire())
 
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        self._require_reachable()
+        with identity_scope(_PEER_IDENTITY):
+            return self._controller.kick_tasks(request)
+
     def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse:
         raise NotImplementedError("federation journey does not provide a process runtime")
 

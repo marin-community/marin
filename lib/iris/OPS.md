@@ -353,6 +353,11 @@ running on a worker (ASSIGNED / BUILDING / RUNNING) can be changed; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
 
+For federated jobs, the parent forwards task and attempt actions to the
+execution peer. The peer validates the current attempt and queues the action;
+a stale parent mirror does not determine which attempt is stopped. A successful
+reply means the action was queued. Check task status to confirm it took effect.
+
 Use `job complete` only when the workload should be recorded as successful. It
 marks the Job and every unfinished Task and Attempt `SUCCEEDED`, then stops
 their runtimes. `job cancel` records the Job as `KILLED` instead.

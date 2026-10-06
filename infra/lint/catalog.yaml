@@ -175,6 +175,7 @@ lanes:
   - ml-local-import
   - ml-type-checking-guard
   - ml-reverse-layer-import
+  - ml-consumer-policy-in-shared-layer
   - ml-cross-sibling-import
   - ml-bool-flag-arg
   - ml-bool-return-status
