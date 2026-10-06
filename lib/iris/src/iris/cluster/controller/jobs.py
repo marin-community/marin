@@ -14,7 +14,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
-from sqlalchemy import bindparam, func, select
+from sqlalchemy import Row, bindparam, func, select
 
 from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.config import user_admitted
@@ -316,7 +316,7 @@ def _get_autoscaler_pending_hints(dependencies: JobDependencies) -> dict[str, Pe
     return dependencies.runtime.backend_observation.pending_hints
 
 
-def _task_caller_parent(dependencies: JobDependencies, job_id: JobName):
+def _task_caller_parent(dependencies: JobDependencies, job_id: JobName) -> Row | None:
     """The parent's job row when a task token launches a child job, else None.
 
     A task may give its child the admin-gated band or profile its parent already

@@ -85,9 +85,7 @@ def _launch(service, name: str, *, profile: int = 0, band: int = 0):
         pytest.param(job_pb2.CONTAINER_PROFILE_DEFAULT, False, id="parent-default"),
     ],
 )
-def test_task_launches_an_elevated_child_only_when_its_parent_holds_that_profile(
-    auth_service, parent_profile, allowed
-):
+def test_task_launches_an_elevated_child_only_when_its_parent_holds_that_profile(auth_service, parent_profile, allowed):
     with identity_scope(_ADMIN):
         _launch(auth_service, "/alice/parent", profile=parent_profile)
 
