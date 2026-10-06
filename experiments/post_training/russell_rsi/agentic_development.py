@@ -35,8 +35,8 @@ from shellbox.backends.qemu.bundle import guest_code_id
 from shellbox.mini_agent import NativeMiniAgent
 
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal, EvaluationJournal
-from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 TASK_IDS = (
@@ -61,6 +61,7 @@ AGENT_TIMEOUT = 1800
 VERIFIER_TIMEOUT = 300
 MINI_VERSION = "2.1.0"
 LITELLM_VERSION = "1.104.0"
+NATIVE_MODEL_RETRY_ENV = {"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1"}
 QUALIFICATION_JOB_TIMEOUT = 6 * 3600
 EVALUATION_JOB_TIMEOUT = 2 * 3600
 MODEL_ERRORS = frozenset(
@@ -76,18 +77,6 @@ MODEL_ERRORS = frozenset(
         "InternalServerError",
     }
 )
-
-
-@dataclass(frozen=True)
-class PinnedFile:
-    uri: str
-    sha256: str
-
-    def read(self) -> bytes:
-        return pinned_bytes(self.uri, self.sha256)
-
-    def json(self) -> Any:
-        return json.loads(self.read())
 
 
 @dataclass(frozen=True)
@@ -107,7 +96,7 @@ class FrozenProducer:
     chat_template: PinnedFile
 
     def validate(self) -> None:
-        record = self.record.json()
+        record = self.record.read_json()
         identity = f"{record['name']}@{record['version']}:{record['fingerprint']}"
         if identity != self.identity:
             raise ValueError("Checkpoint producer identity differs from its frozen record")
@@ -120,7 +109,7 @@ class FrozenProducer:
                 raise ValueError("Unsupported frozen checkpoint producer type")
         if canonical_export != self.export_uri:
             raise ValueError("Checkpoint export URI differs from its canonical producer record")
-        manifest = self.export_manifest.json()
+        manifest = self.export_manifest.read_json()
         if manifest["producer_identity"] != self.identity or manifest["export_uri"] != self.export_uri:
             raise ValueError("Checkpoint export does not bind the frozen producer")
         if (manifest["tokenizer"], manifest["tokenizer_revision"], manifest["chat_template_sha256"]) != (
@@ -129,7 +118,7 @@ class FrozenProducer:
             self.chat_template.sha256,
         ):
             raise ValueError("Checkpoint tokenizer or template differs from the frozen export")
-        self.chat_template.read()
+        self.chat_template.read_bytes()
 
 
 @dataclass(frozen=True)
@@ -178,8 +167,8 @@ def load_plan(value: dict) -> DevelopmentPlan:
 
 
 def cohort(plan: DevelopmentPlan) -> tuple[dict, ...]:
-    source = plan.source_manifest.json()
-    images = plan.image_manifest.json()
+    source = plan.source_manifest.read_json()
+    images = plan.image_manifest.read_json()
     tasks = source["tasks"]
     prepared = images if isinstance(images, list) else images["images"]
     if tuple(t["task_id"] for t in tasks) != TASK_IDS or tuple(t["task_id"] for t in prepared) != TASK_IDS:
@@ -245,7 +234,7 @@ def native_config_specs(plan: DevelopmentPlan, directory: Path) -> list[str]:
     specs = []
     for index, pin in enumerate(plan.native_configs):
         path = directory / f"native-{index}.yaml"
-        path.write_bytes(pin.read())
+        path.write_bytes(pin.read_bytes())
         specs.append(str(path))
     resolved = recursive_merge(*(get_config_from_spec(spec) for spec in specs))
     if resolved != plan.resolved_native_config:
@@ -362,7 +351,7 @@ def file_sha256(path: Path) -> str:
 def install_guest_bundle(entry: dict, plan: DevelopmentPlan, parent: Path) -> Path:
     """Install one pinned data archive without changing RuntimeBundle limits."""
     image = entry["image"]
-    manifest = PinnedFile(image["data_manifest_uri"], image["data_manifest_sha256"]).json()
+    manifest = PinnedFile(image["data_manifest_uri"], image["data_manifest_sha256"]).read_json()
     task_id = entry["task"]["task_id"]
     expected_metadata = {
         "task_id": task_id,
@@ -817,7 +806,7 @@ def run_checkpoint_evaluation(config: CheckpointEvaluationConfig) -> None:
         producer.validate()
     write_once(StoragePath(config.output_path) / "worker-import-provenance.json", worker_provenance(plan))
     install_runtime_bundle(plan.runtime_bundle)
-    os.environ["MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"] = "1"
+    os.environ.update(NATIVE_MODEL_RETRY_ENV)
     with tempfile.TemporaryDirectory(prefix="russell-native-development-") as temporary:
         root = Path(temporary)
         specs = native_config_specs(plan, root)
@@ -825,7 +814,7 @@ def run_checkpoint_evaluation(config: CheckpointEvaluationConfig) -> None:
         bundles = {entry["task"]["task_id"]: install_guest_bundle(entry, plan, root / "guests") for entry in entries}
         producer = plan.producers[config.producer_index]
         template = root / "chat-template.jinja"
-        template.write_bytes(producer.chat_template.read())
+        template.write_bytes(producer.chat_template.read_bytes())
         with local_inference(
             ServedModelConfig(
                 weights=producer.export_uri,

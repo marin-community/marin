@@ -24,17 +24,18 @@ from experiments.post_training.russell_rsi.agentic_development import (
     HARBOR_COMMIT,
     LITELLM_VERSION,
     MINI_VERSION,
+    NATIVE_MODEL_RETRY_ENV,
     QUALIFICATION_JOB_TIMEOUT,
     CheckpointEvaluationConfig,
     DevelopmentPlan,
     PairedReportConfig,
-    PinnedFile,
     QualificationConfig,
     load_plan,
     paired_report,
     run_checkpoint_evaluation,
     run_qualification,
 )
+from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 
 BRANCH_PYTHONPATH = (
     ":".join(
@@ -77,7 +78,7 @@ def submit_worker(
             env_vars={
                 "UV_PRERELEASE": "allow",
                 "PYTHONPATH": BRANCH_PYTHONPATH,
-                "MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1",
+                **NATIVE_MODEL_RETRY_ENV,
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             },
         ),
@@ -143,7 +144,7 @@ def agentic_development_workflow(plan: DevelopmentPlan, version: str) -> Artifac
 @click.option("--config-sha256", required=True)
 @build_options
 def main(config_uri: str, config_sha256: str) -> list[ArtifactStep]:
-    config = PinnedFile(config_uri, config_sha256).json()
+    config = PinnedFile(config_uri, config_sha256).read_json()
     if resolve_version("russell-rsi-native-development", None) != config["evaluation_version"]:
         raise click.UsageError("DEVELOPMENT config and artifact version differ")
     return [agentic_development_workflow(load_plan(config), config["evaluation_version"])]

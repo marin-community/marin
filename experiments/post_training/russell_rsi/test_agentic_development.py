@@ -26,7 +26,6 @@ from experiments.post_training.russell_rsi.agentic_development import (
     DevelopmentPlan,
     FrozenProducer,
     PairedReportConfig,
-    PinnedFile,
     binding,
     cohort,
     file_sha256,
@@ -36,6 +35,7 @@ from experiments.post_training.russell_rsi.agentic_development import (
     scripted_endpoint,
 )
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
 from lib.shellbox.tests.test_qemu_machine import local_guest
 
@@ -72,10 +72,17 @@ class LocalGuestEnvironment(QemuEnvironment):
     def local_path(self, path: str) -> Path:
         return Path(self.guest_bundle) / path.lstrip("/")
 
-    async def exec(self, command: str, **kwargs):
+    async def exec(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: int | str | None = None,
+    ):
         for path in ("/logs", "/tests", "/solution"):
             command = command.replace(path, str(self.local_path(path)))
-        return await super().exec(command, **kwargs)
+        return await super().exec(command, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user)
 
     async def upload_dir(self, source_dir, target_dir):
         shutil.copytree(Path(str(source_dir)), self.local_path(target_dir), dirs_exist_ok=True)
@@ -88,10 +95,17 @@ class LocalGuestEnvironment(QemuEnvironment):
 
 
 class CwdFailureEnvironment(LocalGuestEnvironment):
-    async def exec(self, command: str, **kwargs):
+    async def exec(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: int | str | None = None,
+    ):
         if command == "pwd":
             raise FileNotFoundError("Fixture cwd is unavailable")
-        return await super().exec(command, **kwargs)
+        return await super().exec(command, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user)
 
 
 @pytest.fixture
@@ -248,7 +262,9 @@ def test_paired_report_keeps_sixteen_slots_and_excludes_infrastructure_errors(tm
     frozen = binding(plan, cohort(plan))
     paths = (str(tmp_path / "producer-0"), str(tmp_path / "producer-1"))
     for index, path in enumerate(paths):
-        slots = {task_id: {"status": "valid_grade", "grade": index, "error_category": None} for task_id in TASK_IDS}
+        slots: dict[str, dict[str, object]] = {
+            task_id: {"status": "valid_grade", "grade": index, "error_category": None} for task_id in TASK_IDS
+        }
         if index == 1:
             slots[TASK_IDS[0]] = {
                 "status": "infrastructure_error",
@@ -276,7 +292,7 @@ def test_paired_report_keeps_sixteen_slots_and_excludes_infrastructure_errors(tm
 @pytest.mark.parametrize("altered", [False, True])
 def test_task_archive_materializes_frozen_files_and_rejects_changed_bytes(tmp_path, altered):
     plan = report_plan(tmp_path)
-    source = plan.source_manifest.json()
+    source = plan.source_manifest.read_json()
     archive_root = tmp_path / "archive-source/tasks"
     for task in source["tasks"]:
         content = f"Fixture instruction for {task['task_id']}".encode()
