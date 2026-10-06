@@ -64,6 +64,10 @@ Each task gets a fresh machine. The engine attempts machine cleanup after comple
 failure, or cancellation.
 The default session exposes `shell(command: string)` for executable environments.
 Files persist between commands. Each command starts a new shell process.
+`rolloutengine.shell_tool` defines that contract: `SHELL_TOOL_NAME`, the function
+definition from `shell_tool_definition()`, and the tool message content from
+`shell_observation(result)`. The content is a JSON object with `stdout`, `stderr`,
+`exit_code`, `reason` (the Shellbox `ExitReason` value), and `truncated`.
 
 `ShellboxRolloutEngine.run(task, execution=...)` accepts a `TaskSpec` and separate
 `TaskExecution` settings from `taskcompendium.execution`.

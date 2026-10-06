@@ -32,8 +32,7 @@ from rolloutengine.cleanup import Cleanup
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
-
-SHELL_TOOL_NAME = "shell"
+from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_tool_definition
 
 
 def _task_submission(task: TaskSpec, convention: SubmissionConvention) -> SubmissionConvention:
@@ -55,21 +54,7 @@ def session_start(task: TaskSpec, convention: SubmissionConvention) -> SessionSt
     if task.environment.kind != EnvironmentKind.NULL:
         if any(function.name == SHELL_TOOL_NAME for function in task.final_tools):
             raise ValueError("The shell tool name is reserved for executable tasks")
-        options.setdefault("tools", []).append(
-            {
-                "type": "function",
-                "function": {
-                    "name": SHELL_TOOL_NAME,
-                    "description": "Run a shell command in the task workspace. Files persist between commands.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"command": {"type": "string"}},
-                        "required": ["command"],
-                        "additionalProperties": False,
-                    },
-                },
-            }
-        )
+        options.setdefault("tools", []).append(shell_tool_definition())
     return SessionStart(tuple(messages), options)
 
 
@@ -157,15 +142,7 @@ class _ShellboxTaskSession:
                 {
                     "role": "tool",
                     "tool_call_id": call.call_id,
-                    "content": json.dumps(
-                        {
-                            "stdout": result.stdout.decode(errors="replace"),
-                            "stderr": result.stderr.decode(errors="replace"),
-                            "exit_code": result.exit_code,
-                            "reason": result.reason.value,
-                            "truncated": result.stdout_truncated or result.stderr_truncated,
-                        }
-                    ),
+                    "content": shell_observation(result),
                 }
             )
         return Transition(done=False, observations=tuple(observations))

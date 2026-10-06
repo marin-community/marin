@@ -3,6 +3,8 @@
 
 """Task machines, shell grading, and the shell tool outside an engine rollout."""
 
+import json
+
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command
@@ -14,13 +16,15 @@ from taskcompendium.environment import (
     HealthcheckSpec,
     ShellVerifierSpec,
 )
+from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
 
 from rolloutengine.cleanup import Cleanup
 from rolloutengine.grading import shell_grade
 from rolloutengine.machines import task_machine
+from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_tool_definition
 
-from .test_rollout import RecordingShellSimFactory
+from .test_rollout import RecordingShellSimFactory, ReplayModel, engine, file_task
 
 SHELLSIM = {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
 GRADER = ShellVerifierSpec(argv=("sh", "/private/grade.sh"), timeout=5)
@@ -109,3 +113,29 @@ async def test_shell_grade_passes_the_transcript_on_stdin():
         assert machine is not None
         grade = await shell_grade(verifier, messages, machine, ())
     assert (grade.status, grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_shell_tool_contract_matches_the_engine_session():
+    command = "echo 12 > /workspace/answer && cat /workspace/answer"
+    model = ReplayModel(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": SHELL_TOOL_NAME, "arguments": json.dumps({"command": command})},
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Completed."},
+        ]
+    )
+    await engine(model, SHELLSIM).run(file_task(), execution=TaskExecution())
+
+    assert shell_tool_definition() in model.requests[0].options["tools"]
+    async with task_machine(EnvironmentSpec(kind=EnvironmentKind.SHELLSIM), SHELLSIM, Cleanup(5)) as machine:
+        assert machine is not None
+        result = await machine.run(Command(("sh", "-c", command), timeout=5))
+    assert model.requests[1].messages[-1]["content"] == shell_observation(result)
