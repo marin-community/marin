@@ -12,12 +12,13 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Machine, MachineSpec
+from shellbox.machine import Command, ExitReason, Machine, MachineSpec, Result
 from taskcompendium.environment import EnvironmentKind, StdoutReward
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import numeric_answer, structured_exact
@@ -222,6 +223,44 @@ class FlakyFactory:
         return await ShellSimMachineFactory().create(spec)
 
 
+@dataclass
+class FaultyMachine:
+    """A ShellSim machine whose ``close`` raises when ``close_error`` is set and whose ``failing_argv``
+    command exits 1."""
+
+    machine: Machine
+    close_error: bool
+    failing_argv: tuple[str, ...] | None
+
+    async def run(self, command: Command) -> Result:
+        if command.argv == self.failing_argv:
+            return Result(1, b"", b"", False, False, ExitReason.EXITED)
+        return await self.machine.run(command)
+
+    async def upload(self, source: Path, target: str) -> None:
+        await self.machine.upload(source, target)
+
+    async def download(self, source: str, target: Path) -> None:
+        await self.machine.download(source, target)
+
+    async def open_shell(self):
+        return await self.machine.open_shell()
+
+    async def close(self) -> None:
+        await self.machine.close()
+        if self.close_error:
+            raise RuntimeError("sandbox delete refused")
+
+
+@dataclass
+class FaultyFactory:
+    close_error: bool = False
+    failing_argv: tuple[str, ...] | None = None
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        return FaultyMachine(await ShellSimMachineFactory().create(spec), self.close_error, self.failing_argv)
+
+
 @dataclass(frozen=True)
 class Fakes:
     """The fake classes, handed to tests through the ``fakes`` fixture (test modules cannot import each other)."""
@@ -229,6 +268,7 @@ class Fakes:
     script_model: type[ScriptModel] = ScriptModel
     raising_model: type[RaisingModel] = RaisingModel
     flaky_factory: type[FlakyFactory] = FlakyFactory
+    faulty_factory: type[FaultyFactory] = FaultyFactory
     text: Callable[[str], dict[str, Any]] = assistant_text
     shell: Callable[[str], dict[str, Any]] = assistant_shell
 

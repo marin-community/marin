@@ -6,9 +6,12 @@
 Every attempt of every trial is one ``TRIAL`` ledger span (``step`` is ``<kind>/<trial>/<attempt>``,
 ``cause`` is the ``Cause`` value of an ungraded attempt) and one JSON file under
 ``<evidence_dir>/<kind>/<trial>/attempt-<n>.json`` holding the outcome and the full ``RolloutData``
-(or the traceback when the engine kept no rollout). A trial is attempted again while its outcome is
-``Ungraded`` with a retryable cause, up to ``max_retries`` times, waiting ``plan.retry_backoff``
-between attempts.
+(or the traceback when the engine kept no rollout). Both carry ``cleanup_errors``, the number of
+cleanup actions that failed or overran (RolloutEngine's ``cleanup_error_count``), so a leaked
+machine shows in summaries; it is ``None`` when the engine kept no rollout.
+
+A trial is attempted again while its outcome is ``Ungraded`` with a retryable cause, up to
+``max_retries`` times, waiting ``plan.retry_backoff`` between attempts.
 
 A sampled rollout breaks the exact-token contract when the model samples a token sequence the
 server does not reproduce when it re-renders the conversation (``llm.rollout_model``). That is
@@ -58,6 +61,9 @@ from taskforge.validate.classify import trial_outcome
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 
 type RolloutModel = Callable[[ModelRequest], Awaitable[ModelTurn]]
+
+CLEANUP_ERROR_COUNT = "cleanup_error_count"
+"""The ``RolloutData.metrics`` key where RolloutEngine counts failed cleanup actions."""
 
 
 @dataclass(frozen=True)
@@ -299,15 +305,24 @@ def _record(fields: SpanFields, outcome: Outcome, plan: TrialPlan, trial: str, a
     write_evidence(plan.evidence_dir / str(plan.kind) / trial / f"attempt-{attempt}.json", payload)
 
 
+def cleanup_errors(outcome: Outcome) -> int | None:
+    """How many cleanup actions of the attempt failed or overran; ``None`` without a rollout."""
+    if outcome.rollout is None:
+        return None
+    return int(outcome.rollout.metrics.get(CLEANUP_ERROR_COUNT, 0))
+
+
 def _attributes(outcome: Outcome) -> dict[str, str]:
+    cleanup = {"cleanup_errors": str(cleanup_errors(outcome))}
     if isinstance(outcome, Graded):
         return {
             "outcome": "graded",
             "status": str(outcome.grade.status),
             "reward": str(outcome.reward),
             "timed_out": str(outcome.timed_out),
+            **cleanup,
         }
-    return {"outcome": "ungraded", "retryable": str(outcome.retryable)}
+    return {"outcome": "ungraded", "retryable": str(outcome.retryable), **cleanup}
 
 
 def outcome_json(outcome: Outcome) -> bytes:
@@ -322,6 +337,7 @@ def outcome_json(outcome: Outcome) -> bytes:
             "detail": outcome.detail,
         }
     )
+    record["cleanup_errors"] = cleanup_errors(outcome)
     record["rollout"] = None if outcome.rollout is None else dataclasses.asdict(outcome.rollout)
     return json.dumps(record, indent=1).encode()
 

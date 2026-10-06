@@ -276,3 +276,15 @@ async def test_token_contract_retries_stop_at_their_cap(tmp_path, file_task, fak
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.TOKEN_CONTRACT
     assert model.breaks == 2
+
+
+async def test_the_evidence_counts_failed_cleanup_actions(tmp_path, file_task, fakes):
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
+
+    outcomes = await run_trials(
+        file_task, EXECUTION, plan(tmp_path, k=1), settings(fakes.faulty_factory(close_error=True)), model
+    )
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+    assert [record["cleanup_errors"] for record in attempt_records(tmp_path)] == [1]
+    assert [entry.attrs["cleanup_errors"] for entry in ledger(tmp_path)] == ["1"]
