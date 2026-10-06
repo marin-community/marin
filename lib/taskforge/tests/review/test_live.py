@@ -15,7 +15,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from taskcompendium.grading_result import Outcome
 
@@ -94,19 +93,6 @@ SHORTCUT_DETAIL = (
 )
 
 
-def scripted(turns: tuple[dict, ...]):
-    """A model that serves ``turns`` in order, with token ids that extend each request's prefix."""
-
-    async def model(request: ModelRequest) -> ModelTurn:
-        served = sum(message["role"] == "assistant" for message in request.messages)
-        message = turns[served]
-        prompt = (*request.prefix_token_ids, 2 * served + 1)
-        stop = "tool_calls" if "tool_calls" in message else "stop"
-        return ModelTurn(message, prompt, (2 * served + 2,), None, stop)
-
-    return model
-
-
 async def build_with_revisions(
     proposal: TaskProposal,
     revision: Revision | None,
@@ -129,7 +115,9 @@ async def build_with_revisions(
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortcut(glm_settings, parallel_key, summary):
+async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortcut(
+    glm_settings, parallel_key, summary, scripted_model
+):
     proposal = parse(PROPOSAL)
     run_dir = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
     factories = machine_factories(MachineHost.LAPTOP, controller_url=None)
@@ -168,7 +156,7 @@ async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortc
 
     turns = control_turns(SHORTCUT)
     engine = ShellboxRolloutEngine(
-        scripted(turns),
+        scripted_model(turns),
         factories,
         max_turns=len(turns),
         command_timeout=60,
