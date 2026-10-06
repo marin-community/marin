@@ -3,12 +3,12 @@
     "moe_hero_pipeline"
   ],
   "base_sha": "89ac0d770506f7e27ca217760ec5ca3246694e7e",
-  "head_sha": "5c2d91a6e48a43573b7f0b09be7e5f16bfc3eddc",
+  "head_sha": "1322c845dcde037fc798921950a6c3bc55cd984f",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "snowball_synthetic",
-      "distance_score": 2804,
+      "distance_score": 2805,
       "report_relpath": "moe_hero_pipeline/index.html",
       "status_counts": {
         "added": 11,
