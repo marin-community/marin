@@ -55,6 +55,7 @@ from experiments.post_training.russell_rsi.teacher_collection import (
 from experiments.sft.launcher import ArtifactDatasetSpec, PreparedModel, SFTSpec, sft_step
 
 SFT_NODES = 4
+SFT_GPUS_PER_NODE = 8
 SFT_LEARNING_RATE = 1e-6
 TEACHER_PIP_PACKAGES = ("./lib/rolloutengine", "./lib/taskcompendium", "./lib/shellbox")
 CollectionConfig = TypeVar("CollectionConfig")
@@ -212,7 +213,13 @@ def run_teacher_collection_remote(config: TeacherCollectionConfig) -> None:
 
 def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
     """Bind verified conversations and the pinned parent to one standard SFT update."""
-    return teacher_sft_steps(config, CollectionBinding(lambda base: base, run_teacher_collection_remote), 1, "teacher")
+    return teacher_sft_steps(
+        config,
+        CollectionBinding(lambda base: base, run_teacher_collection_remote),
+        1,
+        "teacher",
+        training_version=config["version"],
+    )
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,8 @@ def teacher_sft_steps(
     updates: int,
     namespace: str,
     context_tokens: int = STUDENT_CONTEXT_TOKENS,
+    *,
+    training_version: str,
 ) -> dict[str, ArtifactStep]:
     version = config["version"]
     parent_spec = config["parent"]
@@ -265,9 +274,15 @@ def teacher_sft_steps(
         build_config=collection_config,
         run=collection.run,
     )
+    mesh = MeshConfig(
+        axes={"data": 1, "replica": 1, "model": 1, "expert": SFT_GPUS_PER_NODE},
+        dcn_axes={"replica_dcn": 1, "context": SFT_NODES},
+        compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
+    )
+    mesh.axis_shapes(SFT_NODES * SFT_GPUS_PER_NODE, SFT_NODES)
     spec = SFTSpec(
         name=f"checkpoints/russell-rsi-{namespace}-sft",
-        version=version,
+        version=training_version,
         model=PreparedModel(parent, model_type="snowball"),
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=(ArtifactDatasetSpec("russell-teacher", collected, "train.jsonl", 1.0),),
@@ -281,11 +296,7 @@ def teacher_sft_steps(
             weight_decay=0,
             max_grad_norm=1,
         ),
-        mesh=MeshConfig(
-            axes={"data": 1, "replica": 1, "model": 1, "context": SFT_NODES, "expert": 8},
-            dcn_axes={"replica_dcn": 1},
-            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
-        ),
+        mesh=mesh,
         seq_len=context_tokens,
         pack=False,
         batch_size=STUDENT_ROWS,
@@ -297,7 +308,7 @@ def teacher_sft_steps(
         spec,
         ResourceConfig.with_gpu(
             "H100",
-            count=8,
+            count=SFT_GPUS_PER_NODE,
             cpu=32,
             ram="512GB",
             disk="512GB",
@@ -311,7 +322,7 @@ def teacher_sft_steps(
         pod = cast(TrainLmOnPodConfig, original_build_config(ctx))
         train = cast(TrainLmConfig, pod.train_config)
         watch = WatchConfig(watch_targets=["grads", "updates"], include_per_parameter_norms=False, interval=1)
-        trainer = replace(train.trainer, id=f"russell-rsi-{namespace}-sft-{version}", watch=watch)
+        trainer = replace(train.trainer, id=f"russell-rsi-{namespace}-sft-{training_version}", watch=watch)
         env_vars = pod.env_vars
         if "student_context_amendment" in config:
             trainer = replace(trainer, metrics_start_step=0, tracker=(JsonLoggerConfig(),))
@@ -331,7 +342,7 @@ def teacher_sft_steps(
     reload = eval_step(
         reload_model,
         "mmlu-smoke",
-        version=version,
+        version=training_version,
         deps=(trained,),
         resolve_model=lambda ctx: replace(
             reload_model,

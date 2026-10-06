@@ -475,7 +475,7 @@ def chat_study_workflow(config: dict) -> dict[str, ArtifactStep]:
         raise ValueError("Chat runtime differs from the original pinned study")
     scientific = {
         **original,
-        "version": config["version"],
+        "version": config["collection_version"],
         "dose_decision_uri": original["continuation_selection_uri"],
         "dose_decision_sha256": original["continuation_selection_sha256"],
     }
@@ -485,6 +485,7 @@ def chat_study_workflow(config: dict) -> dict[str, ArtifactStep]:
         SFT_UPDATES,
         NAMESPACE,
         CONTEXT_TOKENS,
+        training_version=config["version"],
     )
     trained = outputs["train"]
     pod = cast(

@@ -286,12 +286,15 @@ def four_pass_teacher_workflow(config: dict) -> dict[str, ArtifactStep]:
             lambda base: RecoveryFourPassCollectionConfig(FourPassCollectionConfig(base, config), recovery, amendment),
             run_recovery_four_pass_collection_remote,
         )
-        return teacher_sft_steps(collection, binding, 4, "teacher-four-pass", amendment.context_tokens)
+        return teacher_sft_steps(
+            collection, binding, 4, "teacher-four-pass", amendment.context_tokens, training_version=config["version"]
+        )
     return teacher_sft_steps(
         collection,
         CollectionBinding(lambda base: FourPassCollectionConfig(base, config), run_four_pass_collection_remote),
         4,
         "teacher-four-pass",
+        training_version=config["version"],
     )
 
 

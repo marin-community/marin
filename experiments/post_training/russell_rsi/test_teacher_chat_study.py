@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections import Counter
 from dataclasses import asdict, replace
+from math import prod
 
 import jax.random as jrandom
 import pytest
@@ -184,7 +185,8 @@ def test_actual_mixture_repeats_four_rows_eight_times_in_built_four_batches(stud
     dummy = {"uri": str(tmp_path / "not-read"), "sha256": "0" * 64}
     config = {
         "protocol": study.PROTOCOL,
-        "version": original["version"],
+        "version": "2026.10.06.2",
+        "collection_version": original["version"],
         "runtime_commit": MARIN_SKYRL.commit,
         "original_study": dummy,
         "prospective_decision": dummy,
@@ -210,6 +212,15 @@ def test_actual_mixture_repeats_four_rows_eight_times_in_built_four_batches(stud
         )
     )
     assert built.trainer.train_batch_size == 8 and built.trainer.num_train_steps == 4 and built.train_seq_len == 16384
+    # The failed launch used a 32-device ICI mesh on four eight-device slices.
+    ici, dcn = built.trainer.mesh.axis_shapes(32, 4)
+    assert prod(ici.values()) == 8 and prod(dcn.values()) == 4
+    assert ici["expert"] == 8 and dcn["context"] == 4 and "context" not in ici
+    collected = outputs["collect"]
+    assert collected.version == original["version"]
+    assert collected in trained.deps and trained.version != collected.version
+    assert reload.model.location.startswith(trained.path(str(tmp_path / "artifacts")) + "/")
+    assert built.trainer.id.endswith(trained.version)
     assert reload.model.identity == artifact_identity(trained) and reload.model.location.endswith("/hf/step-3")
     mixture = MixtureDataset(
         {"teacher": ListAsyncDataset(["a", "b", "c", "d"])},
