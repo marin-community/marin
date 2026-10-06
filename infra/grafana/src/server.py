@@ -116,6 +116,9 @@ from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
+from gpu_allocation_history import CLUSTER_NAMES as GPU_CLUSTERS
+from gpu_allocation_history import MODELS as GPU_MODELS
+from gpu_allocation_history import allocation_history, live_rows
 from hero_health import (
     EVAL_HISTORY_LENGTH,
     EvalHistory,
@@ -685,6 +688,98 @@ def create_app(
                 int(_require(params, "bucket_ms")),
             ),
         )
+
+    def gpu_allocation(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            if target.name not in iris_sources:
+                raise _BadRequest("GPU allocation metadata requires an Iris controller source")
+            params = request.query_params
+            start = _require_time(params, "from")
+            end = _require_time(params, "to")
+            selected = params.get("clusters", "")
+            requested_clusters = set(selected.split(",")) if selected and selected != "$__all" else set(GPU_CLUSTERS)
+            if requested_clusters - (set(GPU_CLUSTERS) | {target.name for target in CLUSTERS}):
+                raise _BadRequest("GPU allocation history contains an unknown cluster")
+            clusters = (
+                GPU_CLUSTERS
+                if not selected or selected == "$__all"
+                else tuple(sorted(requested_clusters & set(GPU_CLUSTERS)))
+            )
+            model = params.get("model")
+            if model is not None and model not in GPU_MODELS:
+                raise _BadRequest("GPU model must be H100 or GB200")
+            key = (
+                "gpu-allocation",
+                target.name,
+                clusters,
+                _bucket(start, config.cache_ttl),
+                _bucket(end, config.cache_ttl),
+            )
+
+            def run() -> list[dict]:
+                rows = allocation_history(
+                    finelog_sources[target.name],
+                    iris_sources[target.name],
+                    dataset_source_cache,
+                    round(start.timestamp() * 1000),
+                    round(end.timestamp() * 1000),
+                    clusters=clusters,
+                    max_rows=config.max_rows,
+                    cache_ttl=config.cache_ttl,
+                    now_ms=time.time_ns() // 1_000_000,
+                )
+                now_ms = time.time_ns() // 1_000_000
+                if k8s_fleet is not None and round(end.timestamp() * 1000) >= now_ms - 60_000:
+
+                    def read_live() -> list[dict]:
+                        began = time.time_ns() // 1_000_000
+                        nodes = k8s_fleet.nodes()
+                        workloads = k8s_fleet.workload_allocations()
+                        finished = time.time_ns() // 1_000_000
+                        return live_rows(nodes, workloads, clusters, (began + finished) // 2)
+
+                    minute = (now_ms // 60_000) * 60_000
+                    k8s_cache.get_or_compute(("gpu-allocation-live", clusters, minute), read_live, ttl=120)
+                    # Retain only short-lived reads already sampled inside the range.
+                    # These never write Finelog or become durable history.
+                    for bucket in range(minute - 120_000, minute + 1, 60_000):
+                        sampled = k8s_cache.get_if_present(("gpu-allocation-live", clusters, bucket))
+                        if sampled is not None:
+                            rows.extend(
+                                row
+                                for row in sampled
+                                if start.timestamp() * 1000 <= row["time"] < end.timestamp() * 1000
+                            )
+                return sorted(rows, key=lambda row: (row["model"], row["time"]))
+
+            rows = finelog_cache.get_or_compute(key, run)
+            if params.get("view") == "coverage":
+                summaries = []
+                for family in GPU_MODELS:
+                    points = [r for r in rows if r["model"] == family]
+                    summaries.append(
+                        {
+                            "model": family,
+                            "samples": len(points),
+                            "incomplete_samples": sum(r["incomplete"] for r in points),
+                            "resolution_minutes": points[0]["resolution_minutes"] if points else None,
+                            "setup_gap_samples": sum(r["setup_gpu_requests"] > 0 for r in points),
+                            "metadata_gap_samples": sum(r["missing_task_metadata"] > 0 for r in points),
+                            "missing_clusters": ",".join(
+                                sorted({c for r in points for c in r["missing_clusters"].split(",") if c})
+                            ),
+                            "status": points[-1]["status"] if points else "No samples in the requested range",
+                        }
+                    )
+                return JSONResponse(summaries)
+            if params.get("view") not in (None, "history"):
+                raise _BadRequest("GPU allocation view must be history or coverage")
+            return JSONResponse([r for r in rows if model is None or r["model"] == model])
+        except (ValueError, _BadRequest) as error:
+            return JSONResponse({"error": str(error)}, status_code=400)
+        except QueryResultTooLargeError as error:
+            return JSONResponse({"error": str(error)}, status_code=400)
 
     def zephyr_overview(request: Request) -> JSONResponse:
         return dashboard_dataset_response(
@@ -1407,6 +1502,7 @@ def create_app(
             Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
             Route("/finelog/{cluster}/v1/node/overview", node_overview),
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
+            Route("/finelog/{cluster}/v1/gpu/allocation", gpu_allocation),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
             Route("/finelog/{cluster}/v1/async-rl/overview", async_rl_overview),

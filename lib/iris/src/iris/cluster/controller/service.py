@@ -15,6 +15,7 @@ from iris.cluster.controller import (
     checkpoint,
     diagnostics,
     federation_service,
+    gpu_allocation,
     jobs,
     tasks,
     workers,
@@ -81,6 +82,7 @@ class ControllerServiceImpl:
             user_budget_defaults=resolved_budget_defaults,
         )
         self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
+        self._gpu_allocation = gpu_allocation.GpuAllocationDependencies(db=db, runtime=controller)
         self._attempts = attempts.AttemptDependencies(
             db=db,
             runtime=controller,
@@ -100,6 +102,13 @@ class ControllerServiceImpl:
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
+
+    def get_gpu_allocation_metadata(
+        self,
+        request: controller_pb2.Controller.GetGpuAllocationMetadataRequest,
+        ctx: RequestContext,
+    ) -> controller_pb2.Controller.GetGpuAllocationMetadataResponse:
+        return gpu_allocation.gpu_allocation_metadata(self._gpu_allocation, request)
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)

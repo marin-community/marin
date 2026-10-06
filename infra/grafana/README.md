@@ -392,6 +392,40 @@ target, missing, and off-target counts across the selected clusters. The table k
 each pool's scaling work, bounds, policy, conditions, and problem reasons visible.
 GCE clusters have no CoreWeave NodePool objects and return no rows.
 
+![GPU allocation history with explicit gaps](../../docs/assets/grafana-gpu-allocation.png)
+
+The H100 and Blackwell (GB200) allocation panels on Fleet accelerators default to
+seven days. They sample retained Running GPU requests at common instants: every
+minute for ranges up to six hours, five minutes up to two days, and fifteen
+minutes up to seven days. Each request uses the owning child job's GPU shape and
+its attempt interval. A current attempt uses its persisted applied priority,
+including budget downgrades. Older Interactive attempts with an unverified band
+appear as unknown priority; older System, Production and Batch bands follow the
+controller's immutable-band policy.
+
+Historical points are incomplete. Retained metadata does not establish exact
+node binding during setup, pod cleanup after an attempt ends, or historical
+Kubernetes allocatable capacity. The coverage table quantifies setup and metadata
+gaps and names unavailable regional sources. Missing allocation does not become
+unknown priority or idle. Recent live reads include node-bound setup and lingering
+nonterminal pods, using the same numerator and denominator as Cluster Capacity;
+only complete live samples have an idle band. These reads remain in a two-minute
+memory cache and do not write Finelog.
+
+`/finelog/marin/v1/gpu/allocation` shares daily inputs across both panels. Closed
+days cache for one hour and the current day follows the normal bridge TTL, within
+the existing shared Arrow-cache budget. Both the aggregate input rows and each
+upstream query retain the configured row limit. A moving window refreshes the
+current day instead of rescanning the full week.
+
+Regional metadata uses `GetGpuAllocationMetadata` through Marin's existing signed
+federation connections. The fixed read returns resource shapes, priority and
+attempt lifetimes for local jobs, including jobs absent from the hub's mirror.
+Verified peers receive this one read permission; SQL and transitive forwarding
+remain denied. The parent and regional controllers must include the RPC before
+Grafana can load historical metadata. No new credentials, Kubernetes proxy role,
+Finelog producer, persisted schema or retention policy is needed.
+
 `jobs.json` reads the `iris.task_state` finelog namespace on the marin hub — one
 row per active root job every 30s per cluster-view (CoreWeave) controller,
 carrying waiting/running task counts and the oldest PENDING and stuck-in-BUILDING

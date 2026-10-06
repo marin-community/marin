@@ -92,8 +92,9 @@ class TtlCache(Generic[V]):
             raise copy.copy(entry.error).with_traceback(None) from None
         return entry.value
 
-    def get_or_compute(self, key: Hashable, compute: Callable[[], V]) -> V:
+    def get_or_compute(self, key: Hashable, compute: Callable[[], V], *, ttl: float | None = None) -> V:
         """Return the cached outcome for ``key``, computing it if absent or stale."""
+        lifetime = self._ttl if ttl is None else ttl
         entry = self._live(key)
         if entry is not None:
             return self._resolve(entry)
@@ -112,7 +113,7 @@ class TtlCache(Generic[V]):
                 key,
                 _Entry(
                     value=value,
-                    expires_at=time.monotonic() + self._ttl,
+                    expires_at=time.monotonic() + lifetime,
                     size=self._get_size(value),
                 ),
             )
@@ -121,3 +122,13 @@ class TtlCache(Generic[V]):
     def __len__(self) -> int:
         with self._guard:
             return len(self._entries)
+
+    @property
+    def max_size(self) -> int:
+        """The byte budget shared by entries in this cache."""
+        return self._max_size
+
+    def get_if_present(self, key: Hashable) -> V | None:
+        """Read a live cached outcome without starting upstream work."""
+        entry = self._live(key)
+        return self._resolve(entry) if entry is not None else None

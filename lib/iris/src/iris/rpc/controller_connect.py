@@ -100,6 +100,9 @@ class ControllerService(Protocol):
     async def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_gpu_allocation_metadata(self, request: controller__pb2.Controller.GetGpuAllocationMetadataRequest, ctx: RequestContext) -> controller__pb2.Controller.GetGpuAllocationMetadataResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def list_peers(self, request: controller__pb2.Controller.ListPeersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListPeersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -381,6 +384,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_backends,
+                ),
+                "/iris.cluster.ControllerService/GetGpuAllocationMetadata": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetGpuAllocationMetadata",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.GetGpuAllocationMetadataRequest,
+                        output=controller__pb2.Controller.GetGpuAllocationMetadataResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_gpu_allocation_metadata,
                 ),
                 "/iris.cluster.ControllerService/ListPeers": Endpoint.unary(
                     method=MethodInfo(
@@ -955,6 +968,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_gpu_allocation_metadata(
+        self,
+        request: controller__pb2.Controller.GetGpuAllocationMetadataRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.GetGpuAllocationMetadataResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetGpuAllocationMetadata",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.GetGpuAllocationMetadataRequest,
+                output=controller__pb2.Controller.GetGpuAllocationMetadataResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def list_peers(
         self,
         request: controller__pb2.Controller.ListPeersRequest,
@@ -1171,6 +1204,8 @@ class ControllerServiceSync(Protocol):
     def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_gpu_allocation_metadata(self, request: controller__pb2.Controller.GetGpuAllocationMetadataRequest, ctx: RequestContext) -> controller__pb2.Controller.GetGpuAllocationMetadataResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_peers(self, request: controller__pb2.Controller.ListPeersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListPeersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1451,6 +1486,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_backends,
+                ),
+                "/iris.cluster.ControllerService/GetGpuAllocationMetadata": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetGpuAllocationMetadata",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.GetGpuAllocationMetadataRequest,
+                        output=controller__pb2.Controller.GetGpuAllocationMetadataResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_gpu_allocation_metadata,
                 ),
                 "/iris.cluster.ControllerService/ListPeers": EndpointSync.unary(
                     method=MethodInfo(
@@ -2019,6 +2064,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListBackendsRequest,
                 output=controller__pb2.Controller.ListBackendsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_gpu_allocation_metadata(
+        self,
+        request: controller__pb2.Controller.GetGpuAllocationMetadataRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.GetGpuAllocationMetadataResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetGpuAllocationMetadata",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.GetGpuAllocationMetadataRequest,
+                output=controller__pb2.Controller.GetGpuAllocationMetadataResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

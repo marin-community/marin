@@ -794,6 +794,36 @@ message Controller {
     repeated PeerSummary peers = 1;
   }
 
+  // Bounded, nonsecret regional registry reads for allocation-history queries.
+  // A parent admin may select one peer; a peer request reads only local rows.
+  message GetGpuAllocationMetadataRequest {
+    string cluster = 1;
+    int64 from_ms = 2;
+    int64 to_ms = 3;
+    repeated string root_job_ids = 4;
+    int32 max_rows = 5;
+  }
+
+  message GpuAllocationAttempt {
+    string root_job_id = 1;
+    string task_id = 2;
+    int32 gpu_count = 3;
+    string gpu_variant = 4;
+    iris.job.PriorityBand requested_priority = 5;
+    // This band describes current_attempt_id only, not every past attempt.
+    iris.job.PriorityBand current_applied_priority = 6;
+    int32 current_attempt_id = 7;
+    int32 attempt_id = 8; // -1 when the task has no attempt yet.
+    int64 created_at_ms = 9;
+    int64 started_at_ms = 10;
+    int64 finished_at_ms = 11;
+    iris.job.TaskState state = 12;
+  }
+
+  message GetGpuAllocationMetadataResponse {
+    repeated GpuAllocationAttempt attempts = 1;
+  }
+
   // --- Federation sync (served by every peer, called by each parent) ---
 
   message FederationSyncRequest {
@@ -914,6 +944,7 @@ service ControllerService {
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
   rpc ListBackends(Controller.ListBackendsRequest) returns (Controller.ListBackendsResponse);
+  rpc GetGpuAllocationMetadata(Controller.GetGpuAllocationMetadataRequest) returns (Controller.GetGpuAllocationMetadataResponse);
 
   // Federation peers this controller may delegate whole jobs to. Distinct from
   // ListBackends: backends are what this controller runs, peers are what it
