@@ -59,7 +59,7 @@ REQUIRED_PER_STAGE = frozenset(
     {ControlCategory.KNOWN_CORRECT, ControlCategory.EMPTY_OR_MALFORMED, ControlCategory.PLAUSIBLE_WRONG}
 )
 ADVERSARIAL = frozenset({ControlCategory.TASK_SPECIFIC_SHORTCUT, ControlCategory.REWARD_HACK})
-EXPECTED_STATUSES = frozenset({Outcome.GRADED, Outcome.EXTRACTION_ERROR})
+EXPECTED_STATUSES = frozenset({Outcome.GRADED, Outcome.SUBMISSION_FAILURE})
 
 
 @dataclass(frozen=True)
@@ -77,10 +77,10 @@ class Expectation:
 
     def __post_init__(self) -> None:
         if self.status not in EXPECTED_STATUSES:
-            raise ValueError(f"A control expects a graded result or an extraction error, not {self.status}")
+            raise ValueError(f"A control expects a graded result or a submission failure, not {self.status}")
         bounds = (self.reward_min, self.reward_max)
-        if self.status == Outcome.EXTRACTION_ERROR and (bounds != (None, None) or self.components):
-            raise ValueError("An extraction error has no reward bounds")
+        if self.status == Outcome.SUBMISSION_FAILURE and (bounds != (None, None) or self.components):
+            raise ValueError("A submission failure has no reward bounds")
         for bound in bounds:
             if bound is not None and not (math.isfinite(bound) and 0 <= bound <= 1):
                 raise ValueError(f"Reward bound {bound} is outside [0, 1]")
@@ -184,8 +184,8 @@ def validate_controls(task: TaskSpec, controls: Sequence[Control]) -> None:
             raise ValueError(f"Control {control.id} names stage {control.stage}; the task has {stage_count}")
         _check_payload(task, control)
         grader = task.stages[control.stage].verifier if task.stages else task.verifier
-        if grader.kind == VerifierKind.SHELL and control.expect.status == Outcome.EXTRACTION_ERROR:
-            raise ValueError(f"Control {control.id} expects an extraction error from a shell verifier")
+        if grader.kind == VerifierKind.SHELL and control.expect.status == Outcome.SUBMISSION_FAILURE:
+            raise ValueError(f"Control {control.id} expects a submission failure from a shell verifier")
         if grader.kind != VerifierKind.SHELL and isinstance(control.payload, Workspace):
             raise ValueError(f"Workspace control {control.id} requires a shell verifier")
         if control.kind == ControlKind.PARTIAL and not emits_reward_components(grader):

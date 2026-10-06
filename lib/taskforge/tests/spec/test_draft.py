@@ -22,7 +22,8 @@ from taskcompendium.environment import (
     VerifierArtifact,
 )
 from taskcompendium.execution import StageExecution, TaskExecution
-from taskcompendium.grading import grade_answer, verifier_descriptor
+from taskcompendium.grading import grade_answer, structured_exact, verifier_descriptor
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
@@ -31,7 +32,7 @@ from taskcompendium.models import (
     StageRewardStrategy,
     TaskSpec,
 )
-from taskcompendium.submission import AnswerFormat, FinalAction, SubmissionConvention
+from taskcompendium.submission import FinalAction, JsonValueAnswer, PlainText
 from verifyit.spec import ExactSpec, FunctionCall, McqSpec, NumericSpec, PredictedActionSpec
 
 from taskforge.spec.draft import (
@@ -48,7 +49,7 @@ from taskforge.spec.draft import (
 )
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
-PLAIN = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+PLAIN = PlainText(id="plain")
 NO_EXECUTION = TaskExecution()
 GRADE_ANSWER = 'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi'
 
@@ -102,7 +103,7 @@ def answer_task(verifier) -> TaskSpec:
     "verifier,right,wrong",
     [
         (ExactSpec(expected=("twelve",)), "Twelve", "eleven"),
-        (NumericSpec(expected=12.0, tolerance_abs=0.0, tolerance_rel=0.0), "12", "13"),
+        (NumericSpec(expected="12", tolerance_abs=0.0, tolerance_rel=0.0), "12", "13"),
         (McqSpec(expected="B"), "B", "C"),
     ],
 )
@@ -111,7 +112,7 @@ def test_answer_verifier_grades_after_json_round_trip(verifier, right, wrong):
 
     def reward(answer: str) -> float | None:
         messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": answer}]
-        return grade_answer(task, PLAIN, chat_conversation(messages)).reward
+        return grade_answer(task, PLAIN, GradingAttempt(chat_conversation(messages))).reward
 
     assert (reward(right), reward(wrong)) == (1.0, 0.0)
     assert task.environment_requirements.capabilities == ()
@@ -134,9 +135,27 @@ def test_predicted_action_verifier_grades_native_action_after_round_trip():
     def reward(city: str) -> float | None:
         call = {"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": json.dumps({"city": city})}}
         messages = [{"role": "user", "content": "q"}, {"role": "assistant", "tool_calls": [call]}]
-        return grade_answer(task, FinalAction(id="action"), chat_conversation(messages)).reward
+        return grade_answer(task, FinalAction(id="action"), GradingAttempt(chat_conversation(messages))).reward
 
     assert (reward("Paris"), reward("Rome")) == (1.0, 0.0)
+
+
+def test_structured_exact_verifier_grades_a_json_answer():
+    task = assemble(
+        "json",
+        "Report the total as a JSON object.",
+        AnswerType.JSON,
+        environment(EnvironmentKind.NULL),
+        structured_exact({"total": 12}),
+        SOURCE,
+        execution=NO_EXECUTION,
+    )
+
+    def reward(answer: str) -> float | None:
+        messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": answer}]
+        return grade_answer(task, JsonValueAnswer(id="json"), GradingAttempt(chat_conversation(messages))).reward
+
+    assert (reward('{"total": 12}'), reward('{"total": 13}')) == (1.0, 0.0)
 
 
 @pytest.mark.parametrize(
@@ -311,6 +330,8 @@ def test_stage_minimum_rewards_must_name_components_the_grader_reports():
         (AnswerType.TEXT, EnvironmentKind.NULL, "shell", "executable task environment"),
         (AnswerType.FILE, EnvironmentKind.SHELLSIM, "exact", "requires a shell verifier"),
         (AnswerType.TEXT, EnvironmentKind.NULL, "action", "native_action"),
+        (AnswerType.TEXT, EnvironmentKind.NULL, "structured", "json answer"),
+        (AnswerType.JSON, EnvironmentKind.NULL, "numeric", "number or text answer"),
     ],
 )
 def test_assemble_rejects_graders_that_cannot_see_the_answer(answer_type, env_kind, verifier, message):
@@ -318,6 +339,8 @@ def test_assemble_rejects_graders_that_cannot_see_the_answer(answer_type, env_ki
         "shell": shell_verifier(("true",), ExitCodeReward(), timeout=5),
         "exact": verifier_descriptor(ExactSpec(expected=("12",))),
         "action": verifier_descriptor(PredictedActionSpec(expected_calls=(FunctionCall("f", {}),))),
+        "structured": structured_exact({"total": 12}),
+        "numeric": verifier_descriptor(NumericSpec(expected="12", tolerance_abs=0.0, tolerance_rel=0.0)),
     }
     with pytest.raises(ValueError, match=message):
         assemble(
