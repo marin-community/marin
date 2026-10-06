@@ -157,14 +157,11 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
-When Iris restarts an orchestrator, the runner reads its existing records before serving. It skips
-evaluations with a `succeeded` record and returns immediately when the whole batch has succeeded.
-It reconciles these records into the per-eval StepSpec status, including records from runs that
-predate per-eval steps. Failed eval steps remain retryable.
-
-Record publication uses a conditional object write: a later attempt can replace a failed record, but
-cannot replace a successful one. This also protects a success that appears after the restarted
-orchestrator begins serving. An evaluator already launched before the first success may still share
+When Iris restarts an orchestrator, it checks each eval's StepSpec status before serving. A
+completed batch returns without starting another server; a mixed batch runs only unfinished evals.
+Normal results and startup failure records are written under each eval's step lock. Successful steps
+are cached, while failed steps remain retryable. A record written before the step reaches `SUCCESS`
+can be replaced on retry. An evaluator already launched before the first success may still share
 the same results directory, so inspect active child jobs before treating its archive as settled.
 
 For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
@@ -203,8 +200,7 @@ override is a runtime arg, so changing it does not change the artifact identity.
 The policy launcher calls the CLI directly. In a pipeline, the step is marked successful only after
 the whole orchestrator job finishes, so its cache does not cover an individual eval that completed
 before an orchestrator failure. Both launch paths execute each eval through a per-eval StepSpec inside
-the orchestrator; the record guard also protects a success from a late writer after the step lock is
-lost.
+the orchestrator.
 
 For produced models, pass the producer handles in `deps` and resolve their locations in
 `resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.

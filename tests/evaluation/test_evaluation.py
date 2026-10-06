@@ -369,14 +369,12 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge.hardware.accelerator == "H100x1"
 
 
-def test_run_evaluation_batch_restart_keeps_completed_record_without_serving(tmp_path, monkeypatch):
+def test_run_evaluation_batch_restart_skips_completed_step_without_serving(tmp_path, monkeypatch):
     evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
     batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
     path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
     original = Path(path).read_bytes()
-    status_path = Path(evaluation.step.output_path) / ".executor_status"
-    status_path.unlink()  # An older successful record has no per-eval StepSpec status.
 
     _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("completed eval started serving again"))
 
@@ -519,8 +517,18 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
     for evaluation in evaluations:
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
         assert record.status is RunStatus.INFRA_FAILED
+        assert StatusFile(evaluation.step.output_path, worker_id="test").status == STATUS_FAILED
         assert record.jobs == {"orchestrator": "/orchestrator"}
         assert "judge did not become ready" in (record.error or "")
+
+    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    run_evaluation_batch(batch)
+
+    for evaluation in evaluations:
+        record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
+        assert record.status is RunStatus.SUCCEEDED
+        assert StatusFile(evaluation.step.output_path, worker_id="test").status == STATUS_SUCCESS
 
 
 def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
