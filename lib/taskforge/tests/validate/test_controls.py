@@ -170,7 +170,9 @@ async def test_a_control_longer_than_max_turns_is_refused(tmp_path, file_task, f
         )
 
 
-async def test_a_rendering_that_does_not_extend_the_prompt_is_ungraded(tmp_path, math_task, math_controls, fakes):
+async def test_a_rendering_that_does_not_extend_the_prompt_is_ungraded_and_not_retried(
+    tmp_path, math_task, math_controls, fakes
+):
     outcomes = await replay(
         math_task,
         EXECUTION,
@@ -182,6 +184,10 @@ async def test_a_rendering_that_does_not_extend_the_prompt_is_ungraded(tmp_path,
 
     assert all(o.verdict is ControlVerdict.UNGRADED for o in outcomes)
     assert all(isinstance(o.outcome, Ungraded) and o.outcome.cause is Cause.TOKEN_CONTRACT for o in outcomes)
+    # Scripted turns render the same way every time, so a control has no token contract retries.
+    assert sorted(path.name for path in (tmp_path / "control").glob("*/attempt-*.json")) == ["attempt-0.json"] * len(
+        math_controls
+    )
 
 
 @dataclass

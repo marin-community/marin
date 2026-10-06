@@ -55,7 +55,9 @@ class Cause(StrEnum):
     GENERATION_LIMIT = "generation_limit"
     """The first prompt left no generation budget, so nothing was graded."""
     TOKEN_CONTRACT = "token_contract"
-    """The model transport broke the exact-token contract."""
+    """The model transport broke the exact-token contract. Not in ``RETRYABLE``: a sampled trial has
+    its own retry budget (``TrialPlan.token_contract_retries``); a scripted control is deterministic
+    and has none."""
     GRADER_RAISED = "grader_raised"
     GRADER_TIMEOUT = "grader_timeout"
     GRADER_MISSING_REWARD = "grader_missing_reward"
