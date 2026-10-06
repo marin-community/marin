@@ -297,18 +297,26 @@ native_32k_models = {
 assert set(harbor_model_info) == native_32k_models
 for name in native_32k_models:
     assert harbor_model_info[name] == {"max_input_tokens": 32768}
-assert harbor_eval_harness_profiles == {"bixbench-pi": "pi-65k-16k"}
+assert harbor_eval_harness_profiles == {
+    "bixbench-pi": "pi-65k-16k",
+    "tau3-pi": "tau3-pi-131k-32k",
+    "swebench-verified": "mini-swe-k2-tool-history",
+}
 expected_model_kwargs = {
     name: {"compaction_reserve_tokens": 16384}
     for name in native_32k_models
 }
-assert harbor_harness_profiles == {
-    "pi-65k-16k": {
-        "agent": "pi",
-        "kwargs": {"compaction_reserve_tokens": 32768},
-        "model_kwargs": expected_model_kwargs,
-    }
+assert set(harbor_harness_profiles) == set(harbor_eval_harness_profiles.values())
+assert harbor_harness_profiles["pi-65k-16k"] == {
+    "agent": "pi",
+    "kwargs": {"compaction_reserve_tokens": 32768},
+    "model_kwargs": expected_model_kwargs,
 }
+assert harbor_harness_profiles["mini-swe-k2-tool-history"] == {
+    "agent": "mini-swe-agent",
+    "model_kwargs": {"IFM-K2-Horizon-MoVA-36B-A4B": {"model_format": "k2_horizon"}},
+}
+assert harbor_harness_profiles["tau3-pi-131k-32k"]["agent"] == "acp"
 assert {path.stem for path in chat_templates.glob("*.jinja")} <= {path.stem for path in models.glob("*.yaml")}
 for path in models.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
@@ -391,6 +399,8 @@ for model_path in models.glob("*.yaml"):
 fallbacks = {
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
     "IFM/K2-Horizon-MoVA-36B-A4B": {"reasoning_effort": "low"},
+    "Aleph-Alpha/Kolibri-1": {"reasoning_effort": "none"},
+    "zai-org/GLM-4.7-Flash": {"enable_thinking": False},
 }
 for model_path in models.glob("*.yaml"):
     model = load_model_config(model_path)
@@ -459,11 +469,14 @@ for name in (
     "ot-tblite-recovery",
     "ds-1000-local",
     "bfclparity-pi",
-    "tau3-pi",
     "sotopia-hard",
 ):
     document = yaml.safe_load((harbor / f"{name}.yaml").read_text())
     assert document["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 32768
+assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwargs"]["model_info"] == {
+    "max_input_tokens": 131072,
+    "max_output_tokens": 32768,
+}
 
 registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
 for path in harbor.glob("*.yaml"):
