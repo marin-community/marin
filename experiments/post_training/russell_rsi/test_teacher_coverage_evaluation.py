@@ -16,6 +16,7 @@ from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import SkyRLRun
 
 from experiments.post_training.russell_rsi import launch_interrupted_calibration_sft as foreground
+from experiments.post_training.russell_rsi import test_completed_partitioned_coding_analysis
 from experiments.post_training.russell_rsi import test_teacher_coverage_study as fixtures
 from experiments.post_training.russell_rsi.calibration_recovery import LAUNCH_PROTOCOL
 from experiments.post_training.russell_rsi.launch import adopted
@@ -24,6 +25,7 @@ from experiments.post_training.russell_rsi.launch_teacher_coverage import main
 from experiments.post_training.russell_rsi.teacher_coverage_study import coverage_evaluation, coverage_sft_workflow
 from experiments.post_training.russell_rsi.test_teacher_four_pass import four_update_qualification
 
+regional_runtime_metadata = test_completed_partitioned_coding_analysis.regional_runtime_metadata
 coverage_condition_inputs = fixtures.coverage_condition_inputs
 coverage_training_inputs = fixtures.coverage_training_inputs
 incumbent_inputs = fixtures.incumbent_inputs
@@ -212,6 +214,7 @@ def test_coverage_evaluation_rejects_unbound_optimizer_evidence(completed_covera
 
 
 @pytest.mark.parametrize("stage", ["collect", "sft", "reload", "evaluate"])
+@pytest.mark.usefixtures("regional_runtime_metadata")
 def test_public_coverage_cli_preflight_uses_explicit_runtime(
     stage, completed_coverage_evaluation, tmp_path, monkeypatch
 ):
@@ -231,7 +234,7 @@ def test_public_coverage_cli_preflight_uses_explicit_runtime(
         },
     )
 
-    # The test tree has pending changes; keep all source and installed-runtime checks active.
+    # Report a clean tree. HEAD must still match the source review.
     def git_output(command, **kwargs):
         if command == ["git", "status", "--porcelain"]:
             return ""
