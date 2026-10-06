@@ -262,6 +262,33 @@ def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path:
     assert rpc.sent("echo once") == 1
 
 
+class ClosingRpc(RefusingRpc):
+    """Refuses every exec for a full pool and closes the machine on the first refusal."""
+
+    def __init__(self):
+        super().__init__(Code.RESOURCE_EXHAUSTED, refusals=1_000)
+        self.machine: IrisMachine | None = None
+
+    def exec_in_container(self, request, timeout_ms):
+        try:
+            return super().exec_in_container(request, timeout_ms)
+        finally:
+            assert self.machine is not None
+            asyncio.run(self.machine.close())
+
+
+def test_exec_retry_stops_once_the_machine_is_closed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
+    rpc = ClosingRpc()
+    machine, job = local_machine(tmp_path, rpc)
+    rpc.machine = machine
+
+    with pytest.raises(RuntimeError, match="Machine is closed"):
+        asyncio.run(machine.run(Command(("echo", "late"))))
+    assert job.terminated
+    assert rpc.sent("echo late") == 1
+
+
 @pytest.mark.parametrize(
     ("network", "egress"),
     [

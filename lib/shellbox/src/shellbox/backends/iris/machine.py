@@ -92,16 +92,22 @@ class IrisMachine:
     def _exec_sync(
         self, argv: list[str], timeout: float | None = None
     ) -> controller_pb2.Controller.ExecInContainerResponse:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
         seconds = math.ceil(timeout) if timeout is not None else -1
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
         )
         timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
+
+        def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
+            # A timed-out ``run`` closes the machine while this thread may still be retrying;
+            # no attempt may start after that.
+            if self._closed:
+                raise RuntimeError("Machine is closed")
+            return self.rpc.exec_in_container(request, timeout_ms=timeout_ms)
+
         try:
             response = retry_with_backoff(
-                lambda: self.rpc.exec_in_container(request, timeout_ms=timeout_ms),
+                attempt,
                 retryable=_exec_was_shed,
                 max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
                 max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
