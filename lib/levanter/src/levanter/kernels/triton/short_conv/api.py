@@ -246,7 +246,8 @@ def short_conv(
     A sequence sharded over one mesh axis exchanges a left halo before local
     convolution. Each shard must contain at least ``kernel_size - 1`` tokens.
     With ``exact_reference_rounding=True``, the bf16 forward matches the unsharded
-    reference bitwise. FP32 forward results can differ due to compiler fusion.
+    reference bitwise, and so does the Triton kernel's fp32 forward. On the reference
+    path, XLA fusion can change fp32 results.
     Input gradients near shard boundaries combine separately rounded local and
     neighboring contributions, so they can differ from the unsharded reference.
 

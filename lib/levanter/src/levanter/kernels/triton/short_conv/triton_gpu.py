@@ -443,7 +443,6 @@ def short_conv_triton_fwd_local(
     segment_ids: Int[Array, "B S"],
     *,
     exact_reference_rounding: bool,
-    tiles: TritonShortConvTiles = FORWARD_TILES,
 ) -> Float[Array, "B S C"]:
     """Shard-local forward. Callers must have already entered a ``shard_map``."""
     return jt.triton_call(
@@ -452,7 +451,7 @@ def short_conv_triton_fwd_local(
         weight,
         kernel=_short_conv_fwd_kernel,
         out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
-        **_launch_kwargs(x, tiles, exact_reference_rounding),
+        **_launch_kwargs(x, FORWARD_TILES, exact_reference_rounding),
     )
 
 
@@ -463,7 +462,6 @@ def short_conv_triton_bwd_local(
     dy: Float[Array, "B S C"],
     *,
     exact_reference_rounding: bool,
-    tiles: TritonShortConvTiles = BACKWARD_TILES,
 ) -> tuple[Float[Array, "B S C"], Float[Array, "P W C"]]:
     """Shard-local backward. Returns ``(dx, dw_partials)`` with ``dw_partials`` ``[B * S / chunk, W, C]``."""
     batch, seq_len, channels = x.shape
@@ -475,9 +473,9 @@ def short_conv_triton_bwd_local(
         kernel=_short_conv_bwd_kernel,
         out_shape=(
             jax.ShapeDtypeStruct(x.shape, dy.dtype),
-            jax.ShapeDtypeStruct((batch * (seq_len // tiles.chunk), KERNEL_SIZE, channels), jnp.float32),
+            jax.ShapeDtypeStruct((batch * (seq_len // BACKWARD_TILES.chunk), KERNEL_SIZE, channels), jnp.float32),
         ),
-        **_launch_kwargs(x, tiles, exact_reference_rounding),
+        **_launch_kwargs(x, BACKWARD_TILES, exact_reference_rounding),
     )
     return dx, dw_partials
 
