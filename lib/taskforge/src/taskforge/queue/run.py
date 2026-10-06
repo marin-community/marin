@@ -130,12 +130,12 @@ async def _item(
     proposal: TaskProposal, policy: LoopPolicy, services: LoopServices, failed: FailedItems, tally: _Tally
 ) -> None:
     item_id = item_id_for(proposal)
-    terminal = item_terminal(services.root / LEDGER_DIR, item_id)
-    if not enters(terminal, failed):
-        assert terminal is not None
-        tally.items[item_id] = terminal
-        return
     try:
+        terminal = item_terminal(services.root / LEDGER_DIR, item_id)
+        if not enters(terminal, failed):
+            assert terminal is not None
+            tally.items[item_id] = terminal
+            return
         tally.items[item_id] = await run_item(proposal, policy, services)
     except Exception as error:
         tally.items[item_id] = Terminal.FAILED

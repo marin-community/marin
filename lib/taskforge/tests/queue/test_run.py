@@ -3,6 +3,7 @@
 
 import asyncio
 
+from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
 from taskforge.loop.events import Terminal
 from taskforge.loop.program import LEDGER_DIR
@@ -130,3 +131,16 @@ async def test_an_idea_whose_source_fails_is_recorded_and_its_siblings_finish(qu
 
     assert summary.items == {"good--0": Terminal.REJECTED}
     assert summary.failed == {"idea--bad": "RuntimeError"}
+
+
+async def test_an_item_with_an_inconsistent_log_is_recorded_and_its_siblings_finish(queue_run, fakes):
+    run = queue_run(rubric=fakes.rubric(REJECT))
+    policy = fakes.policy()
+    await run({"a": "a", "b": "b"}, policy, width=4)
+    log = JsonlLedger(run.root / LEDGER_DIR).path_for("b--0")
+    log.write_text(log.read_text() + log.read_text().splitlines(keepends=True)[-1])
+
+    summary = await run({"a": "a", "b": "b"}, policy, width=4)
+
+    assert summary.items == {"a--0": Terminal.REJECTED, "b--0": Terminal.FAILED}
+    assert summary.failed == {"b--0": "ValueError"}
