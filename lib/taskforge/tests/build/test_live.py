@@ -58,7 +58,7 @@ async def test_authored_program_builds_a_task_its_positive_control_passes(glm_se
             policy=LLMPolicy(),
             factories=factories,
             ledger=JsonlLedger(run_dir / "ledger"),
-            web_tools=web_tools(http, parallel_key),
+            web_tools=web_tools(http, parallel_key.value),
         )
         item_dir = run_dir / item_id_for(proposal)
         program = await author(proposal, standard, item_dir, services, item_id_for(proposal))
