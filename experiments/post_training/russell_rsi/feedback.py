@@ -52,6 +52,15 @@ class FeedbackAnalysis(BaseModel):
     skills: list[SkillEvidence] = Field(max_length=4)
 
 
+class PrivateSkillEvidence(SkillEvidence):
+    evidence: str = Field(min_length=1)
+
+
+class PrivateFeedbackAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skills: list[PrivateSkillEvidence] = Field(max_length=4)
+
+
 def failure_evidence(traces_uri: str) -> list[str]:
     failures = []
     with StoragePath(traces_uri).open("r") as stream:
@@ -82,7 +91,7 @@ def failure_evidence(traces_uri: str) -> list[str]:
     return failures
 
 
-def generation_feedback(analysis: FeedbackAnalysis) -> str:
+def generation_feedback(analysis: FeedbackAnalysis | PrivateFeedbackAnalysis) -> str:
     skills = sorted({entry.skill for entry in analysis.skills if entry.confidence >= 0.7})
     return json.dumps({"skills": [{"label": skill.value, "description": SKILL_DESCRIPTIONS[skill]} for skill in skills]})
 

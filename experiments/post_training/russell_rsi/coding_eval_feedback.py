@@ -18,7 +18,12 @@ from openai import AsyncOpenAI
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.glm import GLM_MODEL, resolve_glm_base_url
-from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, FeedbackAnalysis, generation_feedback
+from experiments.post_training.russell_rsi.feedback import (
+    SKILL_DESCRIPTIONS,
+    FeedbackAnalysis,
+    PrivateFeedbackAnalysis,
+    generation_feedback,
+)
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
@@ -413,9 +418,9 @@ async def analyze_coding_failures(
             + "\n"
         )
     analysis = (
-        FeedbackAnalysis(skills=[])
+        PrivateFeedbackAnalysis(skills=[])
         if response is None
-        else FeedbackAnalysis.model_validate_json(response["choices"][0]["message"]["content"])
+        else PrivateFeedbackAnalysis.model_validate_json(response["choices"][0]["message"]["content"])
     )
     # Only this canonical summary can enter task construction.
     (directory / "capabilities.json").write_text(generation_feedback(analysis) + "\n")

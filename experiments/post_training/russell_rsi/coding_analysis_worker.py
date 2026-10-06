@@ -52,6 +52,8 @@ SOURCE_FILES = (
     "experiments/post_training/russell_rsi/coding_eval_feedback.py",
     "experiments/post_training/russell_rsi/coding_analysis_recovery.py",
     "experiments/post_training/russell_rsi/completed_partitioned_coding_analysis.py",
+    "experiments/post_training/russell_rsi/coding_analysis_response_recovery.py",
+    "experiments/post_training/russell_rsi/feedback.py",
     "experiments/post_training/glm.py",
 )
 

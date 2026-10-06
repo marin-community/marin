@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -15,7 +16,7 @@ from experiments.post_training.russell_rsi.coding_eval_feedback import (
     analyze_coding_failures,
     coding_analysis_request,
 )
-from experiments.post_training.russell_rsi.feedback import FeedbackAnalysis, generation_feedback
+from experiments.post_training.russell_rsi.feedback import PrivateFeedbackAnalysis, generation_feedback
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
@@ -204,11 +205,11 @@ async def partition_response(config: PartitionedCodingAnalysisConfig, partition:
     return json.loads((directory / "private-analysis.json").read_text())["response"]
 
 
-def merged_partition_feedback(responses: tuple[dict, dict]) -> tuple[FeedbackAnalysis, dict]:
+def merged_partition_feedback(responses: tuple[dict, dict]) -> tuple[PrivateFeedbackAnalysis, dict]:
     """Rank raw evidence without adding confidence or bypassing private review."""
-    entries = []
+    entries: list[dict[str, Any]] = []
     for part, response in enumerate(responses, 1):
-        analysis = FeedbackAnalysis.model_validate_json(response["choices"][0]["message"]["content"])
+        analysis = PrivateFeedbackAnalysis.model_validate_json(response["choices"][0]["message"]["content"])
         response_sha256 = compact_json_sha256(response)
         for index, entry in enumerate(analysis.skills):
             entries.append(
@@ -228,7 +229,7 @@ def merged_partition_feedback(responses: tuple[dict, dict]) -> tuple[FeedbackAna
             entry["disposition"] = "selected"
         else:
             entry["disposition"] = "four-label-limit"
-    merged = FeedbackAnalysis.model_validate(
+    merged = PrivateFeedbackAnalysis.model_validate(
         {"skills": [{key: entry[key] for key in ("skill", "confidence", "evidence")} for entry in selected]}
     )
     return merged, {

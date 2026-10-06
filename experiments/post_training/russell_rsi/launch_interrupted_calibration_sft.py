@@ -23,6 +23,12 @@ from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
+from experiments.post_training.russell_rsi.coding_analysis_response_recovery import (
+    PROTOCOL as RESPONSE_RECOVERY_PROTOCOL,
+)
+from experiments.post_training.russell_rsi.coding_analysis_response_recovery import (
+    response_recovery_stages,
+)
 from experiments.post_training.russell_rsi.coding_transport_replacement import (
     PROTOCOL as CODING_REPLACEMENT_PROTOCOL,
 )
@@ -127,6 +133,7 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
             "analyze-completed-coding",
             "select-recovered-retention",
             "analyze-partitioned-coding",
+            "recover-analysis-response",
         ]
     ),
     required=True,
@@ -138,6 +145,15 @@ def main(
     configure_coreweave_s3()
     require_reviewed_source(source_review_uri, source_review_sha256)
     config = json.loads(pinned_bytes(config_uri, config_sha256))
+    if stage == "recover-analysis-response":
+        if resolve_version(RESPONSE_RECOVERY_PROTOCOL, None) != config["version"]:
+            raise click.UsageError("Response recovery version differs from its frozen amendment")
+        predecessor = PinnedFile(**config["predecessor_config"]).read_json()
+        previous = PinnedFile(**predecessor["original_config"]).read_json()
+        extraction = PinnedFile(**previous["extraction_config"]).read_json()
+        source = PinnedFile(**extraction["source_config"]).read_json()
+        original = chat_study_post_workflow(source, "evaluate-interrupted")
+        return [response_recovery_stages(config, PinnedFile(config_uri, config_sha256), original)["terminal"]]
     if stage == "analyze-partitioned-coding":
         if resolve_version(PARTITIONED_ANALYSIS_PROTOCOL, None) != config["version"]:
             raise click.UsageError("Partitioned coding analysis version differs from its frozen configuration")
