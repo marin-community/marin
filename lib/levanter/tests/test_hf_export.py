@@ -205,6 +205,7 @@ def test_reference_code_copy_preserves_nested_code_without_weight_shards(tmp_pat
     source = tmp_path / "source"
     source.mkdir()
     files = {
+        ".marinskyrl-model-manifest.json": b'{"weights": "parent hashes"}',
         "configuration_model.py": b"reference code",
         "nested/modeling_model.py": b"nested reference code",
         "model.safetensors": b"weights",
