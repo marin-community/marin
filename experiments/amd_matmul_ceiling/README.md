@@ -29,4 +29,4 @@ cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -w
 
 Keep XLA's GEMM autotuning on. With `--xla_gpu_autotune_level=0`, bf16 matmuls on MI350X ran at 15-17 TFLOP/s, about 1% of the autotuned rate (job 453316), so level 0 does not isolate hipBLASLt's default kernel choice from XLA's tuning.
 
-On MI350X, `amdsmi` reports 38 MHz and 308 W under load, so MAMF-finder's boost-clock check does not work there; its throughput numbers do not depend on telemetry.
+MAMF-finder samples `amdsmi` GPU 0 for power and clock, but `amdsmi` and HIP number GPUs differently. On MI350X node k007-002, HIP device 0 is `amd-smi` GPU 3, so the MI350X logs show an idle GPU (about 308 W) and the boost-clock check is invalid there. Its TFLOP/s do not depend on telemetry. To read the busy GPU, run `/opt/rocm-7.2.0/bin/amd-smi metric --power --clock` alongside the job and match GPUs by PCI address. Under a sustained bf16 matmul, MI350X holds its 1,000 W limit with its compute dies at about 1,400 MHz, 64% of the 2.2 GHz used for the 2,307 TFLOP/s peak.
