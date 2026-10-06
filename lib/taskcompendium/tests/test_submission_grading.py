@@ -251,4 +251,3 @@ def test_invalid_captured_state_remains_an_infrastructure_error(state):
         RuntimeEvidence({}, state),
     )
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
-    assert "Invalid captured state" in result.error

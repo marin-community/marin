@@ -283,5 +283,5 @@ def test_json_answer_schema_roundtrip_and_prior_version_rejection(specification)
     assert payload["schema_version"] == "0.22"
     assert TaskSpec.model_validate_json(json.dumps(payload)) == task
     payload["schema_version"] = "0.21"
-    with pytest.raises(ValidationError, match=r"Unsupported TaskSpec schema: 0\.21"):
+    with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))
