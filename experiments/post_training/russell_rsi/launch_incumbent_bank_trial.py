@@ -47,6 +47,7 @@ from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256,
 from experiments.post_training.russell_rsi.replay import REPLAY_SEED, ReplayDatasetConfig, freeze_replay_dataset
 from experiments.post_training.russell_rsi.rollout_eval import run_calibration_evaluation
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
+from experiments.post_training.russell_rsi.teacher_four_pass import pinned_record
 
 PROTOCOL = "incumbent-current-bank-r1"
 TASKS = 32
@@ -55,14 +56,10 @@ PRIOR_TASKS = 28
 TARGETS = 4
 
 
-def pinned_config(config: dict, name: str) -> dict:
-    return json.loads(pinned_bytes(config[f"{name}_uri"], config[f"{name}_sha256"]))
-
-
 def current_bank_tasks(config: dict) -> tuple[tuple[QualifiedTask, ...], dict[str, str], tuple[QualifiedTask, ...]]:
     """Verify the frozen bank and select additions by identity in current-bank order."""
-    bank = pinned_config(config, "bank_record")
-    prior = pinned_config(config, "prior_bank_record")
+    bank = pinned_record(config, "bank_record")
+    prior = pinned_record(config, "prior_bank_record")
     root = config["bank"]["uri"]
     pins = config["bank"]["identity_config"]
     if (
@@ -199,20 +196,20 @@ def incumbent_bank_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     pinned_bytes(config["feedback_release_uri"], config["feedback_release_sha256"])
     if config["feedback_identity"] != config["feedback_release_sha256"]:
         raise ValueError("Feedback identity differs from its lineage pin")
-    source = pinned_config(config, "source_config")
+    source = pinned_record(config, "source_config")
     for key in ("parent", "retention", "machine_config", "runtime_bundle", "panel_uri", "panel_sha256"):
         if config[key] != source[key]:
             raise ValueError(f"Incumbent trial {key} differs from the frozen source")
     tasks, families, targets = current_bank_tasks(config)
-    producer = pinned_config(config, "incumbent_artifact")
-    qualification = pinned_config(config, "qualification")
+    producer = pinned_record(config, "incumbent_artifact")
+    qualification = pinned_record(config, "qualification")
     if (
         qualification["source_artifact_uri"] != config["incumbent_artifact_uri"]
         or qualification["source_artifact_sha256"] != config["incumbent_artifact_sha256"]
     ):
         raise ValueError("Qualification identifies a different incumbent producer")
     export = qualified_champion(qualification, producer)
-    lineage = pinned_config(config, "lineage_review")
+    lineage = pinned_record(config, "lineage_review")
     if (
         lineage["current_pair"]["model_identity"] != qualification["model_identity"]
         or lineage["current_pair"]["bank"]["sha256"] != config["bank_record_sha256"]
@@ -234,12 +231,12 @@ def incumbent_bank_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     )
     bank, retention = adopted(config["bank"]), adopted(config["retention"])
     parent = adopted(config["parent"], LevanterCheckpoint)
-    panel = CodingPanel.from_dict(pinned_config(config, "panel"))
+    panel = CodingPanel.from_dict(pinned_record(config, "panel"))
     panel_digest = compact_json_sha256(asdict(panel))
     scores = []
     task_ids: tuple[str, ...] = ()
     for label, identity in (("parent", artifact_identity(parent)), ("incumbent", qualification["model_identity"])):
-        coding, retained = pinned_config(config, f"{label}_coding"), pinned_config(config, f"{label}_retention")
+        coding, retained = pinned_record(config, f"{label}_coding"), pinned_record(config, f"{label}_retention")
         ids = tuple(sorted(retained["task_rewards"]))
         if task_ids and ids != task_ids:
             raise ValueError("Incumbent trial baselines use different retention contracts")
@@ -308,7 +305,7 @@ def incumbent_bank_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     )
     if stage == "calibrate":
         return {"calibration": calibration, "decision": decision, "terminal": decision}
-    record = pinned_config(config, "calibration_decision")
+    record = pinned_record(config, "calibration_decision")
     raw = pinned_bytes(config["calibration_summary_uri"], record["summary_sha256"])
     expected = calibration_decision(
         summary=json.loads(raw),

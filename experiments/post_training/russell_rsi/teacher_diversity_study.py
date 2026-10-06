@@ -131,7 +131,7 @@ def diversity_bank(config: dict, original: dict) -> dict:
         if evidence["task"] != expected:
             raise ValueError("Diversity addition differs from reviewed admission")
         for name in ("admission_evidence", "exclusion_review"):
-            PinnedFile(evidence[f"{name}_uri"], evidence[f"{name}_sha256"]).read_json()
+            pinned_record(evidence, name)
     return bank
 
 
