@@ -99,9 +99,11 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     return {"path": output_path, "count": count}
 
 
-def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
-    """Infer a PyArrow schema from a batch of record dicts"""
-    return pa.Table.from_pylist(records).schema
+def infer_arrow_schema(records: list[dict[str, Any]]) -> pa.Schema:
+    """Infer a PyArrow schema from every field in a batch of record dicts."""
+    fields = dict.fromkeys(key for record in records for key in record)
+    rows = [{key: record.get(key) for key in fields} for record in records]
+    return pa.Table.from_pylist(rows).schema
 
 
 def batchify(batch: Iterable, n: int = 1024) -> Iterable:
@@ -141,7 +143,7 @@ def _accumulate_row_tables(
     schema_inferred = schema is None
 
     def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> None:
-        actual_schema = pa.Table.from_pylist(dicts).schema
+        actual_schema = infer_arrow_schema(dicts)
         origin = (
             f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
             if schema_inferred
@@ -179,7 +181,7 @@ def _accumulate_row_tables(
 
         if not schema_inferred:
             _raise_schema_mismatch(mismatch_error, dicts)
-        new_schema = pa.Table.from_pylist(dicts).schema
+        new_schema = infer_arrow_schema(dicts)
         try:
             widened = pa.unify_schemas([schema, new_schema])
         except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):

@@ -151,13 +151,18 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites outside the root workspace's import-selected Python matrix.
-# TaskCompendium has its own uv lock and pinned Harbor dependency; Iris smoke
+# Suites outside the import-selected Python matrix.
+# TaskCompendium tests its optional pinned Harbor dependency; Iris smoke
 # drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
-    "taskcompendium-unit": ("lib/taskcompendium/", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"),
+    "taskcompendium-unit": (
+        "lib/taskcompendium/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
