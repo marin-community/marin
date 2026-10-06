@@ -148,9 +148,10 @@ def test_parent_rejects_endpoint_model_arg_overrides():
         _payload(_config(extra_model_args={"model": "other"}))
 
 
-def test_financebench_requires_an_explicit_external_judge():
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+def test_judged_task_requires_an_explicit_external_judge(task):
     with pytest.raises(ValueError, match="requires an explicit judge"):
-        EvalchemyConfig(tasks=("FinanceBench",))
+        EvalchemyConfig(tasks=(task,))
 
     judge = EvalchemyJudgeConfig(
         base_url="https://judge.example/v1",
@@ -158,7 +159,7 @@ def test_financebench_requires_an_explicit_external_judge():
         api_key=("env:JUDGE_KEY",),
     )
     with pytest.raises(ValueError, match="only for a single FinanceBench"):
-        EvalchemyConfig(tasks=("FinanceBench", "gsm8k"), judge=judge)
+        EvalchemyConfig(tasks=(task, "gsm8k"), judge=judge)
     with pytest.raises(ValueError, match="only for a single FinanceBench"):
         EvalchemyConfig(tasks=("gsm8k",), judge=judge)
 
