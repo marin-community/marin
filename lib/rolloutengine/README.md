@@ -3,8 +3,8 @@
 `marin-rolloutengine` executes one TaskCompendium task through Shellbox and returns
 `RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
 
-Callers supply a model callable, machine factories, and optional `TaskSession` factories.
-Machine factories create isolated execution machines. Session factories supply task-specific actions and grading.
+Callers supply a model callable, machine factories, and optional `TaskSession`
+factories for task actions and grading.
 The default session handles shell tools.
 The engine owns model calls, conversation and token accumulation, stage progression, and resource cleanup.
 

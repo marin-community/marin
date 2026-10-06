@@ -1,6 +1,11 @@
 # TaskCompendium
 
-The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every selected input, source locator, edit and rejection reason. Library families define normalization, checks and rubrics; the experiment binds pinned inputs, intended use, download artifacts and inference clients.
+The [task curation pipeline](../../docs/references/task-curation.md) downloads
+pinned sources, normalizes tasks, and runs grading checks and model review.
+It writes filtering decisions to sharded Parquet and retains source locators,
+edits, and rejection reasons. Library families define normalization, checks,
+and rubrics. Experiments bind pinned inputs, download artifacts, inference clients,
+and intended use.
 
 For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
 and the [experiment flow](../../experiments/post_training/task_curation/README.md).
@@ -14,7 +19,7 @@ Harbor runs model trials and invokes private graders. Shellbox supplies isolated
 
 A task contains:
 
-- `context`: Public text messages, historical function calls, and tool results.
+- `context`: Public text messages, function calls, and tool results before the first model turn.
 - `answer_type`: Text, number, final function calls, files, or environment state.
 - `final_tools`: Advertised functions that terminate the task.
 - `interaction_tools`: Executable function declarations for the episode runtime.
@@ -33,10 +38,11 @@ Conversation events retain tool-call IDs and order. They exclude provider reason
 `answer_type` describes the result, independently of its submission format.
 Importers must remove source instructions that conflict with the supported conventions or reject the row.
 
-`environment` is the single machine description. Place public files in `environment.files` and private files in `VerifierSpec.files`.
-Schema `0.24` removes the legacy machine fields and `resources`. `environment_requirements` declares capabilities only.
-`TaskExecution` stores attempt and agent deadlines, agent users, and stage preparation separately from the task definition.
-Rebuild earlier task exports with the current importer.
+`environment` describes the task machine. `environment_requirements` declares
+task capabilities.
+Place public files in `environment.files` and private files in `VerifierSpec.files`.
+`TaskExecution` stores attempt and agent deadlines, agent users, and stage
+preparation separately from the task definition.
 See [task rollouts](../../docs/references/task-rollouts.md) for executable fields, stages, and token contracts.
 
 ## Submissions and grading
@@ -73,7 +79,7 @@ Malformed provider messages fail at the harness boundary. Verifier failures rece
 ## Direct-chat Harbor export
 
 A lowering pairs a compatible submission convention with a Harbor environment configuration.
-The current direct-chat configuration accepts text, numeric, and native-action tasks without machine or resource requirements.
+The direct-chat configuration accepts text, numeric, and native-action tasks without machine requirements.
 It records final calls without execution. Shell, file, and state tasks require the separate rollout engine.
 
 For multiple presentations, use `compatible_lowerings` and `select_lowerings` with an explicit selection policy and RNG key.
