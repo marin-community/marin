@@ -51,6 +51,8 @@ except ModuleNotFoundError:
     tl = None
 
 KERNEL_SIZE = 4
+# Fewest channels per program; the channel count must be a multiple of it.
+MIN_CHANNEL_BLOCK = 64
 
 # PTX's packed bf16 add and multiply (``add.rn.bf16x2``, ``mul.rn.bf16x2``) need SM90 or newer.
 _PACKED_BF16_MIN_COMPUTE_CAPABILITY = 9.0
@@ -61,7 +63,7 @@ class TritonShortConvTiles:
     """Launch shape of one direction's kernel.
 
     Attributes:
-      chunk: rows each program walks; the sequence length must divide by it. The halo re-read
+      chunk: rows each program walks; the sequence length must be a multiple of it. The halo re-read
         is ``(KERNEL_SIZE - 1) / chunk`` of a pass.
       max_channel_block: channels per program, halved until it divides the channel count.
       num_warps: warps per program.
@@ -74,8 +76,10 @@ class TritonShortConvTiles:
     rows_per_step: int
 
     def channel_block(self, channels: int) -> int | None:
+        """The largest block of at least ``MIN_CHANNEL_BLOCK`` channels, halving from
+        ``max_channel_block``, that divides ``channels``; None if none does."""
         block = self.max_channel_block
-        while block >= 64:
+        while block >= MIN_CHANNEL_BLOCK:
             if channels % block == 0:
                 return block
             block //= 2
@@ -132,7 +136,7 @@ def triton_short_conv_shapes_supported(
     if seq_len % SEQUENCE_MULTIPLE:
         return f"seq_len {seq_len} not divisible by {SEQUENCE_MULTIPLE}"
     if FORWARD_TILES.channel_block(channels) is None or BACKWARD_TILES.channel_block(channels) is None:
-        return f"channels {channels} not divisible by 64"
+        return f"channels {channels} not divisible by {MIN_CHANNEL_BLOCK}"
     return None
 
 

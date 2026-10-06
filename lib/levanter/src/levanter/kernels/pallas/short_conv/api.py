@@ -317,8 +317,8 @@ def short_conv(
       segment_ids: ``[batch, seq_len]`` packed-document ids, or None for an unpacked batch.
       implementation: a single name (fail fast if unsupported) or an ordered sequence to
         try in turn. Defaults to the Pallas kernel on GPU, the reference elsewhere.
-        "triton_gpu" streams the sequence with the taps carried in registers (kernel size 4
-        only); it reads each tensor once where the Pallas kernel re-reads it per tap.
+        "triton_gpu" takes kernel size 4 only and, unless the sequence is sharded, a sequence
+        length that is a multiple of 128.
       block_sizes: GPU tile configuration.
       exact_reference_rounding: keep the reference's per-op bf16 rounding, which makes the
         forward and, with the sequence whole, ``dx`` bit-identical to ``short_conv_reference``.

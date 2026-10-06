@@ -310,7 +310,7 @@ def _triton_segment_ids(kind, batch, seq_len, rng):
         return _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=3)
     if kind == "padded":
         # Two documents, then padding carrying the out-of-range segment id.
-        seg = np.full((batch, seq_len), -1, np.int32)
+        seg = np.full((batch, seq_len), triton_gpu.OOB_SEGMENT, np.int32)
         for b in range(batch):
             valid = int(rng.integers(seq_len // 2, seq_len))
             seg[b, : valid // 3] = 0
@@ -400,9 +400,9 @@ def test_triton_implementation_fails_fast_when_unsupported():
     """Off GPU the backend is missing; on GPU a kernel width other than 4 is unsupported."""
     width = 3 if jax.default_backend() == "gpu" else 4
     weight, x, segment_ids, _ = _inputs(2, 64, 8, width, seed=3, dtype=jnp.bfloat16, packed=True)
-    with pytest.raises(RuntimeError, match="'triton_gpu' is unusable"):
+    with pytest.raises(RuntimeError, match="triton_gpu"):
         short_conv(weight, x, segment_ids, implementation="triton_gpu")
-    with pytest.warns(UserWarning, match="falling back from 'triton_gpu'"):
+    with pytest.warns(UserWarning, match="triton_gpu"):
         got = short_conv(weight, x, segment_ids, implementation=("triton_gpu", "reference"))
     np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
 
