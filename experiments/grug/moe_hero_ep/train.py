@@ -97,6 +97,9 @@ HERO_EP_RUNTIME_ENV = {
 }
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 XLA_HOST_MEMORY_OFFLOADING_FLAG = "--xla_gpu_enable_host_memory_offloading"
+XLA_DISABLE_ASYNC_COLLECTIVES_FLAG = "--xla_gpu_disable_async_collectives"
+# Every collective type runs synchronously, one at a time.
+SYNC_COLLECTIVES = "ALLCOLLECTIVES"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -252,6 +255,14 @@ def _apply_hero_ep_runtime_defaults(
         # occurrence XLA's parser keeps.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
         xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
+    if ragged and not offload_carry:
+        # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps
+        # off. XLA's default scheduler then starts collectives regardless of the limit: compiled for
+        # the EP64 hero layer, it puts two ragged transports in flight at once in the forward and in
+        # the backward, where they can hang or corrupt each other. Synchronous collectives keep them
+        # one at a time, so the caller does not choose this.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_DISABLE_ASYNC_COLLECTIVES_FLAG]
+        xla_flags.append(f"{XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}={SYNC_COLLECTIVES}")
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
