@@ -30,6 +30,12 @@ from experiments.post_training.russell_rsi.coding_transport_replacement import (
     prepare_coding_replacement,
     replacement_selection_stages,
 )
+from experiments.post_training.russell_rsi.completed_sft_selection import (
+    EXTRACTION_PROTOCOL,
+    completed_coding_extraction_stages,
+    completed_sft_selection_stages,
+)
+from experiments.post_training.russell_rsi.completed_sft_selection import PROTOCOL as COMPLETED_SELECTION_PROTOCOL
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     BRANCH_PACKAGES,
     OUTPUT_PROTOCOL,
@@ -93,7 +99,16 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
 @click.option(
     "--stage",
     type=click.Choice(
-        ["evaluate-interrupted", "retain", "repair-retention", "select", "replace-coding", "select-replacement"]
+        [
+            "evaluate-interrupted",
+            "retain",
+            "repair-retention",
+            "select",
+            "replace-coding",
+            "select-replacement",
+            "select-completed",
+            "extract-completed-coding",
+        ]
     ),
     required=True,
 )
@@ -104,6 +119,14 @@ def main(
     configure_coreweave_s3()
     require_reviewed_source(source_review_uri, source_review_sha256)
     config = json.loads(pinned_bytes(config_uri, config_sha256))
+    if stage in {"select-completed", "extract-completed-coding"}:
+        protocol = COMPLETED_SELECTION_PROTOCOL if stage == "select-completed" else EXTRACTION_PROTOCOL
+        if resolve_version(protocol, None) != config["version"]:
+            raise click.UsageError("Completed selection version differs from its frozen configuration")
+        source = PinnedFile(**config["source_config"]).read_json()
+        original = chat_study_post_workflow(source, "evaluate-interrupted")
+        stages = completed_sft_selection_stages if stage == "select-completed" else completed_coding_extraction_stages
+        return [stages(config, PinnedFile(config_uri, config_sha256), original)["terminal"]]
     if stage in {"replace-coding", "select-replacement"}:
         if resolve_version(CODING_REPLACEMENT_PROTOCOL, None) != config["version"]:
             raise click.UsageError("Coding replacement version differs from its frozen amendment")
