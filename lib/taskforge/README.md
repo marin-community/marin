@@ -40,7 +40,9 @@ modules, each of which keeps its types beside the code that checks their invaria
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
 `ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `builder.run` (`TaskDraft`,
 `load_draft`, `item_id_for`), `builder.author` (`BuildProgram`, `Revision`), `validate.outcome`,
-`validate.evidence` and `validate.calibration` (`CalibrationSummary`, `Finding`).
+`validate.evidence`, `validate.calibration` (`CalibrationSummary`, `Finding`) and `review.decision`
+(`Decision`). `tests/test_imports.py` parses every module and fails on an import that points right
+in the order, or on a package the order does not name.
 
 ## Seams
 
@@ -158,6 +160,11 @@ modules, each of which keeps its types beside the code that checks their invaria
   control (`candidate_control`), NOTED trials are `CalibrationSummary.notes`, every assessment is in
   `CalibrationSummary.assessments`, and `RoleStats` counts passes, submissions, budget use, claims,
   failed audits, budget stops and tiers.
+- `review.rules.decide(draft, summary, history) -> Decision`: a pure rule table over a
+  `CalibrationSummary`. The `Decision` is `Accept`, `Reject(kind, reasons, summary)` with kind
+  `TASK`, `BUDGET` or `HOST`, `Repair(program_digest, brief, invalidate)` or `Retry(cause, count)`,
+  and `review.decision.write_decision` and `load_decision` keep it in `decision.json` beside
+  `calibration.json`. `review.rules.staged_repair` is the fixed decision for a staged draft.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -294,6 +301,19 @@ The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `va
 those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
 `calibration.SummaryPolicy`, `calibration.RoundEvidence`), because `ValidationPolicy` holds a
 `CalibrationBand` and the adversary brief, and the modules defining those take the policy.
+
+Review calls no model. Its rules, in order: decisive findings (a violated control, a shortcut or
+leak pass, an ambiguous instruction, a task defect) repair the program even when some trials are
+ungraded, because retrying cannot improve them; trials this host cannot run reject the item as
+`HOST`, not as a task defect; other ungraded trials retry; a solve rate outside the band gets one
+repair per direction, then rejects the task; clean evidence accepts. A repair past the item's
+budget rejects as `BUDGET`. A `Repair` carries a brief, not a patch: the loop passes
+`brief.failure` to `build.author.author` as `Revision.failure`, so the author is the only model
+that writes builder code. The brief renders adversary passes as controls the revised CONTROLS
+step must return verbatim, so the next round's control replay checks the fix. `invalidate` names
+the steps whose roles the findings condemn, so a model-driven step the author left unchanged is
+resampled rather than replayed from the step cache. Staged tasks are not validated; a staged
+draft gets one fixed repair asking for separate single-stage tasks.
 
 ## Testing
 
