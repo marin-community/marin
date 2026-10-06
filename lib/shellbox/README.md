@@ -1,10 +1,17 @@
 # Marin Shellbox (0.1)
 
-`marin-shellbox` provides three Harbor import paths:
+`marin-shellbox` provides four Harbor import paths:
 
 - `shellbox.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
 - `shellbox.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
 - `shellbox.backends.shellsim.environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
+- `shellbox.mini_agent:NativeMiniAgent`: the native mini-swe-agent controller runs on the host. A private Unix socket sends commands to `QemuEnvironment`. The guest has no network.
+
+The native mini adapter requires an isolated environment with mini-swe-agent `2.1.0` and Harbor commit `2666d6526477ae3e46030a8dc4f3f2c68fd7a84f`. It does not change the workspace Harbor pin. Set `api_base` for the host model endpoint. Set `config_specs` to the native CLI config list, including `mini.yaml` when its prompts are necessary. The adapter keeps the native InteractiveAgent, `--yolo`, `--exit-immediately`, provider settings, completion sentinel and trajectory format.
+
+A native limit prompt receives batch EOF. It cannot grant more steps.
+
+This is an adapted runtime with root-only guest execution. It does not support MCP servers or skills. Output above the transport limit fails the trial. Guest-loop regression tests use scripted model responses. They do not qualify benchmark images or the canonical verifier. Each new task image requires separate baseline and reference verifier qualification.
 
 Install the backend dependencies you need:
 

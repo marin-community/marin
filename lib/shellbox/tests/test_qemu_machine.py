@@ -14,7 +14,7 @@ from shellbox.backends.qemu.machine import Acceleration, QemuMachine
 from shellbox.machine import Command, ExitReason, MachineSpec, QemuBundle
 
 
-async def local_guest(tmp_path: Path, upload_fd: int | None = None) -> QemuMachine:
+async def local_guest(tmp_path: Path, upload_fd: int | None = None, env: dict[str, str] | None = None) -> QemuMachine:
     # The real guest loop uses host applets and pipes in place of guest devices.
     busybox = tmp_path / "busybox"
     busybox.write_text(
@@ -50,6 +50,7 @@ async def local_guest(tmp_path: Path, upload_fd: int | None = None) -> QemuMachi
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         pass_fds=() if upload_fd is None else (upload_fd,),
+        env=env,
     )
     return machine
 
