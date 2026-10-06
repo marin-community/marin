@@ -98,11 +98,11 @@ class EvalchemyConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_judge_task(self) -> EvalchemyConfig:
-        financebench = self.tasks == ("FinanceBench",)
-        if self.judge is not None and self.tasks not in {("FinanceBench",), ("OlympiadBench",)}:
+        judge_task = self.tasks in {("FinanceBench",), ("OlympiadBench",)}
+        if self.judge is not None and not judge_task:
             raise ValueError("judge is supported only for a single FinanceBench or OlympiadBench task")
-        if financebench and self.judge is None:
-            raise ValueError("FinanceBench requires an explicit judge configuration")
+        if judge_task and self.judge is None:
+            raise ValueError(f"{self.tasks[0]} requires an explicit judge configuration")
         return self
 
     @field_validator("tasks", "runtime_extras")
