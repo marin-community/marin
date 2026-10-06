@@ -32,7 +32,11 @@ class SessionStart:
 
 @dataclass(frozen=True)
 class ModelTurn:
-    """Exact tokens and the parsed message from one inference request."""
+    """The parsed message and the token IDs a model reported for one inference request.
+
+    Under `TokenContract.EXACT` the IDs are the served training sequence; under
+    `TokenContract.TEXT` they are informational.
+    """
 
     message: dict[str, Any]
     prompt_token_ids: tuple[int, ...]
