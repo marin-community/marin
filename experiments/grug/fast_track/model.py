@@ -424,6 +424,18 @@ class LatentMixBalance(StrEnum):
     gate logits' gradient, pushing the token-averaged block distribution toward uniform."""
 
 
+class KvMixMode(StrEnum):
+    """How the MLA KV-latent mixture combines the chosen experts' down-projections."""
+
+    CONCAT = "concat"
+    """``mla_kv_latent_dim`` splits into ``latent_mix_experts`` blocks; each chosen block keeps its own slot of the
+    latent (the rest are zero), so each expert has its own rows of ``w_uk`` / ``w_uv`` and the cache needs the
+    block indices."""
+    SUM = "sum"
+    """Each expert down-projects to the full ``mla_kv_latent_dim``; the chosen ones are summed (weighted) into one
+    shared latent before the RMSNorm, so ``w_uk`` / ``w_uv`` are shared and MLA absorption is unchanged."""
+
+
 LATENT_MIX_SITES = ("q", "k", "v", "o", "kv", "moe_in", "moe_out")
 
 
@@ -1452,6 +1464,8 @@ class GrugModelConfig:
     """Load balancing of the MLA KV-latent mixture's block selection (``kv`` in ``latent_mix_sites``)."""
     latent_mix_entropy_weight: float = 0.01
     latent_mix_renorm: bool = False
+    latent_mix_kv_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
+    """How the MLA KV-latent mixture combines its chosen experts (see ``KvMixMode``)."""
     """MLA KV-latent mixture: divide the chosen blocks' sigmoid weights by their sum (each token's sum to 1)."""
     """``LatentMixBalance.ENTROPY``: weight of the regularizer ``-H(mean over tokens of softmax(gate logits))``."""
     qk_mult_per_head: bool = False
@@ -1603,7 +1617,15 @@ class GrugModelConfig:
         for site in self.latent_mix_sites:
             width = {
                 **attn_latents,
-                "kv": self.mla_kv_latent_dim if self.mla else 0,
+                "kv": (
+                    (
+                        self.mla_kv_latent_dim * self.latent_mix_experts
+                        if self.latent_mix_kv_mode == KvMixMode.SUM
+                        else self.mla_kv_latent_dim
+                    )
+                    if self.mla
+                    else 0
+                ),
                 "moe_in": self.latent_dim or 0,
                 "moe_out": self.expert_out_dim,
             }[site]
@@ -1612,6 +1634,7 @@ class GrugModelConfig:
         if self.latent_mix_sites and not 1 <= self.latent_mix_topk <= self.latent_mix_experts:
             raise ValueError("latent_mix_topk must be in [1, latent_mix_experts]")
         LatentMixBalance(self.latent_mix_balance)
+        KvMixMode(self.latent_mix_kv_mode)
         if (self.latent_mix_balance != LatentMixBalance.NONE or self.latent_mix_renorm) and self.latent_mix_sites != (
             "kv",
         ):
@@ -2237,6 +2260,7 @@ class CausalSelfAttention(eqx.Module):
             k_q2, k_uk2, k_lam = random.split(random.fold_in(key, 1), 3)
             kvl = cfg.mla_kv_latent_dim
             kv_mix = "kv" in cfg.latent_mix_sites
+            kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
             diff = cfg.mla_diff_attn
             group = cfg.mla_grouped_diff
@@ -2271,10 +2295,13 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
-                w_dkv=reshard(_init_weight(k_dkv, (cfg.kv_in_dim, kvl), std), P(_FSDP_AXES, None)),
+                w_dkv=reshard(
+                    _init_weight(k_dkv, (cfg.kv_in_dim, kvl * (cfg.latent_mix_experts if kv_sum else 1)), std),
+                    P(_FSDP_AXES, None),
+                ),
                 kv_latent_norm=(
                     _grouped_rms_norm(cfg, cfg.latent_mix_experts, kvl // cfg.latent_mix_experts)
-                    if kv_mix
+                    if kv_mix and not kv_sum
                     else _learned_rms_norm(cfg, kvl, cfg.layer_norm_eps, role="kv_latent")
                 ),
                 kv_mix_bias=(
@@ -2477,9 +2504,14 @@ class CausalSelfAttention(eqx.Module):
                 kv_latent = self.kv_latent_norm(latent)
             else:
                 blocks = self.cfg.latent_mix_experts
-                normed = self.kv_latent_norm(rearrange(latent, "... (e r) -> ... e r", e=blocks))
                 weights = self._kv_mix_weights(x if kv_input is None else kv_input)
-                kv_latent = rearrange(normed * weights[..., None].astype(normed.dtype), "... e r -> ... (e r)")
+                experts = rearrange(latent, "... (e r) -> ... e r", e=blocks)
+                if self.cfg.latent_mix_kv_mode == KvMixMode.SUM:
+                    mixed = jnp.einsum("...er,...e->...r", experts, weights.astype(experts.dtype))
+                    kv_latent = self.kv_latent_norm(mixed)
+                else:
+                    normed = self.kv_latent_norm(experts)
+                    kv_latent = rearrange(normed * weights[..., None].astype(normed.dtype), "... e r -> ... (e r)")
             if share_latent:
                 kv_share["latent"] = kv_latent
         # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its

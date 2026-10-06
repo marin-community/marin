@@ -112,3 +112,21 @@ def test_renormed_mixture_weights_sum_to_one_over_the_kept_blocks():
     weights = np.asarray(mixture_weights(x, gate, 8, 2, renorm=True))
     np.testing.assert_allclose(weights.sum(-1), 1.0, rtol=1e-6)
     assert ((weights > 0).sum(-1) == 2).all()
+
+
+def test_sum_mode_mla_mixture_keeps_a_shared_latent_and_up_projection():
+    mesh, model = t._model(
+        ngram_stat_rows=0,
+        mla=True,
+        mla_kv_latent_dim=12,
+        latent_mix_sites=("kv",),
+        latent_mix_experts=4,
+        latent_mix_kv_mode="sum",
+    )
+    attn = model.stacked_blocks.stacked.attn
+    assert attn.w_dkv.shape[-1] == 4 * 12
+    assert attn.w_uk.shape[-2] == 12 and attn.w_uv.shape[-2] == 12
+    assert attn.kv_latent_norm.weight.shape[-1] == 12
+    loss, grads = _loss_and_grads(model, mesh)
+    assert np.isfinite(float(loss))
+    assert float(jnp.abs(grads.stacked_blocks.stacked.attn.kv_mix_gate).max()) > 0
