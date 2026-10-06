@@ -108,8 +108,9 @@ def default_setup_script(
         "if grep -q 'editable = true' pyproject.toml 2>/dev/null; then"
         " echo 'rust-dev mode: building native extensions';"
         " for crate in lib/*/pyproject.toml; do"
-        ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
+        ' if grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null; then'
         ' uv pip install -e "$(dirname "$crate")";'
+        " fi;"
         " done;"
         " fi",
     ]
