@@ -1,35 +1,22 @@
 {
   "added_variants": [
-    "moe_hero_pipeline",
-    "snowball_synthetic"
+    "moe_hero_pipeline"
   ],
-  "base_sha": "06da233d9a85735db5a81343fba228d1cb6a77e7",
-  "head_sha": "16bf53fe113125cdf0a634a695e3c85492e97984",
-  "report_count": 2,
+  "base_sha": "4c0896acd1d978ce2bb62093e8d6901e113d9dac",
+  "head_sha": "15325f8087ce4b0be55e94bd5a79aa946424f733",
+  "report_count": 1,
   "reports": [
     {
-      "closest_variant": "base",
-      "distance_score": 2852,
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 2270,
       "report_relpath": "moe_hero_pipeline/index.html",
       "status_counts": {
         "added": 6,
-        "changed": 0,
-        "removed": 3,
-        "unchanged": 1
-      },
-      "variant": "moe_hero_pipeline"
-    },
-    {
-      "closest_variant": "base",
-      "distance_score": 1515,
-      "report_relpath": "snowball_synthetic/index.html",
-      "status_counts": {
-        "added": 2,
         "changed": 1,
         "removed": 2,
         "unchanged": 1
       },
-      "variant": "snowball_synthetic"
+      "variant": "moe_hero_pipeline"
     }
   ]
 }
