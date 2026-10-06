@@ -6,6 +6,7 @@
 import hashlib
 import json
 import math
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 
 import click
@@ -21,7 +22,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
-from experiments.evaluation.pipeline import eval_step
+from experiments.evaluation.pipeline import EvalStepConfig, EvaluationResult, eval_step
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     CheckpointScore,
     QualifiedTask,
@@ -58,6 +59,7 @@ from experiments.post_training.russell_rsi.replay import (
 from experiments.post_training.russell_rsi.rollout_eval import (
     CALIBRATION_SAMPLES,
     CALIBRATION_STARTUP_ATTEMPTS,
+    DevelopmentEvaluationConfig,
     run_calibration_evaluation,
     run_development_evaluation,
 )
@@ -442,6 +444,35 @@ def post_sft_stages(
         barriers = (trained, updates, reload)
     if stage == "train":
         return {**outputs, "terminal": outputs["reload"] if outputs else saved_decision}
+    return post_sft_evaluation_stages(
+        config,
+        model=model,
+        retention=retention,
+        export_uri=export_uri,
+        checkpoints=checkpoints,
+        barriers=barriers,
+        outputs=outputs,
+        study=study,
+    )
+
+
+def post_sft_evaluation_stages(
+    config: dict,
+    *,
+    model: ArtifactStep,
+    retention: ArtifactStep,
+    export_uri: str,
+    checkpoints: list[tuple[str, ArtifactStep]],
+    barriers: tuple[ArtifactStep, ...],
+    outputs: dict[str, ArtifactStep],
+    study: StudyBaseline | None,
+    coding_runner: Callable[[EvalStepConfig], EvaluationResult] | None = None,
+    retention_runner: Callable[[DevelopmentEvaluationConfig], None] | None = None,
+) -> dict[str, ArtifactStep]:
+    """Build the unchanged coding, retention, and selection stages."""
+    protocol = PROTOCOL if study is None else study.protocol
+    version = config["version"]
+    runtime = RuntimeBundle(**config["runtime_bundle"])
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
     panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
     panel_digest = compact_json_sha256(asdict(panel))
@@ -484,6 +515,9 @@ def post_sft_stages(
             federated_cluster=CLUSTER,
         )
 
+        if coding_runner is not None:
+            coding = replace(coding, run=coding_runner)
+
         def evidence_config(ctx: StepContext, result_step=coding, item=checkpoint):
             if ctx.is_fingerprint:
                 return {"evaluation": artifact_identity(result_step), "model": artifact_identity(item), "panel": panel}
@@ -508,6 +542,8 @@ def post_sft_stages(
         retained = development_step(
             retention, checkpoint, version, runtime, f"{protocol}-{label}-retention", limit=RETENTION_TASKS
         )
+        if retention_runner is not None:
+            retained = replace(retained, run=retention_runner)
         retained = replace(retained, deps=tuple(dict.fromkeys((*retained.deps, *barriers))))
         outputs.update({f"coding-{label}": evidence, f"retention-{label}": retained})
     labels = tuple(label for label, _ in checkpoints)

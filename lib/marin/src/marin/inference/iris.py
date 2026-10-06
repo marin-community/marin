@@ -581,9 +581,11 @@ def remote_inference(
 ) -> Iterator[RemoteInferenceSession]:
     """Start inference on Iris and optionally expose its link URL."""
 
-    if get_job_info() is None:
-        raise RuntimeError("remote_inference must run inside an Iris job")
+    if get_job_info() is None and iris_ctx().client is None:
+        raise RuntimeError("remote_inference requires an explicit Iris client or an Iris job")
     resolved_broker = _broker_config(config.instances, config.broker)
+    if get_job_info() is None and resolved_broker is not None:
+        raise RuntimeError("Brokered remote inference requires an Iris job")
     if resolved_broker is None:
         with _start_direct_inference(config) as session:
             yield session

@@ -22,6 +22,10 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
 )
 from experiments.post_training.russell_rsi.collection_recovery import CollectionRecovery, StudentContextAmendment
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
+from experiments.post_training.russell_rsi.interrupted_calibration import (
+    interrupted_evaluation_stages,
+    require_interruption,
+)
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     StudyBaseline,
     adopted,
@@ -376,9 +380,11 @@ def validated_study_post_workflow(
         )
     else:
         raise ValueError("Unknown SFT qualification protocol")
+    sealed = require_interruption(config) if stage == "evaluate-interrupted" else None
+    model_version = config["version"] if sealed is None else sealed["source_config"]["version"]
     model = ArtifactStep.adopt(
         f"checkpoints/russell-rsi-{study_protocol}-qualified-hf",
-        config["version"],
+        model_version,
         export,
         kind=LevanterCheckpoint,
         config={
@@ -405,6 +411,29 @@ def validated_study_post_workflow(
             != score
         ):
             raise ValueError("Teacher study baseline differs from its original evidence identity")
+    study_baseline = StudyBaseline(study_protocol, baseline, original_parent, retention_task_ids)
+    if sealed is not None:
+        interrupted_calibration = post_sft_stages(
+            sealed["source_config"],
+            "calibrate",
+            model=model,
+            bank=bank,
+            retention=retention,
+            source_plan=source_plan,
+            source={**schedule, "family_by_task": bank_record["family_by_task"]},
+            export_uri=export,
+            study=study_baseline,
+        )["calibration"]
+        if artifact_identity(interrupted_calibration) != sealed["amendment"]["source"]["calibration_identity"]:
+            raise ValueError("Interruption identifies a different original calibration artifact")
+        return interrupted_evaluation_stages(
+            config,
+            model=model,
+            retention=retention,
+            export_uri=export,
+            study=study_baseline,
+            sealed=sealed,
+        )
     return post_sft_stages(
         config,
         stage,
@@ -414,5 +443,5 @@ def validated_study_post_workflow(
         source_plan=source_plan,
         source={**schedule, "family_by_task": bank_record["family_by_task"]},
         export_uri=export,
-        study=StudyBaseline(study_protocol, baseline, original_parent, retention_task_ids),
+        study=study_baseline,
     )

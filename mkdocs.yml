@@ -102,6 +102,7 @@ nav:
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
+      - SFT after interrupted calibration: references/russell-interrupted-calibration.md
       - RL Data Atlas: references/rl-data-atlas.md
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
