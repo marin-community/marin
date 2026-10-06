@@ -7,10 +7,10 @@
 ``httpx.AsyncClient``, so concurrent agents share one connection pool; the model sees Parallel's
 JSON response body unchanged. ``web_fetch`` returns extracted page content that may be Parallel's
 cached copy of the page; its description says so and leaves it to the agent to make a direct network
-call from the sandbox shell when it decides it needs current data. A 400 or 422 means the model's arguments were rejected, so the body
-goes back to the model as an error result. A 408, 429, 5xx or transport error is retried with
-exponential backoff, up to ``MAX_ATTEMPTS`` requests; after that, and on every other non-2xx
-status, the error raises for the caller to classify.
+call from the sandbox shell when it decides it needs current data. A 400 or 422 means the model's
+arguments were rejected, so the body goes back to the model as an error result. A 408, 429, 5xx or
+transport error is retried with exponential backoff, up to ``MAX_ATTEMPTS`` requests; after that,
+and on every other non-2xx status, the error raises for the caller to classify.
 """
 
 import asyncio
