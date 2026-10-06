@@ -172,6 +172,20 @@ in the order, or on a package the order does not name.
   `RepairBrief` holds the `findings` the author must fix, the `notes` (noted adversary passes from
   `CalibrationSummary.notes`) it shows as information, and the rendered `failure`;
   `review.rules.render_brief(findings, notes)` builds it.
+- `loop.policy.LoopPolicy`: every bound of a run (proposals per idea, idea re-proposals, triage
+  repairs, build revisions, review repairs, validation retries and their backoff, the output-token
+  budget, the `ValidationPolicy`), with no defaults. `loop.policy.POLICY` reads and writes it as the
+  run's `policy.json`; a missing or unknown key is an error.
+- `loop.events`: `record_event(ledger, item_id, round, kind, seq, input_hash, **attrs)` writes one
+  `EntryKind.EVENT` row with `attrs["seq"]` and `attrs["schema"] = EVENT_SCHEMA`.
+  `derive_state(entries) -> ItemState` folds a proposal item's events (phase, round, digests,
+  counters, `Terminal`); `derive_idea_state` folds an idea's; `item_tokens_out` sums the item's
+  `LLM_CALL` output tokens.
+- `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
+  `run_item(proposal, policy, services) -> Terminal`: one idea's proposals, and one proposal carried
+  to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `LoopServices[IdeaT]` holds what a run's items
+  share, including the `slots` semaphore that bounds model- and sandbox-bound phases across items.
+  Both resume from the run root's event logs.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -329,6 +343,28 @@ an accepted summary carries them, and a repair's `invalidate` and a rejection's 
 the findings alone. `invalidate` names
 the steps whose roles the findings condemn, so a model-driven step the author left unchanged is
 resampled rather than replayed from the step cache.
+
+An item's status is derived from its event log, never stored. Each phase boundary appends one
+`EntryKind.EVENT` row through the run's ledger, into the item's own JSONL file beside its spans and,
+under Iris, into the Finelog mirror. Large payloads stay in the item directory (proposals,
+`verdict.json`, programs, drafts, attempt files, `calibration.json`, `decision.json`) and events name
+them by digest. A per-item contiguous `seq` and a schema version are the only guards against a second
+writer and against an enum rename silently changing what an old log means; `derive_state` raises on
+either. A relaunch re-runs only the sub-phase that lacks its completion event: build steps are
+memoized, settled trials load from their attempt files, and review is pure. A log opened under a
+different `policy.json` is refused.
+
+The loop keeps a run's bounds separate because their costs differ: a build revision is one author
+call, a review repair is a whole validation round. A build failure, or any exception the builder
+program raises, goes back to the author as a revision; `GlmUnavailable` is the endpoint's failure,
+not the program's, and propagates. A repair whose rebuild produces the same task digest counts as a
+failed revision whose failure text is the brief again, so the author cannot spend the repair budget
+returning the same program. The output-token budget sums the item's `LLM_CALL` entries (triage,
+authoring, build steps) and is checked before each authoring; validation trials are bounded by `k`,
+the roles and the deadlines instead. A `Retry` waits out the backoff without holding a slot; spent
+retries end the item `ABANDONED`, never rejected, and the next launch re-enters it at the control
+replay with a fresh retry budget. An unhandled exception records `FAILED` and propagates to the queue.
+A triage verdict is final for its proposal digest within a run.
 
 ## Testing
 
