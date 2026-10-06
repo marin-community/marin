@@ -112,14 +112,18 @@ def grade_json_schema_candidate(schema: dict, instance: Any) -> Reward:
     )
 
 
+def grade_json_document(schema: dict, candidate_format: SchemaFormat, text: str) -> Reward:
+    """Parse a document and return the full schema verdict with diagnostics."""
+    try:
+        instance = parse_candidate(unwrap_fence(text), candidate_format)
+    except (ValueError, yaml.YAMLError, RecursionError) as error:
+        return scored(0.0, reason="parse_error", error=str(error))
+    return grade_json_schema_candidate(schema, instance)
+
+
 def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
     schema = load_schema(tests_dir / spec.schema)
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
-    try:
-        instance = parse_candidate(unwrap_fence(text), spec.format)
-    except (ValueError, yaml.YAMLError, RecursionError) as error:
-        return scored(0.0, reason="parse_error", error=str(error))
-
-    return grade_json_schema_candidate(schema, instance)
+    return grade_json_document(schema, spec.format, text)

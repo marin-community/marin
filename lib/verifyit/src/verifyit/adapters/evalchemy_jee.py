@@ -7,8 +7,9 @@ import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from verifyit.grade import InvalidTask, Reward, invalid_task, scored
+from verifyit.grade import InvalidTask, Reward, invalid_task
 from verifyit.modes.grade_exact import grade_collection_subset, grade_exact_candidate
+from verifyit.modes.grade_math import grade_numeric_candidate_float
 from verifyit.spec import ExactSpec
 
 LETTERS = "ABCD"
@@ -86,20 +87,7 @@ def grade_prepared_jee(prepared: PreparedJEE) -> Reward:
             )
     else:
         assert prepared.candidate is None or isinstance(prepared.candidate, float)
-        value = prepared.candidate
-        if value is None or not math.isfinite(value):
-            result = scored(0, reason="nonfinite_candidate")
-        else:
-            # JEEBench subtracts binary floats before applying its absolute tolerance.
-            result = scored(float(abs(value - prepared.expected) <= 0.01))
-        result = replace(
-            result,
-            detail={
-                **result.detail,
-                "extracted": value if value is not None and math.isfinite(value) else None,
-                "expected": prepared.expected,
-            },
-        )
+        result = grade_numeric_candidate_float(prepared.expected, prepared.candidate, tolerance_abs=0.01)
     return replace(result, detail={**result.detail, "policy": prepared.policy.value})
 
 

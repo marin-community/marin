@@ -1355,6 +1355,8 @@ def _analysis_router(store: RecordStore) -> APIRouter:
             selection = _selection(params)
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        if selection.cohort_version is None:
+            return JSONResponse({"error": "Choose one cohort before comparing models."}, status_code=400)
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 

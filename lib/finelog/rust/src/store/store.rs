@@ -1345,18 +1345,18 @@ impl Store {
         self.tables.query_visibility()
     }
 
-    /// Snapshot every live namespace into a `RegisteredProvider` over its sealed
+    /// Snapshot requested live namespaces into `RegisteredProvider`s over their sealed
     /// segments — the registration set for a `Query`.
     ///
-    /// Snapshot the live registry, then for each namespace capture its arrow
+    /// Snapshot the live registry, then for each requested namespace capture its arrow
     /// schema + sealed-segment paths (under the engine's insertion lock).
-    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Every
-    /// live namespace is registered so cross-namespace SQL and the reserved `log`
+    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Requested
+    /// live namespaces are registered so cross-namespace SQL and the reserved `log`
     /// namespace both resolve.
-    pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
+    pub fn query_providers(&self, names: &[String]) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
-            if self.tables.get(&ns.name).is_none() {
+            if !names.contains(&ns.name) || self.tables.get(&ns.name).is_none() {
                 // A registry entry with no runtime is a transient state during
                 // (re)build; skip it rather than fail the whole query.
                 continue;
@@ -2272,7 +2272,7 @@ mod tests {
     /// pinned state and then localizes exactly the objects it selected. Returns
     /// the row count.
     async fn scan_table(store: &Store, table: &str) -> i64 {
-        let providers = store.query_providers().unwrap();
+        let providers = store.query_providers(&[table.to_owned()]).unwrap();
         let sql = format!("SELECT * FROM \"{table}\"");
         let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, &sql)
             .await

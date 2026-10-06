@@ -47,7 +47,7 @@ def specification() -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer("12.0", tolerance_abs="0.0", tolerance_rel="0.0"),
+        verifier=numeric_answer("12.0", tolerance_abs=0.0, tolerance_rel=0.0),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     )
 
@@ -81,7 +81,7 @@ def test_plain_text_rejects_tool_call_evidence(specification):
     "answer_type,verifier,response",
     [
         (AnswerType.TEXT, exact_answer("12"), "12"),
-        (AnswerType.NUMBER, numeric_answer("12", tolerance_abs="0", tolerance_rel="0"), "12.0"),
+        (AnswerType.NUMBER, numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0), "12.0"),
     ],
 )
 def test_answer_call_grades_semantic_answers(specification, answer_type, verifier, response):

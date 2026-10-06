@@ -54,7 +54,7 @@ A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` 
 
 ### Numeric answers
 
-A numeric task uses `answer_type=number` and can use the same submission conventions as text. Expected values and tolerances are required numeric literal strings, preserving integers, decimals and fractions without float rounding. The `numeric` verifier extracts a full final scalar, the last boxed answer, or an explicit `Answer:` / `The answer is` envelope, then compares exact numeric values with the configured tolerances. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
+A numeric task uses `answer_type=number` and can use the same submission conventions as text. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` verifier reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
 
 ### Final function calls
 
@@ -165,7 +165,7 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 `verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
-Schema loading accepts descriptors without a grader implementation. The grading boundary validates executable verifier configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. The implemented pure grading boundary rejects nonempty verifier environment requirements; an isolated verifier runtime is required to satisfy them.
+Schema loading accepts descriptors without a grader implementation. The pure candidate grading boundary validates its supported verifier configuration; an unimplemented kind raises `NotImplementedError`. Runtime file and script grading uses shared verifyit specifications separately, with private entrypoints and resources in the verifier package. The pure grading boundary rejects nonempty verifier environment requirements; an isolated verifier runtime must satisfy them.
 
 Standard verifier contracts and pure candidate scoring live in `verifyit`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. Submission conventions acquire evidence; TaskCompendium scores it and returns a typed grading outcome; it has no verifier registry or separate standard verifier schema.
 
@@ -213,7 +213,7 @@ spec = TaskSpec(
     context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
     environment_requirements=EnvironmentRequirements(),
     answer_type=AnswerType.NUMBER,
-    verifier=numeric_answer("12", tolerance_abs="0", tolerance_rel="0"),
+    verifier=numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
 )
 convention = PlainText(id="plain")
@@ -233,7 +233,7 @@ def score_final_response(content: str):
     return grade_answer(spec, convention, GradingAttempt(conversation))
 ```
 
-Grading is synchronous. The execution runtime completes file or environment-state acquisition before grading; custom conventions extract that acquired evidence without accessing a live workspace. Private expected values remain in `spec.verifier` and must not be included in the model request.
+Grading is synchronous. The execution runtime completes file or environment-state acquisition before grading; custom conventions hold the acquired values in their own explicit fields and extract them without accessing a live workspace. `GradingAttempt` contains only the conversation. Private expected values remain in `spec.verifier` and must not be included in the model request.
 
 A valid correct answer produces `GradeResult(status=graded, reward=1.0)`; a valid wrong answer produces `graded` with reward `0.0`. Malformed text, JSON, numeric, or final-action evidence produces `submission_failure` with reward `0.0`. Invalid private configuration and infrastructure failures raise; the execution runtime must preserve those errors separately from wrong or invalid submissions.
 
@@ -241,7 +241,7 @@ Execution runtimes decode provider responses into `TextMessage` or `AssistantToo
 
 ## Dataset conversion
 
-TaskSpec defines the serialized task contract. Dataset conversion pipelines own storage layout and streaming I/O, using Zephyr for Parquet processing. The TaskCompendium package has no Parquet reader or writer. JSON decoding preserves valid requirements independently of a runtime's support for them.
+TaskSpec defines the serialized task contract. Dataset conversion pipelines own storage layout and streaming I/O, using Zephyr for Parquet processing. The optional `taskcompendium.pipeline` package stores curation outputs through Zephyr. See [pipeline contracts](src/taskcompendium/pipeline/README.md). JSON decoding preserves valid requirements independently of a runtime's support for them.
 
 ```python
 serialized = spec.model_dump_json()
@@ -250,6 +250,8 @@ restored = TaskSpec.model_validate_json(serialized)
 
 The serialized spec includes private verifier configuration and private resources. Store it where trusted grading code can read it; construct model-visible requests from public context, expectations, and the selected convention.
 
+Runtime evidence grading lives in `taskcompendium.runtime.task_grading`. Its synchronous `grade_task` entrypoint accepts a conversation and already acquired `RuntimeEvidence`, delegates candidate modes to `grade_answer`, and prepares private resources for file and script graders. Script verdicts retain `invalid_task` and `infra_error` status and details separately from graded rewards. Callers opt into calendar or shell episode controls by selecting a check suite from `taskcompendium.runtime.checks.episode_suite`; the pinned source graph does not run these controls.
+
 ## Development
 
 TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for portable path and mount-collision validation. The validator leaf module performs no storage access.
@@ -257,7 +259,7 @@ TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for portabl
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
 # Type-check from the package project directory with its dependencies available.
 cd lib/taskcompendium

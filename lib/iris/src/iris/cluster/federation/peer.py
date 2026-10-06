@@ -50,6 +50,7 @@ _DEFAULT_EXEC_TIMEOUT = 60
 # forward caps at ~10s, a kubectl-exec /proc read is quick), so give the parent->peer
 # hop that budget plus margin to outlast the peer rather than time out first.
 _PROCESS_STATUS_PROXY_TIMEOUT_MS = 30_000
+_KICK_PROXY_TIMEOUT_MS = 30_000
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,10 @@ class PeerConnection(Protocol):
     def launch_job(
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse: ...
+
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse: ...
 
     def terminate_job(self, job_id: JobName) -> None: ...
 
@@ -138,6 +143,11 @@ class _PeerRpcConnection:
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse:
         return self._client.launch_job(request, timeout_ms=_LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        return self._client.kick_tasks(request, timeout_ms=_KICK_PROXY_TIMEOUT_MS)
 
     def terminate_job(self, job_id: JobName) -> None:
         self._client.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()))
@@ -227,6 +237,12 @@ class FederationPeer:
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Deliver a handed-off job to the peer (reuses its ``LaunchJob``)."""
         return self._connection.launch_job(request)
+
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Route task overrides to the controller executing the targets."""
+        return self._connection.kick_tasks(request)
 
     def terminate_job(self, job_id: JobName) -> None:
         """Route a cancel to the peer (reuses its ``TerminateJob``).

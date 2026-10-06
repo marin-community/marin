@@ -390,6 +390,17 @@ def grade_regression_candidate(expected: object, candidate: object, *, variance_
     return scored(max(0.0, r2), nmse=nmse, nmae=nmae, r2=r2)
 
 
+def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:
+    """Compare source-normalized binary floats with an absolute tolerance."""
+    if not math.isfinite(expected):
+        raise InvalidTask("numeric reference must be finite")
+    if not math.isfinite(tolerance_abs) or tolerance_abs < 0:
+        raise InvalidTask("numeric tolerance must be finite and nonnegative")
+    if value is None or not math.isfinite(value):
+        return scored(0.0, reason="nonfinite_candidate", extracted=None, expected=expected)
+    return scored(float(abs(value - expected) <= tolerance_abs), extracted=value, expected=expected)
+
+
 def grade_numeric_candidate(spec: NumericSpec, value: Fraction) -> Reward:
     """Compare an exact scalar against validated private literals and tolerances."""
     empty_output_policy(spec)

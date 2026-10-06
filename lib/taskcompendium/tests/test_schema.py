@@ -21,6 +21,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierSpec,
 )
+from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import PlainText, chat_request
 
 
@@ -59,7 +60,7 @@ def specification():
     ]
     + [
         {"resources": {role: [{"path": "input.txt", "source": {"kind": "inline_file", "content_base64": "eA=="}}]}}
-        for role in ("all", "worker", "oracle", "verifier")
+        for role in ("all", "worker", "oracle")
     ]
     + [
         {
@@ -82,17 +83,6 @@ def specification():
                 parameters_json='{"expected":"done"}',
                 environment_requirements=EnvironmentRequirements(capabilities=("process",)),
             ),
-        },
-        {
-            "resources": {
-                "verifier": [
-                    {
-                        "path": "checks/grade.py",
-                        "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="},
-                        "mode": "0755",
-                    }
-                ]
-            }
         },
     ],
 )
@@ -188,6 +178,8 @@ def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, spe
     # This correct answer must not earn credit without the required private runtime.
     with pytest.raises(NotImplementedError):
         grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation))
+    result = grade_task(task, PlainText(id="plain"), conversation)
+    assert (result.status, result.reward) == ("invalid_task", None)
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "private_script"])

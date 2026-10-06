@@ -26,8 +26,8 @@ use crate::proto::finelog::stats::{
     ReportRelayStatusResponse, StatsService, WriteRowsResponse,
 };
 use crate::query::{
-    make_ctx, query_timeout, run_query_over, run_within_query_timeout, slow_query_log_ms,
-    truncate_sql_for_log,
+    make_ctx, query_namespaces, query_timeout, run_query_over, run_within_query_timeout,
+    slow_query_log_ms, truncate_sql_for_log,
 };
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::relay_status::RelayStatusRegistry;
@@ -350,12 +350,15 @@ impl StatsService for StatsServiceImpl {
         let _read_guard = self.store.query_visibility().read().await;
         let visibility_wait = visibility_started.elapsed();
 
-        // Plan every live namespace from its pinned state (schema, bounds,
+        let query_ctx = make_ctx();
+        let names = query_namespaces(&query_ctx, &sql).map_err(map_query_error)?;
+
+        // Plan only referenced namespaces from their pinned state (schema, bounds,
         // partitions, exact object references) on the blocking pool. Objects are
         // localized later, and only for the segments the scan selects.
         let store = Arc::clone(&self.store);
         let provider_started = Instant::now();
-        let providers = run_blocking(move || store.query_providers()).await?;
+        let providers = run_blocking(move || store.query_providers(&names)).await?;
         let provider_elapsed = provider_started.elapsed();
         // Object-backed tables bound the read themselves; that bound cannot be
         // configured away.
@@ -368,7 +371,6 @@ impl StatsService for StatsServiceImpl {
         // Bound execution by the earlier of the server ceiling and the caller's
         // remaining budget. On elapse the query future is dropped (aborting the
         // scan), so a timed-out caller cannot leave CPU work behind.
-        let query_ctx = make_ctx();
         let query = run_query_over(&query_ctx, providers, &sql);
         let result = run_within_query_timeout(
             query_timeout(ctx.time_remaining(), table_bound),

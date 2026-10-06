@@ -7,21 +7,33 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic task contracts, submission extraction, and shared grading"
 requires-python = ">=3.12,<3.14"
-dependencies = ["marin-rigging", "pydantic>=2.0", "verifyit"]
+dependencies = ["marin-rigging", "pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
+
+[project.optional-dependencies]
+pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore", "numpy>=1.26"]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-timeout"]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
 [tool.uv.workspace]
 
+[tool.uv]
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
 [tool.uv.sources]
-marin-rigging = { path = "../rigging", editable = true }
 verifyit = { path = "../verifyit", editable = true }
+marin-shellbox = { path = "../shellbox", editable = true }
+marin-finestore = { path = "../finestore", editable = true }
+marin-zephyr = { path = "../zephyr", editable = true }
+marin-fray = { path = "../fray", editable = true }
+marin-iris = { path = "../iris", editable = true }
+marin-rigging = { path = "../rigging", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 timeout = 60
 addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
 markers = [
@@ -42,6 +54,7 @@ known-first-party = ["taskcompendium"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
-project-includes = ["src"]
+use-ignore-files = false
+project-includes = ["src/**/*.py"]
 search-path = ["src", "../verifyit/src", "../rigging/src"]
 python-interpreter = ".venv/bin/python"

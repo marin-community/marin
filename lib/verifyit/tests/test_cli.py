@@ -18,14 +18,14 @@ from verifyit.spec import FunctionCall, Mode, NumericSpec, PredictedActionSpec, 
     [
         *[
             (
-                NumericSpec("0.3", tolerance_abs="0", tolerance_rel="0"),
+                NumericSpec("0.3", tolerance_abs=0.0, tolerance_rel=0.0),
                 "0.3",
                 'mode = "numeric"\n' + invalid_fields + "\n",
             )
             for invalid_fields in (
-                'expected = 0.30000000000000004\ntolerance_abs = "0"\ntolerance_rel = "0"',
-                'expected = "0.3"\ntolerance_abs = 0.01\ntolerance_rel = "0"',
-                'expected = "0.3"\ntolerance_abs = "0"',
+                "expected = 0.30000000000000004\ntolerance_abs = 0.0\ntolerance_rel = 0.0",
+                'expected = "0.3"\ntolerance_abs = "0.01"\ntolerance_rel = 0.0',
+                'expected = "0.3"\ntolerance_abs = 0.0',
             )
         ],
         *[

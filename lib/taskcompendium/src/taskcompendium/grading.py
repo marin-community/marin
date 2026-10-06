@@ -11,8 +11,6 @@ execution runtimes own provider decoding and workspace lifecycle.
 """
 
 import json
-from dataclasses import dataclass
-from enum import StrEnum
 
 from pydantic import JsonValue
 from verifyit.candidate import (
@@ -45,25 +43,13 @@ from taskcompendium.grading_contract import (
     TextSubmission,
     resolve_verifier,
 )
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AssistantToolCalls,
     TaskSpec,
     VerifierSpec,
 )
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
-
-
-class Outcome(StrEnum):
-    GRADED = "graded"
-    SUBMISSION_FAILURE = "submission_failure"
-    INFRA_ERROR = "infra_error"
-
-
-@dataclass(frozen=True)
-class GradeResult:
-    status: Outcome
-    reward: float | None
-    error: str | None = None
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
@@ -130,5 +116,5 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
     )
 
 
-def numeric_answer(expected: str, *, tolerance_abs: str, tolerance_rel: str) -> VerifierSpec:
+def numeric_answer(expected: str, *, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))

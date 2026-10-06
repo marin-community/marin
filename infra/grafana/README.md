@@ -865,6 +865,23 @@ metric names from the request. Keep separate sources when namespaces or cardinal
 profiles differ; Jobs deliberately uses five sources, while Node uses one. Add a
 page-level test that requests every view and asserts the cold Finelog call count.
 
+Set the same explicit `maxDataPoints` on panels sharing a dataset (360 for
+Training, Node, Jobs, Runs, RL, and Inference; 100 for Accelerator). Grafana's
+automatic point count depends on panel width and can otherwise send different
+`${__interval_ms}` values for the same window, defeating shared computation.
+Panel time-range overrides remain independent. The bridge also coalesces identical
+`SourceQuery` requests across datasets and retains their Arrow results for the
+20-second cache TTL, capped at 128 MiB across source results. Exact SQL and time
+bounds remain part of the source key; historical ranges are not rounded.
+
+Training metric views query only the visible metrics window. Attempt history and
+execution-health views load independently, so a loss chart does not wait for Iris
+task state or seven-day retry history. Attempts and execution age share one
+seven-day ordered aggregate, independent of the panel's graph range. The run
+picker refreshes on dashboard load; reload the dashboard to discover a new run.
+Dataset completion logs include the cache key, while `dashboard source query`
+logs record actual Finelog calls rather than cache hits.
+
 Dashboards address the `finelog-marin` hub directly rather than through a
 datasource variable. The hub is the fleet view: the CoreWeave clusters forward
 into it and their rows carry an origin `cluster` column, while `finelog-marin-dev`

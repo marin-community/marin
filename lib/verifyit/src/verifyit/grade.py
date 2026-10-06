@@ -62,6 +62,14 @@ class InvalidTask(Exception):
     """The task is malformed: a reference is missing or its grading contract is invalid."""
 
 
+class GradingInfraError(RuntimeError):
+    """A grading failure with diagnostic fields for the unscored verdict."""
+
+    def __init__(self, message: str, **detail: object) -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
 @dataclass(frozen=True)
 class Reward:
     reward: float
@@ -213,20 +221,21 @@ def finalize_preparation_failure(
 
 
 def numeric_tolerance(spec: NumericSpec) -> Fraction:
-    """Validate exact private literals and return the effective tolerance."""
+    """Validate the reference and return exact tolerance from float decimal spellings."""
     try:
         expected = numeric_literal(spec.expected)
-        absolute = numeric_literal(spec.tolerance_abs)
-        relative = numeric_literal(spec.tolerance_rel)
-    except ValueError as error:
+        for tolerance in (spec.tolerance_abs, spec.tolerance_rel):
+            if type(tolerance) not in (int, float) or not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError("numeric tolerances must be finite nonnegative numbers")
+        absolute = Fraction(str(spec.tolerance_abs))
+        relative = Fraction(str(spec.tolerance_rel))
+    except (ValueError, OverflowError) as error:
         raise InvalidTask(f"invalid numeric contract: {error}") from error
-    if absolute < 0 or relative < 0:
-        raise InvalidTask("numeric tolerances must be nonnegative")
     return max(absolute, relative * abs(expected))
 
 
-def infra_error(message: str) -> Reward:
-    return Reward(0.0, Status.INFRA_ERROR, {"error": message})
+def infra_error(message: str, **detail: object) -> Reward:
+    return Reward(0.0, Status.INFRA_ERROR, {"error": message, **detail})
 
 
 def write_reward(logs_dir: Path, reward: Reward) -> None:
@@ -290,7 +299,7 @@ def positive_candidate(spec: Spec) -> str | None:
 
 
 def negative_candidate(spec: Spec) -> str | None:
-    """Return a candidate that must score zero, when a safe perturbation exists."""
+    """Return a zero-scoring negative control when available."""
     if isinstance(spec, McqSpec):
         other = "B" if spec.expected.upper() != "B" else "A"
         return f"Answer: {other}"
@@ -300,11 +309,13 @@ def negative_candidate(spec: Spec) -> str | None:
         except InvalidTask:
             return None
         expected = numeric_literal(spec.expected)
-        candidate = expected + max(2 * tolerance, 1)
+        step = max(2 * tolerance, 1)
         limit = 10**MAX_NUMERIC_DIGITS
-        if abs(candidate.numerator) >= limit or candidate.denominator >= limit:
-            return None
-        return f"\\boxed{{{candidate}}}"
+        for candidate in (expected + step, expected - step):
+            if abs(candidate.numerator) < limit and candidate.denominator < limit:
+                return f"\\boxed{{{candidate}}}"
+        # If both perturbations exceed literal bounds, use a malformed submission as the negative control.
+        return r"\boxed{not a number}"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None
@@ -364,6 +375,9 @@ def run(spec_path: Path, workspace: Path) -> Reward:
         return invalid_task(f"cannot read verifier spec {spec_path}: {error}")
     try:
         return _validated_reward(grade(spec, tests_dir=spec_path.parent, workspace=workspace))
+    except GradingInfraError as error:
+        logger.error("grader failed: %s", error)
+        return infra_error(f"{type(error).__name__}: {error}", **error.detail)
     except Exception as error:
         logger.error("grader crashed: %s", traceback.format_exc())
         return infra_error(f"{type(error).__name__}: {error}")

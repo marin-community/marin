@@ -142,7 +142,7 @@ def test_invalid_private_verifier_is_not_scored_as_agent_failure():
     "wire_kind,verifier,answer_type,correct,wrong",
     [
         ("exact", exact_answer("yes"), AnswerType.TEXT, "yes", "no"),
-        ("numeric", numeric_answer("12.0", tolerance_abs="0.0", tolerance_rel="0.0"), AnswerType.NUMBER, "12", "13"),
+        ("numeric", numeric_answer("12.0", tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
         ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
     ],
 )

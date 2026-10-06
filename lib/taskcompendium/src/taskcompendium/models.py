@@ -346,6 +346,8 @@ class TaskSpec(BaseModel):
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
     final_tools: tuple[FunctionDefinition, ...] = ()
+    interaction_tools: tuple[FunctionDefinition, ...] = ()
+    output_paths: tuple[str, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source

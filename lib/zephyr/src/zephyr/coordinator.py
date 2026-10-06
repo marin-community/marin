@@ -38,7 +38,6 @@ from zephyr.dashboard.app import (
     create_dashboard_application,
 )
 from zephyr.dashboard.coordinator import CoordinatorDashboard
-from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import (
     ROOT_PLAN_PREFIX,
     Join,
@@ -406,7 +405,6 @@ class ZephyrCoordinator:
         self._worker_counters: dict[tuple[str, str], CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: ActorGroup | None = None  # owned, created by start_workers()
-        self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._worker_task_ids: dict[str, str] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
@@ -490,15 +488,11 @@ class ZephyrCoordinator:
         """Return the dashboard app that shares the actor endpoint."""
         return self._web_application
 
-    def register_worker(
-        self, worker_id: str, worker_handle: ActorHandle, task_id: str = ""
-    ) -> tuple[MemoryTableRegistration, ...]:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle, task_id: str = "") -> None:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state. The
-        returned table registrations let the worker restore table metadata
-        before it polls for tasks. Table data is reloaded lazily on first use.
+        preemption) by updating the stale handle and resetting worker state.
         """
         with self._lock:
             if worker_id in self._worker_handles:
@@ -517,24 +511,6 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
-            return tuple(self._memory_tables.values())
-
-    def register_memory_table(self, registration: MemoryTableRegistration) -> None:
-        """Publish a table after every worker validates its source shards."""
-        with self._lock:
-            if registration.table_id in self._memory_tables:
-                raise ValueError(f"memory table {registration.table_id!r} is already registered")
-            self._memory_tables[registration.table_id] = registration
-
-    def memory_table_registration(self, table_id: str) -> MemoryTableRegistration | None:
-        """Return metadata needed to reload a table on a replacement worker."""
-        with self._lock:
-            return self._memory_tables.get(table_id)
-
-    def unregister_memory_table(self, table_id: str) -> None:
-        """Remove a table from future worker recovery."""
-        with self._lock:
-            self._memory_tables.pop(table_id, None)
 
     def deregister_worker(self, worker_id: str) -> None:
         """Remove a sub-worker that has finished its stage pool."""
