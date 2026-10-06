@@ -14,6 +14,7 @@ import subprocess
 import sys
 import textwrap
 
+import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -262,6 +263,27 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_cli_ragged_dot_selection_overrides_environment(monkeypatch, tmp_path):
+    cfg = _tiny_config()
+    config_path = tmp_path / "snowball.yaml"
+    with config_path.open("w") as config_file:
+        draccus.dump(cfg, config_file)
+    explicit_cfg = draccus.parse(
+        SnowballConfig,
+        args=["--ragged_dot_implementation", "xla"],
+        config_path=config_path,
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        ids = _device_batched_ids(cfg.vocab_size, 8)
+        monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
+        reference = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        expected = hax.named_jit(lambda m, x: m(x))(reference, ids)
+        monkeypatch.setenv("RAGGED_DOT_IMPL", "invalid")
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), explicit_cfg, key=jax.random.key(3))
+        actual = hax.named_jit(lambda m, x: m(x))(model, ids)
+    np.testing.assert_allclose(actual.array, expected.array, rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.parametrize(

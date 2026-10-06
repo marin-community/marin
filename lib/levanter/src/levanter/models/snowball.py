@@ -37,6 +37,7 @@ from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 import haliax as hax
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
+from haliax.nn.ragged_dot import Implementation as RaggedDotImplementation
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -229,6 +230,7 @@ class SnowballConfig(HFCompatConfig):
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
+    ragged_dot_implementation: RaggedDotImplementation = "auto"
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -562,6 +564,7 @@ class SnowballMoEMLP(eqx.Module):
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
                 implementation=cfg.moe_implementation,
+                ragged_dot_implementation=cfg.ragged_dot_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_EP_CAPACITY_FACTOR,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
