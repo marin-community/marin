@@ -33,10 +33,10 @@ from taskcompendium.environment import DockerBuild, EnvironmentFile, Environment
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec, format_conversation
-from taskcompendium.submission import PlainText
+from taskcompendium.submission import PlainText, submission_instruction
 from verifyit.spec import ExactSpec, NumericSpec
 
-from taskforge.build.sdk import Build, BuildOutput, Grader
+from taskforge.build.sdk import DOCKER_IMAGE_REQUIREMENTS, NUMERIC_LITERALS, Build, BuildFailure, BuildOutput, Grader
 from taskforge.build.step import SDK_VERSION, StepRole, step
 from taskforge.llm.agent import AgentStop
 from taskforge.llm.policy import Message
@@ -64,6 +64,10 @@ EXECUTION = TaskExecution()
 """Template tasks have one stage and set no deadlines or agent user."""
 CONVENTION = PlainText(id="plain_text")
 """Template tasks take a plain-text final reply."""
+SUBMISSION = (
+    "RolloutEngine ends the solver's prompt with this submission instruction: "
+    f"{submission_instruction(CONVENTION)!r}. The final reply is graded as a {CONVENTION.id} submission."
+)
 SOURCE_DATASET = "taskforge"
 
 TASK_CONTEXT = """\
@@ -148,7 +152,7 @@ class FixturesDraft(BaseModel):
 class DockerfileDraft(BaseModel):
     """Submit the task image: a Dockerfile and the build-context files it copies."""
 
-    dockerfile: str = Field(description="Dockerfile content; WORKDIR /workspace.")
+    dockerfile: str = Field(description="Dockerfile content; WORKDIR /workspace; the image provides sh and setsid.")
     context_files: list[FileDraft] = Field(
         description="Other build-context files, paths relative to the context root as /name."
     )
@@ -162,7 +166,10 @@ class GraderDraft(BaseModel):
     )
     script: str = Field(description="For kind=script, the grader script source; otherwise empty.")
     private_files: list[FileDraft] = Field(description=f"Data files the script reads, under {GRADER_DIR}/.")
-    expected: str = Field(description="For exact or numeric, the expected final answer; otherwise empty.")
+    expected: str = Field(
+        description="For exact, the expected final answer. For numeric, a numeric literal string such as 42, "
+        "0.125, 1/8 or 1.5e3. Otherwise empty."
+    )
     tolerance: float = Field(description="For numeric, the absolute tolerance; otherwise 0.")
     answer_contract: str = Field(description="The exact output format the solver must follow, for the instruction.")
     reference_reply: str = Field(description="A complete correct final reply that follows the contract.")
@@ -309,7 +316,8 @@ async def environment(b: Build, made: Fixtures, guidance: str) -> EnvironmentSpe
         return b.spec.environment(EnvironmentKind.SHELLSIM, files=made.agent_files, workdir=WORKDIR)
     request = (
         "Write the task image: a Dockerfile (WORKDIR /workspace, no network at run time) and any build-context "
-        f"files it copies. The solver-visible files below are installed by the task, not the image.\n\n"
+        f"files it copies. {DOCKER_IMAGE_REQUIREMENTS} The solver-visible files below are installed by the task, "
+        "not the image.\n\n"
         f"{files_text(made.agent_files)}"
     )
 
@@ -347,6 +355,7 @@ async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: s
         f"{GRADER_CONTRACT.format(script=GRADER_SCRIPT, workdir=WORKDIR, grader=GRADER_DIR)}\n\n"
         f"# Fixture facts\n\n{made.facts}\n\n# Solver-visible files\n\n{files_text(made.agent_files)}\n\n"
         f"# Private files already under {GRADER_DIR}/\n\n{files_text(made.private_files)}\n\n"
+        f"{SUBMISSION}\n\n{NUMERIC_LITERALS}\n\n"
         "Write the grader from the proposal's 'Grader design and controls' section. Prefer kind=script for "
         "anything beyond one exact or numeric answer. Give partial credit only where the proposal does. The "
         "reference reply and files must earn full credit."
@@ -355,16 +364,19 @@ async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: s
     async def problem(draft: GraderDraft) -> str | None:
         if draft.kind == "script" and not draft.script.strip():
             return "kind=script needs the script source"
-        verifier = grader_verifier(b, draft, made)
-        reference = await b.try_grader(
-            machine,
-            verifier,
-            AnswerType.TEXT,
-            CONVENTION,
-            "(instruction)",
-            draft.reference_reply,
-            [environment_file(f) for f in draft.reference_files],
-        )
+        try:
+            verifier = grader_verifier(b, draft, made)
+            reference = await b.try_grader(
+                machine,
+                verifier,
+                AnswerType.TEXT,
+                CONVENTION,
+                "(instruction)",
+                draft.reference_reply,
+                [environment_file(f) for f in draft.reference_files],
+            )
+        except (ValueError, BuildFailure) as error:
+            return str(error)
         if reference.status != Outcome.GRADED or (reference.reward or 0.0) < FULL_CREDIT:
             return (
                 f"the reference answer was graded {reference.status} reward={reference.reward}: "
@@ -397,7 +409,7 @@ async def instructions(b: Build, made: Fixtures, graded: Grader, guidance: str) 
     """Write the solver-facing instruction around the grader's answer contract."""
     request = (
         f"{MACHINE_FACTS.format(grader=GRADER_DIR)}\n\n# Solver-visible files\n\n{files_text(made.agent_files)}\n\n"
-        f"# Answer contract the grader enforces\n\n{graded.answer_contract}\n\n"
+        f"# Answer contract the grader enforces\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"
         "Write the solver-facing instruction from the proposal's Task section: the scenario, every input the "
         "solver needs that is not in a file, the deliverable, and the answer contract verbatim. Never include "
         "a graded answer, the grader's existence details, or hints that give the answer away."
@@ -464,7 +476,7 @@ async def controls(b: Build, task: TaskSpec, graded: Grader, guidance: str) -> t
     """Write fixed controls for the assembled task; ``validate`` replays them later."""
     request = (
         f"# Task conversation\n\n{format_conversation(task.context.events)}\n\n"
-        f"# Answer contract\n\n{graded.answer_contract}\n\n"
+        f"# Answer contract\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"
         f"# Reference reply\n\n{graded.reference_reply}\n\n# Reference files\n\n{files_text(graded.reference_files)}\n\n"
         "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
         "known_correct positive control (reward_min 0.99), one empty_or_malformed control, one plausible_wrong "

@@ -56,6 +56,16 @@ from taskforge.spec.controls import Control
 MACHINE_CLEANUP_TIMEOUT = 120.0
 """Seconds ``Build.machine`` and ``Build.try_grader`` wait for a machine to close; a failed close is
 logged, not raised."""
+DOCKER_IMAGE_REQUIREMENTS = (
+    "A Docker task image (EnvironmentKind.DOCKER) must provide `sh` and `setsid` (util-linux, or busybox "
+    "with its setsid applet): shellbox's Docker backend starts every command under setsid and refuses an image "
+    "without it, so distroless and scratch images cannot run a task."
+)
+NUMERIC_LITERALS = (
+    "A numeric answer's expected value (verifyit `NumericSpec.expected`) is a literal string: an integer, "
+    'decimal, scientific-notation number or integer fraction such as "42", "-0.125", "1.5e3" or "1/8". '
+    'It is never a float or an expression (not 0.125, not "sqrt(2)").'
+)
 TRY_GRADER_SOURCE = "taskforge.try_grader"
 """``Source.dataset`` of the provisional task ``Build.try_grader`` grades against."""
 
@@ -421,6 +431,7 @@ def sdk_reference() -> str:
         lines += _describe(f"b.llm.{name}", getattr(BuildLLM, name), "  ")
     for name in ("Grader", "BuildOutput", "BuildFailure"):
         lines += _describe(name, SDK_EXPORTS[name])
+    lines += ["## Machines and answers", "", f"- {DOCKER_IMAGE_REQUIREMENTS}", f"- {NUMERIC_LITERALS}", ""]
     lines += _module_reference("Steps", step_module, ("step", "StepRole", "Blob", "Resource"))
     lines += _module_reference(
         "Task spec helpers, available as `spec`",

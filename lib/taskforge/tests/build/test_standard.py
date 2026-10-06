@@ -11,7 +11,9 @@ from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import VerifierKind
 
 from taskforge.build.author import compile_program
-from taskforge.build.run import run_build
+from taskforge.build.run import item_id_for, run_build
+from taskforge.build.sdk import Build
+from taskforge.build.step import StepCache
 from taskforge.build.template import standard
 from taskforge.llm.agent import AgentTool
 from taskforge.spec.controls import ControlCategory
@@ -123,6 +125,25 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
         ControlCategory.TASK_SPECIFIC_SHORTCUT,
     }
     assert {r.name for r in draft.provenance.resources} >= {"research/notes.md", standard.GRADER_SCRIPT}
+
+
+async def test_grader_step_feeds_back_a_numeric_answer_that_is_not_a_literal(proposal, tmp_path, services, fake_glm):
+    def numeric(expected: str) -> None:
+        arguments = {**grader_call(""), "kind": "numeric", "expected": expected, "reference_reply": "42"}
+        fake_glm.stream(tool_calls=(("submit_grader", json.dumps(arguments)),), finish="tool_calls")
+
+    numeric("sqrt(1764)")
+    numeric("42")
+    made = standard.Fixtures(agent_files=(), private_files=(), facts="6 * 7 = 42")
+    cache = StepCache(root=tmp_path / "cache", item_id=item_id_for(proposal))
+    async with services(fake_glm.base_url) as s:
+        b = Build(proposal, cache.item_id, s, cache, tmp_path / "scratch", 0)
+        machine = b.spec.environment(EnvironmentKind.SHELLSIM, workdir=standard.WORKDIR)
+        graded = await standard.grader(b, made, machine, "")
+
+    assert graded.verifier.kind == VerifierKind.NUMERIC_ANSWER
+    retry = fake_glm.requests[1]["messages"][-1]["content"]
+    assert "numeric value requires one finite scalar literal" in retry
 
 
 async def test_control_files_with_shell_metacharacters_in_their_paths_are_written_verbatim():
