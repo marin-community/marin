@@ -22,7 +22,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.russell_rsi import test_teacher_diversity_study as fixture_source
-from experiments.post_training.russell_rsi.launch_post_teacher_sft import adopted
+from experiments.post_training.russell_rsi.launch import adopted
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_diversity_study import diversity_workflow
 from experiments.post_training.russell_rsi.test_teacher_four_pass import four_update_qualification

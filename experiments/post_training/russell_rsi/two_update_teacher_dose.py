@@ -13,6 +13,7 @@ from typing import cast
 import click
 from levanter.main.train_lm import TrainLmConfig
 from marin.evaluation.records import record_path
+from marin.execution.artifact import artifact_record_identity
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
@@ -23,12 +24,12 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
+from experiments.post_training.russell_rsi.launch import adopted
 from experiments.post_training.russell_rsi.launch_interrupted_calibration_sft import (
     foreground_build_options,
     require_reviewed_source,
 )
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
-    adopted,
     post_sft_evaluation_stages,
     qualified_optimizer_steps,
     qualified_sft_export,
@@ -71,7 +72,7 @@ def completed_training_rows(config: dict, expected: ArtifactStep) -> ArtifactSte
     status = PinnedFile(**pins["status"])
     status_bytes = status.read_bytes()
     if (
-        f"{record['name']}@{record['version']}:{record['fingerprint']}" != artifact_identity(expected)
+        artifact_record_identity(record) != artifact_identity(expected)
         or producer_pin.uri != prefix_join(root, ".artifact.json")
         or status.uri != prefix_join(root, ".executor_status")
         or status_bytes.decode().strip() != STATUS_SUCCESS
@@ -247,7 +248,6 @@ def two_update_dose_evaluation(config: dict) -> dict[str, ArtifactStep]:
     )
     return post_sft_evaluation_stages(
         {**original, "version": VERSION},
-        model=model,
         retention=baseline.retention,
         export_uri=export,
         checkpoints=[("sft", model)],
