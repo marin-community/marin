@@ -55,6 +55,7 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
+    SuppliedState,
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -1414,3 +1415,166 @@ async def test_artifact_archive_cleanup_failure_retains_the_grade_or_primary_err
     for machine in factory.machines:
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))
+
+
+def shell_answer_turns(answer: str) -> list[dict]:
+    command = f"printf %s {answer} > /workspace/answer"
+    return [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "write",
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": json.dumps({"command": command})},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Completed."},
+    ]
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_supplied_workspace_grades_like_a_rollout_without_model_calls(answer, reward):
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                setup=(EnvironmentCommand(argv=("sh", "-c", "echo 0 > /workspace/answer"), timeout=5),),
+            )
+        }
+    )
+    rollout = await engine(
+        ReplayModel(shell_answer_turns(answer)), {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
+    ).run(task, execution=TaskExecution())
+    unused_model = ReplayModel([])
+    factory = RecordingShellSimFactory()
+
+    grade = await engine(unused_model, {EnvironmentKind.SHELLSIM: factory}).grade_state(
+        task,
+        SuppliedState(files=(EnvironmentFile(path="/workspace/answer", content=answer.encode()),)),
+        execution=TaskExecution(),
+    )
+
+    assert (grade.status, grade.reward) == (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, reward)
+    assert unused_model.requests == []
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_supplied_transcript_is_graded_by_the_engine_submission_convention(answer, reward):
+    task = arithmetic_task()
+    messages = (
+        {"role": "user", "content": "What is six plus six?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "answer",
+                    "type": "function",
+                    "function": {"name": "submit_answer", "arguments": json.dumps({"answer": answer})},
+                }
+            ],
+        },
+    )
+    runner = ShellboxRolloutEngine(
+        ReplayModel([]).complete, {}, max_turns=1, command_timeout=5, cleanup_timeout=5, convention=AnswerCall(id="a")
+    )
+
+    grade = await runner.grade_state(task, SuppliedState(messages=messages), execution=TaskExecution())
+
+    assert (grade.status, grade.reward) == (Outcome.GRADED, reward)
+    with pytest.raises(ValueError, match="null environment"):
+        await runner.grade_state(
+            task,
+            SuppliedState(messages, files=(EnvironmentFile(path="/workspace/answer", content=b"12"),)),
+            execution=TaskExecution(),
+        )
+
+
+@dataclass
+class StallingShellSimFactory:
+    """ShellSim machines whose `stall` command never finishes."""
+
+    machines: list = field(default_factory=list)
+
+    async def create(self, spec):
+        machine = await ShellSimMachineFactory().create(spec)
+        self.machines.append(machine)
+
+        class Stalling:
+            async def run(self, command):
+                if command.argv == ("stall",):
+                    await asyncio.Future()
+                return await machine.run(command)
+
+            def __getattr__(self, name):
+                return getattr(machine, name)
+
+        return Stalling()
+
+
+@pytest.mark.parametrize(
+    "failure,operation",
+    [("setup", RolloutOperation.START), ("state", RolloutOperation.STATE), ("attempt", RolloutOperation.ATTEMPT)],
+)
+async def test_supplied_state_failures_use_rollout_operations_and_release_the_machine(failure, operation):
+    task = file_task()
+    if failure == "setup":
+        task = task.model_copy(
+            update={
+                "environment": EnvironmentSpec(
+                    kind=EnvironmentKind.SHELLSIM, setup=(EnvironmentCommand(argv=("false",), timeout=5),)
+                )
+            }
+        )
+    command = {"setup": (), "state": ("false",), "attempt": ("stall",)}[failure]
+    commands = (EnvironmentCommand(argv=command, timeout=5),) if command else ()
+    factory = StallingShellSimFactory()
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}).grade_state(
+            task, SuppliedState(commands=commands), execution=TaskExecution(attempt_timeout=1)
+        )
+
+    assert interrupted.value.operation == operation
+    assert interrupted.value.rollout.grade.status == Outcome.UNAVAILABLE
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
+
+
+async def test_supplied_state_grades_one_stage_after_preparing_earlier_stages():
+    marker_check = ShellVerifierSpec(
+        argv=("sh", "-c", "test -f /workspace/first && test -f /workspace/second && test $(cat /workspace/answer) = 12"),
+        timeout=5,
+        reward=ExitCodeReward(),
+    )
+    stage_verifier = VerifierSpec(kind=VerifierKind.SHELL, parameters_json=marker_check.model_dump_json())
+    task = file_task().model_copy(
+        update={
+            "stages": (
+                TaskStage(name="first", verifier=file_task().verifier),
+                TaskStage(name="second", verifier=stage_verifier),
+            ),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.STAGED,
+                parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+            ),
+        }
+    )
+    execution = TaskExecution(
+        stages={
+            name: StageExecution(setup=(EnvironmentCommand(argv=("touch", f"/workspace/{name}"), timeout=5),))
+            for name in ("first", "second")
+        }
+    )
+    runner = engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()})
+    state = SuppliedState(files=(EnvironmentFile(path="/workspace/answer", content=b"12"),))
+
+    grade = await runner.grade_state(task, state, execution=execution, stage="second")
+
+    assert (grade.status, grade.reward) == (Outcome.GRADED, 1.0)
+    assert "stages" not in grade.diagnostics
+    with pytest.raises(ValueError, match="does not select"):
+        await runner.grade_state(task, state, execution=execution)

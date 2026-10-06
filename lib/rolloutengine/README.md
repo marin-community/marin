@@ -10,6 +10,8 @@ The engine owns model calls, conversation and token accumulation, stage progress
 
 `ShellboxRolloutEngine.run(task, execution=...)` accepts a `TaskSpec` and separate
 `TaskExecution` settings, then asynchronously returns one rollout.
+`ShellboxRolloutEngine.grade_state(task, state, execution=...)` grades a supplied
+final transcript and workspace with the same machine setup and verifier, without model calls.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
 for the session lifecycle, exact-token contract, failure handling, and backend configuration.
 
