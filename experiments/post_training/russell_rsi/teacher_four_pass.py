@@ -48,6 +48,12 @@ from experiments.post_training.russell_rsi.teacher_collection import (
     TEACHER_FAMILY_LIMIT,
     selected_teacher_tasks,
 )
+from experiments.post_training.russell_rsi.teacher_sft_export_qualification import (
+    PROTOCOL as RECOVERY_PROTOCOL,
+)
+from experiments.post_training.russell_rsi.teacher_sft_export_qualification import (
+    qualified_recovered_four_update_sft,
+)
 
 PROTOCOL = "champion-rsi-teacher-four-pass-prospective-v1"
 SOURCE_BANK_TASKS = 28
@@ -307,7 +313,13 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
 
 
 def validated_study_post_workflow(
-    config: dict, stage: str, *, study: dict, study_protocol: str, sft: ArtifactStep[LevanterCheckpoint]
+    config: dict,
+    stage: str,
+    *,
+    study: dict,
+    study_protocol: str,
+    sft: ArtifactStep[LevanterCheckpoint],
+    recovered: ArtifactStep[LevanterCheckpoint] | None = None,
 ) -> dict[str, ArtifactStep]:
     """Bind a separately validated SFT study to unchanged continuation gates."""
     decision = require_four_pass_condition(study)
@@ -347,13 +359,33 @@ def validated_study_post_workflow(
     qualification = pinned_record(config, "qualification")
     if qualification["source_config_sha256"] != config["sft_config_sha256"]:
         raise ValueError("Teacher study qualification identifies different SFT configuration")
-    export = qualified_four_update_sft(qualification, identity=artifact_identity(sft), root=config["sft_uri"])
+    if qualification["protocol"] == "teacher-sft-four-update-qualification-v1":
+        if recovered is not None:
+            raise ValueError("Strict qualification cannot substitute a recovered export")
+        export = qualified_four_update_sft(qualification, identity=artifact_identity(sft), root=config["sft_uri"])
+    elif qualification["protocol"] == RECOVERY_PROTOCOL:
+        if recovered is None:
+            raise ValueError("Amended qualification requires the reconstructed recovery artifact")
+        export = qualified_recovered_four_update_sft(
+            qualification,
+            producer_identity=artifact_identity(sft),
+            producer_root=config["sft_uri"],
+            recovery_identity=artifact_identity(recovered),
+            recovery_root=config["recovery_uri"],
+            source_config_sha256=config["sft_config_sha256"],
+        )
+    else:
+        raise ValueError("Unknown SFT qualification protocol")
     model = ArtifactStep.adopt(
         f"checkpoints/russell-rsi-{study_protocol}-qualified-hf",
         config["version"],
         export,
         kind=LevanterCheckpoint,
-        config={"sft": artifact_identity(sft), "qualification_sha256": config["qualification_sha256"]},
+        config={
+            "sft": artifact_identity(sft),
+            **({"recovery": artifact_identity(recovered)} if recovered is not None else {}),
+            "qualification_sha256": config["qualification_sha256"],
+        },
     )
     baseline = checkpoint_score(decision["incumbent"])
     original_parent = checkpoint_score(decision["original_parent"])

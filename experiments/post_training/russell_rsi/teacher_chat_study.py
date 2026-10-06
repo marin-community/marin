@@ -51,6 +51,7 @@ from experiments.post_training.russell_rsi.teacher_four_pass import (
     require_four_pass_condition,
     validated_study_post_workflow,
 )
+from experiments.post_training.russell_rsi.teacher_sft_export_recovery import export_recovery_workflow
 
 PROTOCOL = "champion-rsi-teacher-chat-four-family-v1"
 NAMESPACE = "teacher-chat-four-family"
@@ -512,4 +513,19 @@ def chat_study_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep
     original = source_study(parse_study(sft_config))
     # Reconstruct the producer identity without executing its training graph.
     sft = chat_study_workflow(sft_config)["train"]
-    return validated_study_post_workflow(config, stage, study=original, study_protocol=PROTOCOL, sft=sft)
+    recovered = None
+    if "recovery_config_uri" in config:
+        recovery_config = PinnedFile(config["recovery_config_uri"], config["recovery_config_sha256"]).read_json()
+        if recovery_config["producer_config"]["sha256"] != config["sft_config_sha256"]:
+            raise ValueError("Recovery config identifies another original SFT study")
+        recovered = export_recovery_workflow(recovery_config, sft)["recover"]
+        if recovered.path(config["recovery_artifact_prefix"]) != config["recovery_uri"]:
+            raise ValueError("Post-SFT recovery URI differs from the reconstructed artifact path")
+    return validated_study_post_workflow(
+        config,
+        stage,
+        study=original,
+        study_protocol=PROTOCOL,
+        sft=sft,
+        recovered=recovered,
+    )
