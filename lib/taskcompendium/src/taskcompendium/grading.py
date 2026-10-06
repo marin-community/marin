@@ -25,6 +25,7 @@ from verifyit.modes.grade_structured_exact import grade_structured_exact_candida
 from verifyit.numeric import NumericCandidateError
 from verifyit.spec import (
     ExactSpec,
+    McqSpec,
     NumericSpec,
     PredictedActionSpec,
     Spec,
@@ -70,27 +71,28 @@ def validate_verifier(specification: VerifierSpec) -> None:
 
 
 def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
-    if isinstance(verifier, StructuredExactSpec):
-        if not isinstance(submission, (JsonSubmission, StateSubmission)):
+    match verifier, submission:
+        case StructuredExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
+            return GradeResult(Outcome.GRADED, grade_structured_exact_candidate(verifier, value).reward)
+        case PredictedActionSpec(), ActionSubmission(message=final):
+            calls = (
+                tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
+                if isinstance(final, AssistantToolCalls)
+                else ()
+            )
+            return GradeResult(Outcome.GRADED, grade_predicted_action_candidate(verifier, calls).reward)
+        case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
+            if not isinstance(value, str):
+                return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "Text verifier requires a string JSON value")
+            return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, value).reward)
+        case ExactSpec() | NumericSpec() | McqSpec(), TextSubmission(value=value):
+            return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, value).reward)
+        case StructuredExactSpec(), _:
             raise TypeError("Structured exact verifier requires a JSON or state submission")
-        return GradeResult(Outcome.GRADED, grade_structured_exact_candidate(verifier, submission.value).reward)
-    if isinstance(verifier, PredictedActionSpec):
-        if not isinstance(submission, ActionSubmission):
+        case PredictedActionSpec(), _:
             raise TypeError("Predicted-action verifier requires an action submission")
-        final = submission.message
-        calls = (
-            tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
-            if isinstance(final, AssistantToolCalls)
-            else ()
-        )
-        return GradeResult(Outcome.GRADED, grade_predicted_action_candidate(verifier, calls).reward)
-    if isinstance(verifier, ExactSpec) and isinstance(submission, (JsonSubmission, StateSubmission)):
-        if not isinstance(submission.value, str):
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "Text verifier requires a string JSON value")
-        return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
-    if not isinstance(submission, TextSubmission):
-        raise TypeError("Text candidate verifier requires a text submission")
-    return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
+        case _:
+            raise TypeError("Text candidate verifier requires a text submission")
 
 
 async def grade_answer(specification: TaskSpec, convention: Convention, attempt: GradingAttempt) -> GradeResult:
