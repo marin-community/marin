@@ -952,6 +952,10 @@ class GrugModelConfig:
     go to the residual stream as usual, the last W skip it and, RMS-normed (``lm_head_extra_norm``), are
     concatenated to the final-normed stream before the lm_head (``output_proj`` is ``[hidden_dim + W, V]``)."""
     final_write_extra: int = 0
+    lm_head_prototypes: int = 1
+    """K > 1: each vocabulary token has K lm_head vectors (``output_proj`` is ``[D, K V]``, token v's k-th at column
+    ``k V + v``) and ``p(v) ∝ sum_k exp(logit_{v,k})``: a softmax over K V sub-tokens summed per token, which
+    lifts the rank-D softmax bottleneck. Training and evals use it; ``logits`` returns the per-token logsumexp."""
     """Internal: set on the final layer's config by ``lm_head_extra_dim``."""
     expert_private_dim: int = 0
     """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
@@ -1853,6 +1857,13 @@ class GrugModelConfig:
             self.latent_dim is None or self.latent_dim % self.latent_matryoshka_blocks or self.latent_mix_sites
         ):
             raise ValueError("latent_matryoshka_blocks must divide latent_dim, without latent_mix_sites")
+        if self.lm_head_prototypes > 1 and (
+            self.mtp_mode != MtpMode.OFF
+            or self.aux_lm_layer is not None
+            or self.output_bigram_rank
+            or self.lm_head_unigram_bias
+        ):
+            raise ValueError("lm_head_prototypes needs no MTP, aux LM layer, output bigram prior or lm_head bias")
         if self.lm_head_extra_dim and (
             not self.attn_res
             or self.num_layers - 1 not in self.latent_out_full_layers
@@ -6180,6 +6191,39 @@ def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
     return em.activation
 
 
+def _prototype_target_logits(
+    head_in: Float[Array, "B S E"], lm_head: Float[Array, "E KV"], labels: Int[Array, "B S"], cfg: "GrugModelConfig"
+) -> Float[Array, "B S K"]:
+    """The soft-capped logits of each label's ``lm_head_prototypes`` columns (``k V + label``)."""
+    columns = labels[..., None] + cfg.vocab_size * jnp.arange(cfg.lm_head_prototypes)  # [B, S, K]
+    rows = jnp.take(reshard(lm_head.T, P(None, None)), columns, axis=0)  # [B, S, K, E]
+    rows = reshard(rows, P(_BATCH_AXES, None, None, None))
+    logits = jnp.einsum("bse,bske->bsk", head_in.astype(jnp.float32), rows.astype(jnp.float32))
+    cap = _logit_cap(cfg)
+    if cap is None:
+        return logits
+    if isinstance(cap, tuple):
+        a, b, c = cap
+        return a * jax.nn.sigmoid((logits + b) / c)
+    return jnp.tanh(logits / cap) * cap
+
+
+def _reduce_token_loss(loss: jax.Array, reduction: str | None, weight: jax.Array | None) -> jax.Array:
+    """The fused CE kernel's reduction (weighted mean / sum / none) for an externally adjusted per-token loss."""
+    if weight is not None:
+        loss = loss * weight.astype(loss.dtype)
+    if reduction in (None, "none"):
+        return loss
+    if reduction == "sum":
+        return jnp.sum(loss)
+    if reduction != "mean":
+        raise ValueError(f"Unsupported reduction: {reduction}")
+    if weight is None:
+        return jnp.mean(loss)
+    denom = jnp.sum(weight.astype(loss.dtype))
+    return jnp.where(denom != 0, jnp.sum(loss) / denom, jnp.zeros_like(denom))
+
+
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
     if cfg.logit_soft_cap_asym:
         a, b, c = cfg.logit_soft_cap_asym
@@ -7134,7 +7178,11 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
         )
         output_proj = reshard(
-            _init_weight(out_key, (cfg.hidden_dim + cfg.lm_head_extra_dim, cfg.vocab_size), cfg.initializer_std),
+            _init_weight(
+                out_key,
+                (cfg.hidden_dim + cfg.lm_head_extra_dim, cfg.vocab_size * cfg.lm_head_prototypes),
+                cfg.initializer_std,
+            ),
             _LM_HEAD_PARTITION_SPEC,
         )
 
@@ -8281,7 +8329,11 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
         hidden, lm_head = self._lm_head_operands(hidden, token_ids)
-        return jnp.einsum("bsh,hd->bsd", hidden, lm_head, out_sharding=batch_spec)
+        logits = jnp.einsum("bsh,hd->bsd", hidden, lm_head, out_sharding=batch_spec)
+        if self.config.lm_head_prototypes == 1:
+            return logits
+        per_proto = rearrange(logits, "b s (k v) -> b s k v", k=self.config.lm_head_prototypes)
+        return jax.nn.logsumexp(per_proto, axis=2)
 
     def position_predictions(
         self,
@@ -8493,18 +8545,24 @@ class Transformer(eqx.Module):
 
         def lm_loss(h: jax.Array) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
-            return fused_linear_softmax_cross_entropy_loss(
+            prototypes = self.config.lm_head_prototypes
+            ce = functools.partial(
+                fused_linear_softmax_cross_entropy_loss,
                 head_in,
                 lm_head,
                 labels,
-                weight=loss_weight,
-                reduction=reduction,
                 logsumexp_weight=logsumexp_weight,
                 dtype=loss_dtype,
                 implementation="xla_fast_bwd",
                 block_sizes=_CE_BLOCK_SIZES,
                 logit_soft_cap=_logit_cap(self.config),
             )
+            if prototypes == 1:
+                return ce(weight=loss_weight, reduction=reduction)
+            # The kernel gives lse(all K V) - logit(v, 0); add logit(v, 0) - lse_k logit(v, k) for the summed target.
+            target = _prototype_target_logits(head_in, lm_head, labels, self.config)  # [B, S, K]
+            per_token = ce(weight=None, reduction="none") + target[..., 0] - jax.nn.logsumexp(target, axis=-1)
+            return _reduce_token_loss(per_token.astype(loss_dtype), reduction, loss_weight)
 
         cross_entropy_loss = lm_loss(hidden)
         replay_loss = None
