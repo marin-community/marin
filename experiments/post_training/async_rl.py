@@ -195,8 +195,8 @@ class AsyncPreset:
     evals: str
     # Drop the engines' KV cache at the pause so nothing computed by the old weights is reused.
     clear_kv_cache_on_weight_sync: bool = True
-    # Full batches preserve assigned prompt membership; rolling batches use commit order.
-    batch_policy: str = "full_batch"
+    # Preserve the former fully_async loop's commit-order batching.
+    batch_policy: str = "rolling"
     # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
 
