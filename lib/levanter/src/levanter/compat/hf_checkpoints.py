@@ -1358,16 +1358,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
         # need to also save the .gitattributes file itself
         # TODO: .gitignore too? it's not used a lot with the hub
-        remote_fs = None
-        remote_path = ""
+        reference_fs = None
+        reference_path = ""
         if _is_url_like(repo) or os.path.exists(repo):
             if revision is not None:
                 if _is_url_like(repo):
                     raise ValueError("Filesystem reference code does not support a separate revision")
                 warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
-            remote_fs, remote_path = url_to_fs(repo)
-            attributes_path = posixpath.join(remote_path.rstrip("/"), ".gitattributes")
-            if not remote_fs.exists(attributes_path):
+            reference_fs, reference_path = url_to_fs(repo)
+            attributes_path = posixpath.join(reference_path.rstrip("/"), ".gitattributes")
+            if not reference_fs.exists(attributes_path):
                 attributes_path = None
         else:
             # check hub
@@ -1397,8 +1397,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "*.gguf",
             ]
         else:
-            if remote_fs is not None:
-                with remote_fs.open(attributes_path, "r") as f:
+            if reference_fs is not None:
+                with reference_fs.open(attributes_path, "r") as f:
                     attributes = f.read()
             else:
                 with open(attributes_path) as f:
@@ -1412,10 +1412,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
 
-        if remote_fs is not None:
+        if reference_fs is not None:
             os.makedirs(path, exist_ok=True)
-            for remote_file in remote_fs.find(remote_path):
-                relative_path = posixpath.relpath(remote_file, remote_path.rstrip("/"))
+            for reference_file in reference_fs.find(reference_path):
+                relative_path = posixpath.relpath(reference_file, reference_path.rstrip("/"))
                 if any(
                     fnmatch.fnmatchcase(relative_path, pattern)
                     or any(fnmatch.fnmatchcase(part, pattern) for part in relative_path.split("/"))
@@ -1424,7 +1424,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     continue
                 local_file = os.path.join(path, *relative_path.split("/"))
                 os.makedirs(os.path.dirname(local_file), exist_ok=True)
-                remote_fs.get_file(remote_file, local_file)
+                reference_fs.get_file(reference_file, local_file)
             logger.debug("Saved code to %s", path)
             return
 
