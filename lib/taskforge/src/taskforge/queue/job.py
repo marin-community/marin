@@ -53,6 +53,10 @@ SUBMITTER_KEYS = ("HF_TOKEN", "WANDB_API_KEY")
 IRIS_JOB_ENV = "IRIS_JOB_ENV"
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
+# A sandbox environment name is a credential when one of its ``_``-separated words is in SECRET_WORDS
+# or it ends with one of SECRET_SUFFIXES (so GPG_KEY and TOKENIZERS_* are not).
+SECRET_WORDS = frozenset({"SECRET", "TOKEN", "PASSWORD"})
+SECRET_SUFFIXES = ("KEY_ID", "API_KEY", "ACCESS_KEY")
 POLICY_FILE = "policy.json"
 SUMMARY_FILE = "summary.json"
 # Builders sample at the model maximum and continue on length; only validation rollouts may not continue.
@@ -66,6 +70,11 @@ def read_key(path: Path, key: str) -> str:
         if sep and name.strip() == key and value.strip():
             return value.strip()
     raise ValueError(f"{path} has no non-empty {key}= line")
+
+
+def secret_names(names: list[str]) -> list[str]:
+    """The credential-shaped names among ``names``, the environment variable names a sandbox sees."""
+    return [name for name in names if SECRET_WORDS & set(name.split("_")) or name.endswith(SECRET_SUFFIXES)]
 
 
 def scrub_child_environment(names: Sequence[str]) -> dict[str, str]:

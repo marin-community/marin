@@ -80,6 +80,7 @@ from taskforge.queue.job import (
     host_secrets,
     loop_services,
     prepare_root,
+    secret_names,
 )
 from taskforge.queue.run import FailedItems, item_terminal, run_queue
 from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
@@ -97,10 +98,6 @@ from taskforge.validate.solver import ValidationSite, run_solver
 MATH_ANSWER = "395"
 # Prints names only; `env | cut` would leak fragments of multi-line values into evidence.
 ENV_NAMES_SCRIPT = "awk 'BEGIN{for(k in ENVIRON) print k}' | sort | tr '\\n' ' '"
-# A sandbox environment name is a credential when one of its ``_``-separated words is in SECRET_WORDS
-# or it ends with one of SECRET_SUFFIXES (so GPG_KEY and TOKENIZERS_* are not).
-SECRET_WORDS = frozenset({"SECRET", "TOKEN", "PASSWORD"})
-SECRET_SUFFIXES = ("KEY_ID", "API_KEY", "ACCESS_KEY")
 HEALTH_TIMEOUT = 20.0
 PROBE_DIR = "queue_probe"
 PROBE_PROPOSAL = """---
@@ -149,10 +146,6 @@ class Probe:
     image: str
     results: Path
     report: dict[str, Any] = field(default_factory=dict)
-
-
-def secret_names(names: list[str]) -> list[str]:
-    return [name for name in names if SECRET_WORDS & set(name.split("_")) or name.endswith(SECRET_SUFFIXES)]
 
 
 def math_draft(index: int) -> TaskDraft:
