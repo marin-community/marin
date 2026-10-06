@@ -16,6 +16,23 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome, VerifiedRollout, select_pair
 
+SCOREABLE_HARBOR_MODEL_ERRORS = frozenset(
+    {"AgentTimeoutError", "ContextLengthExceededError", "NonZeroAgentExitCodeError"}
+)
+
+
+def canonical_native_outcome(trial: Mapping[str, Any]) -> RolloutOutcome:
+    """Use verified rewards for policy-scoreable model errors; never invent a timeout score."""
+    error = trial["exception_info"]
+    if error is not None and error["exception_type"] not in SCOREABLE_HARBOR_MODEL_ERRORS:
+        return RolloutOutcome.UNSCORED
+    rewards = (trial["verifier_result"] or {}).get("rewards")
+    if rewards == {"reward": 1.0}:
+        return RolloutOutcome.CORRECT
+    if rewards == {"reward": 0.0}:
+        return RolloutOutcome.INCORRECT
+    return RolloutOutcome.UNSCORED
+
 
 @dataclass(frozen=True)
 class CollectionIdentity:
@@ -87,9 +104,13 @@ def retained_rollout(
             raise ValueError("BFCL preferences require a binary verifier score")
         if verdict["passed"] is not None and verdict["passed"] != (score == 1.0):
             raise ValueError("BFCL verifier pass flag contradicts its score")
-        if disposition["server_error"] is None and disposition["error_treatment"] is None:
-            if record["reward"]["outcome"] != score:
+        model_error = disposition["exception_type"] in SCOREABLE_HARBOR_MODEL_ERRORS
+        scoreable = disposition["error_treatment"] is None or (model_error and disposition["error_treatment"] == "zero")
+        if disposition["server_error"] is None and (disposition["exception_type"] is None or model_error) and scoreable:
+            if disposition["error_treatment"] is None and record["reward"]["outcome"] != score:
                 raise ValueError("retained outcome differs from the BFCL verifier score")
+            if disposition["error_treatment"] == "zero" and record["reward"]["outcome"] != 0.0:
+                raise ValueError("zero-treated model error has a nonzero retained reward")
             outcome = RolloutOutcome.CORRECT if score == 1.0 else RolloutOutcome.INCORRECT
 
     response = record["response"]

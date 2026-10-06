@@ -352,10 +352,11 @@ def test_retained_verdict_overrides_shaping_and_discards_infrastructure_failures
 
 
 @pytest.mark.parametrize("score", [0.0, 1.0])
-def test_zero_treated_agent_exit_is_excluded_from_verified_preferences(score):
+@pytest.mark.parametrize("error_type", ["AgentTimeoutError", "ContextLengthExceededError", "NonZeroAgentExitCodeError"])
+def test_policy_model_errors_keep_verifier_scores_despite_zero_treatment(score, error_type):
     teacher_record = _record("teacher", score)
     teacher_record["reward"]["outcome"] = 0.0
-    teacher_record["disposition"].update(error_treatment="zero", exception_type="NonZeroAgentExitCodeError")
+    teacher_record["disposition"].update(error_treatment="zero", exception_type=error_type)
     teacher = retained_rollout(
         teacher_record, identity=_identity("teacher"), partition=PARTITION, trajectory_uri="teacher"
     )
@@ -363,8 +364,10 @@ def test_zero_treated_agent_exit_is_excluded_from_verified_preferences(score):
         _record("student", 1.0 - score), identity=_identity("student"), partition=PARTITION, trajectory_uri="student"
     )
     selection = select_pair(teacher.rollout, student.rollout)
-    assert selection.disposition == PairDisposition.UNSCORED
-    assert selection.pair is None
+    assert selection.disposition == PairDisposition.PREFERENCE
+    assert selection.pair is not None
+    assert selection.pair.chosen == (teacher.rollout if score == 1.0 else student.rollout)
+    assert selection.pair.rejected == (student.rollout if score == 1.0 else teacher.rollout)
 
 
 def test_retained_holdout_and_changed_model_cannot_form_training_preferences():
@@ -624,6 +627,11 @@ def _native_pair_collection(
             if model == "student" and index == 0 and fault == "agent_error":
                 trial["exception_info"] = {"exception_type": "AgentTimeoutError"}
                 record["disposition"]["exception_type"] = "AgentTimeoutError"
+                record["disposition"]["error_treatment"] = "zero"
+            if model == "student" and index == 0 and fault == "infrastructure_error":
+                trial["exception_info"] = {"exception_type": "EnvironmentStartTimeoutError"}
+                record["disposition"]["exception_type"] = "EnvironmentStartTimeoutError"
+                record["disposition"]["error_treatment"] = "mask"
             if score is None:
                 record["verification_result"] = {"status": "unavailable", "reason": "setup_failed"}
                 record["prompt"]["token_ids"] = []
@@ -743,7 +751,9 @@ def _native_pair_tokenizer(path: Path) -> None:
     hf.save_pretrained(path)
 
 
-@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens", "agent_error", "malformed_calls"])
+@pytest.mark.parametrize(
+    "fault", ["none", "context", "negative_tokens", "agent_error", "infrastructure_error", "malformed_calls"]
+)
 def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
     partition = replace(PARTITION, complement=tasks)
@@ -761,17 +771,17 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         return
     with set_current_client(LocalClient()):
         value = build_native_preference_cache(config, partition)
-    assert value.num_preferences == (1 if fault in ("context", "agent_error") else 2)
+    assert value.num_preferences == (1 if fault in ("context", "infrastructure_error") else 2)
     report = json.loads((tmp_path / "cache/selection.json").read_text())
     assert report["dispositions"] == {
-        "preference": 1 if fault == "agent_error" else 2,
+        "preference": 1 if fault == "infrastructure_error" else 2,
         "both_incorrect": 1,
         "both_correct": 1,
-        "unscored": 2 if fault == "agent_error" else 1,
+        "unscored": 2 if fault == "infrastructure_error" else 1,
     }
     assert [pair["chosen"]["model_revision"] for pair in report["preferences"]] == (
         [MODELS["student"].revision]
-        if fault in ("context", "agent_error")
+        if fault in ("context", "infrastructure_error")
         else [TEACHER_REVISION, MODELS["student"].revision]
     )
     assert [item["reason"] for item in report["excluded_preferences"]] == (
@@ -780,7 +790,7 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
     adaptations = report["model_identity_adaptations"]
     teacher_initial = next(item for item in adaptations if item["source_id"].endswith(tasks[0].name))
     assert teacher_initial["original_initial_prompt_sha256"] != teacher_initial["student_initial_prompt_sha256"]
-    if fault != "agent_error":
+    if fault != "infrastructure_error":
         student_initial = next(
             item
             for item in adaptations
@@ -813,7 +823,7 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
-        if fault not in ("context", "agent_error"):
+        if fault not in ("context", "infrastructure_error"):
             text = tok.decode(ids.tolist())
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text
             assert "The exact model ID is hosted_vllm/teacher-alias" in text

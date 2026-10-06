@@ -25,7 +25,11 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome
-from experiments.post_training.bfcl_rl.retained_preferences import CollectionIdentity, retained_rollout
+from experiments.post_training.bfcl_rl.retained_preferences import (
+    CollectionIdentity,
+    canonical_native_outcome,
+    retained_rollout,
+)
 
 STUDENT_REASONING_MODE = "/think"
 
@@ -80,8 +84,7 @@ def native_model_trace(
         raise ValueError("Unscored native traces cannot supply preference text")
     if trial_result["task_name"] != retained_record["trajectory"]["instance_id"]:
         raise ValueError("Native trial and retained task differ")
-    score = 1.0 if retained.rollout.outcome is RolloutOutcome.CORRECT else 0.0
-    if trial_result["exception_info"] is not None or trial_result["verifier_result"]["rewards"] != {"reward": score}:
+    if canonical_native_outcome(trial_result) is not retained.rollout.outcome:
         raise ValueError("Native trial does not confirm the retained verifier outcome")
     agent = trial_result["agent_info"]
     if identity.harness != f"{agent['name']}@{agent['version']}":

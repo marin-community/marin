@@ -34,6 +34,7 @@ from experiments.post_training.bfcl_rl.recovery_data import generation_collectio
 from experiments.post_training.bfcl_rl.retained_preferences import (
     CollectionIdentity,
     RetainedRollout,
+    canonical_native_outcome,
     retained_archive_records,
     retained_rollout,
 )
@@ -119,7 +120,7 @@ def collection_native_evidence(
     scored_ids = {
         trial["agent_result"]["metadata"]["rollout_correlation_id"]
         for _, trial in trials.values()
-        if trial["exception_info"] is None and trial["verifier_result"]["rewards"] in ({"reward": 1.0}, {"reward": 0.0})
+        if canonical_native_outcome(trial) is not RolloutOutcome.UNSCORED
     }
     literal_root = StoragePath(terminal["config"]["runtime"]["experiments_dir"]) / "logs"
     spans: dict[str, list[LiteralSpan]] = defaultdict(list)
@@ -151,7 +152,7 @@ def collection_native_evidence(
             profile = NATIVE_AGENT_PROFILES[task_indices[task] % len(NATIVE_AGENT_PROFILES)]
             identity = replace(receipt.identity, harness=f"{profile['name']}@{profile['version']}")
             retained = retained_rollout(record, identity=identity, partition=partition, trajectory_uri=uri)
-            if trial["exception_info"] is not None:
+            if canonical_native_outcome(trial) is RolloutOutcome.UNSCORED:
                 retained = replace(retained, rollout=replace(retained.rollout, outcome=RolloutOutcome.UNSCORED))
             dispositions[f"{identity.harness}/{retained.rollout.outcome.value}"] += 1
             entries = []
