@@ -733,6 +733,19 @@ def _native_pair_collection(
                         },
                     ],
                 }
+                if model == "teacher" and index == 0 and fault == "auxiliary_capture":
+                    tools = []
+                    assistant = final
+                    messages = [{"role": "system", "content": "You are a title generator."}, user, final]
+                    initial_count = 2
+                    title_tokens = collection_tokenizer.encode(final["content"])
+                    record["response"] = {
+                        "token_ids": title_tokens,
+                        "loss_mask": [1] * len(title_tokens),
+                        "step_boundaries": [
+                            {"prompt_token_ids": first_prompt, "token_start": 0, "token_end": len(title_tokens)}
+                        ],
+                    }
                 boundaries = record["response"]["step_boundaries"]
                 for step, boundary in enumerate(boundaries):
                     response = record["response"]["token_ids"][boundary["token_start"] : boundary["token_end"]]
@@ -929,6 +942,33 @@ def test_native_dpo_sealed_batches_from_unfinished_producers_preserve_verified_p
     assert [collection["producer"]["state"] for collection in report["collections"]] == ["failed", "running"]
     assert [collection["retained_tasks"] for collection in report["collections"]] == [3, 2]
     assert report["unmatched_branches"][0]["teacher_without_student"] == [[tasks[2].source_id, "codex@0.118.0", 0]]
+
+
+def test_native_dpo_excludes_auxiliary_title_capture_without_changing_verifier_grade(tmp_path: Path):
+    tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
+    partition = replace(PARTITION, complement=tasks)
+    teacher = _native_pair_collection(
+        tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, "auxiliary_capture"
+    )
+    student = _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, "none")
+    tokenizer_path = tmp_path / "student-tokenizer"
+    _native_pair_tokenizer(tokenizer_path)
+    config = NativePreferenceConfig(
+        (teacher,), student, "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
+    )
+    with set_current_client(LocalClient()):
+        result = build_native_preference_cache(config, partition)
+    assert result.num_preferences == 1
+    report = json.loads((tmp_path / "cache/selection.json").read_text())
+    assert report["excluded_branches"] == [
+        {
+            "source_id": f"teacher-collection/teacher-{tasks[0].name}",
+            "reason": "tool_free_auxiliary_capture",
+            "verifier_outcome": "correct",
+        }
+    ]
+    assert report["preferences"][0]["chosen"]["task_source_id"] == tasks[1].source_id
+    assert report["collections"][0]["dispositions"]["opencode@1.18.2/correct"] == 2
 
 
 def test_native_teacher_pool_matches_context_without_reweighting_student_trajectories(tmp_path: Path):

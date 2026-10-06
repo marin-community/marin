@@ -101,6 +101,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
     branches: list[list[NativePreferenceBranch]] = []
     reports = []
     identity_adaptations = []
+    excluded_branches = []
     with (raw / "branches.jsonl").open("w") as destination:
         sources = (*(("teacher", source) for source in config.teachers), ("student", config.student))
         for index, (role, source) in enumerate(sources):
@@ -125,6 +126,20 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                         model_tokenizer=f"{source.model.model}@{source.model.revision}",
                         tool_call_format=evidence.tool_call_format,
                     )
+                    if not trace.tools and not evidence.identity.harness.startswith("mini-swe-agent@"):
+                        excluded_branches.append(
+                            {
+                                "source_id": source_id,
+                                "reason": "tool_free_auxiliary_capture",
+                                "verifier_outcome": evidence.retained.rollout.outcome.value,
+                            }
+                        )
+                        selected.append(
+                            NativePreferenceBranch(
+                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
+                            )
+                        )
+                        continue
                     initial_prompt = trace.initial_prompt_sha256
                     if evidence.identity.harness.startswith("opencode@"):
                         messages = opencode_student_identity(
@@ -266,6 +281,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
         "dispositions": dict(Counter(selection.disposition.value for selection in selections)),
         "preferences": accepted,
         "excluded_preferences": excluded,
+        "excluded_branches": excluded_branches,
         "unmatched_branches": unmatched,
         "overlength_branches": overlength,
         "normalized_branch_ids": normalized_ids,
