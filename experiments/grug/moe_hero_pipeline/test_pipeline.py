@@ -94,22 +94,8 @@ def test_pipeline_update_trains_weights_with_adaptive_or_frozen_router_bias(qb_b
     optimizer = optax.sgd(0.1, momentum=0.5)
     policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     with jax.set_mesh(mesh):
-        stages = split_transformer(model, 2, layer_counts=(2, 3))
-        params = []
-        for stage in stages:
-            trainable, _ = eqx.partition(stage, eqx.is_array)
-            for index in range(len(stage.blocks)):
-                trainable = eqx.tree_at(
-                    lambda current, index=index: current.blocks[index].mlp.router_bias, trainable, None
-                )
-            params.append(trainable)
-        betas = tuple(
-            jnp.arange(len(stage.blocks) * model.config.num_experts, dtype=jnp.float32).reshape(
-                len(stage.blocks), model.config.num_experts
-            )
-            for stage in stages
-        )
-        state = GrugMoeAutomaticPipelineState(tuple(params), tuple(optimizer.init(param) for param in params), betas)
+        state = _pipeline_state(model, optimizer, (2, 3))
+        betas = state.pending_qb_betas
         grads = eqx.filter_grad(lambda values: sum(jnp.sum(value**2) for value in jax.tree.leaves(values)))(
             state.trainable_params
         )
