@@ -1,21 +1,19 @@
 # Task rollouts
 
-TaskCompendium defines executable tasks. The `marin-rolloutengine` package owns the rollout loop in
-`lib/rolloutengine/src/rolloutengine/engine.py`.
-`ShellboxRolloutEngine` calls a model, executes task operations, and grades each task.
+TaskCompendium defines tasks. `ShellboxRolloutEngine` calls the model, executes
+task operations through a `TaskSession`, and returns `RolloutData`.
+Shellbox supplies the task's execution machine. The caller controls concurrency,
+retries, group grading, and training projections.
 
 ## Task format
 
 `TaskSpec.model_dump_json()` serializes a task.
 `TaskSpec.model_validate_json()` validates a serialized task.
-Schema `0.24` uses one machine description and stores execution deadlines separately from `TaskSpec`.
-Rebuild task files created with older schemas before launch.
-TaskCompendium and the rollout engine do not select a dataset file format.
-SkyRL converts source rows through Hugging Face `Dataset.map` without an
-intermediate Parquet file. The prepared dataset stays in memory.
-Explicit SkyRL exports and Harbor caches use a
-`task_spec` string column with one serialized task per row.
-SkyRL stores an optional serialized `TaskExecution` in the separate `task_execution` column.
+Applications own dataset file formats. SkyRL converts source rows with Hugging
+Face `Dataset.map` and retains prepared tasks in memory.
+Its task Parquet exports and private Harbor caches store one serialized task per
+row in `task_spec`.
+The optional `task_execution` column stores separate execution settings.
 
 The serialized task contains private grading inputs. The model request contains
 the public conversation, submission instructions, and tool definitions.
@@ -40,8 +38,8 @@ the public conversation, submission instructions, and tool definitions.
 | `stages` | Ordered phases with instructions, graders, and minimum reward requirements. All phases use the same machine. |
 | `metadata` | Application data that does not change the execution contract. |
 
-`environment` is the single machine description. `environment_requirements` declares task capabilities only.
-Rebuild task exports that contain the removed machine fields or `resources`.
+`environment` describes the task machine. `environment_requirements` declares
+task capabilities.
 Iris does not provide per-job network denial. Tasks on Iris must explicitly set `environment.network=True`.
 The engine does not change a task's network policy to match its backend.
 
@@ -67,8 +65,8 @@ failure, or cancellation.
 The default session exposes `shell(command: string)` for executable environments.
 Files persist between commands. Each command starts a new shell process.
 
-`ShellboxRolloutEngine.run(task, execution=...)` accepts a separate `TaskExecution`
-from `taskcompendium.execution`. One task definition can run with different execution settings.
+`ShellboxRolloutEngine.run(task, execution=...)` accepts a `TaskSpec` and separate
+`TaskExecution` settings from `taskcompendium.execution`.
 
 | Execution field | Contract |
 | --- | --- |
@@ -103,18 +101,16 @@ The verifier has its own deadline. Docker task images must supply `setsid`.
 Docker command interruption stops its process group and retains task files and
 other services for grading. If Docker cannot identify or stop the command, it
 disposes the task container and reports the original interruption.
-One rollout step contains one model response and its task transition.
-An action is one model response.
-A task transition executes the session's operations after that response, including its tool calls.
+One rollout step contains one model response and the following task transition,
+including tool calls.
 Execution failures raise `RolloutInterrupted`, with the failed operation, the completed steps of the current task,
 and the original exception as the cause. The engine attempts resource cleanup
 before the caller receives that exception. Token-contract violations propagate
 as `RolloutContractError`.
 Machine startup and setup failures use the `start` operation and retain an empty
-rollout record. Cancelled creation retains its build context until the factory finishes.
-If the factory returns a machine after cancellation, the engine closes that machine.
-Creation continues until the factory finishes because cancellation can lose a machine from a background thread.
-The cleanup deadline applies when the factory returns that machine.
+rollout record. After cancellation, a background thread can return a machine.
+The engine retains the build context until the factory finishes, then closes
+that machine within the cleanup deadline.
 
 `ShellVerifierSpec` defines a command, a timeout, environment variables, and a reward source.
 `VerifierSpec.files` holds private files. The engine installs them after the last
@@ -181,15 +177,15 @@ failure details, and diagnostics. A skipped grader is not a failure.
 A stage's `minimum_rewards` maps each key to a minimum value. A missing key or
 a value below its minimum stops execution before the next stage.
 The gate controls stage progression. It does not change the grade of the attempted stage.
-When the aggregate is graded, the engine assigns its reward to the last action
+When the aggregate is graded, the engine assigns its reward to the last model turn
 with a valid grade.
 
-All other actions receive zero optimization reward and retain their stage grades.
+Other turns receive zero optimization reward and retain their stage grades.
 The engine masks tokens from a stage without a valid grade, except for explicitly skipped grading.
 An explicitly skipped stage retains its token masks and supplies no score.
 Earlier valid stages keep their exact tokens and masks. When the aggregate has
-no grade, all actions receive zero optimization reward.
-When the aggregate has no grade, the caller decides if earlier valid stages can enter training.
+no grade, all turns receive zero optimization reward.
+The caller decides whether earlier graded stages can enter training.
 
 A model failure after a completed turn triggers grading of the completed state.
 `RolloutInterrupted` retains that grade and the exact token evidence.
@@ -231,10 +227,8 @@ A cleanup error does not remove a completed grade or replace an execution failur
 A cleanup deadline cancels the cleanup action. If that action ignores cancellation,
 the engine retains it until completion and reports the timeout without an unbounded wait.
 
-The caller controls storage of completed records.
-
-This example connects one task and a caller-supplied model.
-The model must implement the token contract above.
+The caller controls storage of completed records. This example connects a task
+to a model that supplies exact tokens:
 
 ```python
 from collections.abc import Awaitable, Callable
@@ -270,16 +264,15 @@ Application-supplied sessions require an additional `sessions` mapping.
 
 ## Integrations
 
-TaskCompendium contains importers for Harbor, SWE, and SkyRL source rows. The
-rollout engine does not own batching, group grading, retry policy, or training
-projection. Applications implement those policies around `ShellboxRolloutEngine`.
+TaskCompendium contains importers for Harbor, SWE, and SkyRL source rows.
 See the MarinSkyRL [rollout modules](https://github.com/marin-community/MarinSkyRL/tree/rollout-engine/skyrl-train/skyrl_train/rollouts)
 for the SkyRL integration. SkyRL sets `trajectory_runner.cleanup_timeout` in
 [its base configuration](https://github.com/marin-community/MarinSkyRL/blob/rollout-engine/skyrl-train/skyrl_train/config/ppo_base_config.yaml).
 
-The SWE importer saves the initial Git revision in `refs/taskcompendium/base` before inference.
-Patch collection compares the final index with that revision, so agent commits remain in the repair.
-Rebuild SWE task exports that do not contain the initial-revision setup command.
+SWE task exports must initialize `refs/taskcompendium/base` before inference.
+The SWE importer saves the initial Git revision there during machine setup.
+Patch collection compares the final index with that revision, including agent
+commits and new files.
 
 ## Local checks
 
