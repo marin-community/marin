@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from verifyit.grade import InvalidTask, Status, grade, run, write_reward
 from verifyit.modes import grade_judge
-from verifyit.spec import Constraint, EmptyOutputPolicy, JudgeSpec, parse_spec, render_spec
+from verifyit.spec import Constraint, EmptyOutputPolicy, JudgeSpec, SampleResolution, parse_spec, render_spec
 
 # The dataset's own reference answer, apostrophe included: the gate must fold case, spacing and
 # punctuation without mangling non-ASCII text.
@@ -323,6 +323,90 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
     assert [criterion["attempt_count"] for criterion in reward.detail["criteria"]] == [1, 2]
     assert [attempt["finish_reason"] for attempt in reward.detail["criteria"][1]["attempts"]] == ["length", "length"]
     assert [attempt["completion_tokens"] for attempt in reward.detail["criteria"][1]["attempts"]] == [1024, 2048]
+
+
+def test_majority_samples_resolve_each_criterion_and_keep_every_verdict(tmp_path, fake_judge):
+    fake_judge.replies = [
+        "Clear.\nSCORE: 1",
+        "Unsure.\nSCORE: 0",
+        "Clear again.\nSCORE: 1",
+        "SCORE: 0",
+        "SCORE: 0",
+        "SCORE: 1",
+    ]
+    spec = JudgeSpec(rubric="checklist", criteria=CRITERIA[:2], samples=3, sample_temperature=0.7)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
+    assert (reward.status, reward.reward) == (Status.SCORED, 0.5)
+    assert [request["temperature"] for request in fake_judge.requests] == [0.7] * 6
+    criteria = reward.detail["criteria"]
+    assert [[sample["passed"] for sample in c["samples"]] for c in criteria] == [
+        [True, False, True],
+        [False, False, True],
+    ]
+    assert [(c["passed"], c["attempt_count"], c["reasoning"]) for c in criteria] == [(True, 3, "Clear."), (False, 3, "")]
+    assert [sample["reasoning"] for sample in criteria[0]["samples"]] == ["Clear.", "Unsure.", "Clear again."]
+
+
+def test_two_then_third_asks_a_third_time_only_on_disagreement(tmp_path, fake_judge):
+    # Criterion one: the first two agree. Criterion two: they disagree and the third decides.
+    fake_judge.replies = ["SCORE: 0", "SCORE: 0", "SCORE: 1", "SCORE: 0", "SCORE: 1"]
+    spec = JudgeSpec(
+        rubric="checklist", criteria=CRITERIA[:2], samples=3, sample_resolution=SampleResolution.TWO_THEN_THIRD
+    )
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
+    assert (reward.status, reward.reward) == (Status.SCORED, 0.5)
+    assert [request["temperature"] for request in fake_judge.requests] == [0.0] * 5
+    criteria = reward.detail["criteria"]
+    assert [[sample["passed"] for sample in c["samples"]] for c in criteria] == [[False, False], [True, False, True]]
+    assert [c["attempt_count"] for c in criteria] == [2, 3]
+
+
+def test_a_failed_sample_leaves_the_whole_checklist_unscored_with_its_completed_samples(tmp_path, fake_judge):
+    fake_judge.replies = ["SCORE: 1"]
+    fake_judge.finish_reasons = ["stop", "stop", "length"]
+    fake_judge.usage_tokens = [10, 11, 8192]
+    spec = JudgeSpec(rubric="checklist", criteria=CRITERIA, samples=3)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
+    assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
+    assert len(fake_judge.requests) == 3
+    [partial] = reward.detail["criteria"]
+    assert (partial["criterion"], len(partial["samples"]), partial["attempt_count"]) == (CRITERIA[0], 2, 3)
+    assert [attempt["finish_reason"] for attempt in partial["attempts"]] == ["stop", "stop", "length"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"samples": 0},
+        {"samples": 2},
+        {"samples": 2, "sample_resolution": "two_then_third"},
+        {"samples": 3, "sample_temperature": -0.5},
+        {"samples": 3, "sample_temperature": float("inf")},
+        {"sample_temperature": 0.7},
+    ],
+)
+def test_invalid_sample_settings_never_call_the_model(tmp_path, fake_judge, overrides):
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(_checklist(**overrides)))
+    reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
+    assert reward.status is Status.INVALID_TASK
+    assert fake_judge.requests == []
+
+
+def test_repeated_judgments_on_a_reference_rubric_are_an_invalid_task(tmp_path, fake_judge):
+    spec = JudgeSpec(references=(REFERENCE,), exact_gate=False, samples=3)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
+    assert (reward.status, reward.reward) == (Status.INVALID_TASK, 0.0)
+    assert reward.detail["error"] == "repeated judgments apply only to the checklist rubric"
+    assert fake_judge.requests == []
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):

@@ -66,6 +66,17 @@ verdicts record them under each entry in `detail.criteria`. Each attempt contain
 and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
 `infra_error`, with the available attempt diagnostics in `detail`.
 
+The checklist rubric judges each criterion `samples` times (default 1). With
+`sample_resolution = "majority"` the count must be odd and the majority verdict wins. With
+`"two_then_third"` and `samples = 3`, the judge is asked twice and a third time only when the
+first two verdicts disagree. Single judgments go out at temperature 0. Repeated judgments use
+`sample_temperature` (default 0, finite and nonnegative); at 0 a deterministic judge repeats its
+first verdict, so set it above 0 to reduce judge noise. Each checklist entry keeps every verdict
+under `samples`, with its own `reasoning`, `attempt_count` and `attempts`; the entry's
+`attempt_count` and `attempts` cover every request for that criterion, and its `reasoning` is the
+first sample's that agrees with the resolved verdict. A sample that fails leaves the whole grade
+an infrastructure error. Repeated judgments are rejected outside the checklist rubric.
+
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
 invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes
