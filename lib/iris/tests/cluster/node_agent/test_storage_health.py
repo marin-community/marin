@@ -170,7 +170,9 @@ def test_agent_resets_failure_streak_after_success_or_configuration_error(config
             stop.set()
 
     with (
-        patch("subprocess.run", side_effect=lambda *args, **kwargs: subprocess.CompletedProcess("probe", next(results))),
+        patch(
+            "subprocess.run", side_effect=lambda *_args, **_kwargs: subprocess.CompletedProcess("probe", next(results))
+        ),
         patch.object(stop, "wait", side_effect=completed_wait),
     ):
         run_storage_health(k8s, "node", config, stop)

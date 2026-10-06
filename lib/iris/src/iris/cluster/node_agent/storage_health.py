@@ -165,6 +165,7 @@ def run_storage_health(k8s: K8sService, node_name: str, config: NodeStorageHealt
 
 
 def current_report(node: dict, config: NodeStorageHealthConfig, now: float) -> StorageHealthReport | None:
+    """Return a fresh report for this node and target, or None if absent, invalid, or stale."""
     metadata = node.get("metadata", {})
     raw = metadata.get("annotations", {}).get(HEALTH_ANNOTATION)
     if raw is None:
@@ -186,9 +187,8 @@ def current_report(node: dict, config: NodeStorageHealthConfig, now: float) -> S
 def reconcile_storage_health(k8s: K8sService, config: NodeStorageHealthConfig) -> None:
     """Cordon persistent outliers under a cluster-wide budget, without eviction.
 
-    Called only by the single controller reconcile loop. Annotations, including
-    released cordons, consume the budget until an operator clears them. This
-    prevents repeated quarantines from silently exhausting the fleet.
+    Cordon annotations consume the budget until an operator clears them, even
+    after a manual uncordon.
     """
     if config.max_cordoned_nodes == 0:
         return
