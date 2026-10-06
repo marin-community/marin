@@ -13,6 +13,7 @@ import experiments.grug.fast_track.test_ngram_stat as t
 from experiments.grug.fast_track.model import (
     HEAD_PROBE_FIELDS,
     HEAD_PROBE_STAT,
+    HEAD_QCOS_STAT,
     LocalMixer,
     _head_attention_stats,
     head_probe,
@@ -72,6 +73,11 @@ def test_dense_model_records_every_layer_and_head():
     with jax.set_mesh(mesh):
         _, plain = eqx.filter_jit(lambda m: m(tokens))(model)
     assert HEAD_PROBE_STAT not in plain
+    qcos = np.asarray(metrics[HEAD_QCOS_STAT])  # [L, 2, H, H]
+    assert qcos.shape == (model.config.num_layers, 2, 4, 4)
+    np.testing.assert_allclose(np.diagonal(qcos[:, 0], axis1=-2, axis2=-1), 1.0, rtol=1e-4)
+    np.testing.assert_allclose(qcos[:, 0], np.swapaxes(qcos[:, 0], -1, -2), atol=1e-5)
+    assert np.all(qcos[:, 1] >= np.abs(qcos[:, 0]) - 1e-5)
 
 
 def test_zeroing_a_heads_output_rows_silences_only_its_contribution():

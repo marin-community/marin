@@ -132,6 +132,10 @@ _FORWARD_PROBE: ForwardProbe | None = None
 # output gate, its gated output norm, and the norm of its contribution to the residual (through its ``w_o`` rows).
 HEAD_PROBE_STAT = f"{_LAYER_KNOB_PREFIX}head_probe"
 HEAD_PROBE_FIELDS = ("p_doc_start", "p_self", "entropy", "gate", "out_norm", "contrib_norm")
+# Per layer, the token-mean cosine similarity ``[H, H]`` between query heads' (QK-normed, RoPE'd) query vectors, and
+# its token-mean absolute value ``[H, H]`` (``head_probe``): under MQA every head's query lives in the one shared key
+# space, and RoPE rotates all heads alike at a position, so the cosine compares what the heads ask.
+HEAD_QCOS_STAT = f"{_LAYER_KNOB_PREFIX}head_qcos"
 _HEAD_PROBE_QUERY_BLOCK = 512
 _HEAD_PROBE = False
 _MEMORY_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}mem_"
@@ -2363,6 +2367,8 @@ class CausalSelfAttention(eqx.Module):
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
         head_probe_attn = _head_attention_stats(q, k, mask, rel_bias, sconv_segment_ids) if _HEAD_PROBE else None
+        if _HEAD_PROBE:
+            stats[HEAD_QCOS_STAT] = _query_head_cosines(q, sconv_segment_ids)
         if _FORWARD_PROBE is not None and _FORWARD_PROBE.attn_queries and self.cfg.mla:
             if fox_key_bias is not None or second_qk is not None:
                 raise ValueError("forward_probe attention supports MLA without FoX or differential attention")
@@ -4892,8 +4898,9 @@ class Block(eqx.Module):
         attn_out, attn_stats = self.attn_branch(x, mask, disable_rope, is_global)
         x = x + attn_out
         mlp_out, router_stats = self.mlp_branch(x, mask)
-        if HEAD_PROBE_STAT in attn_stats:
-            router_stats = {**router_stats, HEAD_PROBE_STAT: attn_stats[HEAD_PROBE_STAT]}
+        probed = {k: attn_stats[k] for k in (HEAD_PROBE_STAT, HEAD_QCOS_STAT) if k in attn_stats}
+        if probed:
+            router_stats = {**router_stats, **probed}
         return x + mlp_out, router_stats
 
 
@@ -5193,6 +5200,19 @@ def _head_attention_stats(
 
     out = jax.lax.map(one_block, jnp.arange(s // block))  # [blocks, B, H, Q, 3]
     return jax.lax.stop_gradient(rearrange(out, "n b h q f -> b (n q) h f"))
+
+
+def _query_head_cosines(q: Float[Array, "B S H D"], segment_ids: Int[Array, "B S"] | None) -> jax.Array:
+    """``[2, H, H]``: token-mean cosine and token-mean absolute cosine between every pair of query heads' vectors,
+    over non-padding tokens."""
+    unit = reshard(q, P(_BATCH_AXES, None, None, None)).astype(jnp.float32)
+    unit = unit * jax.lax.rsqrt(jnp.sum(jnp.square(unit), axis=-1, keepdims=True) + 1e-12)
+    cos = jnp.einsum("bshd,bsgd->bshg", unit, unit)
+    valid = jnp.ones(cos.shape[:2], jnp.float32) if segment_ids is None else (segment_ids >= 0).astype(jnp.float32)
+    count = jnp.maximum(jnp.sum(valid), 1.0)
+    mean = jnp.einsum("bshg,bs->hg", cos, valid) / count
+    mean_abs = jnp.einsum("bshg,bs->hg", jnp.abs(cos), valid) / count
+    return jax.lax.stop_gradient(reshard(jnp.stack([mean, mean_abs]), P(None, None, None)))
 
 
 def _head_output_stats(
@@ -7044,8 +7064,9 @@ class Transformer(eqx.Module):
             )
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
-            if not cfg.attn_res and HEAD_PROBE_STAT in stacked_router_stats:
-                router_metrics[HEAD_PROBE_STAT] = stacked_router_stats[HEAD_PROBE_STAT]  # [L, B, S, H, F]
+            for key in (HEAD_PROBE_STAT, HEAD_QCOS_STAT):
+                if not cfg.attn_res and key in stacked_router_stats:
+                    router_metrics[key] = stacked_router_stats[key]  # [L, B, S, H, F] / [L, 2, H, H]
         else:
             # One cross-device reduction for the whole layer stack, not one per layer (see router_metrics).
             reduced_router_stats = reduce_router_stats(
@@ -7073,8 +7094,9 @@ class Transformer(eqx.Module):
                     if k == _COMPRESS_LOSS or k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
                 }
             )
-            if HEAD_PROBE_STAT in stacked_router_stats:
-                router_metrics[HEAD_PROBE_STAT] = stacked_router_stats[HEAD_PROBE_STAT]  # [L, B, S, H, F]
+            for key in (HEAD_PROBE_STAT, HEAD_QCOS_STAT):
+                if key in stacked_router_stats:
+                    router_metrics[key] = stacked_router_stats[key]  # [L, B, S, H, F] / [L, 2, H, H]
             if return_routing:
                 if cfg.loop_passes != 1:
                     raise ValueError("return_routing needs loop_passes=1 (passes merge the per-layer stats)")

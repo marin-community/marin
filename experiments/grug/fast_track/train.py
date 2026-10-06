@@ -95,6 +95,7 @@ from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
     HEAD_PROBE_FIELDS,
     HEAD_PROBE_STAT,
+    HEAD_QCOS_STAT,
     NEWTON_GRAM_KEY,
     DenseMLP,
     ForwardProbe,
@@ -1922,7 +1923,7 @@ def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax
         model = _cast_to_compute(mp, params)
         with head_probe():
             _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
-        return metrics[HEAD_PROBE_STAT], per_token_loss(model, ids, segs)
+        return metrics[HEAD_PROBE_STAT], metrics[HEAD_QCOS_STAT], per_token_loss(model, ids, segs)
 
     @jax.jit
     def ablated(params, ids, segs, layer, head):
@@ -1935,12 +1936,13 @@ def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax
     def gather(x) -> np.ndarray:
         return np.asarray(multihost_utils.process_allgather(x, tiled=True))
 
-    stats, loss, dloss = [], [], []
+    stats, qcos, loss, dloss = [], [], [], []
     with set_mesh(mesh):
         for start in range(0, len(tokens), batch):
             ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
-            batch_stats, batch_loss = probe(params, ids, segs)
+            batch_stats, batch_qcos, batch_loss = probe(params, ids, segs)
             stats.append(gather(batch_stats).astype(np.float16))
+            qcos.append(np.asarray(batch_qcos))
             base = gather(batch_loss)
             loss.append(base)
             per_head = [
@@ -1958,6 +1960,8 @@ def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax
                 fields=np.asarray(HEAD_PROBE_FIELDS),
                 loss=np.concatenate(loss, axis=0),
                 ablation_dloss=np.concatenate(dloss, axis=2),
+                # [L, 2, H, H]: token-mean query-head cosine and absolute cosine (mean over equal-size batches).
+                query_cos=np.mean(qcos, axis=0),
                 layer_is_long=np.asarray(_long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)),
             )
         logger.info("wrote head probe of %d sequences to %s", len(tokens), path)
