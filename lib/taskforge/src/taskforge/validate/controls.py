@@ -6,8 +6,8 @@
 A control runs as an ordinary trial whose model is a ``ScriptedModel``: it answers each request
 with the control's next assistant turn. A workspace control is delivered the way an agent would
 leave it: one scripted shell call per file (``workspace_turn``: decode the bytes into the path and
-set its mode, run by the shell tool as the task's ``agent_user``, after environment setup and the
-healthcheck), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
+set its mode, run by the shell tool as the execution's ``agent_user``, after environment setup and
+the healthcheck), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
 machine state. Grading is the engine's, unchanged.
 
 The engine accepts a turn only with exact token ids, so the scripted model gets them from the
@@ -43,8 +43,9 @@ from typing import Any, Protocol
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
 from taskcompendium.environment import EnvironmentFile
-from taskcompendium.grading import GradeResult
-from taskcompendium.grading import Outcome as GradeStatus
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.ledger.records import Ledger
@@ -215,9 +216,15 @@ def control_turns(control: Control) -> tuple[dict[str, Any], ...]:
 
 
 async def replay(
-    task: TaskSpec, controls: Sequence[Control], plan: ControlPlan, settings: EngineSettings, tokenize: Tokenize
+    task: TaskSpec,
+    execution: TaskExecution,
+    controls: Sequence[Control],
+    plan: ControlPlan,
+    settings: EngineSettings,
+    tokenize: Tokenize,
 ) -> list[ControlOutcome]:
-    """Replay every control concurrently as a ``CONTROL`` trial named by its id.
+    """Replay every control concurrently as a ``CONTROL`` trial of ``task`` with ``execution``,
+    named by its id.
 
     Raises:
         ValueError: ``controls`` is not a valid control set for ``task`` (``validate_controls``), a
@@ -239,6 +246,7 @@ async def replay(
             group.create_task(
                 run_trial(
                     task,
+                    execution,
                     trial_plan,
                     settings,
                     ScriptedModel(control_turns(control), context_assistant_turns, tokenize),

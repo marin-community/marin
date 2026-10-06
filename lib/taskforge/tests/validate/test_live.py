@@ -20,6 +20,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineFactory, UnsupportedMachineSpec
 from taskcompendium.environment import EnvironmentKind
+from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
@@ -41,6 +42,7 @@ POLICY = LLMPolicy(max_continuations=0)
 K = 3
 LIVE_TIMEOUT = 1800
 RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
+EXECUTION = TaskExecution()
 
 
 def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings:
@@ -49,6 +51,7 @@ def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings
         capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
         max_turns=12,
         command_timeout=60,
+        cleanup_timeout=60,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
 
@@ -153,7 +156,7 @@ async def solver_trials(
     directory = check_dir(check)
     started = time.monotonic()
     outcomes = await run_trials(
-        task, plan(directory, TrialKind.SOLVER, task.id), settings(factories), GlmRolloutModel(client, POLICY)
+        task, EXECUTION, plan(directory, TrialKind.SOLVER, task.id), settings(factories), GlmRolloutModel(client, POLICY)
     )
     evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     write_summary(
@@ -198,7 +201,7 @@ async def replay_controls(
     directory = check_dir(check)
     started = time.monotonic()
     tokenizer = CountingTokenizer(ServerTokenizer(client, POLICY))
-    outcomes = await replay(task, controls, control_plan(directory, task.id), settings(factories), tokenizer)
+    outcomes = await replay(task, EXECUTION, controls, control_plan(directory, task.id), settings(factories), tokenizer)
     write_summary(
         directory,
         f"control replay on {task.id}: scripted turns tokenized through the server, graded by the engine",

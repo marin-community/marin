@@ -19,7 +19,9 @@ from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Machine, MachineSpec
 from taskcompendium.environment import EnvironmentKind, StdoutReward
-from taskcompendium.grading import Outcome, numeric_answer
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading import numeric_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 
 from taskforge.spec.controls import (
@@ -53,6 +55,7 @@ def math_task() -> TaskSpec:
         environment(EnvironmentKind.NULL),
         numeric_answer(MATH_ANSWER, tolerance_abs=0, tolerance_rel=0),
         source("math"),
+        execution=TaskExecution(),
     )
 
 
@@ -68,6 +71,7 @@ def file_task() -> TaskSpec:
             ("sh", "/grader/check.sh"), StdoutReward(), timeout=30, files=(file("/grader/check.sh", CHECK_SCRIPT),)
         ),
         source("file"),
+        execution=TaskExecution(),
     )
 
 

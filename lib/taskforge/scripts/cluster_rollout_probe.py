@@ -48,7 +48,7 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -58,10 +58,12 @@ from typing import Any
 from iris.client.workload import TaskState
 from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.image import RegistryImage as ShellboxRegistryImage
 from shellbox.machine import Command, Machine, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.environment import EnvironmentKind, RegistryImage, StdoutReward
+from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
@@ -71,7 +73,7 @@ from taskforge.ledger.records import entry_to_json
 from taskforge.llm.client import GlmClient, Pool, endpoint_in_task
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import MachineHost, machine_factories
+from taskforge.sandbox.factories import IRIS_DOCKER, SHELLSIM, MachineHost, machine_factories
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
 from taskforge.validate.evidence import Complete, Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
@@ -99,6 +101,14 @@ SECRET_SUFFIXES = ("KEY_ID", "API_KEY", "ACCESS_KEY")
 POLICY = LLMPolicy(max_continuations=0)
 MAX_TURNS = 12
 COMMAND_TIMEOUT = 120
+CLEANUP_TIMEOUT = 120
+EXECUTION = TaskExecution()
+# The probe measures the shipped Iris backend, so it does not refuse docker tasks up front: the
+# DOCKER row is the backend's own create-time checks (registry images, network ALLOW only).
+PROBE_CAPABILITIES = {
+    EnvironmentKind.SHELLSIM: SHELLSIM,
+    EnvironmentKind.DOCKER: replace(IRIS_DOCKER, network=frozenset({NetworkPolicy.ALLOW}), unavailable=None),
+}
 # Characters of a result file per log line, so log storage keeps each line whole.
 PRINT_CHUNK = 4000
 
@@ -170,6 +180,7 @@ def math_task() -> TaskSpec:
         environment(EnvironmentKind.NULL),
         numeric_answer(MATH_ANSWER, tolerance_abs=0, tolerance_rel=0),
         source("math"),
+        execution=EXECUTION,
     )
 
 
@@ -189,6 +200,7 @@ def docker_task() -> TaskSpec:
             ("sh", "/grader/check.sh"), StdoutReward(), timeout=60, files=(file("/grader/check.sh", CHECK_SCRIPT),)
         ),
         source("docker-file"),
+        execution=EXECUTION,
     )
 
 
@@ -270,8 +282,10 @@ async def run_phase(
     timed = {kind: TimedFactory(factory) for kind, factory in factories.items()}
     settings = EngineSettings(
         factories=timed,
+        capabilities=PROBE_CAPABILITIES,
         max_turns=MAX_TURNS,
         command_timeout=COMMAND_TIMEOUT,
+        cleanup_timeout=CLEANUP_TIMEOUT,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
     plan = TrialPlan(
@@ -280,12 +294,13 @@ async def run_phase(
         kind=TrialKind.SOLVER,
         k=k,
         max_retries=max_retries,
+        retry_backoff=ExponentialBackoff(initial=5, maximum=60),
         evidence_dir=directory,
         ledger=JsonlLedger(directory / "ledger"),
     )
     print(f"PHASE_START {phase} task={task.id} k={k} max_retries={max_retries}", flush=True)
     started = time.monotonic()
-    outcomes = await run_trials(task, plan, settings, model)
+    outcomes = await run_trials(task, EXECUTION, plan, settings, model)
     wall_time = time.monotonic() - started
     summary = {
         "phase": str(phase),

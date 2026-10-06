@@ -5,9 +5,9 @@
 
 ``Graded`` holds a rollout whose grade is a judgment of the submission: ``GRADED``, or
 ``EXTRACTION_ERROR`` (the model gave no extractable answer, which scores zero). An agent that runs
-out of ``TaskSpec.agent_timeout`` is a budget stop like running out of turns, so it is ``Graded``
-too (``classify.trial_outcome``). Everything else is ``Ungraded``: task setup, infrastructure,
-grader and contract failures that say nothing about the submission. Statistics use graded outcomes
+out of ``TaskExecution.agent_timeout`` is a budget stop like running out of turns, so it is
+``Graded`` too (``classify.trial_outcome``). Everything else is ``Ungraded``: task setup,
+infrastructure, grader and contract failures that say nothing about the submission. Statistics use graded outcomes
 only; ungraded ones make the evidence incomplete.
 """
 
@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from rolloutengine.contracts import RolloutData
-from taskcompendium.grading import GradeResult
-from taskcompendium.grading import Outcome as GradeStatus
+from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import Outcome as GradeStatus
 
 
 class TrialKind(StrEnum):
@@ -38,10 +38,9 @@ class Cause(StrEnum):
     passed, or the environment lacks the capabilities the task requires. A task defect, not flakiness."""
     SESSION_PREPARE = "session_prepare"
     ATTEMPT_TIMEOUT = "attempt_timeout"
-    """``TaskSpec.attempt_timeout`` expired."""
-    AGENT_TIMEOUT = "agent_timeout"
-    """``TaskSpec.agent_timeout`` expired during a model call or a tool step. ``trial_outcome`` turns
-    it into a ``Graded`` budget stop, so it never appears on an ``Ungraded`` outcome."""
+    """``TaskExecution.attempt_timeout`` expired."""
+    CLEANUP = "cleanup"
+    """Removing a stage's private grader files failed before the next stage could run."""
     MODEL_UNAVAILABLE = "model_unavailable"
     """``GlmClient`` spent its attempts or its infrastructure hold."""
     MODEL_REJECTED = "model_rejected"
@@ -60,6 +59,8 @@ class Cause(StrEnum):
     GRADER_EXECUTION = "grader_execution"
     GRADER_INFRA = "grader_infra"
     """An infrastructure grade with no ``GradingFailure``."""
+    INVALID_TASK = "invalid_task"
+    """The grader reported the task itself invalid (TaskCompendium ``Outcome.INVALID_TASK``)."""
     VERIFIER_SKIPPED = "verifier_skipped"
     NO_GRADE = "no_grade"
     """The engine returned an unavailable grade for another reason."""
@@ -73,6 +74,7 @@ RETRYABLE = frozenset(
         Cause.MACHINE_START_TIMEOUT,
         Cause.SESSION_PREPARE,
         Cause.ATTEMPT_TIMEOUT,
+        Cause.CLEANUP,
         Cause.MODEL_UNAVAILABLE,
         Cause.TOOL_EXECUTION,
         Cause.GRADER_RAISED,
