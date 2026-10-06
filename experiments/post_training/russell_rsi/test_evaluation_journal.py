@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
 from rolloutengine.contracts import RolloutContractError
@@ -476,6 +477,11 @@ def calibration_config(frozen_comparison):
 
 
 def test_completed_journal_reconstructs_without_http_or_runtime(tmp_path, frozen_comparison, monkeypatch):
+    # This saved comparison and scripted native-token stream use the frozen study runtime.
+    monkeypatch.setattr(
+        "experiments.post_training.russell_rsi.rollout_eval.MARIN_SKYRL",
+        replace(MARIN_SKYRL, commit="f124f258383763e10766cff5e5af4c433cad4b1a"),
+    )
     config = frozen_comparison.evaluation
     server = TokenServer(tmp_path / "journal")
     journal = supplementary_evaluation_journal(frozen_comparison)
