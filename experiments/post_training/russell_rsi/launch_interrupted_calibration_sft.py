@@ -38,11 +38,13 @@ from experiments.post_training.russell_rsi.interrupted_calibration import (
 from experiments.post_training.russell_rsi.launch import CLUSTER
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.retention_continuation import (
-    PROTOCOL as RETENTION_CONTINUATION_PROTOCOL,
+    HASH_REPAIR_PROTOCOL,
+    prepare_retention_continuation,
+    prepare_retention_hash_repair,
+    retention_continuation_stages,
 )
 from experiments.post_training.russell_rsi.retention_continuation import (
-    prepare_retention_continuation,
-    retention_continuation_stages,
+    PROTOCOL as RETENTION_CONTINUATION_PROTOCOL,
 )
 from experiments.post_training.russell_rsi.settings import IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.teacher_chat_study import chat_study_post_workflow
@@ -90,7 +92,9 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
 @click.option("--source-review-sha256", required=True)
 @click.option(
     "--stage",
-    type=click.Choice(["evaluate-interrupted", "retain", "select", "replace-coding", "select-replacement"]),
+    type=click.Choice(
+        ["evaluate-interrupted", "retain", "repair-retention", "select", "replace-coding", "select-replacement"]
+    ),
     required=True,
 )
 @foreground_build_options
@@ -121,20 +125,24 @@ def main(
         if stage == "replace-coding":
             return [replacement.coding]
         return [replacement_selection_stages(config, replacement)["terminal"]]
-    if stage in {"retain", "select"}:
-        if resolve_version(RETENTION_CONTINUATION_PROTOCOL, None) != config["version"]:
+    if stage in {"retain", "repair-retention", "select"}:
+        protocol = HASH_REPAIR_PROTOCOL if stage == "repair-retention" else RETENTION_CONTINUATION_PROTOCOL
+        if resolve_version(protocol, None) != config["version"]:
             raise click.UsageError("Retention continuation version differs from its frozen amendment")
-        retention_pin = (
-            PinnedFile(config_uri, config_sha256)
-            if stage == "retain"
-            else PinnedFile(config["retention_config_uri"], config["retention_config_sha256"])
-        )
+        if stage == "retain":
+            retention_pin = PinnedFile(config_uri, config_sha256)
+        elif stage == "repair-retention":
+            retention_pin = PinnedFile(config["predecessor_config_uri"], config["predecessor_config_sha256"])
+        else:
+            retention_pin = PinnedFile(config["retention_config_uri"], config["retention_config_sha256"])
         retention_config = retention_pin.read_json()
         source = PinnedFile(retention_config["source_config_uri"], retention_config["source_config_sha256"]).read_json()
         if source["runtime_commit"] != MARIN_SKYRL.commit:
             raise click.UsageError("Retention continuation changed the original science runtime")
         original = chat_study_post_workflow(source, "evaluate-interrupted")
         prepared = prepare_retention_continuation(retention_config, source, original, retention_pin)
+        if stage == "repair-retention":
+            return [prepare_retention_hash_repair(config, PinnedFile(config_uri, config_sha256), prepared)]
         if stage == "retain":
             return [prepared.step]
         return [retention_continuation_stages(config, prepared)["terminal"]]

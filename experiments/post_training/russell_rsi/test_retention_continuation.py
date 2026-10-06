@@ -17,7 +17,11 @@ from marin.execution.lazy import StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
 from marin.external_dependencies import MARIN_SKYRL
 
-from experiments.post_training.russell_rsi import test_interrupted_calibration, test_teacher_four_pass
+from experiments.post_training.russell_rsi import (
+    retention_continuation,
+    test_interrupted_calibration,
+    test_teacher_four_pass,
+)
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.coding_eval_feedback import collect_coding_eval_evidence
 from experiments.post_training.russell_rsi.interrupted_calibration import coding_attempt, run_foreground_coding
@@ -25,9 +29,13 @@ from experiments.post_training.russell_rsi.launch_post_teacher_sft import StudyS
 from experiments.post_training.russell_rsi.retention_continuation import (
     FAILED_SOURCE_COMMIT,
     FAILURE_PROTOCOL,
+    HASH_FAILURE_SOURCE,
+    HASH_REPAIR_PROTOCOL,
+    HASH_REPAIR_VERSION,
     PROTOCOL,
     VERSION,
     prepare_retention_continuation,
+    prepare_retention_hash_repair,
     retention_continuation_stages,
     seal_retention_continuation,
     submit_continuation_retention,
@@ -297,3 +305,134 @@ def test_retention_continuation_rejects_changed_coding_or_issued_retention(compl
     config.update(retention_config_uri=retained_pin["uri"], retention_config_sha256=retained_pin["sha256"])
     with pytest.raises(ValueError, match="Completed coding producer"):
         retention_continuation_stages(config, prepared)
+
+
+class HashRepair(NamedTuple):
+    config: dict
+    config_pin: PinnedFile
+    predecessor: retention_continuation.PreparedRetentionContinuation
+    amendment: dict
+    failure: dict
+    pin: Callable[..., dict]
+
+
+@pytest.fixture
+def hash_repair(completed_coding, tmp_path, monkeypatch):
+    previous = completed_coding
+    old_failure = previous.pin(tmp_path / "launch-failure.json", previous.failure)
+    old_config = {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "source_config_uri": previous.config["source_config_uri"],
+        "source_config_sha256": previous.config["source_config_sha256"],
+        "launch_failure_uri": old_failure["uri"],
+        "launch_failure_sha256": old_failure["sha256"],
+    }
+    old_pin = previous.pin(tmp_path / "predecessor.json", old_config)
+    prepared = prepare_retention_continuation(old_config, previous.source, previous.original, PinnedFile(**old_pin))
+    output = prepared.step.path(previous.source["recovery_artifact_prefix"])
+    files = []
+    for relative, raw in (
+        (".executor_info", b"{}"),
+        (".executor_status", b"FAILED"),
+        ("journal/binding.json", b"{}"),
+        ("token-preflight-suite.json", b"{}"),
+        ("worker-import-provenance.json", b"{}"),
+    ):
+        path = Path(output) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        files.append(
+            {"relative_path": relative, "uri": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+        )
+    failure = {
+        "status": "root-reviewed-failed-before-first-journal-attempt",
+        "source_commit": HASH_FAILURE_SOURCE,
+        "artifact_prefix": output,
+        "calibration_status": "incomplete_infrastructure",
+        "signal_gate_passed": None,
+        "rl_authorized": False,
+        "preflight_attempt_reservations": 0,
+        "preflight_request_issuances": 0,
+        "scored_task_attempt_reservations": 0,
+        "scored_task_request_issuances": 0,
+        "provider_startup_generations": "not established; not counted as scored samples",
+        "files": files,
+    }
+    failure_pin = previous.pin(tmp_path / "hash-failure.json", failure)
+    monkeypatch.setattr(retention_continuation, "HASH_FAILURE_SHA256", failure_pin["sha256"])
+    amendment = {
+        "protocol": HASH_REPAIR_PROTOCOL,
+        "version": HASH_REPAIR_VERSION,
+        "calibration_status": "incomplete_infrastructure",
+        "signal_gate_passed": None,
+        "rl_authorized": False,
+        "predecessor": {
+            "config": old_pin,
+            "retention_identity": artifact_identity(prepared.step),
+            "retention_uri": output,
+            "model_identity": artifact_identity(prepared.model),
+            "tasks_identity": artifact_identity(prepared.tasks),
+            "source_commit": HASH_FAILURE_SOURCE,
+            "runtime_commit": MARIN_SKYRL.commit,
+        },
+        "failure": failure_pin,
+        "repair": {
+            "preflight_hash": "compact_json_sha256",
+            "task_hash": "contract_tasks.digest",
+            "scored_tasks_unchanged": True,
+            "new_coding_attempts": 0,
+        },
+    }
+    amendment_pin = previous.pin(tmp_path / "hash-amendment.json", amendment)
+    config = {
+        "protocol": HASH_REPAIR_PROTOCOL,
+        "version": HASH_REPAIR_VERSION,
+        "predecessor_config_uri": old_pin["uri"],
+        "predecessor_config_sha256": old_pin["sha256"],
+        "repair_amendment_uri": amendment_pin["uri"],
+        "repair_amendment_sha256": amendment_pin["sha256"],
+    }
+    config_pin = previous.pin(tmp_path / "repair.json", config)
+    return HashRepair(config, PinnedFile(**config_pin), prepared, amendment, failure, previous.pin)
+
+
+def test_hash_repair_uses_fresh_retention_output_without_coding(hash_repair):
+    config, pin, prepared, _, _, _ = hash_repair
+    repaired = prepare_retention_hash_repair(config, pin, prepared)
+    prefix = prepared.source["recovery_artifact_prefix"]
+    old_path, new_path = prepared.step.path(prefix), repaired.path(prefix)
+    assert old_path != new_path
+    ctx = StepContext.for_run(new_path, prefix, deps=repaired.deps)
+    bound = repaired.build_config(ctx)
+    assert bound.evaluation == prepared.step.build_config(ctx).evaluation
+    assert bound.evaluation.output_path == new_path
+    assert bound.retention_config == pin
+    assert repaired.deps == prepared.step.deps
+    assert all(step.run is not run_foreground_coding for step in graph_handles([repaired]))
+
+
+@pytest.mark.parametrize("defect", ["model", "tasks", "issued"])
+def test_hash_repair_rejects_changed_inputs_or_issued_worker(hash_repair, tmp_path, monkeypatch, defect):
+    config, _, prepared, amendment, failure, pin = hash_repair
+    if defect == "issued":
+        failure["preflight_request_issuances"] = 1
+        changed = pin(tmp_path / "changed-failure.json", failure)
+        monkeypatch.setattr(retention_continuation, "HASH_FAILURE_SHA256", changed["sha256"])
+        amendment["failure"] = changed
+    else:
+        amendment["predecessor"][f"{defect}_identity"] = "changed-input"
+    amendment_pin = pin(tmp_path / "changed-amendment.json", amendment)
+    config.update(repair_amendment_uri=amendment_pin["uri"], repair_amendment_sha256=amendment_pin["sha256"])
+    config_pin = pin(tmp_path / "changed-config.json", config)
+    with pytest.raises(ValueError, match=r"changed the frozen|before any journal"):
+        prepare_retention_hash_repair(config, PinnedFile(**config_pin), prepared)
+
+
+def test_hash_repair_rejects_unlisted_attempt(hash_repair):
+    prepared = hash_repair.predecessor
+    path = Path(prepared.step.path(prepared.source["recovery_artifact_prefix"])) / "journal/preflight/1/reservation.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}")
+    with pytest.raises(ValueError, match="unrecorded attempt"):
+        prepare_retention_hash_repair(hash_repair.config, hash_repair.config_pin, prepared)

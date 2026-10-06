@@ -46,6 +46,7 @@ from experiments.post_training.russell_rsi.rollout_eval import (
     require_journal_submission,
     run_development_evaluation,
 )
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_PROBES, preflight_task
 
 PROTOCOL = "russell-rsi-calibration-interruption-v1"
@@ -152,7 +153,9 @@ def retention_journal(
         "job_policy": {"failure_retries": 0, "preemption_retries": 0, "timeout_hours": WORKER_TIMEOUT_HOURS},
         "attempts": {
             "task": {f"{task.id}/0": digest(task.model_dump(mode="json")) for task in tasks},
-            "preflight": {str(index): digest(task.model_dump(mode="json")) for index, task in enumerate(probes, 1)},
+            "preflight": {
+                str(index): compact_json_sha256(task.model_dump(mode="json")) for index, task in enumerate(probes, 1)
+            },
         },
     }
     if continuation_binding is not None:

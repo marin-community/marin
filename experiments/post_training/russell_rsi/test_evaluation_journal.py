@@ -27,6 +27,7 @@ from taskcompendium.parquet import write_tasks
 
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal, EvaluationJournal
+from experiments.post_training.russell_rsi.interrupted_calibration import retention_journal
 from experiments.post_training.russell_rsi.rollout_eval import (
     DevelopmentEvaluationConfig,
     SupplementaryEvaluationConfig,
@@ -250,6 +251,39 @@ def test_eight_matched_attempts_and_four_probes_resume_without_inference(tmp_pat
         summary = json.loads((tmp_path / label / "failure_summary.json").read_text())
         assert summary["categories"] == {"passed": 4}
         assert len((tmp_path / label / "traces.jsonl").read_text().splitlines()) == 4
+
+
+def test_retention_journal_resumes_without_http(tmp_path, frozen_comparison):
+    tasks = [preflight_task(index, PREFLIGHT_INSTRUCTION, 23) for index in range(101, 104)]
+    config = replace(frozen_comparison.evaluation, limit=3, startup_attempts=1)
+    write_tasks(config.tasks_path, tasks)
+    server = TokenServer(Path(config.output_path) / "journal")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return server(request)
+
+    async def evaluate():
+        journal = retention_journal(config)
+        await evaluate_development(
+            config,
+            "https://unit.test/v1",
+            "unit",
+            {"source_image": QEMU_TEST_IMAGE, "directory_name": "unused"},
+            journal=journal,
+            http_transport=httpx.MockTransport(respond),
+        )
+        return journal
+
+    journal = asyncio.run(evaluate())
+    assert journal.complete()
+    assert len(server.completions) == 2 * (len(tasks) + len(PREFLIGHT_PROBES))
+    request_count = len(requests)
+    saved = {path: path.read_bytes() for path in (Path(config.output_path) / "journal").rglob("*.json")}
+    asyncio.run(evaluate())
+    assert len(requests) == request_count
+    assert all(path.read_bytes() == content for path, content in saved.items())
 
 
 def test_interrupted_attempt_and_changed_candidate_stop_before_any_http(tmp_path, frozen_comparison):

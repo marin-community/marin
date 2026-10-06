@@ -43,6 +43,10 @@ from experiments.post_training.russell_rsi.sources import compact_json_sha256
 PROTOCOL = "russell-rsi-interrupted-retention-continuation-v1"
 FAILURE_PROTOCOL = "russell-rsi-interrupted-retention-launch-failure-v1"
 VERSION = "2026.10.06.8"
+HASH_REPAIR_PROTOCOL = "russell-rsi-retention-preflight-hash-repair-v1"
+HASH_REPAIR_VERSION = "2026.10.06.10"
+HASH_FAILURE_SOURCE = "be82779e7e39765054eaf020fe8f1bd247aa34e8"
+HASH_FAILURE_SHA256 = "beca078b0dca2480ce0378b0f85cfc0971529e08bdf24669d4c4d8e6a0aecded"
 FAILED_SOURCE_COMMIT = "249d57f88b2845e1d82282b6219c8d5bb2f25c4a"
 NEVER_ADMITTED_WITNESSES = {"summary", "rejection", "not_found", "empty_controller_prefix", "absent_journal"}
 
@@ -60,10 +64,10 @@ class ContinuationRetentionConfig:
 
 def run_continuation_retention(config: ContinuationRetentionConfig) -> None:
     # Validate both frozen metadata hashes before reservation or model startup.
-    config.retention_config.read_bytes()
+    retention_config = config.retention_config.read_json()
     config.failure.read_bytes()
     binding = {
-        "protocol": PROTOCOL,
+        "protocol": retention_config["protocol"],
         "retention_config": asdict(config.retention_config),
         "launch_failure": asdict(config.failure),
         "worker_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -196,6 +200,120 @@ def prepare_retention_continuation(
     return PreparedRetentionContinuation(
         source, model, old_coding, old_evidence, old_retention.deps[0], old_selection, failure_pin, config_pin, retained
     )
+
+
+def prepare_retention_hash_repair(
+    config: dict, config_pin: PinnedFile, predecessor: PreparedRetentionContinuation
+) -> ArtifactStep:
+    """Create fresh retention after the pinned preflight hash failure.
+
+    Selection requires a separate amendment for completed v9 coding and v10 retention.
+    """
+    if config != config_pin.read_json() or set(config) != {
+        "protocol",
+        "version",
+        "predecessor_config_uri",
+        "predecessor_config_sha256",
+        "repair_amendment_uri",
+        "repair_amendment_sha256",
+    }:
+        raise ValueError("Hash repair configuration differs from its frozen pin or schema")
+    if config["protocol"] != HASH_REPAIR_PROTOCOL or config["version"] != HASH_REPAIR_VERSION:
+        raise ValueError("Hash repair requires its separate protocol and version")
+    if _pin(config, "predecessor_config") != predecessor.retention_config:
+        raise ValueError("Hash repair substituted the predecessor configuration")
+    amendment_pin = _pin(config, "repair_amendment")
+    amendment = amendment_pin.read_json()
+    prefix = predecessor.source["recovery_artifact_prefix"]
+    expected_predecessor = {
+        "config": asdict(predecessor.retention_config),
+        "retention_identity": artifact_identity(predecessor.step),
+        "retention_uri": predecessor.step.path(prefix),
+        "model_identity": artifact_identity(predecessor.model),
+        "tasks_identity": artifact_identity(predecessor.tasks),
+        "source_commit": HASH_FAILURE_SOURCE,
+        "runtime_commit": MARIN_SKYRL.commit,
+    }
+    if (
+        set(amendment)
+        != {
+            "protocol",
+            "version",
+            "calibration_status",
+            "signal_gate_passed",
+            "rl_authorized",
+            "predecessor",
+            "failure",
+            "repair",
+        }
+        or amendment["protocol"] != HASH_REPAIR_PROTOCOL
+        or amendment["version"] != HASH_REPAIR_VERSION
+        or amendment["calibration_status"] != "incomplete_infrastructure"
+        or amendment["signal_gate_passed"] is not None
+        or amendment["rl_authorized"] is not False
+        or amendment["predecessor"] != expected_predecessor
+        or amendment["repair"]
+        != {
+            "preflight_hash": "compact_json_sha256",
+            "task_hash": "contract_tasks.digest",
+            "scored_tasks_unchanged": True,
+            "new_coding_attempts": 0,
+        }
+        or amendment["failure"]["sha256"] != HASH_FAILURE_SHA256
+    ):
+        raise ValueError("Hash repair changed the frozen failure, model, tasks, or science")
+    failure = PinnedFile(**amendment["failure"]).read_json()
+    if (
+        failure["status"] != "root-reviewed-failed-before-first-journal-attempt"
+        or failure["source_commit"] != HASH_FAILURE_SOURCE
+        or failure["artifact_prefix"] != expected_predecessor["retention_uri"]
+        or failure["calibration_status"] != "incomplete_infrastructure"
+        or failure["signal_gate_passed"] is not None
+        or failure["rl_authorized"] is not False
+        or any(
+            failure[name] != 0
+            for name in (
+                "preflight_attempt_reservations",
+                "preflight_request_issuances",
+                "scored_task_attempt_reservations",
+                "scored_task_request_issuances",
+            )
+        )
+        or failure["provider_startup_generations"] != "not established; not counted as scored samples"
+    ):
+        raise ValueError("Hash repair requires failure before any journal attempt or request")
+    files = failure["files"]
+    expected_files = {
+        ".executor_info",
+        ".executor_status",
+        "journal/binding.json",
+        "token-preflight-suite.json",
+        "worker-import-provenance.json",
+    }
+    if len(files) != len(expected_files) or {item["relative_path"] for item in files} != expected_files:
+        raise ValueError("Hash repair failure inventory contains an attempt or lacks evidence")
+    root = StoragePath(expected_predecessor["retention_uri"])
+    actual_files = set()
+    for directory, _, names in root.walk():
+        for name in names:
+            relative = str((directory / name).relative_to(root))
+            if relative not in expected_files:
+                raise ValueError("Hash repair predecessor output contains an unrecorded attempt or file")
+            actual_files.add(relative)
+    if actual_files != expected_files:
+        raise ValueError("Hash repair predecessor output lacks frozen failure evidence")
+    for item in files:
+        if item["uri"] != str(StoragePath(expected_predecessor["retention_uri"]) / item["relative_path"]):
+            raise ValueError("Hash repair failure file is outside the predecessor output")
+        raw = PinnedFile(item["uri"], item["sha256"]).read_bytes()
+        if len(raw) != item["size"] or (item["relative_path"] == ".executor_status" and raw != b"FAILED"):
+            raise ValueError("Hash repair failure file size or terminal status differs")
+
+    def repair_config(ctx: StepContext) -> ContinuationRetentionConfig:
+        previous = predecessor.step.build_config(ctx)
+        return ContinuationRetentionConfig(previous.evaluation, config_pin, amendment_pin)
+
+    return replace(predecessor.step, version=HASH_REPAIR_VERSION, build_config=repair_config)
 
 
 def completed_coding_evidence(
