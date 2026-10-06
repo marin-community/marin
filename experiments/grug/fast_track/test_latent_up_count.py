@@ -17,10 +17,9 @@ from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight
 def test_gated_projections_train_every_projection_and_the_gate(count):
     mesh, model = t._model(ngram_stat_rows=0, latent_up_count=count)
     mlp = model.stacked_blocks.stacked.mlp
-    assert (
-        mlp.w_latent_up_extra.shape[-3] == count - 1 and mlp.w_latent_up_extra.shape[-2:] == mlp.w_latent_up.shape[-2:]
-    )
-    assert not np.allclose(np.asarray(mlp.w_latent_up_extra[..., 0, :, :]), np.asarray(mlp.w_latent_up))
+    assert len(mlp.w_latent_up_extra) == count - 1
+    assert all(w.shape == mlp.w_latent_up.shape for w in mlp.w_latent_up_extra)
+    assert not np.allclose(np.asarray(mlp.w_latent_up_extra[0]), np.asarray(mlp.w_latent_up))
     assert float(jnp.abs(mlp.latent_up_gate).max()) == 0.0
     tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
     with jax.set_mesh(mesh):
@@ -29,6 +28,6 @@ def test_gated_projections_train_every_projection_and_the_gate(count):
         )(model)
     assert np.isfinite(float(loss))
     g = grads.stacked_blocks.stacked.mlp
-    for leaf in (g.w_latent_up, g.w_latent_up_extra, g.latent_up_gate):
+    for leaf in (g.w_latent_up, *g.w_latent_up_extra, g.latent_up_gate):
         assert float(jnp.abs(leaf).max()) > 0
     assert _is_gate_or_router_weight("stacked_blocks.stacked.mlp.latent_up_gate")

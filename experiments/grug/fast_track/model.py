@@ -3818,7 +3818,9 @@ class MoEMLP(eqx.Module):
     expert_router_alpha: jax.Array | None
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
-    w_latent_up_extra: Float[Array, "C O D"] | None  # the other cfg.latent_up_count - 1 output projections
+    # The other cfg.latent_up_count - 1 output projections: separate [O, D] leaves, so each is its own MuonH matrix
+    # (a stacked [C, O, D] leaf would read as an expert bank and shard C over the expert axis).
+    w_latent_up_extra: tuple[jax.Array, ...] | None
     latent_up_gate: Float[Array, "D C"] | None  # per-token sigmoid weights of the output projections
     latent_out_norm: LearnedRMSNorm | None
     latent_mix_in_gate: Float[Array, "D E"] | None  # mixture of latents on the input latent (latent_mix_sites)
@@ -3925,14 +3927,9 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             w_latent_up_extra=(
-                reshard(
-                    jnp.stack(
-                        [
-                            _latent_proj_init(cfg, random.fold_in(k_up, 2 + i), (out_width, d))
-                            for i in range(cfg.latent_up_count - 1)
-                        ]
-                    ),
-                    P(None, "model", _FSDP_AXES),
+                tuple(
+                    reshard(_latent_proj_init(cfg, random.fold_in(k_up, 2 + i), (out_width, d)), P("model", _FSDP_AXES))
+                    for i in range(cfg.latent_up_count - 1)
                 )
                 if cfg.latent_up_count > 1
                 else None
