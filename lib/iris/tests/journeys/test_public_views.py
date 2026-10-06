@@ -58,8 +58,8 @@ def test_succeeded_task_status_omits_failure_highlights_even_with_error_like_log
 def test_list_tasks_reports_current_timing_and_only_the_latest_failed_attempt(journey):
     job = journey.submit("bounded-attempt-list", tasks=2, failure_retries=2)
     journey.settle()
-    first_attempt, untouched = journey.tasks(job)
-    assert [attempt.attempt_id for attempt in first_attempt.attempts] == [0]
+    first_task, untouched = journey.tasks(job)
+    assert [attempt.attempt_id for attempt in first_task.attempts] == [0]
     assert [attempt.attempt_id for attempt in untouched.attempts] == [0]
 
     journey.fail(job[0], error="first failure")

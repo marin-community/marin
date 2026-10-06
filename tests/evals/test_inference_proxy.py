@@ -288,35 +288,54 @@ def test_direct_inference_session_reports_backend_state(
 
 
 @pytest.mark.parametrize(
-    ("task_state", "expected_error"),
+    ("task_state", "placed"),
     [
-        (TaskState.PENDING, "to be placed"),
-        (TaskState.ASSIGNED, "waiting for inference endpoint"),
-        (TaskState.RUNNING, "waiting for inference endpoint"),
+        (TaskState.PENDING, False),
+        (TaskState.ASSIGNED, True),
+        (TaskState.RUNNING, True),
     ],
 )
 def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
-    task_state: TaskState, expected_error: str, monkeypatch
+    task_state: TaskState, placed: bool, monkeypatch
 ) -> None:
-    class ExpiredDeadline:
-        def expired(self) -> bool:
-            return True
+    class FixedDeadline:
+        def __init__(self, seconds: float) -> None:
+            self.seconds = seconds
 
-    monkeypatch.setattr(iris_module.Deadline, "from_seconds", lambda _seconds: ExpiredDeadline())
+        def expired(self) -> bool:
+            return self.seconds == 0
+
+    endpoint_probes = 0
+
+    def list_endpoint_instances(_endpoint_name: str):
+        nonlocal endpoint_probes
+        endpoint_probes += 1
+        if endpoint_probes > 1:
+            return [SimpleNamespace(address="https://inference.example", metadata={})]
+        return []
+
+    monkeypatch.setattr(iris_module.Deadline, "from_seconds", FixedDeadline)
+    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                list_endpoint_instances=lambda _endpoint_name: [],
+                list_endpoint_instances=list_endpoint_instances,
                 job_status=lambda _job_id: SimpleNamespace(task_state_counts={task_state: 1}),
             )
         ),
     )
     job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
 
-    with pytest.raises(TimeoutError, match=expected_error):
-        iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=60)
+    if placed:
+        with pytest.raises(TimeoutError):
+            iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0)
+    else:
+        assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0) == (
+            "https://inference.example",
+            {},
+        )
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
