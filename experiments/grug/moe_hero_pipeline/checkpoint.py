@@ -124,4 +124,11 @@ def restore_checkpoint(
         state,
         shardings,
     )
+    # Canonical scalar counters are replicated on a temporary checkpoint mesh.
+    # Ordinary JAX stages need their training mesh back before the next update.
+    restored = jax.tree.map(
+        lambda value, target: jax.device_put(value, target) if isinstance(target, jax.sharding.Sharding) else value,
+        restored,
+        destination_shardings,
+    )
     return mpmd_checkpoint.wrap_checkpoint_arrays(restored, destination_shardings), checkpoint.step

@@ -4,7 +4,10 @@
 latent/shared experts, SConv, absolute local/global attention positions, and QB
 router updates. Standard 1F1B is the default. Each process initializes only its
 own stage. CPU tests compare sequential-stage hidden states, routing statistics,
-losses, and gradients against the unsplit model.
+losses, and gradients against the unsplit model. Run them with
+`uv run pytest experiments/grug/moe_hero_pipeline/test_pipeline.py`. The
+checkpoint continuation test compares two AdamW updates after restore with an
+uninterrupted run, including a changing learning rate and a changed stage split.
 
 The synthetic runner can save and resume complete pipeline checkpoints. Its
 AdamW default is a bring-up configuration; the validated long-context recipe

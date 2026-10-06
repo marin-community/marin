@@ -20,6 +20,7 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_pipeline.checkpoint import checkpoint_state, restore_checkpoint, save_checkpoint
 from experiments.grug.moe_hero_pipeline.pipeline import (
     GrugMoeAutomaticPipelineState,
+    _apply_qb_betas,
     _copy_array_to_host,
     split_transformer,
 )
@@ -185,6 +186,27 @@ def test_parked_host_copy_survives_device_alias_deletion_and_restores_bits():
     np.testing.assert_array_equal(np.asarray(restored).view(np.uint32), values.view(np.uint32))
 
 
+def _pipeline_state(model, optimizer, layer_counts):
+    stages = split_transformer(model, len(layer_counts), layer_counts=layer_counts)
+    trainable = []
+    for stage in stages:
+        params, _ = eqx.partition(stage, eqx.is_array)
+        for index in range(len(stage.blocks)):
+            params = eqx.tree_at(lambda current, index=index: current.blocks[index].mlp.router_bias, params, None)
+        trainable.append(params)
+    return GrugMoeAutomaticPipelineState(
+        trainable_params=tuple(trainable),
+        opt_state=tuple(optimizer.init(params) for params in trainable),
+        pending_qb_betas=tuple(
+            jnp.arange(len(stage.blocks) * model.config.num_experts, dtype=jnp.float32).reshape(
+                len(stage.blocks), model.config.num_experts
+            )
+            + 10 * stage.start_layer
+            for stage in stages
+        ),
+    )
+
+
 @pytest.mark.parametrize("optimizer_name", ["adamw", "muonh"])
 def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_path, optimizer_name):
     mesh, model = _tiny_hero(QbEstimator.HIST)
@@ -194,28 +216,8 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
         else GrugMoeMuonHConfig(learning_rate=1e-4, adam_lr=1e-4, warmup=0).build(3)
     )
 
-    def pipeline_state(layer_counts):
-        stages = split_transformer(model, len(layer_counts), layer_counts=layer_counts)
-        trainable = []
-        for stage in stages:
-            params, _ = eqx.partition(stage, eqx.is_array)
-            for index in range(len(stage.blocks)):
-                params = eqx.tree_at(lambda current, index=index: current.blocks[index].mlp.router_bias, params, None)
-            trainable.append(params)
-        return GrugMoeAutomaticPipelineState(
-            trainable_params=tuple(trainable),
-            opt_state=tuple(optimizer.init(params) for params in trainable),
-            pending_qb_betas=tuple(
-                jnp.arange(len(stage.blocks) * model.config.num_experts, dtype=jnp.float32).reshape(
-                    len(stage.blocks), model.config.num_experts
-                )
-                + 10 * stage.start_layer
-                for stage in stages
-            ),
-        )
-
     with jax.set_mesh(mesh):
-        state = pipeline_state((2, 3))
+        state = _pipeline_state(model, optimizer, (2, 3))
         if optimizer_name == "adamw":
             gradients = jax.tree.map(jnp.ones_like, state.trainable_params)
             updates = tuple(
@@ -245,7 +247,7 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
         for actual, expected in zip(jax.tree.leaves(loaded), jax.tree.leaves(canonical), strict=True):
             np.testing.assert_array_equal(actual, expected)
 
-        destination = pipeline_state((1, 1, 1, 1, 1))
+        destination = _pipeline_state(model, optimizer, (1, 1, 1, 1, 1))
         destination = jax.tree.map(jnp.zeros_like, destination)
         shardings = jax.tree.map(lambda value: value.sharding, destination)
         restored, completed = restore_checkpoint(
@@ -256,3 +258,73 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
         assert jax.tree.structure(restored_canonical) == jax.tree.structure(canonical)
         for actual, expected in zip(jax.tree.leaves(restored_canonical), jax.tree.leaves(canonical), strict=True):
             np.testing.assert_array_equal(actual, expected)
+
+
+@eqx.filter_jit
+def _serial_training_step(state, batch, optimizer):
+    # Exercise real Hero gradients and delayed QB updates without CUDA/JAXPP.
+    def loss_fn(params):
+        hidden = params[0].embed(batch.tokens)
+        next_betas = []
+        for stage, betas in zip(params, state.pending_qb_betas, strict=True):
+            stage = _apply_qb_betas(stage, betas)
+            hidden, metrics = stage.run_blocks(hidden, batch.attn_mask)
+            next_betas.append(metrics["qb_beta_per_layer"])
+        loss = stage.cross_entropy_loss(stage.finish(hidden), batch.tokens, batch.loss_weight, logsumexp_weight=0.01)
+        return loss, tuple(next_betas)
+
+    (loss, next_betas), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.trainable_params)
+    updates = tuple(
+        optimizer.update(gradient, opt_state, params)
+        for gradient, opt_state, params in zip(grads, state.opt_state, state.trainable_params, strict=True)
+    )
+    return (
+        dataclasses.replace(
+            state,
+            trainable_params=tuple(
+                optax.apply_updates(params, update)
+                for params, (update, _) in zip(state.trainable_params, updates, strict=True)
+            ),
+            opt_state=tuple(next_state for _, next_state in updates),
+            pending_qb_betas=next_betas,
+        ),
+        loss,
+    )
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("restored_layer_counts", [(2, 3), (1, 1, 1, 1, 1)])
+def test_checkpoint_next_two_training_steps_match_uninterrupted_run(tmp_path, restored_layer_counts):
+    mesh, model = _tiny_hero(QbEstimator.HIST)
+    # Changing learning rates expose a reset schedule counter as well as Adam's
+    # bias-correction counter. Every restart uses the full four-step schedule.
+    optimizer = optax.adamw(optax.linear_schedule(1e-3, 1e-4, transition_steps=4))
+    contract = {"model": "tiny-hero", "optimizer": "adamw", "training_steps": 4}
+    batch = _packed_batch()
+
+    def advance(state, completed_step):
+        next_batch = dataclasses.replace(batch, tokens=(batch.tokens + completed_step) % model.config.vocab_size)
+        return _serial_training_step(state, next_batch, optimizer)
+
+    with jax.set_mesh(mesh):
+        uninterrupted = _pipeline_state(model, optimizer, (2, 3))
+        for completed_step in (1, 2):
+            uninterrupted, _ = advance(uninterrupted, completed_step)
+        save_checkpoint(str(tmp_path), uninterrupted, step=2, contract=contract)
+
+        destination = _pipeline_state(model, optimizer, restored_layer_counts)
+        shardings = jax.tree.map(lambda value: value.sharding, destination)
+        resumed, completed = restore_checkpoint(str(tmp_path), destination, shardings, contract=contract)
+        assert completed == 2
+
+        resumed_steps = []
+        for completed_step in range(completed + 1, contract["training_steps"] + 1):
+            uninterrupted, expected_loss = advance(uninterrupted, completed_step)
+            resumed, actual_loss = advance(resumed, completed_step)
+            resumed_steps.append(completed_step)
+            np.testing.assert_array_equal(actual_loss, expected_loss)
+            expected = checkpoint_state(uninterrupted)
+            actual = checkpoint_state(resumed)
+            for actual_value, expected_value in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+                np.testing.assert_array_equal(actual_value, expected_value)
+        assert resumed_steps == [3, 4]
