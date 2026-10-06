@@ -33,7 +33,7 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     make_job_request,
     make_test_entrypoint,
@@ -822,6 +822,46 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         with pytest.raises(ConnectError) as exc_info:
             auth_service.launch_job(make_job_request("/alice/parent-job/sneaky-child"), None)
         assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(token)
+
+
+@pytest.mark.parametrize(
+    ("identity", "allowed"),
+    [
+        pytest.param(VerifiedIdentity(user_id="alice", role="user"), True, id="owner"),
+        pytest.param(VerifiedIdentity(user_id="bob", role="user"), False, id="other-user"),
+        pytest.param(VerifiedIdentity(user_id="anonymous", role="admin"), True, id="admin"),
+    ],
+)
+def test_exec_in_container_requires_job_owner(state, mock_controller, tmp_path, log_client, identity, allowed):
+    mock_controller.worker_health = state._health
+    auth_service = ControllerServiceImpl(
+        controller=mock_controller,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_exec")),
+        log_client=log_client,
+        db=state._db,
+        auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db),
+    )
+    auth_service.launch_job(make_job_request("/alice/my-job"), None)
+    task_id = JobName.from_wire("/alice/my-job").task(0)
+    _register_worker(state, WorkerId("w1"))
+    _assign_and_transition(state, task_id, WorkerId("w1"), job_pb2.TASK_STATE_RUNNING)
+    mock_controller.backend.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
+        exit_code=0, stdout="ran"
+    )
+    request = controller_pb2.Controller.ExecInContainerRequest(task_id=task_id.to_wire(), command=["true"])
+
+    token = _verified_identity.set(identity)
+    try:
+        if allowed:
+            assert auth_service.exec_in_container(request, None).stdout == "ran"
+        else:
+            with pytest.raises(ConnectError) as exc_info:
+                auth_service.exec_in_container(request, None)
+            assert exc_info.value.code == Code.PERMISSION_DENIED
+            mock_controller.backend.exec_in_container.assert_not_called()
     finally:
         _verified_identity.reset(token)
 

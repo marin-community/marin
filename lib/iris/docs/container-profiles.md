@@ -123,7 +123,8 @@ authenticates a caller from those ranges that presents no token as the
 anonymous admin (`CidrAuthenticator` in `rigging.server_auth`). A sandbox
 pod's address falls in those ranges, so a task that connects to the controller
 directly can submit jobs with any container profile, including the elevated
-ones, and leave the sandbox. `ExecInContainer` has no owner check, so the same
+ones, and leave the sandbox. `ExecInContainer` admits only the owner of the
+task's job or an admin, and the anonymous admin passes that check, so the same
 caller can run commands in any task on the cluster. Withholding the controller
 address does not stop this: the address is stable, and the log sidecar holds
 it in the pod's shared network namespace.
