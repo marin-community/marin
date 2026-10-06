@@ -240,10 +240,12 @@ engine installs verifier files only after the final response, so the leak role l
 keys in the instruction, the environment files and the build context rather than reading the
 grader. A shortcut or leak pass becomes a negative control (`reward_max = REJECTION_CEILING`) that
 the revised program must ship, so the next round's control replay proves the fix. Every role has
-a sentinel reply for finding nothing, and a pass that ends on it is no finding: on a task graded by
-machine state, the adversary's honest work before it gave up is what passed. `RoleStats` counts
-passes and sentinel replies per role, which measures each role's false-positive rate. Review
-consumes findings through rules; no model judges legitimacy.
+a sentinel reply for finding nothing. A shortcut or leak pass is a finding whatever the adversary
+replied last: the grade is the evidence, and the adversary's own conclusion is not trusted over it.
+Only an ambiguity pass that ends on its sentinel is no finding, because no reading changed the
+answer and the role solved the task as intended. `RoleStats` counts passes and sentinel replies per
+role, which measures each role's false-positive rate. Review consumes findings through rules; no
+model judges legitimacy.
 
 The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `validate.run` type
 those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
