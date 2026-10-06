@@ -20,7 +20,7 @@ from enum import StrEnum
 from pydantic import TypeAdapter
 from rolloutengine.task_session import SHELL_TOOL_NAME
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage, VerifierKind
 from taskcompendium.submission import ANSWER_CALL_NAME
 
@@ -67,7 +67,9 @@ class Expectation:
     """The grade a control must receive.
 
     ``components`` are exact reward components (``GradeResult.rewards``) that
-    pin which criterion a partial control breaks.
+    pin which criterion a partial control breaks. A graded expectation with only
+    an upper bound is a no-credit expectation: a submission failure, which
+    scores zero, meets it as well as a graded reward within the bound.
     """
 
     status: Outcome
@@ -88,6 +90,33 @@ class Expectation:
             raise ValueError("Reward bounds are reversed")
         if any(not name or not math.isfinite(value) for name, value in self.components.items()):
             raise ValueError("Reward components need names and finite values")
+
+    @property
+    def no_credit(self) -> bool:
+        """Whether the expectation asks only that the submission earn at most ``reward_max``."""
+        return (
+            self.status == Outcome.GRADED
+            and self.reward_min is None
+            and self.reward_max is not None
+            and not self.components
+        )
+
+    def met_by(self, grade: GradeResult) -> bool:
+        """Whether ``grade`` meets this expectation."""
+        if self.no_credit and grade.status == Outcome.SUBMISSION_FAILURE:
+            return True
+        if grade.status != self.status:
+            return False
+        if self.status != Outcome.GRADED:
+            return True
+        assert grade.reward is not None
+        if self.reward_min is not None and grade.reward < self.reward_min:
+            return False
+        if self.reward_max is not None and grade.reward > self.reward_max:
+            return False
+        return all(
+            name in grade.rewards and math.isclose(grade.rewards[name], value) for name, value in self.components.items()
+        )
 
 
 @dataclass(frozen=True)

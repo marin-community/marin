@@ -7,7 +7,7 @@ import pytest
 from taskcompendium.environment import EnvironmentKind, ExitCodeReward, RewardFileFormat
 from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading import verifier_descriptor
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, Source, StageRewardStrategy, TaskSpec
 from verifyit.spec import ExactSpec
 
@@ -269,3 +269,22 @@ def test_replay_mismatches_with_the_task_are_rejected():
         validate_controls(file_task(), [gold, failure_on_shell, wrong, hack])
     with pytest.raises(ValueError, match="does not end with a reply"):
         validate_controls(file_task(), [gold, empty, unfinished, hack])
+
+
+@pytest.mark.parametrize(
+    "expect,grade,met",
+    [
+        (GRADED_ZERO, GradeResult(Outcome.GRADED, 0.0), True),
+        (GRADED_ZERO, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0), True),
+        (GRADED_ZERO, GradeResult(Outcome.GRADED, 1.0), False),
+        (GRADED_ONE, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0), False),
+        (
+            Expectation(Outcome.GRADED, reward_min=0.0, reward_max=0.0),
+            GradeResult(Outcome.SUBMISSION_FAILURE, 0.0),
+            False,
+        ),
+        (Expectation(Outcome.SUBMISSION_FAILURE), GradeResult(Outcome.GRADED, 0.0), False),
+    ],
+)
+def test_a_no_credit_expectation_is_met_by_a_zero_grade_or_a_submission_failure(expect, grade, met):
+    assert expect.met_by(grade) is met
