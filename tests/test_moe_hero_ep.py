@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 import tomllib
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -609,6 +610,34 @@ def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monke
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
 
 
+def test_a_ragged_run_without_the_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+
+
+def test_the_carry_offload_widens_the_memory_budget_for_the_saved_moe_output(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == train.OFFLOAD_CARRY_MEM_FRACTION
+    slop = f"--xla_gpu_memory_limit_slop_factor={train.OFFLOAD_CARRY_SLOP_FACTOR}"
+    assert slop in os.environ["XLA_FLAGS"].split()
+
+
 def test_a_ragged_run_without_the_offload_runs_collectives_synchronously(monkeypatch):
     # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps off.
     inherited = f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}=ALLREDUCE"
@@ -1080,6 +1109,74 @@ def _latent_config(latent_dim=None):
         moe_implementation="fixed_all_to_all",
         report_capacity_overflow=True,
     )
+
+
+def _hero_ragged_offload_config(num_layers: int) -> model.GrugModelConfig:
+    """A small ragged EP model under the carry offload, whose shared-expert width no other weight has."""
+    return dataclasses.replace(
+        _latent_config(latent_dim=16),
+        num_layers=num_layers,
+        num_shared_experts=2,
+        shared_expert_intermediate_dim=24,
+        num_experts_per_token=2,
+        moe_implementation="ragged_all_to_all",
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+        qb_estimator=model.QbEstimator.HIST,
+        qb_hist_bins=16,
+    )
+
+
+def _hero_ragged_offload_loss_and_grad_jaxpr(num_layers: int, axis_sizes=(1, 2, 1, 2, 1)):
+    """Trace the loss and its gradient for `_hero_ragged_offload_config`."""
+    mesh = AbstractMesh(
+        axis_sizes=axis_sizes,
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    cfg = _hero_ragged_offload_config(num_layers)
+    sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
+    tokens = jax.ShapeDtypeStruct((4, 8), jnp.int32, sharding=sharding)
+    weight = jax.ShapeDtypeStruct((4, 8), jnp.float32, sharding=sharding)
+
+    def loss_and_grad(token_ids, loss_weight):
+        transformer = model.Transformer.init(cfg, key=jax.random.key(0))
+        return eqx.filter_value_and_grad(
+            lambda m: m.next_token_loss(token_ids, loss_weight, mask=AttentionMask.causal())
+        )(transformer)
+
+    with use_abstract_mesh(mesh):
+        return jax.make_jaxpr(loss_and_grad)(tokens, weight)
+
+
+def _equations(jaxpr) -> Iterator:
+    """Every equation of a traced program, each before the equations of its sub-programs."""
+    for eqn in jaxpr.eqns:
+        yield eqn
+        for param in eqn.params.values():
+            for sub in param if isinstance(param, (tuple, list)) else (param,):
+                inner = getattr(sub, "jaxpr", sub)
+                if hasattr(inner, "eqns"):
+                    yield from _equations(inner)
+
+
+def _layer_scans(jaxpr) -> list:
+    """The scan equations of a traced program, outermost first."""
+    return [eqn for eqn in _equations(jaxpr) if eqn.primitive.name == "scan"]
+
+
+def test_the_hero_takes_its_routing_weight_gradient_on_the_expert_side():
+    # The hero's routing weights are positive sigmoids and its cotangents bf16, inside EXPERT_SIDE's
+    # contract, so its backward sends each expert row's <h, dh> back, one [rows, 1] float32 transport
+    # per expert chunk, rather than keeping the expert outputs.
+    backward = _layer_scans(_hero_ragged_offload_loss_and_grad_jaxpr(2).jaxpr)[1].params["jaxpr"].jaxpr
+    row_dots = [
+        eqn
+        for eqn in _equations(backward)
+        if eqn.primitive.name == "ragged_all_to_all"
+        and eqn.invars[0].aval.shape[-1:] == (1,)
+        and eqn.invars[0].aval.dtype == jnp.float32
+    ]
+    assert len(row_dots) == 2
 
 
 @pytest.mark.parametrize("context_size", [1, 2])
