@@ -1,19 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adapt a sync RPC service to the async surface expected by
-``connectrpc.server.ConnectASGIApplication``.
+"""Expose synchronous RPC service methods to async Connect applications.
 
-The ASGI application invokes ``await endpoint.function(...)`` for every
-unary RPC, so each handler must be a coroutine function.
-``AsyncServiceAdapter`` exposes a sync service's methods as async:
-
-- sync methods use ``asyncio.to_thread``, except methods assigned an isolated
-  bounded executor.
-- methods that are already coroutine functions pass through untouched.
-
-Interceptors are not adapted here — each interceptor that participates in
-an ASGI chain implements ``async intercept_unary`` directly.
+Calls await the service result without blocking the event loop. Selected methods
+can have separate concurrency limits. Existing coroutine methods and
+interceptors retain their own async behavior.
 """
 
 import asyncio
