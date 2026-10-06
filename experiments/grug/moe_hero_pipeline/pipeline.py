@@ -83,6 +83,11 @@ class AutomaticPipelineSchedule(StrEnum):
     DUALPIPE_V = "dualpipe_v"
 
 
+class QbBiasMode(StrEnum):
+    ADAPTIVE = "adaptive"
+    FROZEN = "frozen"
+
+
 def make_pipeline_mesh(
     config: GrugMoePipelineConfig,
     *,
@@ -445,6 +450,46 @@ def _automatic_schedule(config: GrugMoePipelineConfig, schedule_name: AutomaticP
     raise ValueError(f"unknown automatic pipeline schedule: {schedule_name}")
 
 
+def updated_pipeline_state(
+    state: GrugMoeAutomaticPipelineState,
+    grads: tuple[GrugMoePipelineStage, ...],
+    qb_beta_sums: tuple[jax.Array, ...],
+    optimizer: optax.GradientTransformation,
+    mp_policy: jmp.Policy,
+    *,
+    microbatches: int,
+    qb_bias_mode: QbBiasMode = QbBiasMode.ADAPTIVE,
+    offload_opt_state: bool = False,
+) -> GrugMoeAutomaticPipelineState:
+    """Update stage parameters and retain or advance the pending router biases.
+
+    Frozen mode keeps the current pending betas, including values restored from
+    a checkpoint. Expert and router weights still receive optimizer updates.
+    """
+    grads = mp_policy.cast_to_param(grads)
+    next_params, next_opt_state = [], []
+    for params, opt_state, stage_grads in zip(state.trainable_params, state.opt_state, grads, strict=True):
+        if offload_opt_state:
+            opt_state = _tree_to_memory_kind(opt_state, "device")
+        updates, stage_opt_state = optimizer.update(stage_grads, opt_state, params)
+        if offload_opt_state:
+            stage_opt_state = _tree_to_memory_kind(stage_opt_state, _HOST_MEMORY_KIND)
+        next_params.append(mp_policy.cast_to_param(eqx.apply_updates(params, updates)))
+        next_opt_state.append(stage_opt_state)
+    if qb_bias_mode == QbBiasMode.ADAPTIVE:
+        pending_qb_betas = tuple(beta / microbatches for beta in qb_beta_sums)
+    elif qb_bias_mode == QbBiasMode.FROZEN:
+        pending_qb_betas = state.pending_qb_betas
+    else:
+        raise ValueError(f"unknown QB bias mode: {qb_bias_mode}")
+    return dataclasses.replace(
+        state,
+        trainable_params=tuple(next_params),
+        opt_state=tuple(next_opt_state),
+        pending_qb_betas=pending_qb_betas,
+    )
+
+
 def make_automatic_pipeline_step(
     optimizer: optax.GradientTransformation,
     mp_policy: jmp.Policy,
@@ -457,6 +502,7 @@ def make_automatic_pipeline_step(
     schedule_name: AutomaticPipelineSchedule = AutomaticPipelineSchedule.STANDARD_1F1B,
     logsumexp_weight: float | None = None,
     offload_opt_state: bool = False,
+    qb_bias_mode: QbBiasMode = QbBiasMode.ADAPTIVE,
 ):
     """Build a JAXPP optimizer step using the selected pipeline schedule.
 
@@ -512,27 +558,15 @@ def make_automatic_pipeline_step(
             schedule=schedule,
             operation=((pp.Add, tuple(pp.Add for _ in range(config.stages))), pp.Add),
         )
-        grads = mp_policy.cast_to_param(grads)
-        next_params = []
-        next_opt_state = []
-        for params, opt_state, stage_grads in zip(
-            state.trainable_params,
-            state.opt_state,
-            grads,
-            strict=True,
-        ):
-            if offload_opt_state:
-                opt_state = _tree_to_memory_kind(opt_state, "device")
-            updates, stage_opt_state = optimizer.update(stage_grads, opt_state, params)
-            if offload_opt_state:
-                stage_opt_state = _tree_to_memory_kind(stage_opt_state, _HOST_MEMORY_KIND)
-            next_params.append(mp_policy.cast_to_param(eqx.apply_updates(params, updates)))
-            next_opt_state.append(stage_opt_state)
-        next_state = dataclasses.replace(
+        next_state = updated_pipeline_state(
             state,
-            trainable_params=tuple(next_params),
-            opt_state=tuple(next_opt_state),
-            pending_qb_betas=tuple(beta / config.microbatches for beta in next_qb_betas),
+            grads,
+            next_qb_betas,
+            optimizer,
+            mp_policy,
+            microbatches=config.microbatches,
+            qb_bias_mode=qb_bias_mode,
+            offload_opt_state=offload_opt_state,
         )
         return next_state, {TRAIN_LOSS_KEY: loss}
 

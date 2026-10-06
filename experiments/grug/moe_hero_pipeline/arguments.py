@@ -6,7 +6,8 @@
 import argparse
 from collections.abc import Sequence
 
-from experiments.grug.moe_hero_pipeline.pipeline import AutomaticPipelineSchedule
+from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization
+from experiments.grug.moe_hero_pipeline.pipeline import AutomaticPipelineSchedule, QbBiasMode
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -65,6 +66,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Diagnostic CUDA synchronization on every local device after each optimizer step",
     )
     parser.add_argument("--optimizer", choices=("adamw", "muonh"), default="adamw")
+    parser.add_argument(
+        "--expert-normalization",
+        type=ExpertNormalization,
+        choices=list(ExpertNormalization),
+        default=ExpertNormalization.ALL_EXPERTS,
+        help="MuonH norm across a layer's expert bank or separately for each expert",
+    )
+    parser.add_argument(
+        "--qb-bias-mode",
+        type=QbBiasMode,
+        choices=list(QbBiasMode),
+        default=QbBiasMode.ADAPTIVE,
+        help="Freeze the current QB bias while continuing expert and router-weight training",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--run-id", help="Optional rank-zero W&B console capture in marin-community/marin_moe")
     parser.add_argument("--compilation-cache", default="/tmp/hero-pipeline-jax-cache")

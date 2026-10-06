@@ -34,6 +34,20 @@ and the coordinator exiting zero, with both coordinator retry caps set to zero.
 All-48-layer main-recipe execution remains unvalidated.
 The H100 reference records the measured losses, data budget and source boundary.
 
+The current optimizer normalizes each layer's routed expert bank together, matching
+the stacked EP model. Set `--expert-normalization per_expert` for a comparison;
+the shared `GrugMoeMuonHConfig.expert_normalization` records this choice in the
+checkpoint optimizer contract. The recorded `a1e3ab` and `0da04ac` gates used the
+earlier per-expert behavior; they do not validate this normalization correction.
+The main recipe stores FP32 parameters and computes in BF16. The historical
+long-context diagnostics below stored BF16 parameters to establish capacity.
+
+QB bias adapts after each update by default. Set `--qb-bias-mode frozen` to
+retain the current pending bias, including one restored from a checkpoint,
+while continuing to train expert and router weights. This controls the QB bias
+only; it does not freeze the router weights. Frozen QB has CPU state-transition
+coverage but has not been evaluated for SFT or RL training quality.
+
 ## Historical full-model result
 
 The full 535,477,106,688-parameter, 48-layer model completed ten finite synthetic
@@ -51,6 +65,17 @@ collection and inter-step overhead. These are systems measurements from fresh
 initialization with synthetic data, not training-quality results. The complete
 scaling table, negative results, dependency findings, and W&B links are in
 [experiment #9277](https://github.com/marin-community/marin/issues/9277).
+
+PP24 gives two transformer layers per stage, reducing the parameters and
+optimizer state owned by each worker. EP8 keeps expert communication within
+an eight-GPU worker's NVLink fabric. CP1 was the initial working integration;
+this layout was chosen to fit the model and then fill the 1F1B pipeline, rather
+than through a matched comparison with PP8/EP32/CP4. More pipeline stages also
+increase the number of microbatches needed to amortize pipeline fill and drain.
+The subsequent PP24/EP4/CP2 diagnostic completed ten updates at batch 96,
+68.539 seconds/update and 9.877% MFU. It reduced tokens per GPU and tokens per
+update; differing batch sizes and attention-helper versions prevent an isolated
+CP comparison. No matched Megatron layout benchmark was performed.
 
 ## Historical runtime requirements
 

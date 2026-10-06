@@ -11,6 +11,11 @@ completed successfully. These gates validate this two-layer H100 adapter;
 All-48-layer main-recipe execution remains unvalidated; the H100 adapter
 does not establish ragged transport parity.
 
+The current branch corrects stage-local MuonH normalization to use each layer's
+entire routed expert bank and adds `--qb-bias-mode frozen`. The measured pins
+below used the earlier per-expert normalization with adaptive QB. Their hardware
+results do not validate these review follow-ups.
+
 Publication targets `codex/hero-gb200-pipeline` in
 [PR #9662](https://github.com/marin-community/marin/pull/9662), with executable
 pin `0da04acccf7b0842319a8668d71ccc697a7b10ec`. The measured H100 runs used the

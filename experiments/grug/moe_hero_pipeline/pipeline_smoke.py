@@ -249,12 +249,17 @@ def _optimizer_and_contract(
             ),
             use_syrk=all("H100" not in device.device_kind for device in jax.local_devices()),
             gate_router_weight_decay=0.02,
+            expert_normalization=args.expert_normalization,
         )
         optimizer = optimizer_config.build(args.steps)
         optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
     elif args.optimizer == "muonh":
         optimizer_config = GrugMoeMuonHConfig(
-            learning_rate=13 / 3 * 1e-4, adam_lr=1e-4, warmup=0, lr_schedule="constant"
+            learning_rate=13 / 3 * 1e-4,
+            adam_lr=1e-4,
+            warmup=0,
+            lr_schedule="constant",
+            expert_normalization=args.expert_normalization,
         )
         optimizer = optimizer_config.build(args.steps)
         optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
@@ -444,6 +449,7 @@ def main() -> None:
         schedule_name=args.schedule,
         logsumexp_weight=1e-4 if args.main_hero_recipe else None,
         offload_opt_state=args.offload_opt_state,
+        qb_bias_mode=args.qb_bias_mode,
     )
     started = time.monotonic()
     prepared = prepare_automatic_mpmd_step(step, state, batches, denominator, mpmd_mesh)
