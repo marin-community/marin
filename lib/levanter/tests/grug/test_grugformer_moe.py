@@ -36,6 +36,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
 )
 from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.sonic import sonic_gather_sum
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -697,6 +698,76 @@ def test_sonic_gather_sum_matches_jax_reference_on_gpu():
     sonic_out.block_until_ready()
     reference_out.block_until_ready()
     np.testing.assert_allclose(np.asarray(sonic_out), np.asarray(reference_out), rtol=1e-5, atol=1e-5)
+
+
+# 0xFFFFFFFF is the negative NaN whose total-order key is the smallest int32.
+_TOP_K_SPECIAL_VALUES = np.array(
+    [0x00000000, 0x80000000, 0x7F800000, 0xFF800000]  # signed zeros and infinities
+    + [0x7FC00000, 0xFFC00000, 0x7F800001, 0xFF800001, 0x7FFFFFFF, 0xFFFFFFFF],  # NaNs of either sign
+    np.uint32,
+).view(np.float32)
+
+
+def _top_k_adversarial_rows(rows: int, width: int, seed: int) -> jax.Array:
+    rng = np.random.default_rng(seed)
+    values = rng.standard_normal((rows, width)).astype(np.float32)
+    values[0::5] = rng.integers(0, 3, size=values[0::5].shape)  # heavy ties
+    values[1::5] = np.where(rng.random(values[1::5].shape) < 0.5, -0.0, 0.0)  # signed zeros
+    values[2::5] = np.where(
+        rng.random(values[2::5].shape) < 0.3, rng.choice(_TOP_K_SPECIAL_VALUES, values[2::5].shape), values[2::5]
+    )
+    values[3::5] = rng.choice(_TOP_K_SPECIAL_VALUES, values[3::5].shape)
+    values[4] = _TOP_K_SPECIAL_VALUES[-1]  # every key ties with the smallest int32
+    return jnp.asarray(values)
+
+
+# Widths cover one tile, exact or padded, and three tiles, exact (384) or padded (37). k = 37 runs the
+# steps in a loop rather than unrolled.
+_TOP_K_CASES = [
+    (61, 1, 1),
+    (61, 7, 7),
+    (97, 37, 9),
+    (61, 37, 37),
+    (61, 100, 9),
+    (61, 128, 9),
+    (61, 256, 9),
+    (97, 384, 9),
+    (64, 384, 8),
+    (61, 1000, 9),
+    (61, 1023, 9),
+]
+
+
+def test_top_k_indices_run_inside_a_checking_shard_map_on_gpu():
+    # The hero calls the kernel per token shard, inside a shard_map that checks varying axes.
+    _skip_without_sonic_gpu_runtime()
+    devices = jax.devices()
+    mesh = Mesh(np.asarray(devices), ("data",), axis_types=(AxisType.Explicit,))
+    values = _top_k_adversarial_rows(16 * len(devices), 384, seed=11)
+
+    with jax.set_mesh(mesh):
+        actual = jax.jit(
+            jax.shard_map(
+                lambda local: top_k_indices(local, 9),
+                mesh=mesh,
+                in_specs=P("data", None),
+                out_specs=P("data", None),
+            )
+        )(jax.sharding.reshard(values, P("data", None)))
+
+    expected = jax.jit(lambda v: jax.lax.top_k(v, 9)[1])(values)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+@pytest.mark.parametrize(("rows", "width", "k"), _TOP_K_CASES)
+def test_top_k_indices_match_lax_top_k_on_gpu(rows, width, k):
+    _skip_without_sonic_gpu_runtime()
+    values = _top_k_adversarial_rows(rows, width, seed=width)
+
+    actual = jax.jit(lambda v: top_k_indices(v, k))(values)
+
+    expected = jax.jit(lambda v: jax.lax.top_k(v, k)[1])(values)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
 def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
