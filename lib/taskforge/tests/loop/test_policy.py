@@ -25,6 +25,10 @@ def test_policy_json_round_trips_to_the_same_digest(programs):
         (lambda p: p.pop("max_repairs"), "missing fields \\['max_repairs'\\]"),
         (lambda p: p["validation"].pop("k"), "missing fields \\['k'\\]"),
         (lambda p: p["retry_backoff"].pop("jitter"), "jitter"),
+        (lambda p: p["validation"]["sampling"].pop("temperature"), "missing fields \\['temperature'\\]"),
+        (lambda p: p["validation"]["sampling"].update(temprature=0.1), "unknown fields \\['temprature'\\]"),
+        (lambda p: p["validation"]["deadlines"].pop("agent_timeout"), "missing fields \\['agent_timeout'\\]"),
+        (lambda p: p["validation"]["band"].update(min=0.1), "unknown fields \\['min'\\]"),
         (lambda p: p.update(max_retries=3), "unknown fields \\['max_retries'\\]"),
     ],
 )

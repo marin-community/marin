@@ -3,8 +3,9 @@
 
 """Every bound of one run, stated in the run's ``policy.json``; no field has a default.
 
-``POLICY`` reads and writes a ``LoopPolicy`` as JSON. Every field of ``LoopPolicy`` and of its
-``ValidationPolicy`` is required and an unknown key is an error, so a run config states each bound.
+``POLICY`` reads and writes a ``LoopPolicy`` as JSON. Every field of ``LoopPolicy``, of its
+``ValidationPolicy`` and of that policy's ``band``, ``sampling`` and ``deadlines`` is required and an
+unknown key is an error, so a run config states each bound.
 An ``ExponentialBackoff`` is written as its four constructor arguments (``initial``, ``maximum``,
 ``factor``, ``jitter``), all required.
 """
@@ -18,7 +19,10 @@ from pydantic import ConfigDict, PlainSerializer, PlainValidator, TypeAdapter, w
 from rigging.timing import ExponentialBackoff
 
 from taskforge.canonical import digest
+from taskforge.llm.policy import LLMPolicy
+from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy, backoff_config
+from taskforge.validate.trials import Deadlines
 
 
 @dataclass(frozen=True)
@@ -118,7 +122,15 @@ def _strict_dataclass(cls: type, substitutes: Mapping[Any, Any]) -> Any:
     return Annotated[cls, PlainValidator(validate), PlainSerializer(serializer)]
 
 
-_VALIDATION_JSON = _strict_dataclass(ValidationPolicy, {ExponentialBackoff: Backoff})
+_VALIDATION_JSON = _strict_dataclass(
+    ValidationPolicy,
+    {
+        ExponentialBackoff: Backoff,
+        CalibrationBand: _strict_dataclass(CalibrationBand, {}),
+        LLMPolicy: _strict_dataclass(LLMPolicy, {}),
+        Deadlines: _strict_dataclass(Deadlines, {}),
+    },
+)
 _LOOP_JSON = _strict_dataclass(LoopPolicy, {ExponentialBackoff: Backoff, ValidationPolicy: _VALIDATION_JSON})
 
 POLICY: TypeAdapter[LoopPolicy] = TypeAdapter(_LOOP_JSON)
