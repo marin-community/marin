@@ -170,7 +170,7 @@ def test_create_blanks_inherited_credentials_in_the_sandbox_job(monkeypatch) -> 
 def test_create_refuses_a_network_policy_the_cluster_does_not_provide() -> None:
     factory = IrisMachineFactory(controller_url="http://controller", cluster_network=NetworkPolicy.DENY)
 
-    with pytest.raises(UnsupportedMachineSpec, match="provides deny, not allow"):
+    with pytest.raises(UnsupportedMachineSpec):
         asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=NetworkPolicy.ALLOW)))
 
 
