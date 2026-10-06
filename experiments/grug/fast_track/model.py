@@ -6196,8 +6196,8 @@ def _prototype_target_logits(
 ) -> Float[Array, "B S K"]:
     """The soft-capped logits of each label's ``lm_head_prototypes`` columns (``k V + label``)."""
     columns = labels[..., None] + cfg.vocab_size * jnp.arange(cfg.lm_head_prototypes)  # [B, S, K]
-    rows = jnp.take(reshard(lm_head.T, P(None, None)), columns, axis=0)  # [B, S, K, E]
-    rows = reshard(rows, P(_BATCH_AXES, None, None, None))
+    head_t = reshard(lm_head.T, P(None, None))
+    rows = head_t.at[columns].get(out_sharding=P(_BATCH_AXES, None, None, None))  # [B, S, K, E]
     logits = jnp.einsum("bse,bske->bsk", head_in.astype(jnp.float32), rows.astype(jnp.float32))
     cap = _logit_cap(cfg)
     if cap is None:
