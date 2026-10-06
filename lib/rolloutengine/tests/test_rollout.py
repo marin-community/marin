@@ -847,7 +847,8 @@ async def test_machine_creation_failure_is_not_a_task_setup_error():
         )
 
     assert failure.value.operation == RolloutOperation.START
-    assert type(failure.value.__cause__) is OSError
+    assert isinstance(failure.value.__cause__, OSError)
+    assert not isinstance(failure.value.__cause__, TaskSetupError)
 
 
 @pytest.mark.parametrize(
