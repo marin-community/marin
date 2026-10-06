@@ -13,6 +13,7 @@ from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.kernels.pallas.short_conv.triton_gpu import SEQUENCE_MULTIPLE as TRITON_SHORT_CONV_SEQUENCE_MULTIPLE
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -191,6 +192,18 @@ def build_diagnostic_run(
     )
     if model.max_seq_len % context_axis_size:
         raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
+    # The Triton short convolution pads each shard of a context-sharded sequence itself, but takes a
+    # whole sequence only in multiples of its chunk; otherwise it fails at compile, on the allocated rack.
+    if (
+        model.sconv
+        and model.sconv_implementation == "triton_gpu"
+        and context_axis_size == 1
+        and model.max_seq_len % TRITON_SHORT_CONV_SEQUENCE_MULTIPLE
+    ):
+        raise ValueError(
+            f"max_seq_len={model.max_seq_len} must be a multiple of {TRITON_SHORT_CONV_SEQUENCE_MULTIPLE} "
+            "for the Triton short convolution without context sharding"
+        )
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, and one not divisible by
     # the (expert, context) storage split fails in parameter init; both are after the rack is already
     # allocated and the workspace is built. Reject them here instead.

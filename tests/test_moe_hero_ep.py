@@ -322,6 +322,13 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
         launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
+def test_unsharded_sequence_must_fit_the_triton_short_convolution():
+    # The hero's Triton short convolution rejects a whole sequence that is not a multiple of its
+    # chunk only at compile time, after the rack is allocated.
+    with pytest.raises(ValueError, match=r"max_seq_len=4000 must be a multiple of 128"):
+        launch.build_diagnostic_run(run_id="bad-seq", dp_racks=1, num_steps=1, max_seq_len=4000, version="dev")
+
+
 def test_expert_bank_requires_context_divisibility():
     # The bank is stored over (expert, context), so 48 experts pass the 16-way expert check but fail
     # parameter init at EP16 x CP4; the launcher must catch the product before the rack is allocated.
