@@ -15,6 +15,7 @@ from taskcompendium.models import TaskSpec
 
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     QualifiedTask,
+    RoundPlan,
     checkpoint_score,
     promotes,
     restored_round,
@@ -396,8 +397,19 @@ def diversity_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     return validated_diversity_post_workflow(config, stage, trained=trained)
 
 
-def validated_diversity_post_workflow(config: dict, stage: str, *, trained: ArtifactStep) -> dict[str, ArtifactStep]:
-    """Apply the original study gates to an explicitly bound training producer."""
+@dataclass(frozen=True)
+class ValidatedDiversityPostInputs:
+    model: ArtifactStep
+    bank: ArtifactStep
+    retention: ArtifactStep
+    source_plan: RoundPlan
+    source: dict
+    export_uri: str
+    study: StudyBaseline
+
+
+def validated_diversity_post_inputs(config: dict, *, trained: ArtifactStep) -> ValidatedDiversityPostInputs:
+    """Check the original qualification, bank, replay and baseline bindings."""
     if config["protocol"] != PROTOCOL or config["runtime_commit"] != MARIN_SKYRL.commit:
         raise ValueError("Diversity post-SFT protocol or runtime differs")
     study = pinned_record(config, "sft_config")
@@ -451,15 +463,29 @@ def validated_diversity_post_workflow(config: dict, stage: str, *, trained: Arti
             != score
         ):
             raise ValueError("Diversity baseline differs from original pinned evidence")
+    return ValidatedDiversityPostInputs(
+        model,
+        bank,
+        retention,
+        source_plan,
+        {**schedule, "family_by_task": bank_record["family_by_task"]},
+        export,
+        StudyBaseline(PROTOCOL, baseline, parent, ids),
+    )
+
+
+def validated_diversity_post_workflow(config: dict, stage: str, *, trained: ArtifactStep) -> dict[str, ArtifactStep]:
+    """Apply the original study gates to an explicitly bound training producer."""
+    inputs = validated_diversity_post_inputs(config, trained=trained)
     return post_sft_stages(
         config,
         stage,
-        model=model,
-        bank=bank,
-        retention=retention,
-        source_plan=source_plan,
-        source={**schedule, "family_by_task": bank_record["family_by_task"]},
-        export_uri=export,
-        study=StudyBaseline(PROTOCOL, baseline, parent, ids),
+        model=inputs.model,
+        bank=inputs.bank,
+        retention=inputs.retention,
+        source_plan=inputs.source_plan,
+        source=inputs.source,
+        export_uri=inputs.export_uri,
+        study=inputs.study,
         calibration_runner=run_diversity_calibration,
     )

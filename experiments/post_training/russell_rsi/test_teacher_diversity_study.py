@@ -628,7 +628,8 @@ def test_post_workflow_binds_durable_training_and_keeps_qualification_gate(diver
         validated_diversity_post_workflow(post, "calibrate", trained=trained)
 
 
-def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diversity_inputs, tmp_path):
+@pytest.fixture
+def durable_post_inputs(diversity_inputs, tmp_path):
     study = deepcopy(diversity_inputs)
     study["version"] = study["collection_version"] = "2026.10.06.15"
     study["prospective_decision"] = pinned(tmp_path, "v15-decision", decision(study))
@@ -781,6 +782,11 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diver
         "learning_rate_dtype": "float32",
     }
     set_pin(post, "qualification", pinned(tmp_path, "qualified-v17", qualification))
+    return post, stages, qualification, event_pins, result_pin, destination, records, launches
+
+
+def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(durable_post_inputs, tmp_path):
+    post, stages, qualification, event_pins, result_pin, destination, records, launches = durable_post_inputs
     outputs = durable_diversity_post_workflow(post, "calibrate")
     identities = {artifact_identity(handle) for handle in graph_handles([outputs["terminal"]])}
     assert artifact_identity(stages["train"]) not in identities
