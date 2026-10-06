@@ -5,7 +5,8 @@
 
 ``math_task`` is a null-environment numeric task graded by verifyit through TaskCompendium's
 registry; ``json_task`` is a null-environment task with a JSON answer. ``file_task`` is a ShellSim
-task whose private ``ShellVerifierSpec`` script checks a file the agent must create.
+task whose private ``ShellVerifierSpec`` script checks a file the agent must create. ``rounds`` builds
+validation-round inputs: a ``TaskDraft`` around a task, a ``ValidationPolicy`` and a ``ValidationSite``.
 """
 
 import asyncio
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, Machine, MachineSpec, Result
@@ -24,7 +26,11 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import numeric_answer, structured_exact
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
+from taskcompendium.submission import SubmissionConvention
 
+from taskforge.build.run import Provenance, TaskDraft
+from taskforge.ledger.jsonl import JsonlLedger
+from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import (
     Control,
     ControlCategory,
@@ -37,6 +43,11 @@ from taskforge.spec.controls import (
     shell_turn,
 )
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
+from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.calibration import CalibrationBand
+from taskforge.validate.run import ValidationPolicy
+from taskforge.validate.solver import ValidationSite
+from taskforge.validate.trials import Deadlines
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
@@ -310,3 +321,53 @@ class Fakes:
 @pytest.fixture
 def fakes() -> Fakes:
     return Fakes()
+
+
+def draft_of(task: TaskSpec, controls: tuple[Control, ...], convention: SubmissionConvention) -> TaskDraft:
+    """``task`` as a built draft; the provenance names no real program."""
+    provenance = Provenance(
+        item_id=task.id,
+        proposal_digest="proposal",
+        program_digest="program",
+        sdk_version="tests",
+        model="tests",
+        policy_digest="policy",
+        round=0,
+        steps=(),
+        resources=(),
+    )
+    return TaskDraft(task, TaskExecution(), convention, controls, provenance)
+
+
+def validation_policy(
+    k: int = 3, adversary_k: int = 2, max_retries: int = 0, token_contract_retries: int = 0
+) -> ValidationPolicy:
+    return ValidationPolicy(
+        k=k,
+        adversary_k=adversary_k,
+        roles=tuple(AdversaryRole),
+        band=CalibrationBand(0.125, 0.875),
+        sampling=LLMPolicy(max_continuations=0),
+        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        max_retries=max_retries,
+        token_contract_retries=token_contract_retries,
+        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+    )
+
+
+def validation_site(directory: Path) -> ValidationSite:
+    return ValidationSite("item", 0, directory / "evidence", JsonlLedger(directory / "ledger"))
+
+
+@dataclass(frozen=True)
+class Rounds:
+    """Builders for validation-round inputs, handed to tests through the ``rounds`` fixture."""
+
+    draft: Callable[..., TaskDraft] = draft_of
+    policy: Callable[..., ValidationPolicy] = validation_policy
+    site: Callable[[Path], ValidationSite] = validation_site
+
+
+@pytest.fixture
+def rounds() -> Rounds:
+    return Rounds()
