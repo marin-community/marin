@@ -7,7 +7,7 @@ from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.grading_result import Outcome
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.build.author import compile_program
 from taskforge.build.run import load_draft, run_build
@@ -44,7 +44,7 @@ async def test_program_builds_a_runnable_task_and_records_the_draft(proposal, pr
         max_turns=2,
         command_timeout=30,
         cleanup_timeout=30,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     rollout = await engine.run(draft.task, execution=draft.execution)
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
