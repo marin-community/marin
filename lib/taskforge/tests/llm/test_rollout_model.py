@@ -21,7 +21,8 @@ from rolloutengine.contracts import GenerationLimitReached, ModelRequest, Rollou
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind, ExitCodeReward
-from taskcompendium.grading import Outcome
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
@@ -31,6 +32,7 @@ from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_to
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
 
 POLICY = LLMPolicy(max_continuations=0)
+EXECUTION = TaskExecution()
 CONTEXT_ERROR = "This model's maximum context length is 262144 tokens. However, you requested 300000 tokens."
 # ShellSim cannot expand a command substitution inside a test argument, so assign it first.
 COUNT_CHECK = 'v=$(tr -d " \\n" < /workspace/count.txt)\n[ "$v" = 15 ]\n'
@@ -106,6 +108,7 @@ def shell_task():
             files=(file("/grader/check.sh", "test -f /workspace/done.txt\n"),),
         ),
         Source(dataset="taskforge-tests", revision="1", row="0", importer_revision="1"),
+        execution=EXECUTION,
     )
 
 
@@ -115,6 +118,7 @@ def rollout_engine(model: GlmRolloutModel, max_turns: int = 6) -> ShellboxRollou
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
         max_turns=max_turns,
         command_timeout=30,
+        cleanup_timeout=30,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
 
@@ -139,7 +143,7 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
     )
     fake_glm.responses.append(token_stream([1, 2, 3, 4, 5, 6, 7], [8, 9], content="Done."))
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task())
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task(), execution=EXECUTION)
 
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
     assert rollout.prompt_token_ids == (1, 2, 3)
@@ -156,7 +160,7 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
 async def test_length_cut_turn_is_graded_with_length_stop(fake_glm, fake_client):
     fake_glm.responses.append(token_stream([1, 2], [3, 4], content="I will", finish="length"))
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task())
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task(), execution=EXECUTION)
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -169,7 +173,7 @@ async def test_tool_call_cut_at_the_budget_ends_the_rollout_with_length_unexecut
     fake_glm.responses.append(token_stream([1, 2], [3, 4, 5], tool_call=("shell", command), finish="tool_calls"))
     policy = LLMPolicy(max_tokens=3, max_continuations=0)
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy)).run(shell_task())
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy)).run(shell_task(), execution=EXECUTION)
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -215,7 +219,7 @@ async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake
     fake_glm.responses.append(token_stream([1, 2, 3, *canonical, observation, 9], [10], content="Done."))
 
     with pytest.raises(RolloutContractError, match=r"index 5 of the 11-token prefix it served \[23482, 16"):
-        await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task())
+        await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task(), execution=EXECUTION)
 
 
 async def test_a_continued_completion_has_no_exact_tokens(fake_glm, fake_client):
@@ -255,6 +259,7 @@ def live_task():
             files=(file("/grader/check.sh", COUNT_CHECK),),
         ),
         Source(dataset="taskforge-tests", revision="1", row="live", importer_revision="1"),
+        execution=EXECUTION,
     )
 
 
@@ -302,7 +307,7 @@ async def live_rollouts(glm_settings, task: TaskSpec, count: int, max_turns: int
     started = time.monotonic()
     async with GlmClient(endpoint) as client:
         engine = rollout_engine(GlmRolloutModel(client, POLICY), max_turns=max_turns)
-        rollouts = await asyncio.gather(*(engine.run(task) for _ in range(count)))
+        rollouts = await asyncio.gather(*(engine.run(task, execution=EXECUTION) for _ in range(count)))
     return list(rollouts), time.monotonic() - started
 
 
@@ -355,6 +360,7 @@ def reasoning_task():
             files=(file("/grader/check.sh", PUZZLE_1_CHECK),),
         ),
         Source(dataset="taskforge-tests", revision="1", row="reasoning", importer_revision="1"),
+        execution=EXECUTION,
     )
 
 

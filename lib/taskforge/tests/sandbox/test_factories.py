@@ -5,6 +5,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -22,6 +24,7 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
+from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import (
     AnswerType,
@@ -36,6 +39,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
@@ -66,8 +70,8 @@ def task(environment: EnvironmentSpec, **update) -> TaskSpec:
     ).model_copy(update=update)
 
 
-def reasons(spec: TaskSpec, capabilities) -> set[tuple[RefusalReason, str]]:
-    return {(refusal.reason, refusal.where) for refusal in task_refusals(spec, capabilities)}
+def reasons(spec: TaskSpec, capabilities, execution: TaskExecution = TaskExecution()) -> set[tuple[RefusalReason, str]]:
+    return {(refusal.reason, refusal.where) for refusal in task_refusals(spec, execution, capabilities)}
 
 
 IRIS = {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: IRIS_DOCKER}
@@ -83,12 +87,14 @@ def test_docker_tasks_are_refused_on_iris_today():
 
 
 def test_docker_build_task_is_refused_on_iris_and_accepted_on_local_docker():
-    spec = task(EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=BUILD), agent_user="agent")
-    assert reasons(spec, IRIS_WORKING) == {(RefusalReason.IMAGE_SOURCE, "task"), (RefusalReason.EXECUTION_USER, "task")}
-    assert reasons(spec, LAPTOP) == set()
-    published = spec.model_copy(
-        update={"agent_user": None, "environment": EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE)}
-    )
+    spec = task(EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=BUILD))
+    agent = TaskExecution(agent_user="agent")
+    assert reasons(spec, IRIS_WORKING, agent) == {
+        (RefusalReason.IMAGE_SOURCE, "task"),
+        (RefusalReason.EXECUTION_USER, "task"),
+    }
+    assert reasons(spec, LAPTOP, agent) == set()
+    published = spec.model_copy(update={"environment": EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE)})
     assert reasons(published, IRIS_WORKING) == set()
     networked = published.model_copy(
         update={"environment": EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE, network=True)}
@@ -99,10 +105,12 @@ def test_docker_build_task_is_refused_on_iris_and_accepted_on_local_docker():
 
 def test_laptop_without_docker_names_the_missing_factory():
     missing = FactoryCapabilities(
-        frozenset(), frozenset(), False, False, False, unavailable="docker CLI not found on PATH"
+        frozenset(), frozenset(), False, False, False, False, unavailable="docker CLI not found on PATH"
     )
     spec = task(EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE))
-    [refusal] = task_refusals(spec, {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: missing})
+    [refusal] = task_refusals(
+        spec, TaskExecution(), {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: missing}
+    )
     assert refusal.reason is RefusalReason.NO_FACTORY
     assert "docker CLI not found" in refusal.detail
 
@@ -112,18 +120,21 @@ def test_shell_verifier_grading_environment_and_collect_users_are_checked():
         argv=("sh", "/grade.sh"),
         timeout=5,
         collect=(EnvironmentCommand(argv=("true",), timeout=5, user="grader"),),
-        environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, network=True),
     )
     spec = task(
         EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
         answer_type=AnswerType.FILE,
-        verifier=VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
+        verifier=shell_verifier(verifier, EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, network=True)),
     )
     assert reasons(spec, LAPTOP) == {(RefusalReason.EXECUTION_USER, "task"), (RefusalReason.NETWORK, "verifier")}
 
 
-def shell_verifier(verifier: ShellVerifierSpec) -> VerifierSpec:
-    return VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json())
+def shell_verifier(
+    verifier: ShellVerifierSpec, environment: EnvironmentSpec | None = None, files: tuple[EnvironmentFile, ...] = ()
+) -> VerifierSpec:
+    return VerifierSpec(
+        kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json(), environment=environment, files=files
+    )
 
 
 DOCKER_TASK = EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE)
@@ -138,21 +149,22 @@ DOCKER_TASK = EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE)
     ],
 )
 def test_grading_artifacts_the_engine_fetches_as_root_need_execution_users(artifact):
-    verifier = ShellVerifierSpec(argv=("sh", "/grade.sh"), timeout=5, artifacts=(artifact,), environment=DOCKER_TASK)
-    spec = task(DOCKER_TASK, answer_type=AnswerType.FILE, verifier=shell_verifier(verifier))
+    verifier = ShellVerifierSpec(argv=("sh", "/grade.sh"), timeout=5, artifacts=(artifact,))
+    spec = task(DOCKER_TASK, answer_type=AnswerType.FILE, verifier=shell_verifier(verifier, DOCKER_TASK))
     assert reasons(spec, IRIS_WORKING) == {(RefusalReason.EXECUTION_USER, "task")}
     assert reasons(spec, LAPTOP) == set()
 
     plain = VerifierArtifact(source="/work/out", target="/out", kind=ArtifactKind.FILE)
     plain_spec = spec.model_copy(
-        update={"verifier": shell_verifier(verifier.model_copy(update={"artifacts": (plain,)}))}
+        update={"verifier": shell_verifier(verifier.model_copy(update={"artifacts": (plain,)}), DOCKER_TASK)}
     )
     assert reasons(plain_spec, IRIS_WORKING) == set()
 
 
 def test_stage_grader_files_removed_as_root_need_execution_users():
-    grader = ShellVerifierSpec(
-        argv=("sh", "/grade.sh"), timeout=5, files=(EnvironmentFile(path="/grade.sh", content=b"echo 1\n"),)
+    grader = shell_verifier(
+        ShellVerifierSpec(argv=("sh", "/grade.sh"), timeout=5),
+        files=(EnvironmentFile(path="/grade.sh", content=b"echo 1\n"),),
     )
     spec = task(
         DOCKER_TASK,
@@ -161,10 +173,22 @@ def test_stage_grader_files_removed_as_root_need_execution_users():
             kind=VerifierKind.STAGED,
             parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.FINAL).model_dump_json(),
         ),
-        stages=(TaskStage(name="only", verifier=shell_verifier(grader)),),
+        stages=(TaskStage(name="only", verifier=grader),),
     )
-    assert reasons(spec, IRIS_WORKING) == {(RefusalReason.EXECUTION_USER, "task")}
-    assert reasons(spec, LAPTOP) == set()
+    execution = TaskExecution(stages={"only": StageExecution()})
+    assert reasons(spec, IRIS_WORKING, execution) == {(RefusalReason.EXECUTION_USER, "task")}
+    assert reasons(spec, LAPTOP, execution) == set()
+
+
+def test_explicit_file_timestamps_are_refused_where_they_are_not_kept():
+    stamped = EnvironmentFile(path="/work/data.txt", content=b"1\n", mtime_ns=1_700_000_000_000_000_000)
+    shellsim = task(EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, files=(stamped,)))
+    assert reasons(shellsim, LAPTOP) == {(RefusalReason.FILE_TIMESTAMPS, "task")}
+
+    grader = shell_verifier(ShellVerifierSpec(argv=("sh", "/grade.sh"), timeout=5), files=(stamped,))
+    docker = task(DOCKER_TASK, answer_type=AnswerType.FILE, verifier=grader)
+    assert reasons(docker, LAPTOP) == set()
+    assert reasons(docker, IRIS_WORKING) == {(RefusalReason.FILE_TIMESTAMPS, "task")}
 
 
 def test_laptop_without_docker_reports_and_omits_the_docker_factory(monkeypatch):
@@ -218,3 +242,25 @@ async def test_capability_table_matches_what_the_shellbox_factories_refuse():
 
     # Local Docker refuses registry images and Dockerfiles only when it has no Skopeo image cache.
     await assert_refused(DockerMachineFactory(), MachineSpec(source=SOURCES["build"]))
+
+
+async def test_rollout_engine_refuses_the_file_timestamps_shellsim_lacks():
+    """``SHELLSIM.file_timestamps`` mirrors RolloutEngine's own check, made before any machine starts."""
+
+    async def unused_model(request: ModelRequest) -> ModelTurn:
+        raise AssertionError("the engine refuses the task before any model call")
+
+    stamped = EnvironmentFile(path="/work/data.txt", content=b"1\n", mtime_ns=1_700_000_000_000_000_000)
+    engine = ShellboxRolloutEngine(
+        unused_model,
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        max_turns=1,
+        command_timeout=1,
+        cleanup_timeout=1,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+    )
+    assert not SHELLSIM.file_timestamps
+    with pytest.raises(ValueError, match="timestamps"):
+        await engine.run(
+            task(EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, files=(stamped,))), execution=TaskExecution()
+        )

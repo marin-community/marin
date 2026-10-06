@@ -21,7 +21,9 @@ from taskcompendium.environment import (
     StdoutReward,
     VerifierArtifact,
 )
-from taskcompendium.grading import Outcome, grade_answer, verifier_descriptor
+from taskcompendium.execution import StageExecution, TaskExecution
+from taskcompendium.grading import grade_answer, verifier_descriptor
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     FunctionDefinition,
@@ -47,6 +49,7 @@ from taskforge.spec.draft import (
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
 PLAIN = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+NO_EXECUTION = TaskExecution()
 GRADE_ANSWER = 'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi'
 
 
@@ -70,15 +73,16 @@ def shell_message(call_id: str, command: str) -> dict:
     }
 
 
-async def run_on_shellsim(task: TaskSpec, messages: list[dict]):
+async def run_on_shellsim(task: TaskSpec, messages: list[dict], execution: TaskExecution = NO_EXECUTION):
     engine = ShellboxRolloutEngine(
         ReplayModel(messages).complete,
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
         max_turns=6,
         command_timeout=5,
+        cleanup_timeout=5,
         convention=PLAIN,
     )
-    return await engine.run(TaskSpec.model_validate_json(task.model_dump_json()))
+    return await engine.run(TaskSpec.model_validate_json(task.model_dump_json()), execution=execution)
 
 
 def answer_task(verifier) -> TaskSpec:
@@ -89,6 +93,7 @@ def answer_task(verifier) -> TaskSpec:
         environment(EnvironmentKind.NULL),
         verifier_descriptor(verifier),
         SOURCE,
+        execution=NO_EXECUTION,
         system="Answer briefly.",
     )
 
@@ -121,6 +126,7 @@ def test_predicted_action_verifier_grades_native_action_after_round_trip():
         environment(EnvironmentKind.NULL),
         verifier_descriptor(PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"city": "Paris"}),))),
         SOURCE,
+        execution=NO_EXECUTION,
         final_tools=(lookup,),
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
@@ -153,6 +159,7 @@ async def test_shell_verifier_grades_the_agent_workspace_on_shellsim(argv, rewar
         environment(EnvironmentKind.SHELLSIM, files=(file("/workspace/README", "Write your answer here.\n"),)),
         shell_verifier(argv, reward, timeout=5, files=(file("/private/grade.sh", GRADE_ANSWER),)),
         SOURCE,
+        execution=NO_EXECUTION,
     )
 
     result = await run_on_shellsim(
@@ -167,6 +174,7 @@ async def test_staged_task_runs_stages_on_one_machine_and_stops_below_minimum():
     def check(path: str, value: str):
         return shell_verifier(("sh", "-c", f'[ "$(cat {path})" = {value} ]'), ExitCodeReward(), timeout=5)
 
+    execution = TaskExecution(stages={"first": StageExecution(), "second": StageExecution()})
     task = assemble(
         "staged",
         "Write 12 to /workspace/a.",
@@ -174,6 +182,7 @@ async def test_staged_task_runs_stages_on_one_machine_and_stops_below_minimum():
         environment(EnvironmentKind.SHELLSIM),
         staged(StageRewardStrategy.MEAN),
         SOURCE,
+        execution=execution,
         stages=(
             stage("first", check("/workspace/a", "12"), minimum_rewards={"reward": 1.0}),
             stage("second", check("/workspace/b", "24"), instruction="Now write 24 to /workspace/b."),
@@ -185,8 +194,8 @@ async def test_staged_task_runs_stages_on_one_machine_and_stops_below_minimum():
         shell_message("c2", "echo 24 > /workspace/b"),
         {"role": "assistant", "content": "Done."},
     ]
-    passed = await run_on_shellsim(task, both)
-    failed = await run_on_shellsim(task, [shell_message("c1", "echo 11 > /workspace/a"), both[1]])
+    passed = await run_on_shellsim(task, both, execution)
+    failed = await run_on_shellsim(task, [shell_message("c1", "echo 11 > /workspace/a"), both[1]], execution)
 
     assert passed.grade.reward == 1.0
     assert [item["name"] for item in passed.grade.diagnostics["stages"]] == ["first", "second"]
@@ -230,8 +239,7 @@ def test_docker_task_with_separate_grading_machine_round_trips():
         ),
         verifier,
         SOURCE,
-        attempt_timeout=3600,
-        agent_user="agent",
+        execution=TaskExecution(attempt_timeout=3600, agent_user="agent"),
         metadata={"proposal": "abc"},
         tags=("taskforge",),
     )
@@ -243,8 +251,9 @@ def test_docker_task_with_separate_grading_machine_round_trips():
     assert restored.environment_requirements.capabilities == ("shell", "filesystem")
     assert (restored.environment.memory_mb, restored.environment.cpus, restored.environment.network) == (4096, 4, True)
     assert restored.environment.files[0].mode == 0o755
-    assert parameters.environment == grading
-    assert parameters.files[0].content == b"print(1)\n"
+    assert restored.verifier.environment == grading
+    assert restored.verifier.files[0].content == b"print(1)\n"
+    assert parameters.artifacts[0].target == "/submission"
 
 
 def test_assemble_rejects_private_grader_content_shipped_to_the_agent():
@@ -260,6 +269,7 @@ def test_assemble_rejects_private_grader_content_shipped_to_the_agent():
             environment(EnvironmentKind.SHELLSIM, files=(copy,)),
             grader,
             SOURCE,
+            execution=NO_EXECUTION,
         )
     with pytest.raises(ValueError, match="agent-visible"):
         assemble(
@@ -269,7 +279,8 @@ def test_assemble_rejects_private_grader_content_shipped_to_the_agent():
             environment(EnvironmentKind.SHELLSIM),
             staged(StageRewardStrategy.FINAL),
             SOURCE,
-            stages=(stage("only", grader, workdir_files=(file("/notes.sh", GRADE_ANSWER),)),),
+            execution=TaskExecution(stages={"only": StageExecution(workdir_files=(file("/notes.sh", GRADE_ANSWER),))}),
+            stages=(stage("only", grader),),
         )
 
 
@@ -283,6 +294,7 @@ def test_stage_minimum_rewards_must_name_components_the_grader_reports():
             environment(EnvironmentKind.SHELLSIM),
             staged(StageRewardStrategy.FINAL),
             SOURCE,
+            execution=TaskExecution(stages={"first": StageExecution()}),
             stages=(gate,),
         )
 
@@ -308,4 +320,22 @@ def test_assemble_rejects_graders_that_cannot_see_the_answer(answer_type, env_ki
         "action": verifier_descriptor(PredictedActionSpec(expected_calls=(FunctionCall("f", {}),))),
     }
     with pytest.raises(ValueError, match=message):
-        assemble("bad", "Do it.", answer_type, environment(env_kind), verifiers[verifier], SOURCE)
+        assemble(
+            "bad", "Do it.", answer_type, environment(env_kind), verifiers[verifier], SOURCE, execution=NO_EXECUTION
+        )
+
+
+@pytest.mark.parametrize("stages", [{}, {"first": StageExecution(), "extra": StageExecution()}])
+def test_assemble_rejects_execution_settings_for_other_stages(stages):
+    gate = stage("first", shell_verifier(("true",), ExitCodeReward(), timeout=5))
+    with pytest.raises(ValueError, match="Execution stages"):
+        assemble(
+            "staged",
+            "Do it.",
+            AnswerType.FILE,
+            environment(EnvironmentKind.SHELLSIM),
+            staged(StageRewardStrategy.FINAL),
+            SOURCE,
+            execution=TaskExecution(stages=stages),
+            stages=(gate,),
+        )

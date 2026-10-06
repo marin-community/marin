@@ -25,6 +25,7 @@ from shellbox.machine import MachineFactory, NetworkPolicy
 from taskcompendium.environment import (
     ArtifactKind,
     DockerBuild,
+    EnvironmentFile,
     EnvironmentKind,
     EnvironmentSpec,
     FileReward,
@@ -32,7 +33,8 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.models import TaskSpec, VerifierKind
+from taskcompendium.execution import TaskExecution
+from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
 
 IMAGE_CACHE_DIR = Path("~/.cache/taskforge/images").expanduser()
 DOCKER_PROBE_TIMEOUT = 20
@@ -65,6 +67,7 @@ class FactoryCapabilities:
     execution_users: bool
     cpu_and_storage_limits: bool
     gpus: bool
+    file_timestamps: bool
     unavailable: str | None = None
 
 
@@ -75,6 +78,7 @@ class RefusalReason(StrEnum):
     EXECUTION_USER = "execution_user"
     RESOURCE_LIMITS = "resource_limits"
     GPUS = "gpus"
+    FILE_TIMESTAMPS = "file_timestamps"
 
 
 @dataclass(frozen=True)
@@ -117,12 +121,14 @@ def local_docker() -> LocalDocker:
     return LocalDocker(skopeo=Path(skopeo), unavailable=None)
 
 
+# RolloutEngine refuses explicit file timestamps (``EnvironmentFile.mtime_ns``) on ShellSim.
 SHELLSIM = FactoryCapabilities(
     image_sources=frozenset(),
     network=frozenset({NetworkPolicy.DENY}),
     execution_users=False,
     cpu_and_storage_limits=False,
     gpus=False,
+    file_timestamps=False,
 )
 LOCAL_DOCKER = FactoryCapabilities(
     image_sources=frozenset({ImageSourceKind.REGISTRY, ImageSourceKind.BUILD}),
@@ -130,18 +136,21 @@ LOCAL_DOCKER = FactoryCapabilities(
     execution_users=True,
     cpu_and_storage_limits=True,
     gpus=False,
+    file_timestamps=True,
 )
 # shellbox.backends.iris refuses Command.user and GPUs, and takes only registry references. Its
 # create fails on every call today, so the factory is reported unavailable. ``network`` is what the
 # backend provides once its readiness poll is fixed upstream: marin's gVisor sandboxes have no DNS
 # or egress (measured on the marin GCP workers), so the fixed factory
 # declares DENY and refuses ALLOW. The shipped backend instead refuses DENY and claims ALLOW.
+# Its upload writes file bytes through shell commands, so an explicit file timestamp is lost.
 IRIS_DOCKER = FactoryCapabilities(
     image_sources=frozenset({ImageSourceKind.REGISTRY}),
     network=frozenset({NetworkPolicy.DENY}),
     execution_users=False,
     cpu_and_storage_limits=True,
     gpus=False,
+    file_timestamps=False,
     unavailable=(
         "shellbox IrisMachineFactory.create fails before any sandbox starts (its readiness poll compares "
         "iris TaskState to proto ints)"
@@ -155,7 +164,9 @@ def factory_capabilities(where: MachineHost) -> dict[EnvironmentKind, FactoryCap
         return {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: IRIS_DOCKER}
     docker = local_docker()
     if docker.unavailable is not None:
-        unavailable = FactoryCapabilities(frozenset(), frozenset(), False, False, False, unavailable=docker.unavailable)
+        unavailable = FactoryCapabilities(
+            frozenset(), frozenset(), False, False, False, False, unavailable=docker.unavailable
+        )
         return {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: unavailable}
     return {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: LOCAL_DOCKER}
 
@@ -183,8 +194,10 @@ def environment_refusals(
     users: tuple[str | None, ...],
     capabilities: Mapping[EnvironmentKind, FactoryCapabilities],
     where: str,
+    installed: tuple[EnvironmentFile, ...] = (),
 ) -> list[Refusal]:
-    """Why ``environment`` cannot be created, or run commands as ``users``, on these factories."""
+    """Why ``environment`` cannot be created, run commands as ``users``, or receive the ``installed``
+    files (beyond its own) on these factories."""
     if environment.kind == EnvironmentKind.NULL:
         return []
     capability = capabilities.get(environment.kind)
@@ -210,11 +223,14 @@ def environment_refusals(
         refusals.append(Refusal(RefusalReason.RESOURCE_LIMITS, where, "cpus and storage_mb limits are not provided"))
     if environment.gpus and not capability.gpus:
         refusals.append(Refusal(RefusalReason.GPUS, where, f"{environment.gpus} GPUs requested"))
+    stamped = sorted(file.path for file in (*environment.files, *installed) if file.mtime_ns is not None)
+    if stamped and not capability.file_timestamps:
+        refusals.append(Refusal(RefusalReason.FILE_TIMESTAMPS, where, f"explicit timestamps on {stamped}"))
     return refusals
 
 
-def _shell_verifier(kind: str, parameters_json: str) -> ShellVerifierSpec | None:
-    return ShellVerifierSpec.model_validate_json(parameters_json) if kind == VerifierKind.SHELL else None
+def _shell_verifier(spec: VerifierSpec) -> ShellVerifierSpec | None:
+    return ShellVerifierSpec.model_validate_json(spec.parameters_json) if spec.kind == VerifierKind.SHELL else None
 
 
 def _artifact_needs_root(artifact: VerifierArtifact) -> bool:
@@ -228,46 +244,51 @@ def _artifact_needs_root(artifact: VerifierArtifact) -> bool:
     return artifact.kind == ArtifactKind.DIRECTORY and bool(artifact.exclude)
 
 
-def _stage_grader_removal_needs_root(shell: ShellVerifierSpec) -> bool:
+def _stage_grader_removal_needs_root(spec: VerifierSpec, shell: ShellVerifierSpec) -> bool:
     """Whether ``rolloutengine.grading._remove_stage_grader`` deletes this stage grader's files as root."""
-    return shell.environment is None and bool(shell.files or isinstance(shell.reward, FileReward))
+    return spec.environment is None and bool(spec.files or isinstance(shell.reward, FileReward))
 
 
-def task_refusals(task: TaskSpec, capabilities: Mapping[EnvironmentKind, FactoryCapabilities]) -> list[Refusal]:
-    """Every reason ``task`` cannot run on these factories.
+def task_refusals(
+    task: TaskSpec, execution: TaskExecution, capabilities: Mapping[EnvironmentKind, FactoryCapabilities]
+) -> list[Refusal]:
+    """Every reason ``task`` cannot run with ``execution`` on these factories.
 
     Covers the task machine (agent, stage, collect and in-machine verifier users, plus the root
-    commands RolloutEngine itself runs there to fetch grading artifacts and remove stage graders)
-    and each shell verifier's separate grading environment.
+    commands RolloutEngine itself runs there to fetch grading artifacts and remove stage graders,
+    and every file installed there) and each shell verifier's separate grading environment.
     """
-    stage_users = tuple(stage.agent_user for stage in task.stages)
-    stage_commands = [command for stage in task.stages for command in stage.setup]
-    stage_commands += [stage.healthcheck.command for stage in task.stages if stage.healthcheck is not None]
+    stages = tuple(execution.stages.values())
+    stage_commands = [command for stage in stages for command in stage.setup]
+    stage_commands += [stage.healthcheck.command for stage in stages if stage.healthcheck is not None]
     verifiers = [("verifier", task.verifier)] + [
         (f"stage {stage.name} verifier", stage.verifier) for stage in task.stages
     ]
-    shell_verifiers = [
-        (where, shell) for where, spec in verifiers if (shell := _shell_verifier(spec.kind, spec.parameters_json))
-    ]
-    stage_shell_verifiers = [
-        shell for stage in task.stages if (shell := _shell_verifier(stage.verifier.kind, stage.verifier.parameters_json))
-    ]
+    shell_verifiers = [(where, spec, shell) for where, spec in verifiers if (shell := _shell_verifier(spec))]
     engine_root = any(
         _artifact_needs_root(artifact)
-        for _, shell in shell_verifiers
-        if shell.environment is not None
+        for _, spec, shell in shell_verifiers
+        if spec.environment is not None
         for artifact in shell.artifacts
-    ) or any(_stage_grader_removal_needs_root(shell) for shell in stage_shell_verifiers)
+    ) or any(
+        _stage_grader_removal_needs_root(stage.verifier, shell)
+        for stage in task.stages
+        if (shell := _shell_verifier(stage.verifier))
+    )
     task_users = (
-        task.agent_user,
-        *stage_users,
+        execution.agent_user,
+        *(stage.agent_user for stage in stages),
         *(command.user for command in stage_commands),
-        *(command.user for _, shell in shell_verifiers for command in shell.collect),
-        *(shell.user for _, shell in shell_verifiers if shell.environment is None),
+        *(command.user for _, _, shell in shell_verifiers for command in shell.collect),
+        *(shell.user for _, spec, shell in shell_verifiers if spec.environment is None),
         *((ROOT_USER,) if engine_root else ()),
     )
-    refusals = environment_refusals(task.environment, task_users, capabilities, "task")
-    for where, shell in shell_verifiers:
-        if shell.environment is not None:
-            refusals += environment_refusals(shell.environment, (shell.user,), capabilities, where)
+    task_files = (
+        *(file for stage in stages for file in stage.workdir_files),
+        *(file for _, spec in verifiers if spec.environment is None for file in spec.files),
+    )
+    refusals = environment_refusals(task.environment, task_users, capabilities, "task", task_files)
+    for where, spec, shell in shell_verifiers:
+        if spec.environment is not None:
+            refusals += environment_refusals(spec.environment, (shell.user,), capabilities, where, spec.files)
     return refusals
