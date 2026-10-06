@@ -271,6 +271,22 @@ def teacher_sft_steps(
         build_config=collection_config,
         run=collection.run,
     )
+    return teacher_sft_training_steps(
+        config, parent, collected, updates, namespace, context_tokens, training_version=training_version
+    )
+
+
+def teacher_sft_training_steps(
+    config: dict,
+    parent: ArtifactStep,
+    collected: ArtifactStep,
+    updates: int,
+    namespace: str,
+    context_tokens: int,
+    *,
+    training_version: str,
+) -> dict[str, ArtifactStep]:
+    """Train and reload from an explicitly bound completed conversation artifact."""
     mesh = MeshConfig(
         axes={"data": 1, "replica": 1, "model": 1, "expert": SFT_GPUS_PER_NODE},
         dcn_axes={"replica_dcn": 1, "context": SFT_NODES},
@@ -335,6 +351,12 @@ def teacher_sft_steps(
         )
 
     trained = replace(trained, build_config=training_config)
+    reload = teacher_sft_reload_step(trained, updates, namespace, training_version)
+    return {"collect": collected, "train": trained, "reload": reload}
+
+
+def teacher_sft_reload_step(trained: ArtifactStep, updates: int, namespace: str, training_version: str) -> ArtifactStep:
+    """Reload the final normal export with its exact training producer identity."""
     reload_model = evaluation_model(f"russell-rsi-{namespace}-sft-reload", "<completed-sft-export>", None)
     reload = eval_step(
         reload_model,
@@ -351,7 +373,7 @@ def teacher_sft_steps(
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    return {"collect": collected, "train": trained, "reload": reload}
+    return reload
 
 
 @click.command(help=__doc__)

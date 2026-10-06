@@ -74,12 +74,12 @@ RETENTION_TASKS = 3
 
 def qualified_sft(record: dict, *, identity: str, root: str) -> str:
     """Return the attested export of exactly one qualified SFT update."""
-    return _qualified_sft(
+    return qualified_sft_export(
         record, identity=identity, root=root, updates=1, protocol="teacher-sft-one-update-qualification-v1"
     )
 
 
-def _qualified_sft(record: dict, *, identity: str, root: str, updates: int, protocol: str) -> str:
+def qualified_sft_export(record: dict, *, identity: str, root: str, updates: int, protocol: str) -> str:
     export = prefix_join(root, f"hf/step-{updates - 1}")
     shards = record["hf_shards"]
     shard_paths = {item["path"] for item in shards}
@@ -646,20 +646,26 @@ def seal_study_selection(config: StudySelectionConfig) -> None:
 
 def qualified_four_update_sft(record: dict, *, identity: str, root: str) -> str:
     """Require four real finite updates and their post-update export."""
-    export = _qualified_sft(
+    export = qualified_sft_export(
         record, identity=identity, root=root, updates=4, protocol="teacher-sft-four-update-qualification-v1"
     )
+    qualified_optimizer_steps(record, identity=identity, updates=4)
+    return export
+
+
+def qualified_optimizer_steps(record: dict, *, identity: str, updates: int) -> None:
+    """Require every planned optimizer step and its exact serving model."""
     steps = record["optimizer_steps"]
     if record["serving_reload"]["model_identity"] != identity:
-        raise ValueError("Four-pass serving reload identifies a different SFT model")
+        raise ValueError("SFT serving reload identifies a different SFT model")
     if (
-        [step["step"] for step in steps] != list(range(4))
+        [step["step"] for step in steps] != list(range(updates))
         or any(step["skipped"] is not False or step["learning_rate"] != SFT_LEARNING_RATE for step in steps)
         or any(not math.isfinite(step[key]) for step in steps for key in ("loss", "gradient_norm", "update_norm"))
         or any(step[key] <= 0 for step in steps for key in ("gradient_norm", "update_norm"))
     ):
-        raise ValueError("Four-pass SFT requires four complete finite optimizer updates")
-    return export
+        count = "four" if updates == 4 else str(updates)
+        raise ValueError(f"SFT requires {count} complete finite optimizer updates")
 
 
 if __name__ == "__main__":

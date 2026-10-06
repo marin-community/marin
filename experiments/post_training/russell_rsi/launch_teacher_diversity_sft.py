@@ -11,17 +11,16 @@ import click
 from levanter.main.train_lm import TrainLmConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.evaluation.pipeline import eval_step
-from experiments.post_training.russell_rsi.launch import CLUSTER, evaluation_model
 from experiments.post_training.russell_rsi.launch_interrupted_calibration_sft import (
     foreground_build_options,
     require_reviewed_source,
 )
+from experiments.post_training.russell_rsi.launch_teacher_sft import teacher_sft_reload_step
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.teacher_diversity_study import NAMESPACE, UPDATES, diversity_workflow
 
@@ -31,36 +30,27 @@ SFT_VERSION = "2026.10.06.17"
 
 def durable_sft_stages(stages: dict[str, ArtifactStep]) -> dict[str, ArtifactStep]:
     """Keep the collection handle and bind telemetry to the new training output."""
-    previous = stages["train"]
+    trained = durable_training_step(
+        replace(stages["train"], version=SFT_VERSION), f"russell-rsi-{NAMESPACE}-sft-{SFT_VERSION}"
+    )
+    reload = teacher_sft_reload_step(trained, UPDATES, NAMESPACE, SFT_VERSION)
+    return {"collect": stages["collect"], "train": trained, "reload": reload}
+
+
+def durable_training_step(previous: ArtifactStep, run_id: str) -> ArtifactStep:
+    """Override the run id and send telemetry to the step output."""
 
     def training_config(ctx: StepContext) -> TrainLmOnPodConfig:
         pod = cast(TrainLmOnPodConfig, previous.build_config(ctx))
         train = cast(TrainLmConfig, pod.train_config)
         trainer = replace(
             train.trainer,
-            id=f"russell-rsi-{NAMESPACE}-sft-{SFT_VERSION}",
+            id=run_id,
             tracker=(JsonLoggerConfig(metric_destination=prefix_join(ctx.output_path, "optimizer-telemetry")),),
         )
         return replace(pod, train_config=replace(train, trainer=trainer))
 
-    trained = replace(previous, version=SFT_VERSION, build_config=training_config)
-    reload_model = evaluation_model(f"russell-rsi-{NAMESPACE}-sft-reload", "<completed-sft-export>", None)
-    reload = eval_step(
-        reload_model,
-        "mmlu-smoke",
-        version=SFT_VERSION,
-        deps=(trained,),
-        resolve_model=lambda ctx: replace(
-            reload_model,
-            location=prefix_join(ctx.artifact_path(trained), f"hf/step-{UPDATES - 1}"),
-            identity=artifact_identity(trained),
-        ),
-        limit=1,
-        accelerator="H100x8",
-        submission_cluster=CLUSTER,
-        federated_cluster=CLUSTER,
-    )
-    return {"collect": stages["collect"], "train": trained, "reload": reload}
+    return replace(previous, build_config=training_config)
 
 
 @click.command(help=__doc__)

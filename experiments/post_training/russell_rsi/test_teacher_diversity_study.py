@@ -794,7 +794,7 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(durab
 
     qualification["optimizer_telemetry"]["files"] = event_pins[:-1]
     set_pin(post, "qualification", pinned(tmp_path, "missing-metric-step", qualification))
-    with pytest.raises(ValueError, match="cover all four"):
+    with pytest.raises(ValueError, match="cover all qualified"):
         durable_diversity_post_workflow(post, "calibrate")
     qualification["optimizer_telemetry"]["files"] = event_pins
     canonical_raw = Path(result_pin["uri"]).read_bytes()

@@ -77,7 +77,7 @@ def completed_durable_producer(config: dict, role: str, expected: ArtifactStep, 
     request = PinnedFile(**launch["request"]).read_json()
     if (
         request["stage"] != role
-        or request["version"] != SFT_VERSION
+        or request["version"] != expected.version
         or request["source_head"] != launch["source_head"]
         or request["runtime_commit"] != MARIN_SKYRL.commit
         or request["config_uri"] != config_pin["uri"]
@@ -98,7 +98,7 @@ def completed_durable_producer(config: dict, role: str, expected: ArtifactStep, 
     identity = artifact_record_identity(record)
     if (
         identity != launch["producer_identity"]
-        or record["version"] != SFT_VERSION
+        or record["version"] != expected.version
         or record["output_path"] != launch["output_path"]
         or canonical_json(record["config"]) != canonical_json(launch["bound_config"])
         or StatusFile(record["output_path"], worker_id="diversity-post-sft").status != STATUS_SUCCESS
@@ -112,6 +112,11 @@ def completed_durable_producer(config: dict, role: str, expected: ArtifactStep, 
 
 def qualified_optimizer_telemetry(qualification: dict, amendment: dict, trained: dict) -> None:
     """Bind the four qualified optimizer steps to complete durable event bytes."""
+    qualified_step_telemetry(qualification, amendment, trained, UPDATES)
+
+
+def qualified_step_telemetry(qualification: dict, amendment: dict, trained: dict, updates: int) -> None:
+    """Bind every qualified optimizer step to its complete durable event bytes."""
     telemetry = qualification["optimizer_telemetry"]
     trainer = trained["config"]["train_config"]["trainer"]
     if (
@@ -140,7 +145,7 @@ def qualified_optimizer_telemetry(qualification: dict, amendment: dict, trained:
             or event["event"] != "log"
             or event["run_id"] != amendment["sft"]["run_id"]
             or type(step) is not int
-            or step not in range(UPDATES)
+            or step not in range(updates)
             or pin.uri != prefix_join(amendment["sft"]["metric_destination"], f"step-{step}-{pin.sha256}.json")
         ):
             raise ValueError("Durable optimizer event differs from its run, step or content path")
@@ -150,8 +155,8 @@ def qualified_optimizer_telemetry(qualification: dict, amendment: dict, trained:
                 raise ValueError("Durable optimizer events contain conflicting values for one step")
             metrics[key] = value
     steps = qualification["optimizer_steps"]
-    if sorted(merged) != list(range(UPDATES)) or [step["step"] for step in steps] != list(range(UPDATES)):
-        raise ValueError("Durable optimizer events do not cover all four qualified steps")
+    if sorted(merged) != list(range(updates)) or [step["step"] for step in steps] != list(range(updates)):
+        raise ValueError("Durable optimizer events do not cover all qualified steps")
     for step in steps:
         for field, key in METRIC_KEYS.items():
             expected = step[field]
