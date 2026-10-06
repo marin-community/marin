@@ -13,6 +13,7 @@ from typing import Any
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.client.client import IrisClient, iris_ctx
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, ConstraintOp, strip_cluster_constraints
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import default_platform
@@ -187,7 +188,7 @@ def submit_retention(config: DevelopmentEvaluationConfig) -> None:
 
 
 class BoundedIrisClient:
-    """Keep every worker submission at batch priority with zero retries."""
+    """Bound direct CW02 submissions and translate its federation pin to local placement."""
 
     def __init__(self, client: IrisClient):
         self.client = client
@@ -195,7 +196,14 @@ class BoundedIrisClient:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.client, name)
 
-    def submit(self, *args: Any, **kwargs: Any) -> Any:
+    def submit(self, **kwargs: Any) -> Any:
+        constraints = kwargs.get("constraints") or []
+        for constraint in constraints:
+            if constraint.key == CLUSTER_CONSTRAINT_KEY and (
+                constraint.op != ConstraintOp.EQ or constraint.values[0].value != CLUSTER
+            ):
+                raise ValueError(f"Unsupported cluster constraint {constraint} on direct {CLUSTER} client")
+        kwargs["constraints"] = strip_cluster_constraints(constraints)
         kwargs.update(
             max_retries_failure=0,
             max_retries_preemption=0,
@@ -203,7 +211,7 @@ class BoundedIrisClient:
             priority_band=job_pb2.PRIORITY_BAND_BATCH,
             timeout=Duration.from_hours(WORKER_TIMEOUT_HOURS),
         )
-        return self.client.submit(*args, **kwargs)
+        return self.client.submit(**kwargs)
 
 
 def coding_attempt(config: EvalStepConfig) -> AttemptJournal:

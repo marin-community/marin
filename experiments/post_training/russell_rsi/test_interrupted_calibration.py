@@ -12,18 +12,30 @@ from typing import cast
 import pytest
 from fray.client import Client
 from fray.current_client import current_client, set_current_client
+from fray.iris_backend import FrayIrisClient
+from fray.types import ResourceConfig, create_environment
 from iris.client.client import IrisClient, IrisContext, iris_ctx, iris_ctx_scope
+from iris.cluster.client.remote_client import RemoteClusterClient
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.rpc import controller_pb2, job_pb2
+from marin.evaluation.evalchemy.runner import EvalchemyRunConfig, _run_evalchemy_child
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, run
 from marin.experiment.cli import graph_handles
+from marin.inference.config import IrisConfig, RemoteInferenceConfig, ServedModelConfig, VllmEngineConfig
+from marin.inference.iris import remote_inference
+from marin.inference.types import OpenAIEndpoint, RunningModel
 
 from experiments.post_training.russell_rsi import test_teacher_four_pass
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     OUTPUT_PROTOCOL,
     PROTOCOL,
+    WORKER_TIMEOUT_HOURS,
     BoundedIrisClient,
     coding_attempt,
     require_interruption,
+    retention_request,
     run_foreground_coding,
 )
 from experiments.post_training.russell_rsi.launch import CLUSTER
@@ -229,3 +241,70 @@ def test_parallel_artifact_workers_keep_foreground_context(tmp_path, monkeypatch
     for step in steps:
         context = json.loads((Path(step.path()) / "context.json").read_text())
         assert context == {"job_id": None, "iris_client_is_fray_client": True, "bounded_client": True}
+
+
+class CapturedSubmission(Exception):
+    pass
+
+
+@pytest.mark.parametrize("stage", ["serving", "retention", "evalchemy"])
+def test_direct_cluster_route_in_serialized_worker_requests(interrupted_study, tmp_path, monkeypatch, stage):
+    captured = []
+
+    def capture(request, **kwargs):
+        captured.append(controller_pb2.Controller.LaunchJobRequest.FromString(request.SerializeToString()))
+        raise CapturedSubmission
+
+    cluster = RemoteClusterClient("http://controller.invalid", bundle_id="reviewed-source")
+    monkeypatch.setattr(cluster._client, "launch_job", capture)
+    client = BoundedIrisClient(IrisClient(cluster))
+    fray = FrayIrisClient.from_iris_client(cast(IrisClient, client))
+    config, _, _, _ = interrupted_study
+    outputs = four_pass_post_workflow(config, "evaluate-interrupted")
+    retention = outputs["retention-sft"]
+    bound = retention.build_config(StepContext.for_run(str(tmp_path / "retention"), str(tmp_path), deps=retention.deps))
+    resources = ResourceConfig.with_gpu("H100", 8, regions=["us-east"])
+    try:
+        with iris_ctx_scope(IrisContext(job_id=None, client=cast(IrisClient, client))):
+            with set_current_client(fray), pytest.raises(CapturedSubmission):
+                if stage == "retention":
+                    request = retention_request(bound)
+                    fray.submit(request)
+                elif stage == "serving":
+                    with remote_inference(
+                        RemoteInferenceConfig(
+                            model=ServedModelConfig(weights="no-weight-read", tensor_parallel_size=8),
+                            engine=VllmEngineConfig(),
+                            iris=IrisConfig(worker_resources=resources, worker_environment=create_environment()),
+                        )
+                    ):
+                        pytest.fail("No worker may start")
+                else:
+                    _run_evalchemy_child(
+                        RunningModel(
+                            OpenAIEndpoint("http://no-model.invalid/v1", "frozen-model"), tokenizer="frozen-tokenizer"
+                        ),
+                        EvalchemyRunConfig(name="coding", tasks=(EvalTaskConfig("humanevalplus", None),)),
+                        str(tmp_path),
+                        {},
+                    )
+    finally:
+        cluster.shutdown()
+    (wire,) = captured
+    assert not any(constraint.key == CLUSTER_CONSTRAINT_KEY for constraint in wire.constraints)
+    if stage != "evalchemy":
+        assert wire.resources.device.gpu.count == 8
+    if stage == "serving":
+        assert any(constraint.key == "region" for constraint in wire.constraints)
+    if stage == "retention":
+        assert wire.max_retries_failure == wire.max_retries_preemption == wire.max_task_failures == 0
+        assert wire.priority_band == job_pb2.PRIORITY_BAND_BATCH
+        assert wire.timeout.milliseconds == WORKER_TIMEOUT_HOURS * 3600 * 1000
+
+
+@pytest.mark.parametrize("operator,cluster", [(ConstraintOp.EQ, "cw-us-west-04a"), (ConstraintOp.NE, CLUSTER)])
+def test_direct_cluster_route_rejects_other_cluster_before_rpc(operator, cluster):
+    client = BoundedIrisClient(cast(IrisClient, object()))
+    constraint = Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=operator, value=cluster)
+    with pytest.raises(ValueError, match="Unsupported cluster"):
+        client.submit(constraints=[constraint])
