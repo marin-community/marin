@@ -151,8 +151,8 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites outside the root workspace's import-selected Python matrix.
-# TaskCompendium and rolloutengine have separate uv locks; Iris smoke
+# Suites outside the import-selected Python matrix.
+# TaskCompendium tests optional Harbor; RolloutEngine has its own uv lock; Iris smoke
 # drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
@@ -163,6 +163,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
     ),
     "rolloutengine-unit": (
         "lib/rolloutengine/",

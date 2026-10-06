@@ -73,34 +73,34 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
-@pytest.mark.parametrize("install_status", [0, 17])
-def test_default_setup_native_build_status_ignores_non_maturin_members(tmp_path, install_status):
+def test_default_setup_with_editable_python_dependency_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
-    workdir.mkdir()
+    package = workdir / "lib" / "payload"
+    package.mkdir(parents=True)
+    (package / "pyproject.toml").write_text('[project]\nname = "setup-payload"\nversion = "0.1.0"\n')
+    (package / "setup_payload.py").write_text("value = 42\n")
     (workdir / "pyproject.toml").write_text(
-        '[project]\nname = "setup-test"\nversion = "0.1.0"\n'
-        '[tool.uv.sources]\nnative = {path = "lib/a-native", editable = true}\n'
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        'dependencies = ["setup-payload"]\n'
+        "[tool.uv]\npackage = false\n"
+        "[tool.uv.sources]\n"
+        'setup-payload = { path = "lib/payload", editable = true }\n'
     )
-    for name, backend in [("a-native", "maturin"), ("z-python", "setuptools")]:
-        member = workdir / "lib" / name
-        member.mkdir(parents=True)
-        (member / "pyproject.toml").write_text(f'[build-system]\nbuild-backend = "{backend}"\n')
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    uv = bin_dir / "uv"
-    uv.write_text(
-        f'#!/bin/sh\nif [ "$1 $2" = "pip install" ]; then\n echo "native install"\n exit {install_status}\nfi\n'
-    )
-    uv.chmod(0o755)
+    venv = tmp_path / "venv"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+
     completed = subprocess.run(
-        ["bash", "-c", default_setup_script()],
-        env={**os.environ, "IRIS_WORKDIR": str(workdir), "PATH": f"{bin_dir}:{os.environ['PATH']}"},
-        capture_output=True,
-        text=True,
-        check=False,
+        ["bash", "-c", default_setup_script()], env=env, capture_output=True, text=True, check=False
     )
-    assert completed.returncode == install_status
-    assert "native install" in completed.stdout
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    subprocess.run([venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 42"], check=True)
 
 
 @pytest.mark.parametrize("link_mode", ["copy", "symlink"])

@@ -284,6 +284,13 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
     assert set(suites) <= set(full_selection.suites)
 
 
+@pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
+def test_shared_dependency_change_selects_taskcompendium_harbor_suite(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert "taskcompendium-unit" in selection.suites
+
+
 def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:
     write(tmp_path, "lib/verifyit/src/verifyit/__init__.py")
     write(tmp_path, "lib/verifyit/src/verifyit/grade.py", "def grade(): ...\n")
