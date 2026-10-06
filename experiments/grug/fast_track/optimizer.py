@@ -331,12 +331,14 @@ def _kda_leaf(path_lower: str) -> str | None:
 
 
 def _is_gate_or_router_weight(path_lower: str) -> bool:
-    """True for exactly the ``attn_gate`` and MoE ``router`` weight leaves.
+    """True for exactly the ``attn_gate``, MoE ``router`` and SwitchHead gate weight leaves.
 
     Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
     ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
     """
-    return path_lower.endswith((".attn_gate", ".attn_gate_up", ".router", ".router_down", ".router_up"))
+    return path_lower.endswith(
+        (".attn_gate", ".attn_gate_up", ".router", ".router_down", ".router_up", ".switch_v_gate", ".switch_o_gate")
+    )
 
 
 def _is_router_weight(path_lower: str) -> bool:

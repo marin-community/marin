@@ -412,6 +412,16 @@ class ValueEmbeds(StrEnum):
 _GATED_VALUE_EMBEDS = (ValueEmbeds.GATED, ValueEmbeds.GATED_LAMBDA)
 
 
+class SwitchHeadSites(StrEnum):
+    """Which GQA projections SwitchHead (arXiv 2312.07987) turns into per-head mixtures of experts."""
+
+    V = "v"
+    """Value experts per KV head, gated by the source token."""
+    O = "o"
+    """Output experts per query head, gated by the destination token."""
+    VO = "vo"
+
+
 def _ve_lambda_init(mode: "ValueEmbeds") -> jax.Array | None:
     if mode == ValueEmbeds.NONE:
         return None
@@ -1404,6 +1414,12 @@ class GrugModelConfig:
     attn_gate_rank: int = 0
     """Low-rank per-channel output gate in the GatedNorm form: ``2 sigmoid(silu(x W_down) W_up)``, ``W_down``
     [D, r] (stored as ``attn_gate``) and zero-init ``W_up`` [r, N*H] (``attn_gate_up``), so it starts at 1. 0: off."""
+    switchhead_experts: int = 0
+    """SwitchHead (arXiv 2312.07987) on the GQA layers: each head's V and/or O projection (``switchhead_sites``)
+    becomes ``switchhead_experts`` experts mixed by ``sigmoid(x W_gate)`` over the ``switchhead_topk`` largest
+    logits (non-competitive, no load balancing). Computed densely over all experts. 0: off."""
+    switchhead_topk: int = 2
+    switchhead_sites: SwitchHeadSites = SwitchHeadSites.VO
     qk_mult_per_head: bool = False
     """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
     softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
@@ -1540,6 +1556,12 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.switchhead_experts:
+            if self.mla:
+                raise ValueError("switchhead_experts is implemented for the GQA layers only")
+            if not 1 <= self.switchhead_topk <= self.switchhead_experts:
+                raise ValueError("switchhead_topk must be in [1, switchhead_experts]")
+            SwitchHeadSites(self.switchhead_sites)
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
             raise ValueError(f"moe_implementation must be one of {MOE_IMPLEMENTATIONS}, got {self.moe_implementation!r}")
         if self.fp8_recipe != Fp8Recipe.NONE and self.moe_shared_overlap:
@@ -1933,6 +1955,29 @@ class InklingRelPos(eqx.Module):
         )
 
 
+def _switchhead_weights(
+    x: Float[Array, "B S D"], gate: Float[Array, "D GE"], experts: int, topk: int
+) -> Float[Array, "B S G E"]:
+    """SwitchHead's non-competitive expert weights: ``sigmoid(x W_gate)`` on each head's top-k logits, else 0."""
+    logits = rearrange(jnp.einsum("bsd,dg->bsg", x, gate).astype(jnp.float32), "b s (g e) -> b s g e", e=experts)
+    weights = jax.nn.sigmoid(logits)
+    if topk >= experts:
+        return weights
+    threshold = jax.lax.top_k(logits, topk)[0][..., -1:]
+    return jnp.where(logits >= threshold, weights, 0.0)
+
+
+def _switchhead_stats(site: str, weights: Float[Array, "B S G E"]) -> dict[str, jax.Array]:
+    """Mean selected weight and expert-load imbalance (busiest expert's share over the even share)."""
+    weights = jax.lax.stop_gradient(weights)
+    selected = (weights > 0).astype(jnp.float32)
+    load = jnp.mean(selected, axis=(0, 1))
+    return {
+        f"{_LAYER_KNOB_PREFIX}switch_{site}_weight_mean": jnp.sum(weights) / jnp.maximum(jnp.sum(selected), 1.0),
+        f"{_LAYER_KNOB_PREFIX}switch_{site}_load_max_ratio": jnp.max(load / jnp.mean(load, axis=-1, keepdims=True)),
+    }
+
+
 class CausalSelfAttention(eqx.Module):
     """Softmax attention: GQA (``w_q``/``w_k``/``w_v``), or MLA with a compressed KV latent
     (``w_q``/``w_dkv``/``w_uk``/``w_uv``); either with half-RoPE or the Inkling bias."""
@@ -1973,6 +2018,8 @@ class CausalSelfAttention(eqx.Module):
     v_filter_b: Float[Array, " N"] | None  # noise-filter value gate bias (cfg.mla_v_filter)
     forget_gate_w: Float[Array, "D N"] | None  # FoX forget gate direction (cfg.mla_forget_gate), zero-init
     forget_gate_b: Float[Array, " N"] | None  # FoX forget gate bias (cfg.mla_forget_gate)
+    switch_v_gate: Float[Array, "W ME"] | None  # SwitchHead value-expert gate, from the source token
+    switch_o_gate: Float[Array, "D NE"] | None  # SwitchHead output-expert gate, from the destination token
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2069,6 +2116,8 @@ class CausalSelfAttention(eqx.Module):
                 forget_gate_b=(
                     jnp.full((n,), cfg.mla_forget_gate_bias_init, jnp.float32) if cfg.mla_forget_gate else None
                 ),
+                switch_v_gate=None,
+                switch_o_gate=None,
                 cfg=cfg,
             )
         if "qkv" in cfg.proj_biases:
@@ -2081,12 +2130,17 @@ class CausalSelfAttention(eqx.Module):
             raise ValueError("mla_v_filter needs mla")
         if cfg.mla_forget_gate:
             raise ValueError("mla_forget_gate needs mla")
-        k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
+        k_q, k_k, k_v, k_o, k_rel, k_sv, k_so = random.split(key, 7)
+        switch_v = cfg.switchhead_experts if cfg.switchhead_sites in (SwitchHeadSites.V, SwitchHeadSites.VO) else 0
+        switch_o = cfg.switchhead_experts if cfg.switchhead_sites in (SwitchHeadSites.O, SwitchHeadSites.VO) else 0
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
+            w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, m * max(switch_v, 1) * h), std), P(_FSDP_AXES, "model")),
+            w_o=reshard(
+                _init_weight(k_o, (n * max(switch_o, 1) * h, d), std * cfg.init_std_mult_attn_out),
+                P("model", _FSDP_AXES),
+            ),
             attn_gate=attn_gate,
             attn_gate_up=attn_gate_up,
             sconv_k=(
@@ -2124,6 +2178,10 @@ class CausalSelfAttention(eqx.Module):
             v_filter_b=None,
             forget_gate_w=None,
             forget_gate_b=None,
+            switch_v_gate=(
+                reshard(_init_weight(k_sv, (cfg.kv_in_dim, m * switch_v), std), P(None, None)) if switch_v else None
+            ),
+            switch_o_gate=reshard(_init_weight(k_so, (d, n * switch_o), std), P(None, None)) if switch_o else None,
             cfg=cfg,
         )
 
@@ -2220,7 +2278,13 @@ class CausalSelfAttention(eqx.Module):
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
+        if self.switch_v_gate is None:
+            v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
+        else:
+            experts = self.cfg.switchhead_experts
+            weights = _switchhead_weights(kv_in, self.switch_v_gate, experts, self.cfg.switchhead_topk)
+            v_experts = rearrange(v_flat, "... (m e d) -> ... m e d", e=experts, d=head_dim)
+            v = jnp.einsum("bsmed,bsme->bsmd", v_experts, weights.astype(v_experts.dtype))
 
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
             stored_kv_heads = self.cfg.stored_kv_heads
@@ -2448,11 +2512,30 @@ class CausalSelfAttention(eqx.Module):
         gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if per_channel else gate[..., None]
         attn_out = gate * attn_out
         if head_probe_attn is not None:
+            if self.cfg.switchhead_experts:
+                raise ValueError("head_probe does not support switchhead_experts")
             stats[HEAD_PROBE_STAT] = _head_output_stats(head_probe_attn, gate, attn_out, self.w_o)
-        # Merge heads into hidden dim while keeping model-axis sharding for w_o.
+        if self.switch_v_gate is not None:
+            stats.update(
+                _switchhead_stats(
+                    "v",
+                    _switchhead_weights(
+                        x if kv_input is None else kv_input,
+                        self.switch_v_gate,
+                        self.cfg.switchhead_experts,
+                        self.cfg.switchhead_topk,
+                    ),
+                )
+            )
+        if self.switch_o_gate is not None:
+            # Each head's read is copied to its experts, weighted, and contracted with the (n e h) rows of w_o.
+            weights = _switchhead_weights(x, self.switch_o_gate, self.cfg.switchhead_experts, self.cfg.switchhead_topk)
+            stats.update(_switchhead_stats("o", weights))
+            attn_out = attn_out[:, :, :, None, :] * weights[..., None].astype(attn_out.dtype)
+        # Merge heads (and SwitchHead experts) into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
-            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
+            (*attn_out.shape[:2], math.prod(attn_out.shape[2:])),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
