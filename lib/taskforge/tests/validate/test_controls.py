@@ -59,7 +59,7 @@ def settings(factory, max_turns: int = 6) -> EngineSettings:
         max_turns=max_turns,
         command_timeout=10,
         cleanup_timeout=10,
-        convention=PlainText(id="plain"),
+        conventions=(PlainText(id="plain"),),
     )
 
 

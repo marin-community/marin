@@ -10,7 +10,7 @@ from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import TaskExecution
-from taskcompendium.submission import PlainText
+from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText, SubmissionConvention
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.llm.client import GlmRequestRejected
@@ -23,14 +23,18 @@ EXECUTION = TaskExecution()
 DEADLINES = Deadlines(agent_timeout=30, attempt_timeout=60)
 
 
-def settings(factory, capabilities=None) -> EngineSettings:
+PLAIN = PlainText(id="plain")
+JSON_VALUE = JsonValueAnswer(id="json-value")
+
+
+def settings(factory, capabilities=None, conventions: tuple[SubmissionConvention, ...] = (PLAIN,)) -> EngineSettings:
     return EngineSettings(
         factories={EnvironmentKind.SHELLSIM: factory},
         capabilities={EnvironmentKind.SHELLSIM: SHELLSIM} if capabilities is None else capabilities,
         max_turns=4,
         command_timeout=10,
         cleanup_timeout=10,
-        convention=PlainText(id="plain"),
+        conventions=conventions,
     )
 
 
@@ -163,6 +167,57 @@ async def test_the_ledger_input_hash_covers_the_deadlines(tmp_path, math_task, f
 
     for deadlines in (short, short, long):
         await run_trials(math_task, EXECUTION, plan(tmp_path, k=1, deadlines=deadlines), settings(factory), model)
+
+    first, again, other = (entry.input_hash for entry in ledger(tmp_path))
+    assert first == again != other
+
+
+async def test_each_task_runs_under_the_first_convention_that_carries_its_answer(tmp_path, json_task, fakes):
+    model = fakes.script_model([fakes.text('{"sum": 60}')])
+    conventions = (PLAIN, JSON_VALUE)
+
+    outcomes = await run_trials(
+        json_task,
+        EXECUTION,
+        plan(tmp_path, k=1),
+        settings(fakes.flaky_factory(0, RuntimeError), None, conventions),
+        model,
+    )
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+    assert "one JSON value" in model.requests[0].messages[-1]["content"]
+
+
+async def test_a_task_no_convention_carries_is_not_started(tmp_path, json_task, fakes):
+    model = fakes.script_model([fakes.text('{"sum": 60}')])
+
+    outcomes = await run_trials(
+        json_task, EXECUTION, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), model
+    )
+
+    assert all(
+        isinstance(o, Ungraded) and (o.cause, o.retryable) == (Cause.SUBMISSION_UNSUPPORTED, False) for o in outcomes
+    )
+    assert all(isinstance(o, Ungraded) and "PlainText cannot carry json" in o.detail for o in outcomes)
+    assert model.requests == []
+    assert [e.cause for e in ledger(tmp_path)] == [Cause.SUBMISSION_UNSUPPORTED] * 3
+
+
+async def test_a_machine_state_task_runs_under_any_convention(tmp_path, file_task, fakes):
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
+    factory = fakes.flaky_factory(0, RuntimeError)
+
+    outcomes = await run_trials(file_task, EXECUTION, plan(tmp_path, k=1), settings(factory, None, (JSON_VALUE,)), model)
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+
+
+async def test_the_ledger_input_hash_covers_the_convention(tmp_path, math_task, fakes):
+    model = fakes.script_model([fakes.text("395")])
+    factory = fakes.flaky_factory(0, RuntimeError)
+
+    for conventions in ((PLAIN,), (PLAIN,), (JsonAnswer(id="json"),)):
+        await run_trials(math_task, EXECUTION, plan(tmp_path, k=1), settings(factory, None, conventions), model)
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other

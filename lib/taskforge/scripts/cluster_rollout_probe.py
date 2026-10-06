@@ -288,7 +288,7 @@ async def run_phase(
         max_turns=MAX_TURNS,
         command_timeout=COMMAND_TIMEOUT,
         cleanup_timeout=CLEANUP_TIMEOUT,
-        convention=PlainText(id="plain"),
+        conventions=(PlainText(id="plain"),),
     )
     plan = TrialPlan(
         item_id=task.id,

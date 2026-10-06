@@ -53,7 +53,7 @@ def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings
         max_turns=12,
         command_timeout=60,
         cleanup_timeout=60,
-        convention=PlainText(id="plain"),
+        conventions=(PlainText(id="plain"),),
     )
 
 
