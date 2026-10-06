@@ -9,8 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
+from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
@@ -33,6 +36,24 @@ class FailingRpc:
     def exec_in_container(self, request, timeout_ms):
         del request, timeout_ms
         return SimpleNamespace(exit_code=0, stdout="", stderr="", error="Task /user/shellbox/0 is not running")
+
+
+class RefusingRpc(LocalRpc):
+    """Fails the first ``refusals`` execs with ``code`` before running anything, then runs them locally."""
+
+    def __init__(self, code: Code, refusals: int):
+        self.code = code
+        self.refusals = refusals
+        self.scripts: list[str] = []
+
+    def exec_in_container(self, request, timeout_ms):
+        self.scripts.append(request.command[-1])
+        if len(self.scripts) <= self.refusals:
+            raise ConnectError(self.code, "refused")
+        return super().exec_in_container(request, timeout_ms)
+
+    def sent(self, marker: str) -> int:
+        return sum(marker in script for script in self.scripts)
 
 
 class LocalTask:
@@ -188,3 +209,23 @@ def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Pat
     with pytest.raises(RuntimeError, match="Iris exec failed") as raised:
         asyncio.run(machine.run(Command(("true",))))
     assert not isinstance(raised.value, MachineTerminated)
+
+
+def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
+    rpc = RefusingRpc(Code.RESOURCE_EXHAUSTED, refusals=2)
+    machine, _ = local_machine(tmp_path, rpc)
+
+    result = asyncio.run(machine.run(Command(("echo", "ran"))))
+
+    assert result.stdout == b"ran\n"
+    assert rpc.sent("echo ran") == 3
+
+
+def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path: Path) -> None:
+    rpc = RefusingRpc(Code.UNAVAILABLE, refusals=1)
+    machine, _ = local_machine(tmp_path, rpc)
+
+    with pytest.raises(ConnectError):
+        asyncio.run(machine.run(Command(("echo", "once"))))
+    assert rpc.sent("echo once") == 1

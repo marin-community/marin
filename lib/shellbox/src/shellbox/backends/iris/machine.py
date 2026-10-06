@@ -14,6 +14,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
@@ -22,7 +23,8 @@ from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.timing import Duration
+from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSED
+from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -44,6 +46,7 @@ DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
+EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
 # Credentials Iris places in every job: the submitter's HF_TOKEN and WANDB_API_KEY, a parent job's
 # environment in each child job, and on CoreWeave the cluster's object-store keys. A job's own
 # env_vars take precedence over all of them, so the factory sets these names to empty strings.
@@ -57,6 +60,14 @@ DEFAULT_BLANKED_ENV = (
     "CW_KEY_SECRET",
     "GOOGLE_APPLICATION_CREDENTIALS",
 )
+
+
+def _exec_was_shed(error: Exception) -> bool:
+    """The controller refused the exec before running it because its exec pool was full.
+
+    Only this refusal is retried: after any other error the command may already have run.
+    """
+    return isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED
 
 
 class IrisMachine:
@@ -85,12 +96,18 @@ class IrisMachine:
         if self._closed:
             raise RuntimeError("Machine is closed")
         seconds = math.ceil(timeout) if timeout is not None else -1
+        request = controller_pb2.Controller.ExecInContainerRequest(
+            task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
+        )
+        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
         try:
-            response = self.rpc.exec_in_container(
-                controller_pb2.Controller.ExecInContainerRequest(
-                    task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
-                ),
-                timeout_ms=(seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000,
+            response = retry_with_backoff(
+                lambda: self.rpc.exec_in_container(request, timeout_ms=timeout_ms),
+                retryable=_exec_was_shed,
+                max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
+                max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
+                backoff=EXEC_SHED_BACKOFF,
+                operation=f"Iris exec in {self.task.task_id}",
             )
         except ConnectError as error:
             self._raise_if_terminated(error)
