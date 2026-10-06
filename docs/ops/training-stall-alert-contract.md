@@ -25,9 +25,31 @@ Initialization and missing-progress grace start at the later of the current cont
 
 The required Levanter metric records are `progress_time_seconds` and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). Each row carries `step` as a typed column; there is no separate step record. `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run. The hero launchers already pass their trainer ID into telemetry as `run_id`; W&B retains its separate `hero` tag.
 
-Verify enrollment after launch with a bounded Finelog query:
+Verify enrollment after launch with the same phase and progress lookbacks the alert uses:
 
 ```sql
+WITH latest AS (
+  SELECT
+    "cluster",
+    run_id,
+    job_id,
+    execution_uid,
+    step,
+    name,
+    value,
+    timestamp_ms,
+    ROW_NUMBER() OVER (PARTITION BY name ORDER BY timestamp_ms DESC, seq DESC) AS rn
+  FROM "levanter.metrics"
+  WHERE run_id = '<hero-run-id>'
+    AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+    AND (job_id = '<root-job>' OR job_id LIKE '<root-job>/%')
+    AND process_index = 0
+    AND (
+      (name = 'phase' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '24 hours') * 1000 AS BIGINT))
+      OR (name = 'progress_time_seconds' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT))
+    )
+    AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT)
+)
 SELECT
   "cluster",
   run_id,
@@ -37,15 +59,12 @@ SELECT
   name,
   value,
   to_timestamp_millis(timestamp_ms) AS observed_at
-FROM "levanter.metrics"
-WHERE run_id = '<hero-run-id>'
-  AND name IN ('phase', 'progress_time_seconds')
-  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
-ORDER BY timestamp_ms DESC, seq DESC
-LIMIT 20;
+FROM latest
+WHERE rn = 1
+ORDER BY timestamp_ms DESC;
 ```
 
-For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove the retry suffix. An empty result identifies missing Levanter telemetry. The root becomes `initializing_stale` after 45 minutes.
+Use the full coordinator path (for example, `/marin/hero-20260819-coord`) for `<root-job>`. Remove `-coord` and any retry suffix to get `<hero-run-id>`. Compare the two rows' `execution_uid` values: progress from an older attempt does not keep the current attempt healthy. With no phase row in the last 24 hours, a running root becomes `initializing_stale` after 45 minutes. A stale training phase instead makes this rule return `telemetry_gone` with value zero; `TrainingTelemetryGone` handles the page.
 
 Levanter republishes phase every minute. A current phase row binds progress to one execution. [`TrainingTelemetryGone`](hero-run-health-alerts.md) covers loss of the telemetry path for an enrolled run, and the Finelog health alerts cover the durable path itself. Launcher-specific process watchdogs provide additional coverage where configured.
 
