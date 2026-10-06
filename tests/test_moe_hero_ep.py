@@ -4,6 +4,7 @@
 import dataclasses
 import math
 import os
+import struct
 import subprocess
 import sys
 import textwrap
@@ -42,7 +43,7 @@ from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
-from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, pgle_profile, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
@@ -407,6 +408,27 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
     assert os.environ["JAX_ENABLE_PGLE"] == "true"
+
+
+def test_pgle_profile_writes_xla_text_profile_into_a_new_directory(tmp_path, monkeypatch):
+    # The converter's output, encoded by hand in XLA's ProfiledInstructionsProto wire format:
+    # costs (field 1) holds an InstructionCost with name (field 1) and the double cost_us (field 2).
+    name = b"all-to-all-start.1"
+    cost = bytes([1 << 3 | 2, len(name)]) + name + bytes([2 << 3 | 1]) + struct.pack("<d", 2500.25)
+    serialized = bytes([1 << 3 | 2, len(cost)]) + cost
+
+    class _Bucket:
+        def get(self, remote, local):
+            Path(local).write_bytes(b"xplane")
+
+    monkeypatch.setattr(pgle_profile, "filesystem_for", lambda uri: (_Bucket(), uri))
+    monkeypatch.setattr(pgle_profile.profiler, "get_profiled_instructions_proto", lambda run_dir: serialized)
+    # The README writes into pgle/, which does not exist in a fresh checkout.
+    out = tmp_path / "pgle" / "run.pbtxt"
+
+    pgle_profile.main("s3://bucket/run/host.xplane.pb", str(out))
+
+    assert out.read_text() == 'costs {\n  name: "all-to-all-start.1"\n  cost_us: 2500.25\n}\n'
 
 
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
