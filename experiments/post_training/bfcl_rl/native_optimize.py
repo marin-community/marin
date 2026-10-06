@@ -23,6 +23,8 @@ def native_optimizer_step(
     policy_export_version: str,
     policy_checkpoint_step: int,
     num_train_steps: int,
+    learning_rate: float,
+    hf_save_steps: int,
 ) -> ArtifactStep:
     name = user_owned_name(f"data/bfcl-rl-native-preferences-seed-{seed}")
     cache = ArtifactStep.adopt(
@@ -35,6 +37,8 @@ def native_optimizer_step(
         num_train_steps=num_train_steps,
         batch_size=16,
         beta=0.1,
+        learning_rate=learning_rate,
+        hf_save_steps=hf_save_steps,
         num_nodes=16,
         expert_axis=8,
         context_axis=16,
@@ -51,6 +55,8 @@ def native_optimizer_step(
 @click.option("--policy-export-version", required=True)
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
 @click.option("--num-train-steps", type=click.IntRange(min=1), required=True)
+@click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), required=True)
+@click.option("--hf-save-steps", type=click.IntRange(min=1), required=True)
 @rl_build_options
 def main(
     preference_version: str,
@@ -59,9 +65,18 @@ def main(
     policy_export_version: str,
     policy_checkpoint_step: int,
     num_train_steps: int,
+    learning_rate: float,
+    hf_save_steps: int,
 ) -> ArtifactStep:
     return native_optimizer_step(
-        preference_version, seed, recovery_version, policy_export_version, policy_checkpoint_step, num_train_steps
+        preference_version,
+        seed,
+        recovery_version,
+        policy_export_version,
+        policy_checkpoint_step,
+        num_train_steps,
+        learning_rate,
+        hf_save_steps,
     )
 
 

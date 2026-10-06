@@ -63,7 +63,7 @@ def test_recovery_train_only_cache_loads_without_complement_validation(tmp_path)
             cache,
             initial_policy=policy,
             selection_name="full",
-            optimization=RecoveryOptimization(1, 16, 0.1, 8, 8, 4, 0.75),
+            optimization=RecoveryOptimization(1, 16, 0.1, 4e-6, 1, 8, 8, 4, 0.75),
         )
     config = step.build_config(StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=step.deps))
     assert config.train_config.initialize_from_hf == f"{policy_root}/hf/step-57"
@@ -97,7 +97,7 @@ def test_recovery_mesh_fits_eight_gpu_nodes_and_preserves_batch_parallelism():
             cache,
             initial_policy=initial_student_model(),
             selection_name="full",
-            optimization=RecoveryOptimization(1, 16, 0.1, 8, 8, 4, 0.75),
+            optimization=RecoveryOptimization(1, 16, 0.1, 4e-6, 1, 8, 8, 4, 0.75),
         )
     config = step.build_config(StepContext.for_fingerprint(deps=step.deps))
     mesh = config.train_config.trainer.mesh
@@ -116,5 +116,5 @@ def test_recovery_mesh_fits_eight_gpu_nodes_and_preserves_batch_parallelism():
                 cache,
                 initial_policy=initial_student_model(),
                 selection_name="full",
-                optimization=RecoveryOptimization(1, 16, 0.1, 8, 16, 4, 0.75),
+                optimization=RecoveryOptimization(1, 16, 0.1, 4e-6, 1, 8, 16, 4, 0.75),
             )

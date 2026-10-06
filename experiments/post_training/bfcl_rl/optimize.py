@@ -42,6 +42,8 @@ class RecoveryOptimization:
     num_train_steps: int
     batch_size: int
     beta: float
+    learning_rate: float
+    hf_save_steps: int
     num_nodes: int
     expert_axis: int
     context_axis: int
@@ -162,7 +164,7 @@ def recovery_optimizer_step(
             ),
             train_seq_len=RECOVERY_CONTEXT,
             optimizer=AdamConfig(
-                learning_rate=4e-6,
+                learning_rate=optimization.learning_rate,
                 weight_decay=0.0,
                 max_grad_norm=0.5,
                 beta1=0.9,
@@ -175,7 +177,7 @@ def recovery_optimizer_step(
             beta=optimization.beta,
             validation_split_fraction=None,
             run_initial_eval=False,
-            hf_save_steps=optimization.num_train_steps,
+            hf_save_steps=optimization.hf_save_steps,
             hf_save_dtype="bfloat16",
         )
         return TrainDpoOnPodConfig(
@@ -208,6 +210,8 @@ def recovery_optimizer_step(
 @click.option("--num-train-steps", type=click.IntRange(min=1), required=True)
 @click.option("--batch-size", type=click.IntRange(min=1), required=True)
 @click.option("--beta", type=click.FloatRange(min=0, min_open=True), required=True)
+@click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), required=True)
+@click.option("--hf-save-steps", type=click.IntRange(min=1), required=True)
 @click.option("--num-nodes", type=click.IntRange(min=1, max=16), required=True)
 @click.option("--expert-axis", type=click.IntRange(min=1), required=True)
 @click.option("--context-axis", type=click.IntRange(min=1), required=True)
@@ -225,6 +229,8 @@ def main(
     num_train_steps: int,
     batch_size: int,
     beta: float,
+    learning_rate: float,
+    hf_save_steps: int,
     num_nodes: int,
     expert_axis: int,
     context_axis: int,
@@ -269,7 +275,15 @@ def main(
         student = collection_step("student", task, images)
         cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
     optimization = RecoveryOptimization(
-        num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis, jax_memory_fraction
+        num_train_steps=num_train_steps,
+        batch_size=batch_size,
+        beta=beta,
+        learning_rate=learning_rate,
+        hf_save_steps=hf_save_steps,
+        num_nodes=num_nodes,
+        expert_axis=expert_axis,
+        context_axis=context_axis,
+        jax_memory_fraction=jax_memory_fraction,
     )
     optimizer = recovery_optimizer_step(
         cache,
