@@ -33,7 +33,7 @@ from taskforge.spec.controls import Control
 from taskforge.validate.controls import ControlOutcome, ControlPlan, ControlVerdict, ServerTokenizer, replay
 from taskforge.validate.evidence import Complete, Evidence, Incomplete
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
-from taskforge.validate.trials import EngineSettings, TrialPlan, run_trials
+from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 
 pytestmark = pytest.mark.live_glm
 
@@ -43,6 +43,7 @@ K = 3
 LIVE_TIMEOUT = 1800
 RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
 EXECUTION = TaskExecution()
+DEADLINES = Deadlines(agent_timeout=900, attempt_timeout=1200)
 
 
 def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings:
@@ -62,6 +63,7 @@ def plan(directory: Path, kind: TrialKind, item_id: str, k: int = K, max_retries
         round=0,
         kind=kind,
         k=k,
+        deadlines=DEADLINES,
         max_retries=max_retries,
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
@@ -73,6 +75,7 @@ def control_plan(directory: Path, item_id: str) -> ControlPlan:
     return ControlPlan(
         item_id=item_id,
         round=0,
+        deadlines=DEADLINES,
         max_retries=2,
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,

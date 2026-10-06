@@ -21,7 +21,7 @@ from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.spec.draft import shell_command
 from taskforge.validate.controls import ControlPlan, ControlVerdict, ServerTokenizer, replay
 from taskforge.validate.outcome import Cause, Graded, Ungraded
-from taskforge.validate.trials import EngineSettings
+from taskforge.validate.trials import Deadlines, EngineSettings
 
 ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
 
@@ -67,6 +67,7 @@ def plan(tmp_path) -> ControlPlan:
     return ControlPlan(
         item_id="item",
         round=0,
+        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
         max_retries=1,
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
         evidence_dir=tmp_path,
