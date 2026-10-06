@@ -34,6 +34,7 @@ DOCKER_ACCESS = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
 RESTRICTED = job_pb2.CONTAINER_PROFILE_RESTRICTED
 DEFAULT = job_pb2.CONTAINER_PROFILE_DEFAULT
 GVISOR = job_pb2.CONTAINER_PROFILE_GVISOR
+SANDBOX = job_pb2.CONTAINER_PROFILE_SANDBOX
 
 
 @pytest.fixture
@@ -91,7 +92,7 @@ def test_admin_can_use_elevated_profile(service, profile):
     assert resp.job_id == "/admin/job"
 
 
-@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, GVISOR, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
+@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, GVISOR, SANDBOX, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
 def test_non_admin_can_use_unprivileged_profile(service, profile):
     """RESTRICTED/DEFAULT/GVISOR/UNSPECIFIED need no authorization.
 
@@ -102,14 +103,31 @@ def test_non_admin_can_use_unprivileged_profile(service, profile):
     assert resp.job_id == "/alice/job"
 
 
-def test_gvisor_rejected_on_accelerator_task(service):
+@pytest.mark.parametrize("profile", [GVISOR, SANDBOX])
+def test_gvisor_rejected_on_accelerator_task(service, profile):
     """gVisor cannot pass a GPU/TPU through, so an accelerator task is rejected."""
-    req = _launch("/alice/job", GVISOR)
+    req = _launch("/alice/job", profile)
     req.resources.device.gpu.count = 1
     with pytest.raises(ConnectError) as exc:
         _as("user", "alice", service.launch_job, req, None)
     assert exc.value.code == Code.INVALID_ARGUMENT
     assert "gvisor" in str(exc.value.message).lower()
+
+
+def test_sandbox_rejects_workspace_bundle(service):
+    req = _launch("/alice/job", SANDBOX)
+    req.bundle_blob = b"workspace"
+    with pytest.raises(ConnectError) as exc:
+        _as("user", "alice", service.launch_job, req, None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "bundle" in str(exc.value.message)
+
+
+def test_unknown_profile_rejected(service):
+    """A profile this controller does not know must not fall back to DEFAULT."""
+    with pytest.raises(ConnectError) as exc:
+        _as("user", "alice", service.launch_job, _launch("/alice/job", 99), None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
 
 
 def test_docker_access_rejected_on_cluster_backend(state, tmp_path, log_client):

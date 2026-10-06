@@ -669,6 +669,12 @@ enum ContainerProfile {
   // so it is NOT elevated — safe to grant without admin. Requires runsc installed
   // on the worker/node; incompatible with TPU/GPU passthrough.
   CONTAINER_PROFILE_GVISOR = 5;
+  // GVISOR for model-controlled workloads: the task receives only the job's own
+  // env_vars and Iris task identity. No cluster task_env or injected secrets, no
+  // controller address, no shared node cache mounts, no Kubernetes service account
+  // token, and no host network on Kubernetes. Exec and logs still work. The job
+  // must carry no workspace bundle. Not elevated.
+  CONTAINER_PROFILE_SANDBOX = 6;
 }
 
 // ============================================================================

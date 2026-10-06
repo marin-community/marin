@@ -1039,6 +1039,36 @@ def test_gvisor_profile_sets_runtime_class_and_benign_context():
     assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
 
 
+def test_sandbox_pod_carries_nothing_from_the_cluster():
+    """SANDBOX keeps the job's env and the log sidecar, and drops every cluster-held input."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.environment.env_vars["TASK_VAR"] = "1"
+    config = pod_config(
+        controller_address="http://ctrl:8080",
+        task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        env_secret_name="iris-task-env",
+        service_account="iris-task",
+        host_network=True,
+    )
+    spec = _build_pod_manifest(req, config)["spec"]
+    task = spec["containers"][0]
+    env = {e["name"]: e.get("value") for e in task["env"]}
+
+    assert spec["runtimeClassName"] == "gvisor"
+    assert env["TASK_VAR"] == "1"
+    assert "MARIN_PREFIX" not in env
+    assert "IRIS_CONTROLLER_ADDRESS" not in env
+    assert "envFrom" not in task
+    assert "serviceAccountName" not in spec
+    assert spec["automountServiceAccountToken"] is False
+    assert "hostNetwork" not in spec
+    assert not [v for v in spec["volumes"] if "hostPath" in v and v["name"] in {m.name for m in STANDARD_MOUNTS}]
+    (logship,) = [c for c in spec["initContainers"] if c["name"] == "log-shipper"]
+    logship_env = {e["name"]: e.get("value") for e in logship["env"]}
+    assert logship_env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
+
+
 # ---------------------------------------------------------------------------
 # Service account
 # ---------------------------------------------------------------------------

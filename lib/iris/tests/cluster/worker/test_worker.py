@@ -814,6 +814,32 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
 
 
+def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_store, mock_runtime, tmp_path):
+    """A SANDBOX task sees neither worker task_env nor the controller, and mounts no node cache."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        controller_address="http://controller:10000",
+        task_env={"MARIN_PREFIX": "gs://bucket/prefix"},
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.environment.env_vars["TASK_VAR"] = "1"
+
+    task = w.get_task(w.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.env["TASK_VAR"] == "1"
+    assert "MARIN_PREFIX" not in container_config.env
+    assert "IRIS_CONTROLLER_ADDRESS" not in container_config.env
+    assert not [m for m in container_config.mounts if m.kind is MountKind.CACHE]
+
+
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
     """Per-task task_image overrides the worker's default_task_image."""
     config = WorkerConfig(

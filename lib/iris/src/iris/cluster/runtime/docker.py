@@ -57,7 +57,7 @@ from iris.cluster.runtime.types import (
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
-from iris.rpc.proto_display import resolve_container_profile
+from iris.rpc.proto_display import GVISOR_CONTAINER_PROFILES, resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +264,7 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
     # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
     # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
-    if resolved == job_pb2.CONTAINER_PROFILE_GVISOR and not is_tpu_run:
+    if resolved in GVISOR_CONTAINER_PROFILES and not is_tpu_run:
         return ["--runtime", "runsc"]
 
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run

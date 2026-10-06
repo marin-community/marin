@@ -116,7 +116,13 @@ CONTAINER_PROFILE_VALUES: list[int] = [
     job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
     job_pb2.CONTAINER_PROFILE_PRIVILEGED,
     job_pb2.CONTAINER_PROFILE_GVISOR,
+    job_pb2.CONTAINER_PROFILE_SANDBOX,
 ]
+
+# Profiles whose task container runs under the gVisor runtime.
+GVISOR_CONTAINER_PROFILES: frozenset[int] = frozenset(
+    {job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX}
+)
 
 CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]
 

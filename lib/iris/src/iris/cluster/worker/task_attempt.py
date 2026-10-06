@@ -31,6 +31,7 @@ from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import (
     IRIS_ATTEMPT_UID_ENV,
     IRIS_WORKER_REGION_ENV,
+    SANDBOX_MOUNTS,
     STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
     UV_LINK_MODE_ENV,
@@ -734,14 +735,18 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
+        # A sandbox gets neither the controller address nor the cluster task_env
+        # (object-store keys, operator-injected secrets): only the job's own env.
+        sandboxed = self.request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
         iris_env = build_iris_env(
             self,
             self._worker_id,
-            self._controller_address,
+            None if sandboxed else self._controller_address,
         )
         env = dict(iris_env)
 
-        env.update(self._task_env)
+        if not sandboxed:
+            env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
@@ -775,7 +780,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=list(STANDARD_MOUNTS),
+            mounts=list(SANDBOX_MOUNTS if sandboxed else STANDARD_MOUNTS),
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),

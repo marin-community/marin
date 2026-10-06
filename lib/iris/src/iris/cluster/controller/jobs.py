@@ -53,6 +53,8 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     ADMIN_PRIORITY_BAND_VALUES,
+    CONTAINER_PROFILE_VALUES,
+    GVISOR_CONTAINER_PROFILES,
     PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
@@ -578,6 +580,12 @@ def _validate_launch_profile(
     launch: LaunchIdentity,
 ) -> None:
     """Authorize elevated profiles and reject unsupported runtime combinations."""
+    # Backends treat an unrecognized profile as DEFAULT, which would silently drop
+    # the isolation a newer client asked for.
+    if resolve_container_profile(request.container_profile) not in CONTAINER_PROFILE_VALUES:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT, f"Unknown container profile {request.container_profile}; upgrade the controller"
+        )
     if _profile_is_elevated(request.container_profile):
         if dependencies.auth.provider and not launch.received_handoff:
             authorize(AuthzAction.SET_CONTAINER_PROFILE)
@@ -596,14 +604,20 @@ def _validate_launch_profile(
             "host docker socket); this cluster's backend does not support it. Use a privileged "
             "profile with an in-pod runtime, or submit to a docker-worker cluster.",
         )
-    if resolve_container_profile(
-        request.container_profile
-    ) == job_pb2.CONTAINER_PROFILE_GVISOR and request.resources.device.WhichOneof("device") in ("gpu", "tpu"):
+    if resolve_container_profile(request.container_profile) in GVISOR_CONTAINER_PROFILES and (
+        request.resources.device.WhichOneof("device") in ("gpu", "tpu")
+    ):
         raise ConnectError(
             Code.INVALID_ARGUMENT,
-            "Container profile gvisor is CPU-only: the runsc runtime cannot pass a GPU or TPU "
-            "through to the sandboxed guest. Use the default or privileged profile for "
+            "Container profiles gvisor and sandbox are CPU-only: the runsc runtime cannot pass a GPU "
+            "or TPU through to the sandboxed guest. Use the default or privileged profile for "
             "accelerator tasks.",
+        )
+    if request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and (request.bundle_blob or request.bundle_id):
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "Container profile sandbox runs a self-contained image and accepts no workspace bundle; "
+            "submit without a workspace.",
         )
 
 
