@@ -90,10 +90,10 @@ def math_controls() -> tuple[Control, ...]:
         control("correct", ControlKind.POSITIVE, ControlCategory.KNOWN_CORRECT, Transcript((reply("395"),)), CORRECT),
         control("wrong", ControlKind.NEGATIVE, ControlCategory.PLAUSIBLE_WRONG, Transcript((reply("391"),)), WRONG),
         control(
-            "last-operand",
+            "two-answers",
             ControlKind.NEGATIVE,
             ControlCategory.TASK_SPECIFIC_SHORTCUT,
-            Transcript((reply("4"),)),
+            Transcript((reply("395 or 391"),)),
             WRONG,
         ),
         control(
