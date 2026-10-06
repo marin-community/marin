@@ -74,17 +74,20 @@ from taskforge.llm.client import GlmClient, Pool, endpoint_in_task
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.queue.job import (
+    GLM_TOKEN_KEY,
+    IRIS_CONTROLLER_URL_ENV,
+    IRIS_OUTPUT_DIR_ENV,
+    SUBMITTER_KEYS,
+    scrub_child_environment,
+    secret_names,
+)
 from taskforge.sandbox.factories import IRIS_DOCKER, SHELLSIM, MachineHost, machine_factories
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
 from taskforge.validate.evidence import Complete, Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 
-GLM_TOKEN_ENV = "GLM_API_TOKEN"
-IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
-# Iris copies these from the submitting process into every child job (iris.cluster.types.EnvironmentSpec).
-SUBMITTER_KEYS = ("HF_TOKEN", "WANDB_API_KEY")
-IRIS_JOB_ENV = "IRIS_JOB_ENV"
 IMAGE = "docker.io/library/python@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d"
 IMAGE_TAG = "python:3.12-slim (OCI index digest, resolved 2026-10-05)"
 MATH_ANSWER = "395"
@@ -93,12 +96,8 @@ NUMBERS_SUM = 60
 CHECK_SCRIPT = f'v=$(tr -d " \\n" < /workspace/sum.txt)\nif [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
 # Prints names only; `env | cut` would leak fragments of multi-line values into evidence.
 ENV_NAMES_SCRIPT = (
-    f"awk 'BEGIN{{for(k in ENVIRON) print k}}' | sort | tr '\\n' ' '; echo; printenv {GLM_TOKEN_ENV} | wc -c"
+    f"awk 'BEGIN{{for(k in ENVIRON) print k}}' | sort | tr '\\n' ' '; echo; printenv {GLM_TOKEN_KEY} | wc -c"
 )
-# A sandbox environment name is treated as a credential when one of its ``_``-separated words is in
-# SECRET_WORDS or it ends with one of SECRET_SUFFIXES (so GPG_KEY and TOKENIZERS_* are not).
-SECRET_WORDS = frozenset({"SECRET", "TOKEN", "PASSWORD"})
-SECRET_SUFFIXES = ("KEY_ID", "API_KEY", "ACCESS_KEY")
 POLICY = LLMPolicy(max_continuations=0)
 MAX_TURNS = 12
 COMMAND_TIMEOUT = 120
@@ -138,17 +137,6 @@ class TimedFactory:
             raise
         self.creates.append({"ok": True, "seconds": time.monotonic() - started})
         return machine
-
-
-def scrub_child_environment() -> str:
-    """Return the GLM token and remove it, and the forwarded submitter keys, from what children inherit."""
-    token = os.environ.pop(GLM_TOKEN_ENV)
-    job_env = json.loads(os.environ.get(IRIS_JOB_ENV) or "{}")
-    for name in (GLM_TOKEN_ENV, *SUBMITTER_KEYS):
-        job_env.pop(name, None)
-        os.environ.pop(name, None)
-    os.environ[IRIS_JOB_ENV] = json.dumps(job_env)
-    return token
 
 
 def apply_readiness_fix() -> None:
@@ -341,10 +329,6 @@ async def sandbox_environment(factory: MachineFactory) -> dict[str, Any]:
     }
 
 
-def secret_names(names: list[str]) -> list[str]:
-    return [name for name in names if SECRET_WORDS & set(name.split("_")) or name.endswith(SECRET_SUFFIXES)]
-
-
 def upload(results: Path, prefix: str) -> str:
     """Copy ``results`` under ``prefix`` when this task already holds credentials for that store."""
     if prefix.startswith("s3://") and not os.environ.get("AWS_ACCESS_KEY_ID"):
@@ -431,13 +415,13 @@ def main() -> None:
     controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
     if not controller_url:
         raise SystemExit(f"{IRIS_CONTROLLER_URL_ENV} is unset; the probe runs only inside an Iris task")
-    token = scrub_child_environment()
+    token = scrub_child_environment((GLM_TOKEN_KEY, *SUBMITTER_KEYS))[GLM_TOKEN_KEY]
     run = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results = args.results_dir
     if results is None:
-        output_dir = os.environ.get("IRIS_OUTPUT_DIR")
+        output_dir = os.environ.get(IRIS_OUTPUT_DIR_ENV)
         if output_dir is None:
-            raise SystemExit("--results-dir is required outside an Iris task with IRIS_OUTPUT_DIR")
+            raise SystemExit(f"--results-dir is required outside an Iris task with {IRIS_OUTPUT_DIR_ENV}")
         results = Path(output_dir) / "cluster_rollout_probe"
     results.mkdir(parents=True, exist_ok=True)
     marin_prefix = os.environ.get("MARIN_PREFIX")
