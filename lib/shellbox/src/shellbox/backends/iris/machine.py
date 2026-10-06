@@ -47,19 +47,12 @@ DEFAULT_SCHEDULING_TIMEOUT = 600
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
-# Credentials Iris places in every job: the submitter's HF_TOKEN and WANDB_API_KEY, a parent job's
-# environment in each child job, and on CoreWeave the cluster's object-store keys. A job's own
-# env_vars take precedence over all of them, so the factory sets these names to empty strings.
-DEFAULT_BLANKED_ENV = (
-    "HF_TOKEN",
-    "WANDB_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "CW_KEY_ID",
-    "CW_KEY_SECRET",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-)
+
+# ALLOW reaches public internet addresses only; neither mode reaches the cluster.
+EGRESS_POLICIES = {
+    NetworkPolicy.ALLOW: job_pb2.EGRESS_POLICY_INTERNET,
+    NetworkPolicy.DENY: job_pb2.EGRESS_POLICY_NONE,
+}
 
 
 def _exec_was_shed(error: Exception) -> bool:
@@ -244,47 +237,30 @@ class IrisMachine:
 
 
 class IrisMachineFactory:
-    """Submit a CPU-only gVisor job from a registry image.
-
-    Iris cannot set a job's network, so ``cluster_network`` is the caller's assertion of the network
-    the target cluster's gVisor profile gives every sandbox. ``create`` refuses any spec that asks
-    for a different policy; the factory does not check the assertion.
-
-    The sandbox job sets each name in ``DEFAULT_BLANKED_ENV`` and ``extra_blanked_env`` to an empty
-    string, which hides the credentials Iris would otherwise copy into it.
-    """
+    """Submit a CPU-only gVisor job from a registry image."""
 
     def __init__(
         self,
         *,
-        cluster_network: NetworkPolicy,
         cluster: str | None = None,
         controller_url: str | None = None,
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
         job_ttl: int = DEFAULT_JOB_TTL,
         disk_mb: int = DEFAULT_DISK_MB,
-        extra_blanked_env: tuple[str, ...] = (),
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
-        self.cluster_network = cluster_network
         self.cluster = cluster
         self.controller_url = controller_url
         self.scheduling_timeout = scheduling_timeout
         self.job_ttl = job_ttl
         self.disk_mb = disk_mb
-        self.blanked_env = dict.fromkeys((*DEFAULT_BLANKED_ENV, *extra_blanked_env), "")
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
         if spec.gpus:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
-        if spec.network is not self.cluster_network:
-            raise UnsupportedMachineSpec(
-                f"Iris cannot set a job's network; this factory's cluster provides {self.cluster_network}, "
-                f"not {spec.network}"
-            )
         return await asyncio.to_thread(self._create_sync, spec)
 
     def _create_sync(self, spec: MachineSpec) -> IrisMachine:
@@ -304,14 +280,15 @@ class IrisMachineFactory:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("sleep", "infinity"),
                 name=f"shellbox-{uuid.uuid4().hex}",
-                environment=EnvironmentSpec(setup_scripts=[], env_vars=self.blanked_env),
+                environment=EnvironmentSpec(setup_scripts=[]),
                 resources=ResourceSpec(
                     cpu=spec.cpus or 1,
                     memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
                     disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
                 task_image=spec.source.reference,
-                container_profile=job_pb2.CONTAINER_PROFILE_GVISOR,
+                container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
+                egress_policy=EGRESS_POLICIES[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
                 timeout=Duration.from_seconds(self.job_ttl),
                 max_retries_failure=0,

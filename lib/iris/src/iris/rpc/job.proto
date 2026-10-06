@@ -663,12 +663,36 @@ enum ContainerProfile {
   CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
   CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
-  // Runs the whole container under the gVisor runtime (docker --runtime=runsc /
-  // k8s runtimeClassName=gvisor). In-container root gets the docker default cap
-  // set (setuid/apt work) while the intercepted guest kernel isolates the host,
-  // so it is NOT elevated — safe to grant without admin. Requires runsc installed
-  // on the worker/node; incompatible with TPU/GPU passthrough.
-  CONTAINER_PROFILE_GVISOR = 5;
+  // The former whole-container gVisor profile, replaced by SANDBOX.
+  reserved 5;
+  reserved CONTAINER_PROFILE_GVISOR;
+  // For model-controlled workloads. Runs the whole container under the gVisor
+  // runtime (docker --runtime=runsc / k8s runtimeClassName=gvisor), so
+  // in-container root gets the docker default cap set (setuid/apt work) while
+  // the intercepted guest kernel isolates the host. The task receives only the
+  // job's own env_vars and Iris task identity: no cluster task_env or injected
+  // secrets, no controller address, no shared node cache mounts, and no
+  // Kubernetes service account token. Its egress policy cannot be CLUSTER. The
+  // job must carry no workspace bundle. CPU-only (runsc cannot pass a GPU/TPU
+  // through). Not elevated.
+  CONTAINER_PROFILE_SANDBOX = 6;
+}
+
+// What a task's network can reach. INTERNET and NONE both deny the controller,
+// workers, other tasks and the cloud metadata server, and a task under either
+// runs without the Kubernetes log-shipping and output-upload sidecars.
+enum EgressPolicy {
+  // Resolves to INTERNET for a SANDBOX job and CLUSTER for every other profile.
+  EGRESS_POLICY_UNSPECIFIED = 0;
+  // The cluster network: the node's host network where configured, the
+  // controller, workers and other tasks. Not allowed for SANDBOX.
+  EGRESS_POLICY_CLUSTER = 1;
+  // Public internet addresses only: private, carrier-grade NAT and link-local
+  // ranges are blocked. On Docker workers it needs the host egress filter that
+  // worker bootstrap installs.
+  EGRESS_POLICY_INTERNET = 2;
+  // No network beyond DNS on Kubernetes; loopback only on Docker workers.
+  EGRESS_POLICY_NONE = 3;
 }
 
 // ============================================================================
@@ -719,4 +743,7 @@ message RunTaskRequest {
   // DEFAULT. Never set directly by a client — clients request a profile via
   // LaunchJobRequest.container_profile, which the controller authorizes.
   ContainerProfile container_profile = 15;
+
+  // The task's egress policy, resolved by the controller (never UNSPECIFIED).
+  EgressPolicy egress_policy = 16;
 }

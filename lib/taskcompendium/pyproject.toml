@@ -16,20 +16,9 @@ pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore", "numpy>
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
-[tool.uv.workspace]
-
-[tool.uv]
-required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-verifyit = { path = "../verifyit", editable = true }
 marin-shellbox = { path = "../shellbox", editable = true }
-marin-finestore = { path = "../finestore", editable = true }
-marin-zephyr = { path = "../zephyr", editable = true }
-marin-fray = { path = "../fray", editable = true }
-marin-iris = { path = "../iris", editable = true }
-marin-rigging = { path = "../rigging", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
@@ -59,4 +48,4 @@ disable-project-excludes-heuristics = true
 use-ignore-files = false
 project-includes = ["src/**/*.py"]
 search-path = ["src", "../verifyit/src", "../rigging/src"]
-python-interpreter = ".venv/bin/python"
+python-interpreter = "../../.venv/bin/python"

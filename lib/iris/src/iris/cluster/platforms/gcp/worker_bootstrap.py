@@ -15,9 +15,18 @@ import re
 from collections.abc import Mapping
 
 from iris.cluster.config import WorkerConfig
-from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE, RESERVED_HOST_PORTS
+from iris.cluster.runtime.docker import (
+    EGRESS_BRIDGE,
+    EGRESS_DNS_SERVERS,
+    EGRESS_NETWORK,
+    EGRESS_RESOLV_CONF,
+    EGRESS_RUN_DIR,
+    EPHEMERAL_PORT_RANGE,
+    RESERVED_HOST_PORTS,
+)
+from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS
 
-# gVisor release the worker installs so the GVISOR container profile can run task
+# gVisor release the worker installs so the SANDBOX container profile can run task
 # containers under `docker --runtime=runsc`. Pin explicitly; bump by checking
 # https://github.com/google/gvisor/releases (tag "release-YYYYMMDD.P" publishes
 # to the bare "YYYYMMDD.P" path under releases/release/).
@@ -228,7 +237,7 @@ fi
 # Ensure docker daemon is running
 sudo systemctl start docker || true
 
-# Install gVisor (runsc) and register it as a docker runtime so the GVISOR
+# Install gVisor (runsc) and register it as a docker runtime so the SANDBOX
 # container profile can launch task containers under `docker --runtime=runsc`.
 # The host dockerd (root) builds the sandbox — see lib/iris/docs/container-profiles.md.
 # Best-effort: a failed install leaves the worker usable for every other profile.
@@ -242,7 +251,7 @@ if ! command -v runsc &> /dev/null; then
         sudo chmod 0755 /usr/local/bin/runsc
         echo "[iris-init] runsc installed: $(runsc --version | head -1)"
     else
-        echo "[iris-init] Warning: runsc install failed; GVISOR profile unavailable on this worker"
+        echo "[iris-init] Warning: runsc install failed; SANDBOX profile unavailable on this worker"
         sudo rm -f /usr/local/bin/runsc
     fi
 fi
@@ -267,6 +276,45 @@ with open(path, "w") as f:
 RUNSC_DAEMON_EOF
     sudo systemctl restart docker
     echo "[iris-init] runsc runtime registered"
+fi
+
+# Egress filter for EGRESS_POLICY_INTERNET tasks. They run on the {{ egress_network }}
+# bridge network; these host rules drop its forwarded traffic to private, CGNAT
+# and link-local ranges (the VPC, other containers, the metadata server) and all
+# of its traffic to the host itself (worker RPC ports). The worker runs such a task
+# only while {{ egress_resolv_conf }} exists, and this writes that file last, on the
+# host's tmpfs, so a reboot or a failed step leaves the worker refusing them.
+# Best-effort like runsc: a failure leaves every other egress policy usable.
+sudo rm -f {{ egress_resolv_conf }}
+# Each step exits on failure explicitly: `set -e` does not apply inside a
+# function called as an `if` condition.
+install_iris_egress_filter() (
+    sudo docker network inspect {{ egress_network }} > /dev/null 2>&1 \\
+        || sudo docker network create --driver bridge \\
+            -o com.docker.network.bridge.name={{ egress_bridge }} \\
+            -o com.docker.network.bridge.enable_icc=false \\
+            {{ egress_network }} > /dev/null \\
+        || exit 1
+    sudo iptables -N IRIS-EGRESS 2> /dev/null || sudo iptables -L IRIS-EGRESS -n > /dev/null || exit 1
+    for cidr in {{ egress_blocked_cidrs }}; do
+        sudo iptables -C IRIS-EGRESS -d "$cidr" -j DROP 2> /dev/null \\
+            || sudo iptables -A IRIS-EGRESS -d "$cidr" -j DROP \\
+            || exit 1
+    done
+    sudo iptables -C DOCKER-USER -i {{ egress_bridge }} -j IRIS-EGRESS 2> /dev/null \\
+        || sudo iptables -I DOCKER-USER -i {{ egress_bridge }} -j IRIS-EGRESS \\
+        || exit 1
+    sudo iptables -C INPUT -i {{ egress_bridge }} -j DROP 2> /dev/null \\
+        || sudo iptables -I INPUT -i {{ egress_bridge }} -j DROP \\
+        || exit 1
+    sudo mkdir -p "$(dirname {{ egress_resolv_conf }})" || exit 1
+    printf 'nameserver %s\\n' {{ egress_dns_servers }} | sudo tee {{ egress_resolv_conf }}.tmp > /dev/null || exit 1
+    sudo mv {{ egress_resolv_conf }}.tmp {{ egress_resolv_conf }}
+)
+if install_iris_egress_filter; then
+    echo "[iris-init] Egress filter installed on {{ egress_bridge }}"
+else
+    echo "[iris-init] Warning: egress filter install failed; egress policy internet unavailable on this worker"
 fi
 
 # gcloud ships as a snap on tpu-ubuntu2204-base; snapd mounts snaps
@@ -389,6 +437,7 @@ sudo docker run -d --name iris-worker \\
     --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
+    -v {{ egress_run_dir }}:{{ egress_run_dir }}:ro \\
     -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
@@ -459,4 +508,10 @@ def build_worker_bootstrap_script(
         port_range=EPHEMERAL_PORT_RANGE,
         reserved_ports=f"{RESERVED_HOST_PORTS},{task_port_start}-{task_port_end - 1}",
         runsc_version=RUNSC_VERSION,
+        egress_network=EGRESS_NETWORK,
+        egress_bridge=EGRESS_BRIDGE,
+        egress_blocked_cidrs=" ".join(EGRESS_BLOCKED_CIDRS),
+        egress_dns_servers=" ".join(EGRESS_DNS_SERVERS),
+        egress_resolv_conf=EGRESS_RESOLV_CONF,
+        egress_run_dir=EGRESS_RUN_DIR,
     )

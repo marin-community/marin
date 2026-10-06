@@ -13,11 +13,12 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
+from iris.rpc import job_pb2
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -117,14 +118,14 @@ def local_machine(tmp_path: Path, rpc=None, task: LocalTask | None = None) -> tu
     return machine, job
 
 
-def submitted_job(monkeypatch, factory: IrisMachineFactory) -> dict:
+def submitted_job(monkeypatch, factory: IrisMachineFactory, network: NetworkPolicy = NetworkPolicy.DENY) -> dict:
     """Return the keyword arguments ``create`` passes to ``IrisClient.submit``."""
     client = RecordingClient()
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     with pytest.raises(SubmissionRecorded):
-        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir="/tmp")))
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir="/tmp", network=network)))
     return client.submitted
 
 
@@ -175,26 +176,6 @@ def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_create_blanks_inherited_credentials_in_the_sandbox_job(monkeypatch) -> None:
-    monkeypatch.setenv("HF_TOKEN", "submitter-hf-token")
-    monkeypatch.setenv("WANDB_API_KEY", "submitter-wandb-key")
-    factory = IrisMachineFactory(
-        controller_url="http://controller", cluster_network=NetworkPolicy.DENY, extra_blanked_env=("GLM_API_TOKEN",)
-    )
-
-    env_vars = submitted_job(monkeypatch, factory)["environment"].to_proto().env_vars
-
-    for name in (*iris_backend.DEFAULT_BLANKED_ENV, "GLM_API_TOKEN"):
-        assert env_vars[name] == ""
-
-
-def test_create_refuses_a_network_policy_the_cluster_does_not_provide() -> None:
-    factory = IrisMachineFactory(controller_url="http://controller", cluster_network=NetworkPolicy.DENY)
-
-    with pytest.raises(UnsupportedMachineSpec):
-        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=NetworkPolicy.ALLOW)))
-
-
 @pytest.mark.parametrize("state", [TaskState.KILLED, TaskState.FAILED, TaskState.PREEMPTED, TaskState.WORKER_FAILED])
 def test_command_on_an_ended_sandbox_raises_machine_terminated(tmp_path: Path, state: TaskState) -> None:
     machine, _ = local_machine(tmp_path, FailingRpc(), LocalTask(state))
@@ -229,3 +210,17 @@ def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path:
     with pytest.raises(ConnectError):
         asyncio.run(machine.run(Command(("echo", "once"))))
     assert rpc.sent("echo once") == 1
+
+
+@pytest.mark.parametrize(
+    ("network", "egress"),
+    [
+        (NetworkPolicy.ALLOW, job_pb2.EGRESS_POLICY_INTERNET),
+        (NetworkPolicy.DENY, job_pb2.EGRESS_POLICY_NONE),
+    ],
+)
+def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
+    submitted = submitted_job(monkeypatch, IrisMachineFactory(controller_url="http://controller"), network)
+
+    assert submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert submitted["egress_policy"] == egress
