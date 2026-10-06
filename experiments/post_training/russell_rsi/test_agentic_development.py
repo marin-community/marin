@@ -25,6 +25,7 @@ from shellbox.backends.qemu.environment import QemuEnvironment
 
 from experiments.post_training.russell_rsi.agentic_development import (
     HARBOR_COMMIT,
+    NATIVE_MODEL_RETRY_ATTEMPTS,
     TASK_COMMIT,
     TASK_IDS,
     DevelopmentPlan,
@@ -140,6 +141,7 @@ def local_trial(tmp_path):
             model_name="producer-a",
             model_alias="hosted_vllm/scripted",
             upload_agent_logs=False,
+            kwargs={"model_retry_attempts": NATIVE_MODEL_RETRY_ATTEMPTS},
         ),
         environment=EnvironmentConfig(
             import_path="experiments.post_training.russell_rsi.test_agentic_development:LocalGuestEnvironment",
@@ -178,6 +180,7 @@ def test_native_trial_persists_evidence_before_verifier_and_completed_replay_has
                 "agent": config.agent.model_copy(
                     update={
                         "kwargs": {
+                            **config.agent.kwargs,
                             "api_base": endpoint,
                             "config_specs": [
                                 "mini.yaml",
@@ -333,15 +336,15 @@ def test_task_archive_materializes_frozen_files_and_rejects_changed_bytes(tmp_pa
     ]
 
 
-def test_native_model_failure_retains_canonical_grade_and_model_error_category(local_trial, monkeypatch):
+def test_native_model_failure_retains_canonical_grade_and_model_error_category(local_trial):
     attempt, config = local_trial
-    monkeypatch.setenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "1")
     with scripted_endpoint(("unused",), response_status=401) as (endpoint, requests):
         config = config.model_copy(
             update={
                 "agent": config.agent.model_copy(
                     update={
                         "kwargs": {
+                            **config.agent.kwargs,
                             "api_base": endpoint,
                             "config_specs": ["mini.yaml", "model.model_kwargs.num_retries=0"],
                         }

@@ -43,8 +43,11 @@ class NativeMiniAgent(BaseAgent):
 
     SUPPORTS_ATIF = True
 
-    def __init__(self, *args, config_specs: list[str], api_base: str | None = None, **kwargs):
+    def __init__(self, *args, config_specs: list[str], model_retry_attempts: int, api_base: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
+        if model_retry_attempts < 1:
+            raise ValueError("Native model retry attempts must include the initial attempt")
+        self.model_retry_attempts = model_retry_attempts
         self.config_specs = config_specs
         self.api_base = api_base
 
@@ -222,6 +225,7 @@ class NativeMiniAgent(BaseAgent):
                 | provider_env
                 | {
                     "MSWEA_GLOBAL_CONFIG_DIR": str(root / "config"),
+                    "MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": str(self.model_retry_attempts),
                 }
             )
             process = None

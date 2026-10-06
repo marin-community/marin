@@ -9,7 +9,6 @@ import hashlib
 import importlib
 import importlib.metadata
 import json
-import os
 import subprocess
 import tarfile
 import tempfile
@@ -60,7 +59,7 @@ AGENT_SETUP_TIMEOUT = 360
 AGENT_TIMEOUT = 1800
 VERIFIER_TIMEOUT = 300
 LITELLM_VERSION = "1.104.0"
-NATIVE_MODEL_RETRY_ENV = {"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1"}
+NATIVE_MODEL_RETRY_ATTEMPTS = 1
 QUALIFICATION_JOB_TIMEOUT = 6 * 3600
 EVALUATION_JOB_TIMEOUT = 2 * 3600
 MODEL_ERRORS = frozenset(
@@ -197,7 +196,7 @@ def binding(plan: DevelopmentPlan, entries: tuple[dict, ...]) -> dict:
         "verifier_timeout": VERIFIER_TIMEOUT,
         "guest_memory_mb": GUEST_MEMORY_MB,
         "guest_network": "deny",
-        "model_retries": 0,
+        "model_retries": NATIVE_MODEL_RETRY_ATTEMPTS - 1,
         "harbor_retries": 0,
         "job_failure_retries": 0,
         "job_preemption_retries": 0,
@@ -620,6 +619,7 @@ async def qualify_native_contract(
                     model_name="scripted-qualification",
                     model_alias="hosted_vllm/scripted",
                     api_base=endpoint,
+                    model_retry_attempts=NATIVE_MODEL_RETRY_ATTEMPTS,
                     config_specs=[
                         *specs,
                         "environment.cwd=/tmp",
@@ -760,7 +760,11 @@ async def evaluate_slots(
                 model_alias=f"hosted_vllm/{model_alias}",
                 override_setup_timeout_sec=AGENT_SETUP_TIMEOUT,
                 override_timeout_sec=AGENT_TIMEOUT,
-                kwargs={"config_specs": specs, "api_base": api_base},
+                kwargs={
+                    "config_specs": specs,
+                    "api_base": api_base,
+                    "model_retry_attempts": NATIVE_MODEL_RETRY_ATTEMPTS,
+                },
             )
             trial = trial_config(task_path, bundles[task_id], root / "trials", task_id, agent)
             return task_id, await run_trial_slot(attempt, trial, native=True)
@@ -805,7 +809,6 @@ def run_checkpoint_evaluation(config: CheckpointEvaluationConfig) -> None:
         producer.validate()
     write_once(StoragePath(config.output_path) / "worker-import-provenance.json", worker_provenance(plan))
     install_runtime_bundle(plan.runtime_bundle)
-    os.environ.update(NATIVE_MODEL_RETRY_ENV)
     with tempfile.TemporaryDirectory(prefix="russell-native-development-") as temporary:
         root = Path(temporary)
         specs = native_config_specs(plan, root)

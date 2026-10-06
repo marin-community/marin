@@ -77,7 +77,7 @@ def scripted_endpoint(commands, blocked_request=None, started=None, release=None
             except BrokenPipeError:
                 pass
 
-        def log_message(self, *_):
+        def log_message(self, format: str, *args: object):  # noqa: A002
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -113,11 +113,22 @@ def native_agent(tmp_path, endpoint, *specs, model_name="openai/scripted"):
         model_name=model_name,
         api_base=endpoint,
         config_specs=["mini.yaml", *specs],
+        model_retry_attempts=1,
     )
 
 
 @pytest.mark.parametrize("provider", ["openai", "hosted_vllm"])
 def test_native_mini_cli_guest_commands_and_host_environment_isolation(tmp_path, monkeypatch, provider):
+    monkeypatch.setenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "7")
+    child_retry_attempts = []
+    original = asyncio.create_subprocess_exec
+
+    async def create_process(*args, **kwargs):
+        if "minisweagent.run.mini" in args:
+            child_retry_attempts.append(kwargs["env"]["MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-only")
     monkeypatch.setenv("HOST_ONLY_SENTINEL", "must-not-enter-guest-or-template")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -145,6 +156,8 @@ def test_native_mini_cli_guest_commands_and_host_environment_isolation(tmp_path,
             return context
 
         context = asyncio.run(scenario())
+    assert os.environ["MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"] == "7"
+    assert child_retry_attempts == ["1"]
     native = json.loads((tmp_path / "logs/mini-swe-agent.trajectory.json").read_text())
     observations = [item for item in native["messages"] if item["role"] == "tool"]
     assert "firstsecondthird" in observations[0]["content"]
@@ -159,7 +172,7 @@ def test_native_mini_cli_guest_commands_and_host_environment_isolation(tmp_path,
     assert native["info"]["config"]["agent"]["mode"] == "yolo"
     assert native["info"]["config"]["agent"]["confirm_exit"] is False
     assert context.n_input_tokens == 40 and context.n_output_tokens == 20
-    assert context.metadata["caller"] == "preserved"
+    assert context.metadata is not None and context.metadata["caller"] == "preserved"
     atif = json.loads((tmp_path / "logs/trajectory.json").read_text())
     assert atif["session_id"] == "fixture"
     assert len([step for step in atif["steps"] if step["source"] == "agent"]) == 4

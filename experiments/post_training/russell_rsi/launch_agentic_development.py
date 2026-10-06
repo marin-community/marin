@@ -24,7 +24,6 @@ from experiments.post_training.russell_rsi.agentic_development import (
     HARBOR_COMMIT,
     LITELLM_VERSION,
     MINI_VERSION,
-    NATIVE_MODEL_RETRY_ENV,
     QUALIFICATION_JOB_TIMEOUT,
     CheckpointEvaluationConfig,
     DevelopmentPlan,
@@ -78,7 +77,6 @@ def submit_worker(
             env_vars={
                 "UV_PRERELEASE": "allow",
                 "PYTHONPATH": BRANCH_PYTHONPATH,
-                **NATIVE_MODEL_RETRY_ENV,
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             },
         ),
