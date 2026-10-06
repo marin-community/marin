@@ -1,17 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""JEEBench source preparation composed with Exact and Numeric primitives."""
+"""JEEBench source preparation with exact choice and source float grading."""
 
 import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from fractions import Fraction
 
 from verifyit.grade import InvalidTask, Reward, invalid_task, scored
 from verifyit.modes.grade_exact import grade_collection_subset, grade_exact_candidate
-from verifyit.modes.grade_math import grade_numeric_candidate
-from verifyit.spec import ExactSpec, NumericSpec
+from verifyit.spec import ExactSpec
 
 LETTERS = "ABCD"
 
@@ -76,7 +74,7 @@ def prepare_jee_input(raw: JEEInputs, policy: JEEPolicy) -> PreparedJEE:
 
 
 def grade_prepared_jee(prepared: PreparedJEE) -> Reward:
-    """Let Exact or Numeric determine reward for prepared source answers."""
+    """Score prepared answers using the source choice and numeric policies."""
     if isinstance(prepared.expected, tuple):
         assert isinstance(prepared.candidate, tuple)
         if prepared.raw.question_type == "MCQ(multiple)":
@@ -92,15 +90,8 @@ def grade_prepared_jee(prepared: PreparedJEE) -> Reward:
         if value is None or not math.isfinite(value):
             result = scored(0, reason="nonfinite_candidate")
         else:
-            # The source subtracts binary floats before its absolute comparison.
-            delta = abs(value - prepared.expected)
-            if not math.isfinite(delta):
-                result = scored(0, reason="nonfinite_difference")
-            else:
-                result = grade_numeric_candidate(
-                    NumericSpec("0", tolerance_abs=str(Fraction.from_float(0.01)), tolerance_rel="0"),
-                    Fraction.from_float(delta),
-                )
+            # JEEBench subtracts binary floats before applying its absolute tolerance.
+            result = scored(float(abs(value - prepared.expected) <= 0.01))
         result = replace(
             result,
             detail={
