@@ -38,7 +38,12 @@ from experiments.post_training.bfcl_rl.offline_curate import (
     NativeCollectionScope,
     collection_native_evidence,
 )
-from experiments.post_training.bfcl_rl.offline_data import native_chat_document, native_model_trace, native_prompt_sha256
+from experiments.post_training.bfcl_rl.offline_data import (
+    NativeAssistantCaptureError,
+    native_chat_document,
+    native_model_trace,
+    native_prompt_sha256,
+)
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome, VerifiedRollout, select_training_pairs
 from experiments.post_training.bfcl_rl.recovery_data import (
     RecoveryPreferenceCache,
@@ -114,19 +119,37 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                 source_id = f"{evidence.identity.run_id}/{evidence.retained.record_id}"
                 initial_prompt = ""
                 if evidence.retained.rollout.outcome is not RolloutOutcome.UNSCORED:
-                    trace = native_model_trace(
-                        identity=evidence.identity,
-                        seed=source.seed,
-                        retained_record=evidence.record,
-                        retained_uri=evidence.retained_uri,
-                        native_trace_uri=evidence.native_uri,
-                        trial_result=evidence.trial,
-                        literal_entries=evidence.literal_entries,
-                        partition=partition,
-                        assistant_prefill="<think>\n",
-                        model_tokenizer=f"{source.model.model}@{source.model.revision}",
-                        tool_call_format=evidence.tool_call_format,
-                    )
+                    try:
+                        trace = native_model_trace(
+                            identity=evidence.identity,
+                            seed=source.seed,
+                            retained_record=evidence.record,
+                            retained_uri=evidence.retained_uri,
+                            native_trace_uri=evidence.native_uri,
+                            trial_result=evidence.trial,
+                            literal_entries=evidence.literal_entries,
+                            partition=partition,
+                            assistant_prefill="<think>\n",
+                            model_tokenizer=f"{source.model.model}@{source.model.revision}",
+                            tool_call_format=evidence.tool_call_format,
+                        )
+                    except NativeAssistantCaptureError as error:
+                        excluded_branches.append(
+                            {
+                                "source_id": source_id,
+                                "reason": "unproven_assistant_history",
+                                "verifier_outcome": evidence.retained.rollout.outcome.value,
+                                "retained_uri": evidence.retained_uri,
+                                "native_trace_uri": evidence.native_uri,
+                                "error": str(error),
+                            }
+                        )
+                        selected.append(
+                            NativePreferenceBranch(
+                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
+                            )
+                        )
+                        continue
                     if not trace.tools and not evidence.identity.harness.startswith("mini-swe-agent@"):
                         excluded_branches.append(
                             {

@@ -36,6 +36,10 @@ from experiments.post_training.bfcl_rl.retained_preferences import (
 STUDENT_REASONING_MODE = "/think"
 
 
+class NativeAssistantCaptureError(ValueError):
+    """A parsed history turn lacks one provable sampled completion."""
+
+
 @dataclass(frozen=True)
 class NativeModelTrace:
     """Native message evidence joined to an audited generation-only retained record."""
@@ -164,8 +168,14 @@ def native_model_trace(
             if entry["request"]["messages"] == messages[:index]
             and (entry["request"].get("tools") or []) == (request.get("tools") or [])
         ]
+        retained_candidates = [entry for entry in candidates if entry in selected]
+        if retained_candidates:
+            candidates = retained_candidates
         if len(candidates) != 1:
-            raise ValueError("Every native assistant turn requires one unambiguous captured completion")
+            raise NativeAssistantCaptureError(
+                "Every native assistant turn requires one unambiguous captured completion "
+                f"(turn={index}, candidates={len(candidates)})"
+            )
         completions.append(tuple(candidates[0]["literal"]["completion_token_ids"]))
     return NativeModelTrace(
         identity,

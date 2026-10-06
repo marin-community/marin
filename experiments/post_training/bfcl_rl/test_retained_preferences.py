@@ -155,6 +155,11 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         "timestamp": -1,
         "literal": {**entries[0]["literal"], "prompt_token_ids": [999], "completion_token_ids": [248999]},
     }
+    retry = {
+        **entries[0],
+        "timestamp": -0.5,
+        "literal": {**entries[0]["literal"], "completion_token_ids": [248999]},
+    }
     trace = native_model_trace(
         identity=identity,
         seed=7,
@@ -162,7 +167,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         retained_uri="retained",
         native_trace_uri="literal",
         trial_result=trial,
-        literal_entries=[foreign, auxiliary, *reversed(entries)],
+        literal_entries=[foreign, auxiliary, retry, *reversed(entries)],
         partition=PARTITION,
         assistant_prefill="<think>\n",
         model_tokenizer="unused-model",
@@ -170,6 +175,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     assert trace.messages == messages
     assert trace.initial_messages == messages[:2]
+    assert trace.assistant_completion_token_ids == ((248000, 248001), (248003,))
     continuation_prompt = [1, 2, 9, 248000, 248001, 99]
     continuation_record = {
         **teacher_record,
@@ -765,13 +771,22 @@ def _native_pair_collection(
                     completion = [token for token, mask in zip(response, masks, strict=True) if mask]
                     if model == "student" and index == 0 and step == 1 and fault == "negative_tokens":
                         completion = [888]
+                    captured_messages = messages[:initial_count] if step == 0 else messages[:-1]
+                    if model == "teacher" and index == 0 and step == 0 and fault == "unproven_assistant_history":
+                        captured_messages = [
+                            {
+                                **captured_messages[0],
+                                "content": [{"type": "text", "text": captured_messages[0]["content"]}],
+                            },
+                            *captured_messages[1:],
+                        ]
                     entries.append(
                         {
                             "trial_id": trial_id,
                             "timestamp": index * 10 + step,
                             "status_code": 200,
                             "request": {
-                                "messages": messages[:initial_count] if step == 0 else messages[:-1],
+                                "messages": captured_messages,
                                 "tools": tools,
                             },
                             "literal": {
@@ -961,7 +976,7 @@ def test_native_dpo_sealed_batches_from_unfinished_producers_preserve_verified_p
     assert report["unmatched_branches"][0]["teacher_without_student"] == [[tasks[2].source_id, "codex@0.118.0", 0]]
 
 
-@pytest.mark.parametrize("fault", ["auxiliary_capture", "unmatched_literal_tool_calls"])
+@pytest.mark.parametrize("fault", ["auxiliary_capture", "unmatched_literal_tool_calls", "unproven_assistant_history"])
 def test_native_dpo_excludes_unusable_capture_without_changing_verifier_grade(tmp_path: Path, fault: str):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
     partition = replace(PARTITION, complement=tasks)
@@ -978,11 +993,9 @@ def test_native_dpo_excludes_unusable_capture_without_changing_verifier_grade(tm
     report = json.loads((tmp_path / "cache/selection.json").read_text())
     [excluded] = report["excluded_branches"]
     assert excluded["source_id"] == f"teacher-collection/teacher-{tasks[0].name}"
-    assert excluded["reason"] == (
-        "tool_free_auxiliary_capture" if fault == "auxiliary_capture" else "unmatched_literal_tool_calls"
-    )
+    assert excluded["reason"] == ("tool_free_auxiliary_capture" if fault == "auxiliary_capture" else fault)
     assert excluded["verifier_outcome"] == "correct"
-    if fault == "unmatched_literal_tool_calls":
+    if fault != "auxiliary_capture":
         assert excluded["retained_uri"].endswith("records/0.json.gz")
         assert excluded["native_trace_uri"].endswith(f"{tasks[0].name}/result.json")
     assert report["preferences"][0]["chosen"]["task_source_id"] == tasks[1].source_id
