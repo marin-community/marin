@@ -302,6 +302,7 @@ async def run_phase(
         retry_backoff=ExponentialBackoff(initial=5, maximum=60),
         evidence_dir=directory,
         ledger=JsonlLedger(directory / "ledger"),
+        first_attempt=0,
     )
     print(f"PHASE_START {phase} task={task.id} k={k} max_retries={max_retries}", flush=True)
     started = time.monotonic()

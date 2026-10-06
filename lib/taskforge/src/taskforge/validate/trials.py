@@ -11,7 +11,9 @@ cleanup actions that failed or overran (RolloutEngine's ``cleanup_error_count``)
 machine shows in summaries; it is ``None`` when the engine kept no rollout.
 
 A trial is attempted again while its outcome is ``Ungraded`` with a retryable cause, up to
-``max_retries`` times, waiting ``plan.retry_backoff`` between attempts.
+``max_retries`` times, waiting ``plan.retry_backoff`` between attempts. Attempts are numbered from
+``TrialPlan.first_attempt``: a trial re-entered after earlier attempts passes the count already on
+disk, so no attempt file is overwritten and each ledger step stays unique.
 
 A sampled rollout breaks the exact-token contract when the model samples a token sequence the
 server does not reproduce when it re-renders the conversation (``llm.rollout_model``). That is
@@ -157,6 +159,7 @@ class TrialPlan:
 
     ``max_retries`` bounds retries of ``RETRYABLE`` causes and ``token_contract_retries`` those of
     ``TOKEN_CONTRACT``. ``retry_backoff`` is a template: each trial waits on its own copy.
+    ``first_attempt`` numbers each trial's first attempt file and ledger step; later attempts follow it.
     """
 
     item_id: str
@@ -169,10 +172,11 @@ class TrialPlan:
     retry_backoff: ExponentialBackoff
     evidence_dir: Path
     ledger: Ledger
+    first_attempt: int
 
     def __post_init__(self) -> None:
-        if self.k < 1 or self.max_retries < 0 or self.token_contract_retries < 0:
-            raise ValueError("A trial plan needs k >= 1 and non-negative retry counts")
+        if self.k < 1 or self.max_retries < 0 or self.token_contract_retries < 0 or self.first_attempt < 0:
+            raise ValueError("A trial plan needs k >= 1 and non-negative retry counts and first attempt")
         if self.kind is TrialKind.CONTROL and self.token_contract_retries:
             raise ValueError("A control replays fixed turns, so a token contract break is not retried")
 
@@ -211,7 +215,8 @@ async def run_trial(
         return _refuse(task, execution, convention, plan, trial, outcome)
     engine = settings.engine(model, convention)
     backoff = copy.copy(plan.retry_backoff)
-    retries = contract_retries = attempt = 0
+    retries = contract_retries = 0
+    attempt = plan.first_attempt
     while True:
         outcome = await _attempt(engine, task, execution, convention, plan, trial, attempt)
         if isinstance(outcome, Graded):
@@ -247,8 +252,8 @@ def _refuse(
     outcome: Ungraded,
 ) -> Ungraded:
     """Record ``outcome`` as the only attempt of a trial that is not started."""
-    with _attempt_span(task, execution, convention, plan, trial, 0) as fields:
-        _record(fields, outcome, plan, trial, 0)
+    with _attempt_span(task, execution, convention, plan, trial, plan.first_attempt) as fields:
+        _record(fields, outcome, plan, trial, plan.first_attempt)
     return outcome
 
 

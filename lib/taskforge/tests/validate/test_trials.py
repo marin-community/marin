@@ -40,7 +40,12 @@ def settings(factory, capabilities=None, conventions: tuple[SubmissionConvention
 
 
 def plan(
-    tmp_path, k: int = 3, max_retries: int = 2, deadlines: Deadlines = DEADLINES, token_contract_retries: int = 0
+    tmp_path,
+    k: int = 3,
+    max_retries: int = 2,
+    deadlines: Deadlines = DEADLINES,
+    token_contract_retries: int = 0,
+    first_attempt: int = 0,
 ) -> TrialPlan:
     return TrialPlan(
         item_id="item",
@@ -53,6 +58,7 @@ def plan(
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
         evidence_dir=tmp_path / "evidence",
         ledger=JsonlLedger(tmp_path / "ledger"),
+        first_attempt=first_attempt,
     )
 
 
@@ -74,6 +80,25 @@ async def test_failed_starts_are_retried_and_every_attempt_is_recorded(tmp_path,
     assert len(records) == 5
     graded = [json.loads(path.read_bytes()) for path in records if json.loads(path.read_bytes())["outcome"] == "graded"]
     assert all(record["rollout"]["grade"]["reward"] == 1.0 for record in graded)
+
+
+async def test_a_re_entered_trial_numbers_attempts_after_the_ones_on_disk(tmp_path, file_task, fakes):
+    earlier = tmp_path / "evidence" / "solver" / "0" / "attempt-1.json"
+    earlier.parent.mkdir(parents=True)
+    earlier.write_bytes(b"earlier attempt")
+    factory = fakes.flaky_factory(failures=1, error=lambda: RuntimeError("broker refused"))
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
+
+    outcomes = await run_trials(file_task, EXECUTION, plan(tmp_path, k=1, first_attempt=2), settings(factory), model)
+
+    assert isinstance(outcomes[0], Graded)
+    assert earlier.read_bytes() == b"earlier attempt"
+    assert sorted(path.name for path in earlier.parent.iterdir()) == [
+        "attempt-1.json",
+        "attempt-2.json",
+        "attempt-3.json",
+    ]
+    assert [e.step for e in ledger(tmp_path)] == ["solver/0/2", "solver/0/3"]
 
 
 async def test_retries_stop_at_the_cap(tmp_path, file_task, fakes):

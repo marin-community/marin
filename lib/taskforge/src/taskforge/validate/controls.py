@@ -180,6 +180,7 @@ class ControlPlan:
             retry_backoff=self.retry_backoff,
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,
+            first_attempt=0,
         )
 
 
