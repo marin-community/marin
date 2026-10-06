@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
 import dataclasses
 import math
 import os
@@ -638,6 +639,19 @@ def test_the_carry_offload_widens_the_memory_budget_for_the_saved_moe_output(mon
     assert slop in os.environ["XLA_FLAGS"].split()
 
 
+@pytest.mark.parametrize("value", ["false", "0", "False"])
+def test_the_carry_offload_refuses_a_ragged_run_with_the_scheduler_off(monkeypatch, value):
+    # The offload configuration runs the MoE dispatch overlap, whose transport order holds only
+    # under the latency-hiding scheduler; without it two transports can be in flight together.
+    monkeypatch.setenv("XLA_FLAGS", f"{train.XLA_LATENCY_HIDING_FLAG}={value}")
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(ValueError, match="latency_hiding"):
+        train.run_grug(config)
+
+
 def test_a_ragged_run_without_the_offload_runs_collectives_synchronously(monkeypatch):
     # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps off.
     inherited = f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}=ALLREDUCE"
@@ -1164,6 +1178,99 @@ def _layer_scans(jaxpr) -> list:
     return [eqn for eqn in _equations(jaxpr) if eqn.primitive.name == "scan"]
 
 
+def _primitive_counts(jaxpr) -> collections.Counter:
+    return collections.Counter(eqn.primitive.name for eqn in _equations(jaxpr))
+
+
+def test_the_hero_block_stages_shared_expert_0_inside_the_expert_shard_map():
+    # ragged_all_to_all cannot run on CPU, so this checks the traced EP program: shared expert 0's
+    # gate/up runs inside the MoE's expert shard map, beside the first dispatch, and no layer
+    # computes a shared expert's gate/up a second time outside it.
+    cfg = _hero_ragged_offload_config(2)
+    forward = _layer_scans(_hero_ragged_offload_loss_and_grad_jaxpr(2).jaxpr)[0].params["jaxpr"].jaxpr
+    moe_shard_maps = [
+        eqn
+        for eqn in forward.eqns
+        if eqn.primitive.name == "shard_map" and _primitive_counts(eqn.params["jaxpr"])["ragged_all_to_all"]
+    ]
+    assert len(moe_shard_maps) == 1
+
+    def shared_gate_up_count(jaxpr) -> int:
+        shared_weight = (cfg.hidden_dim, cfg.shared_expert_intermediate_dim)
+        return sum(
+            eqn.primitive.name == "dot_general" and eqn.invars[1].aval.shape == shared_weight
+            for eqn in _equations(jaxpr)
+        )
+
+    assert shared_gate_up_count(moe_shard_maps[0].params["jaxpr"]) == 2
+    assert shared_gate_up_count(forward) == 2 * cfg.num_shared_experts
+
+
+def test_the_dispatch_overlap_mlp_section_is_the_routed_moe_plus_every_shared_expert():
+    # Shared expert 0 runs in two halves on the overlap path: its gate/up staged inside the routed
+    # MoE, its output projection added afterwards. Without an expert axis the overlap work runs
+    # beside the plain MoE, so the section executes on CPU.
+    cfg = dataclasses.replace(
+        _latent_config(latent_dim=16),
+        num_shared_experts=2,
+        num_experts_per_token=2,
+        moe_implementation="ragged_all_to_all",
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
+    token_valid = jnp.ones((2, 8), dtype=jnp.bool_)
+    probe = jax.random.normal(jax.random.key(62), (2, 8, cfg.hidden_dim))
+
+    def overlapped(inputs):
+        block, mlp_in = inputs
+        out, router_stats = model._mlp_section(block.mlp, block.shared, mlp_in, token_valid)
+        return jnp.sum(out * probe), (out, router_stats)
+
+    def reference(inputs):
+        block, mlp_in = inputs
+        out, router_stats = block.mlp(mlp_in, token_valid)
+        for shared in block.shared:
+            out = out + shared(mlp_in)
+        return jnp.sum(out * probe), (out, router_stats)
+
+    with set_mesh(_explicit_mesh(1, 1, 1, 1, 1)):
+        block = model.Block.init(cfg, key=jax.random.key(63))
+        assert model._schedules_dispatch_overlap(cfg) and len(block.shared) == 2
+        inputs = (block, jax.random.normal(jax.random.key(61), (2, 8, cfg.hidden_dim)))
+        (_, (actual, actual_stats)), actual_grads = eqx.filter_jit(eqx.filter_value_and_grad(overlapped, has_aux=True))(
+            inputs
+        )
+        (_, (expected, expected_stats)), expected_grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(reference, has_aux=True)
+        )(inputs)
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-6, atol=1e-6)
+    # The overlap path computes the router statistics ahead of the MoE; the next step's router bias
+    # reads them.
+    jax.tree.map(
+        lambda got, want: np.testing.assert_array_equal(np.asarray(got), np.asarray(want)), actual_stats, expected_stats
+    )
+    # The router, the routed experts, every shared expert's three weights and the section input.
+    (actual_block, actual_input), (expected_block, expected_input) = actual_grads, expected_grads
+    for got, want in zip(
+        jax.tree.leaves((actual_block.mlp, actual_block.shared, actual_input)),
+        jax.tree.leaves((expected_block.mlp, expected_block.shared, expected_input)),
+        strict=True,
+    ):
+        np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-5, atol=1e-6)
+
+
+def test_the_carry_offload_keeps_no_carry_stack_on_device():
+    # The backward recompute starts from the offloaded carry; a device copy of every layer's input
+    # alongside it would cost a full [L, B, S, D] stack of HBM.
+    num_layers = 3
+    jaxpr = _hero_ragged_offload_loss_and_grad_jaxpr(num_layers).jaxpr
+    forward = _layer_scans(jaxpr)[0]
+    carry_shaped = [
+        var.aval for var in forward.outvars if var.aval.shape[:1] == (num_layers,) and var.aval.shape[-1] == 32
+    ]
+    assert [aval.memory_space for aval in carry_shaped] == [jax.memory.Space.Host]
+
+
 def test_the_hero_takes_its_routing_weight_gradient_on_the_expert_side():
     # The hero's routing weights are positive sigmoids and its cotangents bf16, inside EXPERT_SIDE's
     # contract, so its backward sends each expert row's <h, dh> back, one [rows, 1] float32 transport
@@ -1177,6 +1284,18 @@ def test_the_hero_takes_its_routing_weight_gradient_on_the_expert_side():
         and eqn.invars[0].aval.dtype == jnp.float32
     ]
     assert len(row_dots) == 2
+
+
+def test_the_dispatch_overlap_recompute_reruns_no_statistics_collectives():
+    # The overlap path computes the QB statistics and the drop count before the first dispatch. The
+    # backward's recompute replays that ordering from saved values instead of rerunning their
+    # all-reduces, which would take the one collective slot.
+    forward, backward = _layer_scans(_hero_ragged_offload_loss_and_grad_jaxpr(3).jaxpr)
+    forward_counts = _primitive_counts(forward.params["jaxpr"].jaxpr)
+    backward_counts = _primitive_counts(backward.params["jaxpr"].jaxpr)
+    assert forward_counts["pmin"] == forward_counts["pmax"] == 1
+    assert backward_counts["pmin"] == backward_counts["pmax"] == backward_counts["psum_invariant"] == 0
+    assert backward_counts["ragged_all_to_all"] == 8
 
 
 @pytest.mark.parametrize("context_size", [1, 2])

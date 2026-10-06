@@ -47,6 +47,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
+    DispatchOverlap,
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
@@ -54,6 +55,7 @@ from levanter.grug.grug_moe import (
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     moe_mlp,
+    moe_mlp_with_dispatch_overlap,
 )
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -1886,6 +1888,110 @@ def test_expert_side_routing_weight_gradient_needs_the_ragged_backend():
         )
 
 
+def _overlap_gate_up(params, x):
+    w_gate, w_up = params
+    return x @ w_gate, x @ w_up
+
+
+def test_dispatch_overlap_matches_moe_mlp_and_the_overlap_work_on_gpu():
+    # The overlap path reorders the transports and runs the caller's work inside the expert shard
+    # map; under a remat it must still compute what the plain path and the work alone compute.
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None or jax.devices()[0].platform != "gpu":
+        pytest.skip("requires an even number of >=2 GPUs")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim, intermediate_dim, num_experts, topk = 16, 24, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(31),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    k_gate, k_up, k_overlap, k_out, k_staged = jax.random.split(jax.random.key(32), 5)
+    params = (
+        jax.random.normal(k_gate, (hidden_dim, 8), dtype=jnp.bfloat16),
+        jax.random.normal(k_up, (hidden_dim, 8), dtype=jnp.bfloat16),
+    )
+    overlap_x = jax.random.normal(k_overlap, (tokens, hidden_dim), dtype=jnp.bfloat16)
+    out_cotangent = jax.random.normal(k_out, (tokens, hidden_dim), dtype=jnp.bfloat16)
+    staged_cotangent = jax.random.normal(k_staged, (tokens, 8), dtype=jnp.bfloat16)
+
+    batch = NamedSharding(mesh, P(("data", "expert"), None))
+    experts = NamedSharding(mesh, P("expert", None, None))
+    replicated = NamedSharding(mesh, P(None, None))
+    x, selected_experts, combine_weights, overlap_x, out_cotangent, staged_cotangent = (
+        jax.sharding.reshard(a, batch)
+        for a in (
+            x.astype(jnp.bfloat16),
+            selected_experts,
+            combine_weights.astype(jnp.bfloat16),
+            overlap_x,
+            out_cotangent,
+            staged_cotangent,
+        )
+    )
+    w_up_gate = jax.sharding.reshard(w_up_gate.astype(jnp.bfloat16), experts)
+    w_down = jax.sharding.reshard(w_down.astype(jnp.bfloat16), experts)
+    params = tuple(jax.sharding.reshard(w, replicated) for w in params)
+
+    def plain(x, w_up_gate, w_down, combine_weights, params, overlap_x):
+        out, counts = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=mesh,
+            report_capacity_overflow=True,
+            capacity_factor=1.0,
+        )
+        return out, _overlap_gate_up(params, overlap_x), counts
+
+    def overlapped(x, w_up_gate, w_down, combine_weights, params, overlap_x):
+        out, counts, staged = moe_mlp_with_dispatch_overlap(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            DispatchOverlap(fn=_overlap_gate_up, params=params, x=overlap_x),
+            mesh=mesh,
+            capacity_factor=1.0,
+        )
+        return out, staged, counts
+
+    def loss(fn, *args):
+        out, (gate, up), _ = jax.checkpoint(fn)(*args)
+        return jnp.sum(out * out_cotangent) + jnp.sum((gate + up) * staged_cotangent)
+
+    def both(*args):
+        # One executable: each further program with ragged transports asks NCCL for another
+        # symmetric-memory window, which a preallocated test process may not have room for.
+        return (
+            plain(*args),
+            overlapped(*args),
+            jax.grad(lambda *a: loss(plain, *a), argnums=range(6))(*args),
+            jax.grad(lambda *a: loss(overlapped, *a), argnums=range(6))(*args),
+        )
+
+    args = (x, w_up_gate, w_down, combine_weights, params, overlap_x)
+    with jax.set_mesh(mesh):
+        expected, actual, expected_grads, actual_grads = jax.jit(both)(*args)
+    (expected_out, expected_staged, expected_counts), (actual_out, actual_staged, actual_counts) = expected, actual
+
+    np.testing.assert_array_equal(np.asarray(actual_out, np.float32), np.asarray(expected_out, np.float32))
+    for actual, expected in zip(actual_staged, expected_staged, strict=True):
+        np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), rtol=1e-2)
+    assert int(actual_counts.dropped) == int(expected_counts.dropped)
+    for actual, expected in zip(jax.tree.leaves(actual_grads), jax.tree.leaves(expected_grads), strict=True):
+        actual, expected = np.asarray(actual, np.float32), np.asarray(expected, np.float32)
+        assert np.max(np.abs(actual - expected)) <= _BF16_MOE_RELATIVE_TOLERANCE * np.max(np.abs(expected))
+
+
 def _filled_transport_buffer(fill: float):
     """A `_transport_buffer` whose unspecified contents are ``fill`` everywhere."""
 
@@ -1897,8 +2003,9 @@ def _filled_transport_buffer(fill: float):
 
 
 @pytest.mark.parametrize("routing_weight_gradient", list(RoutingWeightGradient), ids=lambda g: str(g))
+@pytest.mark.parametrize("dispatch_overlap", [False, True], ids=["plain", "dispatch_overlap"])
 def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
-    routing_weight_gradient: RoutingWeightGradient, monkeypatch: pytest.MonkeyPatch
+    routing_weight_gradient: RoutingWeightGradient, dispatch_overlap: bool, monkeypatch: pytest.MonkeyPatch
 ):
     # The transport buffers start with unspecified contents, and every consumer must read only the
     # rows a collective wrote. With drops and padding, many rows stay unwritten. Filling them with
@@ -1919,6 +2026,7 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
         topk=topk,
     )
     token_valid = jnp.arange(tokens) % 4 != 1
+    overlap_params = (jax.random.normal(jax.random.key(42), (hidden_dim, 8), dtype=jnp.bfloat16),)
     cotangent = jax.random.normal(jax.random.key(43), (tokens, hidden_dim), dtype=jnp.bfloat16)
 
     batch = NamedSharding(mesh, P(("data", "expert"), None))
@@ -1930,9 +2038,24 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
     token_valid = jax.sharding.reshard(token_valid, NamedSharding(mesh, P(("data", "expert"))))
     w_up_gate = jax.sharding.reshard(w_up_gate.astype(jnp.bfloat16), experts)
     w_down = jax.sharding.reshard(w_down.astype(jnp.bfloat16), experts)
+    overlap_params = tuple(jax.sharding.reshard(w, NamedSharding(mesh, P(None, None))) for w in overlap_params)
 
-    def layer(x, w_up_gate, w_down, combine_weights):
-        return moe_mlp(
+    def layer(x, w_up_gate, w_down, combine_weights, overlap_params):
+        if dispatch_overlap:
+            out, counts, (staged,) = moe_mlp_with_dispatch_overlap(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                DispatchOverlap(fn=lambda params, x: (x @ params[0],), params=overlap_params, x=x),
+                token_valid=token_valid,
+                mesh=mesh,
+                capacity_factor=0.5,
+                routing_weight_gradient=routing_weight_gradient,
+            )
+            return out, counts, staged
+        out, counts = moe_mlp(
             x,
             selected_experts,
             combine_weights,
@@ -1945,16 +2068,17 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
             capacity_factor=0.5,
             routing_weight_gradient=routing_weight_gradient,
         )
+        return out, counts, jnp.zeros((), jnp.bfloat16)
 
     def loss(*args):
         # A fresh function for each fill: jax.checkpoint caches its trace by function, and a cached
         # trace would keep the previous fill in the recompute and the backward.
-        out, _ = jax.checkpoint(lambda *operands: layer(*operands))(*args)
-        return jnp.sum(out * cotangent)
+        out, _, staged = jax.checkpoint(lambda *operands: layer(*operands))(*args)
+        return jnp.sum(out * cotangent) + jnp.sum(staged)
 
     def run(*args):
-        out, counts = layer(*args)
-        return out, counts.dropped, jax.grad(loss, argnums=range(4))(*args)
+        out, counts, _ = layer(*args)
+        return out, counts.dropped, jax.grad(loss, argnums=range(5))(*args)
 
     def zero_and_nan(*args):
         # One executable: each further program with ragged transports asks NCCL for another
@@ -1966,7 +2090,7 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
         return results
 
     with jax.set_mesh(mesh):
-        zero_filled, nan_filled = jax.jit(zero_and_nan)(x, w_up_gate, w_down, combine_weights)
+        zero_filled, nan_filled = jax.jit(zero_and_nan)(x, w_up_gate, w_down, combine_weights, overlap_params)
 
     assert int(zero_filled[1]) > 0, "the inputs must drop assignments, or no row stays unwritten"
     for zero, nan in zip(jax.tree.leaves(zero_filled), jax.tree.leaves(nan_filled), strict=True):
