@@ -542,9 +542,7 @@ class QemuMachine:
             await self._shell.close()
             self._shell = None
         if self.process is not None:
-            if self.process.returncode is None:
-                self.process.terminate()
-            await self.process.wait()
+            await _stopped_process_output(self.process)
         self.process = None
         self.active_acceleration = None
         if self._runtime_dir is not None:

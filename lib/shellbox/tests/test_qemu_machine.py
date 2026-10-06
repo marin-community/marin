@@ -151,6 +151,32 @@ def test_qemu_unresponsive_guest_raises_infrastructure_error(tmp_path, monkeypat
     asyncio.run(scenario())
 
 
+def test_qemu_close_drains_unread_guest_output(tmp_path):
+    async def scenario():
+        machine = QemuMachine(MachineSpec(QemuBundle(tmp_path)), Acceleration.TCG)
+        # Exceed the 128 KiB reader high-water mark so unread output pauses the pipe.
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 131073); sys.stdout.flush(); "
+            "print('READY', file=sys.stderr, flush=True); sys.stdin.read()",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        machine.process = process
+        try:
+            assert await asyncio.wait_for(process.stderr.readline(), timeout=5) == b"READY\n"
+            await asyncio.wait_for(machine.close(), timeout=10)
+            assert process.returncode is not None
+        finally:
+            if process.returncode is None:
+                process.kill()
+            await asyncio.wait_for(process.communicate(), timeout=5)
+
+    asyncio.run(scenario())
+
+
 def test_binary_upload_preserves_bytes_modes_and_shell_after_preflight_failure(tmp_path):
     async def scenario():
         read_fd, write_fd = os.pipe()
