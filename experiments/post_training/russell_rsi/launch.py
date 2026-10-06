@@ -392,7 +392,10 @@ def development_step(
             # Remote workers inherit the required CW02 root coordinator; SkyRL and public eval submit separate roots.
             resources=ResourceConfig.with_gpu("H100", 8, cpu=32, ram="512GB", disk="2TB"),
             pip_packages=[MARIN_SKYRL.requirement()],
-            env_vars={"UV_PRERELEASE": "allow"},
+            env_vars={
+                "UV_PRERELEASE": "allow",
+                "PYTHONPATH": "/app/lib/rolloutengine/src:/app/lib/taskcompendium/src:/app/lib/shellbox/src:/app",
+            },
         ),
     )
 

@@ -6,6 +6,9 @@
 import asyncio
 import base64
 import hashlib
+import importlib
+import importlib.metadata
+import importlib.util
 import json
 import traceback
 from collections import Counter
@@ -18,6 +21,7 @@ from typing import Any
 
 import httpx
 from marin.datakit.download.opencode import opencode_protocol_messages
+from marin.external_dependencies import MARIN_SKYRL
 from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.serve import local_inference
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -484,8 +488,63 @@ async def evaluate_development(
         raise ValueError("No sampled task group has reward variation; do not allocate the policy")
 
 
+def development_worker_provenance() -> dict[str, Any]:
+    """Return checked import paths and hashes for the branch worker and pinned SkyRL renderer."""
+    root = Path(__file__).resolve().parents[3]
+    for package in ("rolloutengine", "taskcompendium", "shellbox"):
+        spec = importlib.util.find_spec(package)
+        expected = root / "lib" / package / "src" / package
+        if spec is None or list(spec.submodule_search_locations or ()) != [str(expected)]:
+            raise ValueError(f"Development worker imported {package} outside the packaged branch: {spec}")
+    required = {
+        "rolloutengine.contracts": (
+            "GenerationLimitReached",
+            "ModelRequest",
+            "ModelResponseRejected",
+            "ModelTurn",
+            "RejectedModelResponse",
+            "RolloutContractError",
+        ),
+        "rolloutengine.engine": ("ShellboxRolloutEngine",),
+        "rolloutengine.task_session": ("session_start",),
+        "taskcompendium.models": ("TaskSpec",),
+        "shellbox.backends.qemu.machine": ("QemuMachineFactory",),
+        "shellbox.backends.shellsim.machine": ("ShellSimMachineFactory",),
+    }
+    files = {}
+    for name, symbols in required.items():
+        package = name.split(".")[0]
+        expected = root / "lib" / package / "src" / Path(*name.split(".")).with_suffix(".py")
+        spec = importlib.util.find_spec(name)
+        if spec is None or spec.origin is None or Path(spec.origin).resolve() != expected.resolve():
+            raise ValueError(f"Development worker imported {name} outside the packaged branch: {spec}")
+        module = importlib.import_module(name)
+        for symbol in symbols:
+            getattr(module, symbol)
+        files[name] = {"path": str(expected), "sha256": hashlib.sha256(expected.read_bytes()).hexdigest()}
+    distribution = importlib.metadata.distribution(MARIN_SKYRL.distribution)
+    direct_url = json.loads(distribution.read_text("direct_url.json") or "null")
+    if not isinstance(direct_url, dict) or direct_url.get("vcs_info", {}).get("commit_id") != MARIN_SKYRL.commit:
+        raise ValueError("Development worker SkyRL installation differs from the pinned revision")
+    name = "skyrl_train.inference_engines.chat_continuation"
+    expected = Path(distribution.locate_file("skyrl_train/inference_engines/chat_continuation.py")).resolve()
+    module = importlib.import_module(name)
+    if module.__file__ is None or Path(module.__file__).resolve() != expected:
+        raise ValueError("Development worker renderer differs from the pinned SkyRL installation")
+    if not callable(module.render_exact_chat_continuation):
+        raise ValueError("Development worker renderer is not callable")
+    files[name] = {"path": str(expected), "sha256": hashlib.sha256(expected.read_bytes()).hexdigest()}
+    return {
+        "branch_root": str(root),
+        "modules": files,
+        "skyrl": {"version": distribution.version, "direct_url": direct_url},
+    }
+
+
 def run_development_evaluation(config: DevelopmentEvaluationConfig, *, journal: EvaluationJournal | None = None) -> None:
     """Own the model server for one fixed development evaluation."""
+    provenance = development_worker_provenance()
+    write_once(StoragePath(prefix_join(config.output_path, "worker-import-provenance.json")), provenance)
     runtime_manifest = install_runtime_bundle(config.runtime_bundle)
     if journal is not None and journal.complete():
 
