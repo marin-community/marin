@@ -10,6 +10,7 @@ Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -35,6 +36,8 @@ from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
+    EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_TOLERATION,
 )
 from iris.cluster.platforms.k8s.kueue_manifests import (
@@ -53,6 +56,7 @@ from iris.cluster.platforms.k8s.types import (
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
 from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
+from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS, TaskNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -408,6 +412,57 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
     }
 
 
+# Namespace label the API server sets on every namespace (Kubernetes >= 1.21).
+_NAMESPACE_NAME_LABEL = "kubernetes.io/metadata.name"
+_DNS_NAMESPACE = "kube-system"
+_DNS_PORT = 53
+
+
+def _namespace_pods(namespace: str) -> dict:
+    return {"namespaceSelector": {"matchLabels": {_NAMESPACE_NAME_LABEL: namespace}}}
+
+
+def _internet_except(service_cidr: str) -> list[str]:
+    blocked = [ipaddress.ip_network(cidr) for cidr in EGRESS_BLOCKED_CIDRS]
+    if service_cidr:
+        services = ipaddress.ip_network(service_cidr)
+        if not any(services.subnet_of(network) for network in blocked if network.version == services.version):
+            blocked.append(services)
+    return [str(network) for network in blocked]
+
+
+def build_egress_network_policy(namespace: str, network: TaskNetwork, service_cidr: str = "") -> dict:
+    """Build the NetworkPolicy for pods whose egress label is ``network``.
+
+    Both policies deny all ingress and allow egress to DNS in kube-system.
+    INTERNET adds every IPv4 address outside ``EGRESS_BLOCKED_CIDRS`` and
+    ``service_cidr``. Neither mode reaches the controller, finelog, worker RPC
+    ports, other pods, or the metadata server. ``kubectl exec`` goes through
+    the kubelet and is unaffected.
+    """
+    if network is TaskNetwork.CLUSTER:
+        raise ValueError("cluster-network pods carry no egress NetworkPolicy")
+    egress: list[dict] = [
+        {
+            "to": [_namespace_pods(_DNS_NAMESPACE)],
+            "ports": [{"protocol": "UDP", "port": _DNS_PORT}, {"protocol": "TCP", "port": _DNS_PORT}],
+        }
+    ]
+    if network is TaskNetwork.INTERNET:
+        egress.append({"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": _internet_except(service_cidr)}}]})
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": f"{EGRESS_NETWORK_POLICY_PREFIX}{network.value}", "namespace": namespace},
+        "spec": {
+            "podSelector": {"matchLabels": {EGRESS_LABEL: network.value}},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [],
+            "egress": egress,
+        },
+    }
+
+
 # ============================================================================
 # K8sControllerProvider
 # ============================================================================
@@ -511,6 +566,7 @@ class K8sControllerProvider:
         default_env.update(collect_inject_env(config.defaults.inject_env))
         if default_env:
             self.ensure_task_env_secret(default_env)
+        self.ensure_egress_network_policies(config)
 
         signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
         if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
@@ -912,6 +968,16 @@ class K8sControllerProvider:
                 "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
             }
         )
+
+    def ensure_egress_network_policies(self, config: IrisClusterConfig) -> None:
+        """Create the NetworkPolicies for pods off the cluster network, one per egress policy.
+
+        Never deleted on stop: they select only labeled pods, and removing one
+        while such a pod runs would reconnect it to the controller.
+        """
+        service_cidr = config.kubernetes_provider.service_cidr
+        for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
+            self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
 
     def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
         """Create the iris-controller-env Secret holding the controller's own credentials.

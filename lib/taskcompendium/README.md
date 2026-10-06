@@ -34,7 +34,7 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.21`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.22`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -235,9 +235,9 @@ def score_final_response(content: str):
     return grade_answer(spec, convention, GradingAttempt(conversation))
 ```
 
-Grading is synchronous. The execution runtime completes file or environment-state acquisition before grading; custom conventions hold the acquired values in their own explicit fields and extract them without accessing a live workspace. `GradingAttempt` contains only the conversation. Private expected values remain in `spec.verifier` and must not be included in the model request.
+Grading is synchronous. The execution runtime completes file and environment-state acquisition before grading. `GradingAttempt` carries the conversation, captured file bytes keyed by runtime paths, and an optional `StateSubmission`. Custom conventions read those fields without accessing a live workspace. A missing state is `None`; captured JSON null is `StateSubmission(None)`. Private expected values remain in the task specification’s `spec.verifier` and must not be included in the model request.
 
-A valid correct answer produces `GradeResult(status=graded, reward=1.0)`; a valid wrong answer produces `graded` with reward `0.0`. Malformed text, JSON, numeric, or final-action evidence produces `submission_failure` with reward `0.0`. Invalid private configuration and infrastructure failures raise; the execution runtime must preserve those errors separately from wrong or invalid submissions.
+A valid correct answer produces `GradeResult(status=graded, reward=1.0)`; a valid wrong answer produces `graded` with reward `0.0`. Malformed text, JSON, numeric, or final-action evidence produces `submission_failure` with reward `0.0`. Pure candidate grading raises for invalid private configuration and infrastructure failures; the execution runtime must preserve those errors separately from wrong or invalid submissions.
 
 Execution runtimes decode provider responses into `TextMessage` or `AssistantToolCalls` before constructing a `ConversationTrace`. Tool-call arguments must be decoded JSON objects. A runtime may expose malformed provider output as `submission_failure` with reward `0.0`; network and execution errors remain separate.
 
@@ -258,14 +258,14 @@ Runtime evidence grading lives in `taskcompendium.runtime.task_grading`. Its syn
 
 TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for portable path and mount-collision validation. The validator leaf module performs no storage access.
 
-Run the package tests from the repository root:
+TaskCompendium uses the root workspace's `uv.lock` and `.venv`. Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
+uv run --package taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
 # Type-check from the package project directory with its dependencies available.
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.21` adds the distinct JSON result kind. Decoders reject other schema versions; existing conversion pipelines must emit the current contract.
+Schema `0.22` adds the distinct JSON result kind. Decoders reject other schema versions; existing conversion pipelines must emit the current contract.

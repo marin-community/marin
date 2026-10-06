@@ -4,9 +4,10 @@
 """Typed evidence and the bridge to shared verifier candidate contracts."""
 
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
-from pydantic import JsonValue
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 from verifyit.candidate import CandidateSpec, candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -19,13 +20,6 @@ from taskcompendium.models import (
     TextMessage,
     VerifierSpec,
 )
-
-
-@dataclass(frozen=True)
-class GradingAttempt:
-    """Trial evidence available to submission conventions and verifiers."""
-
-    conversation: ConversationTrace
 
 
 @dataclass(frozen=True)
@@ -46,6 +40,28 @@ class JsonSubmission:
 @dataclass(frozen=True)
 class StateSubmission:
     value: JsonValue
+
+
+@dataclass(frozen=True)
+class GradingAttempt:
+    """Captured trial evidence; state absence is distinct from captured JSON null."""
+
+    conversation: ConversationTrace
+    files: Mapping[str, bytes] = field(default_factory=dict)
+    state: StateSubmission | None = None
+
+
+JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"Non-JSON numeric constant: {value}")
+
+
+def decode_json_value(text: str) -> JsonValue:
+    """Decode finite JSON evidence with unique object keys at every nesting level."""
+    value = json.loads(text, object_pairs_hook=unique_object, parse_constant=_reject_json_constant)
+    return JSON_VALUE.validate_python(value)
 
 
 type Submission = TextSubmission | ActionSubmission | JsonSubmission | StateSubmission

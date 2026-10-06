@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from verifyit.json_objects import unique_object
 
-SCHEMA_VERSION = "0.21"
+SCHEMA_VERSION = "0.22"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 

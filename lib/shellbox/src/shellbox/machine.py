@@ -131,6 +131,10 @@ class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
 
 
+class MachineTerminated(RuntimeError):
+    """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 

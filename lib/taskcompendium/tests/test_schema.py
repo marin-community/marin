@@ -9,7 +9,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from taskcompendium.grading import exact_answer, grade_answer
+from taskcompendium.grading import exact_answer, grade_answer, structured_exact
 from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import (
     AnswerType,
@@ -274,4 +274,14 @@ def test_task_json_rejects_old_schema_and_verifier_shape(specification):
     payload["schema_version"] = "0.1"
     payload["verifier"] = {"expected": "done", "ignore_case": True, "ignore_whitespace": True}
     with pytest.raises(ValidationError):
+        TaskSpec.model_validate_json(json.dumps(payload))
+
+
+def test_json_answer_schema_roundtrip_and_prior_version_rejection(specification):
+    task = specification.model_copy(update={"answer_type": AnswerType.JSON, "verifier": structured_exact({"answer": 1})})
+    payload = json.loads(task.model_dump_json())
+    assert payload["schema_version"] == "0.22"
+    assert TaskSpec.model_validate_json(json.dumps(payload)) == task
+    payload["schema_version"] = "0.21"
+    with pytest.raises(ValidationError, match=r"Unsupported TaskSpec schema: 0\.21"):
         TaskSpec.model_validate_json(json.dumps(payload))

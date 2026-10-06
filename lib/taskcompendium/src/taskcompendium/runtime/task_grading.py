@@ -31,7 +31,13 @@ from verifyit.spec import (
 )
 
 from taskcompendium.grading import grade_answer
-from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission
+from taskcompendium.grading_contract import (
+    GradingAttempt,
+    StateSubmission,
+    SubmissionFailure,
+    TextSubmission,
+    decode_json_value,
+)
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
@@ -71,15 +77,23 @@ def grade_task(
     requirements = specification.verifier.environment_requirements
     if requirements != EnvironmentRequirements() and requirements.docker_image is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Private grading environment is unavailable")
-    if supports_candidate_mode(specification.verifier.kind):
-        if requirements.docker_image:
-            return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare an isolated grader")
-        return grade_answer(specification, convention, GradingAttempt(conversation))
+    candidate_mode = supports_candidate_mode(specification.verifier.kind)
+    if candidate_mode and requirements.docker_image:
+        return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare an isolated grader")
+    attempt = GradingAttempt(conversation)
+    if evidence is not None and (candidate_mode or specification.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}):
+        try:
+            state = StateSubmission(decode_json_value(evidence.state_json))
+        except ValueError as error:
+            return GradeResult(Outcome.INFRA_ERROR, None, f"Invalid captured state: {error}")
+        attempt = GradingAttempt(conversation, files=evidence.files, state=state)
+    if candidate_mode:
+        return grade_answer(specification, convention, attempt)
     executable = isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec)
     candidate = None
     if specification.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}:
         try:
-            submission = convention.extract(GradingAttempt(conversation))
+            submission = convention.extract(attempt)
         except SubmissionFailure as error:
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         if not isinstance(submission, TextSubmission):

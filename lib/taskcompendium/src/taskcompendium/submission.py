@@ -14,8 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
-from verifyit.json_objects import unique_object
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.grading_contract import (
@@ -26,6 +25,7 @@ from taskcompendium.grading_contract import (
     SubmissionFailure,
     TextSubmission,
     accepted_submission_types,
+    decode_json_value,
     resolve_verifier,
 )
 from taskcompendium.models import (
@@ -40,7 +40,6 @@ from taskcompendium.models import (
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
-JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
 
 
 def answer_call_tool() -> dict[str, object]:
@@ -95,7 +94,7 @@ class JsonAnswer(SubmissionConvention):
 
     def extract(self, attempt: GradingAttempt) -> TextSubmission:
         try:
-            value = _json_submission(_text_answer(attempt.conversation.events[-1]))
+            value = decode_json_value(_text_answer(attempt.conversation.events[-1]))
         except ValueError as error:
             raise SubmissionFailure("JSON submission is malformed") from error
         answer = value.get(ANSWER_FIELD) if isinstance(value, dict) else None
@@ -114,7 +113,7 @@ class JsonValueAnswer(SubmissionConvention):
 
     def extract(self, attempt: GradingAttempt) -> JsonSubmission:
         try:
-            return JsonSubmission(_json_submission(_text_answer(attempt.conversation.events[-1])))
+            return JsonSubmission(decode_json_value(_text_answer(attempt.conversation.events[-1])))
         except ValueError as error:
             raise SubmissionFailure("JSON value submission is malformed") from error
 
@@ -167,15 +166,6 @@ class FinalAction(SubmissionConvention):
 
     def extract(self, attempt: GradingAttempt) -> ActionSubmission:
         return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
-
-
-def _reject_json_constant(value: str) -> None:
-    raise ValueError(f"Non-JSON numeric constant: {value}")
-
-
-def _json_submission(text: str) -> JsonValue:
-    value = json.loads(text, object_pairs_hook=unique_object, parse_constant=_reject_json_constant)
-    return JSON_VALUE.validate_python(value)
 
 
 def _text_answer(response: ConversationEvent) -> str:
