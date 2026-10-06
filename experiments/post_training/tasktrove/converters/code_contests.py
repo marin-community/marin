@@ -11,7 +11,7 @@ explicit numeric-error tolerance use float comparison so the grader honors the t
 
 import json
 
-from tasktrove_verify.spec import Compare, StdioSpec
+from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

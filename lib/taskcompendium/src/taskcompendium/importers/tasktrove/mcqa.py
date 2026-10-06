@@ -7,12 +7,12 @@ import hashlib
 import json
 import tomllib
 
-from tasktrove_verify.spec import McqSpec, parse_spec
+from verifyit.spec import McqSpec, parse_spec
 
+from taskcompendium.grading import multiple_choice_answer
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
-from taskcompendium.models import AnswerType, TaskRequirements, TaskSpec
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
+from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -65,9 +65,9 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     )
     return TaskSpec(
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
-        instructions=instructions,
+        context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
         verifier=multiple_choice_answer(contract.expected, contract.options),
         source=archive.source,
-        requirements=TaskRequirements(),
-        answer_type=AnswerType.TEXT,
     )

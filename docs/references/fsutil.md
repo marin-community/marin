@@ -51,6 +51,27 @@ one of them is in play.
 before a command fails against it. A backend with no credentials only breaks commands
 that touch its buckets; the rest keep working.
 
+## Python API
+
+Transfer and streaming hash functions live in `rigging.filesystem` and use the
+same backend routing and credentials as the CLI:
+
+```python
+from rigging.filesystem.transfer import copy
+
+copy("./my-dir", "s3://bucket/prefix/", recursive=True)
+```
+
+This copies files beneath `prefix/my-dir/`. An existing destination directory or
+a trailing slash appends the source basename. Otherwise, the destination is the
+exact output path. Set `no_clobber=True` to preserve existing destination files.
+
+For multiple sources or to inspect operations before executing them, use
+`copy_plan()` and `execute_copy_plan()` from the same module. `sync_plan()` and
+`execute_sync()` synchronize directory contents directly into a destination
+prefix. `rigging.filesystem.hashing.file_md5()` streams a file and returns its
+MD5 digest as bytes.
+
 ## Commands
 
 | Command | What it does |

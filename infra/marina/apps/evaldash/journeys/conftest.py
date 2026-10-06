@@ -39,7 +39,7 @@ def seeded_records(request: pytest.FixtureRequest) -> Iterator[str]:
     try:
         evaldash_app.migrate(engine)
         ingestor = evaldash_app.PostgresIngestor(
-            evaldash_app.PgRecordStore(engine),
+            engine,
             (prefix,),
             evaldash_app.DEFAULT_INGEST_INTERVAL,
             evaldash_app.DEFAULT_REVALIDATE_AFTER,

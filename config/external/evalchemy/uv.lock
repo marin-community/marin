@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [[package]]
@@ -424,7 +424,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#e3f4a3d601896c437f37b0bd0a30e51651cce6d0" }
+source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#2083afa0b937cd7c2e1fbbccf23c8b713a1239a5" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },

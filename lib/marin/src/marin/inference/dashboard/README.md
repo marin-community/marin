@@ -10,13 +10,27 @@ bundled workspace and the PyPI `marin-core` wheel.
 ```bash
 npm install
 npm run build          # rebuild ../serve_dashboard.html (commit the result)
-npm run build:check    # vue-tsc, then build
+npm run build:check    # vue-tsc, tests, then build
 npm run dev            # local dev server (relative /v1, /info, /health fetches
                        # need a Marin serve dashboard server behind it)
 ```
 
 After editing anything under `src/`, rerun `npm run build` and commit the
 regenerated artifact alongside the source change.
+
+## Compare models
+
+Open **Compare** from a Marin serve dashboard, then paste the second model's
+dashboard URL. Both URLs must have the same browser origin, such as two Iris
+capability URLs on one controller. The shared composer sends each prompt to
+both endpoints. Each model receives its own prior messages on later turns.
+For any completed turn, select **Left is better**, **Right is better**, **Tie**,
+or **Both bad**. Click the selected choice again to clear it. The latest paired
+transcripts and selections are stored in the same browser's local storage as
+chat history. **New comparison** clears them. The second endpoint URL is not
+stored because its capability token grants access to that server; reconnect it
+after reloading the page to continue the saved comparison. No selection is
+sent to a server.
 
 ## Chat template controls
 
@@ -33,6 +47,10 @@ The dashboard does not expose raw `xml_tools`, `python_tools`, or `tools`
 template arguments. Functions entered in **Python tools** are converted to the
 standard OpenAI `tools` request field so the served model's active template
 formats them.
+
+When a reply reaches **Max tokens**, Chat warns that it may be incomplete. This
+applies whether the model stopped during thinking or after starting an answer.
+Increase **Max tokens** and retry the prompt.
 
 Enable **Raw chat** above the Chat composer to replace the rendered messages
 with one plain-text transcript of the entire chat. The transcript includes the

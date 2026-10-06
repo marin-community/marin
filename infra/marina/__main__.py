@@ -32,6 +32,7 @@ import pulumi_command as command
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
+from marina.database_setup import LOOM_DATABASE_USER
 from marina.manifest import JobRunner, discover_apps, job_runners
 
 PROJECT = "hai-gcp-models"
@@ -47,7 +48,6 @@ SERVICE_ACCOUNT = f"{SERVICE}@{PROJECT}.iam.gserviceaccount.com"
 DATABASE_USER = SERVICE_ACCOUNT.removesuffix(".gserviceaccount.com")
 # The codehealth workbench's database and its writer (infra/codehealth/review_store.py).
 CODEHEALTH_DATABASE = "context"
-LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 # Cloud SQL group login for people: members read any app's schema under their own Google
 # identity, without a database user each. ``marina migrate`` grants it.
 READER_GROUP = "eng-all@openathena.ai"
@@ -287,7 +287,8 @@ def main() -> None:
         ingress="INGRESS_TRAFFIC_ALL",
         iap_enabled=False,
         deletion_protection=False,
-        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=0, max_instance_count=4),
+        # Public applet navigation otherwise waits for the whole Marina image to cold start.
+        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=1, max_instance_count=4),
         template=gcp.cloudrunv2.ServiceTemplateArgs(
             service_account=SERVICE_ACCOUNT,
             timeout="60s",

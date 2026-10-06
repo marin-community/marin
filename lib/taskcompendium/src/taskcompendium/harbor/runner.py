@@ -4,31 +4,26 @@
 """Resolve a launch separately from a task-owned Harbor environment configuration."""
 
 from pathlib import Path
-from typing import Any
 
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from taskcompendium.grading import supports_verifier
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
+    SUBMISSION_CONVENTION_FILE,
     HarborEnvironmentConfig,
     read_environment_config,
     read_specification,
+    read_submission_convention,
     validate_environment_config,
 )
+from taskcompendium.submission import chat_request
 
 DEFAULT_CHAT_TIMEOUT = 120
-
-
-class ReplayLaunch(BaseModel):
-    """A fixed response for exercising the Harbor trial path."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    response: str
 
 
 class ChatLaunch(BaseModel):
@@ -36,34 +31,32 @@ class ChatLaunch(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model: str
-    api_base: str
-    api_key_env: str | None = None
-    request_timeout: float = DEFAULT_CHAT_TIMEOUT
+    model: str = Field(min_length=1)
+    api_base: str = Field(min_length=1)
+    api_key_env: str | None = Field(default=None, min_length=1)
+    request_timeout: float = Field(default=DEFAULT_CHAT_TIMEOUT, gt=0, allow_inf_nan=False)
 
 
 async def run_trial(
     task_dir: Path,
     environment_config: HarborEnvironmentConfig,
-    launch: ReplayLaunch | ChatLaunch,
+    launch: ChatLaunch,
     trials_dir: Path,
     trial_name: str,
 ) -> TrialResult:
     """Run a lowered task and return Harbor's trial result."""
     if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
         raise ValueError("Launch environment configuration differs from the exported task")
-    validate_environment_config(read_specification(task_dir / SPECIFICATION_FILE), environment_config)
-    if isinstance(launch, ReplayLaunch):
-        agent: dict[str, Any] = {
-            "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
-            "kwargs": launch.model_dump(),
-        }
-    else:
-        agent = {
-            "import_path": "taskcompendium.harbor.adapter:DirectChatAgent",
-            "model_name": launch.model,
-            "kwargs": launch.model_dump(exclude={"model"}),
-        }
+    specification = read_specification(task_dir / SPECIFICATION_FILE)
+    validate_environment_config(specification, environment_config)
+    if not supports_verifier(specification.verifier):
+        raise NotImplementedError("Direct chat cannot run this verifier")
+    convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    agent = {
+        "import_path": "taskcompendium.harbor.adapter:ChatAgent",
+        "model_name": launch.model,
+        "kwargs": {**launch.model_dump(exclude={"model"}), "request": chat_request(specification, convention)},
+    }
     config = TrialConfig.model_validate(
         {
             "task": {"path": str(task_dir.resolve())},

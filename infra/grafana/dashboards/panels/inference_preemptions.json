@@ -84,5 +84,6 @@
       ],
       "filterExpression": "metric == 'preemptions'"
     }
-  ]
+  ],
+  "maxDataPoints": 360
 }

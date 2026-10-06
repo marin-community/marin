@@ -39,12 +39,13 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
-from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
+from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer, _long_layer_schedule
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -212,59 +213,6 @@ def build_tagged_evaluator(
     )
 
 
-def _lm_flops_per_token(
-    hidden_dim: int,
-    intermediate_dim: int,
-    num_layers: int,
-    num_kv_heads: int,
-    num_heads: int,
-    seq_len: int,
-    vocab_size: int,
-    glu: bool,
-    num_experts: int = 1,
-    num_shared_experts: int = 0,
-    num_experts_per_tok: int = 1,
-    shared_intermediate_dim: int | None = None,
-    sliding_window: int | None = None,
-    num_full_attention_layers: int | None = None,
-) -> float:
-    """Analytic forward FLOPs per token, including the run's hybrid attention pattern."""
-    head_dim = hidden_dim / num_heads
-    shared_intermediate_dim = intermediate_dim if shared_intermediate_dim is None else shared_intermediate_dim
-    routed_mlp = 2 * (3 if glu else 2) * hidden_dim * intermediate_dim * num_experts_per_tok
-    shared_mlp = 2 * (3 if glu else 2) * hidden_dim * shared_intermediate_dim * num_shared_experts
-    mlp = routed_mlp + shared_mlp
-    if num_experts > 1:
-        mlp += 2 * hidden_dim * num_experts
-    qkv_proj = 2 * hidden_dim * (num_heads * head_dim + 2 * num_kv_heads * head_dim)
-    dense_proj = 2 * hidden_dim * hidden_dim
-
-    def _attn_per_token(effective_seq: int) -> float:
-        key_query_logits = 2 * effective_seq**2 * num_heads * head_dim
-        mask = 3 * effective_seq * effective_seq * num_heads
-        mask_value = 2 * effective_seq * effective_seq * head_dim * num_heads
-        return (key_query_logits + mask + mask_value) / effective_seq
-
-    if sliding_window is None:
-        n_full = num_layers
-        n_window = 0
-    else:
-        n_full = num_full_attention_layers if num_full_attention_layers is not None else 0
-        if n_full < 0 or n_full > num_layers:
-            raise ValueError(f"num_full_attention_layers ({n_full}) must be in [0, {num_layers}]")
-        n_window = num_layers - n_full
-
-    attn_full = _attn_per_token(seq_len) if n_full else 0.0
-    if n_window:
-        assert sliding_window is not None
-        attn_window = _attn_per_token(min(seq_len, sliding_window))
-    else:
-        attn_window = 0.0
-    per_layer_dense = mlp + qkv_proj + dense_proj
-    lm_head = 2 * hidden_dim * vocab_size
-    return num_layers * per_layer_dense + n_full * attn_full + n_window * attn_window + lm_head
-
-
 def _compute_flops(
     *,
     model_config: GrugModelConfig,
@@ -275,9 +223,9 @@ def _compute_flops(
     # smaller than a naive ``all-layers-full-attention`` estimate, because
     # each sliding-window layer's attention span is capped at the window.
     n = model_config.num_layers
-    num_full_attention_layers = n // 4 + (0 if (n - 1) % 4 == 3 else 1)
+    num_full_attention_layers = int(_long_layer_schedule(n).sum())
 
-    flops_per_token = _lm_flops_per_token(
+    flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,

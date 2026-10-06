@@ -300,8 +300,8 @@ async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
 /// guard across the scan, exactly as the server does.
 async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<String>> {
     let _guard = store.query_visibility().read().await;
-    let providers = store.query_providers().unwrap();
     let sql = format!("SELECT {column} FROM \"{namespace}\" ORDER BY seq");
+    let providers = store.query_providers(&[namespace.to_owned()]).unwrap();
     let result = run_query_over(&make_ctx(), providers, &sql).await.unwrap();
     let mut values = Vec::new();
     for batch in &result.batches {
@@ -313,7 +313,9 @@ async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<
 
 async fn scalar_i64(store: &Store, sql: &str) -> i64 {
     let _guard = store.query_visibility().read().await;
-    let providers = store.query_providers().unwrap();
+    let providers = store
+        .query_providers(&crate::query::query_namespaces(&make_ctx(), sql).unwrap())
+        .unwrap();
     let result = run_query_over(&make_ctx(), providers, sql).await.unwrap();
     result.batches[0]
         .column(0)
