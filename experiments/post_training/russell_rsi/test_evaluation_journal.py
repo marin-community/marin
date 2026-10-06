@@ -10,7 +10,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
 from rolloutengine.contracts import RolloutContractError
@@ -132,7 +131,9 @@ class TokenServer:
             for message in body["messages"]:
                 role = {"system": 1, "user": 2, "assistant": 3, "tool": 4}[message["role"]]
                 text = "tool-call" if message.get("tool_calls") else message.get("content", "")
-                tokens.extend([role, self.content_id(text)])
+                tokens.append(role)
+                if text:
+                    tokens.append(self.content_id(text))
                 if message["role"] == "assistant" and not body.get("continue_final_message"):
                     tokens.append(9)
             if body.get("add_generation_prompt"):
@@ -477,11 +478,6 @@ def calibration_config(frozen_comparison):
 
 
 def test_completed_journal_reconstructs_without_http_or_runtime(tmp_path, frozen_comparison, monkeypatch):
-    # This saved comparison and scripted native-token stream use the frozen study runtime.
-    monkeypatch.setattr(
-        "experiments.post_training.russell_rsi.rollout_eval.MARIN_SKYRL",
-        replace(MARIN_SKYRL, commit="f124f258383763e10766cff5e5af4c433cad4b1a"),
-    )
     config = frozen_comparison.evaluation
     server = TokenServer(tmp_path / "journal")
     journal = supplementary_evaluation_journal(frozen_comparison)
