@@ -70,6 +70,7 @@ def plan(directory: Path, kind: TrialKind, item_id: str, k: int = K, max_retries
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
         ledger=JsonlLedger(directory / "ledger"),
+        first_attempt=0,
     )
 
 

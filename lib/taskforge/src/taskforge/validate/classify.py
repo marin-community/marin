@@ -97,7 +97,7 @@ def _exception_cause(error: BaseException) -> Cause:
 def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
     """Whether ``error`` is a task setup, healthcheck or stage-setup failure from RolloutEngine.
 
-    ``rolloutengine.machines`` and ``rolloutengine.task_session`` raise these as a bare
+    RolloutEngine's environment setup and its default shell task session raise these as a bare
     ``RuntimeError`` or ``TimeoutError``, the same types as machine failures, so this matches
     message prefixes. Replace it with the typed errors requested in #9782 once #9799 (rolloutengine
     typed setup failures) lands.
@@ -107,7 +107,7 @@ def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
 
 def _is_setup_failure(error: BaseException | None, operation: RolloutOperation) -> bool:
     if operation is RolloutOperation.PREPARE and isinstance(error, ValueError):
-        return True  # _ShellboxTaskSession.prepare: the environment lacks the task's required capabilities
+        return True  # the default task session's prepare: the environment lacks the task's required capabilities
     return _matches_rolloutengine_setup_message(error)
 
 
