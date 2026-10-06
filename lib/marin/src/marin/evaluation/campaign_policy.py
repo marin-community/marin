@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frozen configuration profile for the October 5 campaign.
+"""Frozen configuration profiles for evaluation campaigns.
 
 These checks compare submitter-provided settings. Independent policy attestation
 requires the trusted evidence boundary described in marin-community/marin#9458.
@@ -18,6 +18,7 @@ from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, ModelRef
 
 OCTOBER_5_VERSION = "eval-policy-2026-10-05-verified"
+OCTOBER_6_VERSION = "eval-policy-2026-10-06-verified"
 MAX_SERVED_CONTEXT = 131072
 
 
@@ -55,7 +56,17 @@ OCTOBER_5_ORIGINAL_HARBOR_COMMIT = CAMPAIGN.runtimes["harbor"]
 CAMPAIGN = CAMPAIGN.model_copy(
     update={"runtimes": {**CAMPAIGN.runtimes, "harbor": "721215263368e3ff2b16806e01cb1d710a61e573"}}
 )
-CAMPAIGNS = {OCTOBER_5_VERSION: CAMPAIGN}
+CAMPAIGNS = {
+    OCTOBER_5_VERSION: CAMPAIGN,
+    OCTOBER_6_VERSION: CAMPAIGN.model_copy(
+        update={
+            "runtimes": {
+                "harbor": "065a04787a0023b5f9a972799d68d4d4b9068983",
+                "evalchemy": "9780bea47d243d883ca0aa4189cf352d5bef86fb",
+            }
+        }
+    ),
+}
 
 
 def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: CampaignProfile) -> tuple[str, ...]:
