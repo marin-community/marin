@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 
 import experiments.grug.fast_track.test_ngram_stat as t
-from experiments.grug.fast_track.model import LatentProj, _switchhead_weights, mixture_weights
+from experiments.grug.fast_track.gating import mixture_weights, switchhead_weights
+from experiments.grug.fast_track.model import LatentProj
 from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight
 
 
@@ -31,7 +32,7 @@ def test_mixture_latent_matches_block_gated_reference():
         out = np.asarray(proj(cfg, x))
     latent = (x @ proj.down).reshape(3, 4, 3)
     latent = latent / np.sqrt(np.mean(np.square(latent), -1, keepdims=True) + cfg.layer_norm_eps)
-    weights = np.asarray(_switchhead_weights(x[None], proj.mix_gate, 4, 2))[0, :, 0]
+    weights = np.asarray(switchhead_weights(x[None], proj.mix_gate, 4, 2))[0, :, 0]
     assert ((weights > 0).sum(-1) == 2).all()
     expected = (latent * weights[..., None]).reshape(3, 12) @ proj.up
     np.testing.assert_allclose(out, expected, rtol=1e-4, atol=1e-5)

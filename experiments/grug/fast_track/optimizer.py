@@ -1558,6 +1558,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
+    frozen_paths: str = ""
+    """Regex of parameter paths that get no update (filled by the launcher, e.g. the unused routed weights of a
+    ``final_shared_only`` layer)."""
     write_mask_blocks: int = 0
     """``expert_write_masked`` output-block pattern (filled by the launcher): MuonH masks the orthogonalized
     direction of the expert ``w_down`` leaves matching ``write_mask_paths`` to it before the hyperball step."""
@@ -2299,7 +2302,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def _base_group(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if _FROZEN_LEAVES.search(path_lower):
+            if _FROZEN_LEAVES.search(path_lower) or (self.frozen_paths and re.search(self.frozen_paths, path_lower)):
                 return "frozen"
             if self.latent_proj_update != "muonh" and _LATENT_PROJ.search(path_lower):
                 return "frozen" if self.latent_proj_update == "frozen" else "stiefel"

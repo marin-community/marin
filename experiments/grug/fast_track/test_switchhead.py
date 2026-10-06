@@ -10,14 +10,14 @@ import numpy as np
 from levanter.grug.attention import AttentionMask
 
 import experiments.grug.fast_track.test_ngram_stat as t
-from experiments.grug.fast_track.model import _switchhead_weights
+from experiments.grug.fast_track.gating import switchhead_weights
 from experiments.grug.fast_track.test_head_probe import _DENSE
 
 
 def test_weights_keep_sigmoid_of_the_top_k_logits():
     x = jax.random.normal(jax.random.PRNGKey(0), (2, 5, 8))
     gate = jax.random.normal(jax.random.PRNGKey(1), (8, 3 * 4))
-    weights = np.asarray(_switchhead_weights(x, gate, experts=4, topk=2))
+    weights = np.asarray(switchhead_weights(x, gate, experts=4, topk=2))
     logits = np.asarray(jnp.einsum("bsd,dg->bsg", x, gate)).reshape(2, 5, 3, 4)
     top2 = np.argsort(-logits, axis=-1)[..., :2]
     expected = np.zeros_like(logits)

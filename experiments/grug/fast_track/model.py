@@ -62,6 +62,7 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
+from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
     reduce_router_stats,
@@ -951,6 +952,13 @@ class GrugModelConfig:
     layer of the softmax tail stack, ``latent_out_full_layers``) write ``hidden_dim + W``: the first ``hidden_dim``
     go to the residual stream as usual, the last W skip it and, RMS-normed (``lm_head_extra_norm``), are
     concatenated to the final-normed stream before the lm_head (``output_proj`` is ``[hidden_dim + W, V]``)."""
+    final_shared_only: bool = False
+    """The final layer (alone in the softmax tail stack, ``latent_out_full_layers``) runs only its shared expert,
+    ``final_shared_intermediate_dim`` wide: no routing, dispatch or routed experts. It still emits zero-valued
+    MoE stats of the usual shapes so per-layer logging lines up; its unused routed weights are frozen."""
+    final_shared_intermediate_dim: int = 0
+    routed_off: bool = False
+    """Internal: set on the final layer's config by ``final_shared_only``."""
     lm_head_extra_source: str = "routed"
     """Which part of the final MLP writes the ``lm_head_extra_dim`` slice: ``routed`` (the routed experts, which
     widens their write and its all-to-all return) or ``shared`` (the shared expert only: no dispatch cost)."""
@@ -1867,6 +1875,17 @@ class GrugModelConfig:
             or self.lm_head_unigram_bias
         ):
             raise ValueError("lm_head_prototypes needs no MTP, aux LM layer, output bigram prior or lm_head bias")
+        if self.final_shared_only and (
+            not self.attn_res
+            or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
+            or self.num_shared_experts != 1
+            or self.final_shared_intermediate_dim <= 0
+            or self.loop_passes != 1
+        ):
+            raise ValueError(
+                "final_shared_only needs attn_res, the final layer alone in the softmax tail stack, one shared expert "
+                "and final_shared_intermediate_dim > 0"
+            )
         if self.lm_head_extra_source not in ("routed", "shared"):
             raise ValueError(f"lm_head_extra_source must be routed or shared, got {self.lm_head_extra_source!r}")
         if self.lm_head_extra_dim and (
@@ -2174,18 +2193,6 @@ class InklingRelPos(eqx.Module):
         )
 
 
-def _switchhead_weights(
-    x: Float[Array, "B S D"], gate: Float[Array, "D GE"], experts: int, topk: int
-) -> Float[Array, "B S G E"]:
-    """SwitchHead's non-competitive expert weights: ``sigmoid(x W_gate)`` on each head's top-k logits, else 0."""
-    logits = rearrange(jnp.einsum("bsd,dg->bsg", x, gate).astype(jnp.float32), "b s (g e) -> b s g e", e=experts)
-    weights = jax.nn.sigmoid(logits)
-    if topk >= experts:
-        return weights
-    threshold = jax.lax.top_k(logits, topk)[0][..., -1:]
-    return jnp.where(logits >= threshold, weights, 0.0)
-
-
 def _switchhead_stats(site: str, weights: Float[Array, "B S G E"]) -> dict[str, jax.Array]:
     """Mean selected weight and expert-load imbalance (busiest expert's share over the even share)."""
     weights = jax.lax.stop_gradient(weights)
@@ -2232,78 +2239,6 @@ class LatentProj(eqx.Module):
         if self.mix_gate is not None:
             latent = latent * mixture_weights(x, self.mix_gate, blocks, self.topk)[..., None].astype(latent.dtype)
         return _proj(cfg, rearrange(latent, "... e r -> ... (e r)"), self.up)
-
-
-def mixture_weights(
-    x: Float[Array, "... D"],
-    gate: Float[Array, "D E"],
-    experts: int,
-    topk: int,
-    selection_bias: Float[Array, " E"] | None = None,
-    entropy_weight: float = 0.0,
-    renorm: bool = False,
-) -> Float[Array, "... E"]:
-    """SwitchHead's sigmoid top-k weights for one group of ``experts`` blocks, over any leading axes of ``x``
-    (computed in place, so the weights keep ``x``'s batch sharding). ``selection_bias`` (``LatentMixBalance.BIAS``)
-    shifts only which blocks are picked; ``entropy_weight`` (``LatentMixBalance.ENTROPY``) adds the balance
-    regularizer's gradient to the logits; ``renorm`` scales each token's kept weights to sum to 1."""
-    logits = jnp.einsum("...d,de->...e", x, gate).astype(jnp.float32)
-    if entropy_weight:
-        logits = _entropy_balanced(logits, entropy_weight)
-    weights = jax.nn.sigmoid(logits)
-    if topk >= experts:
-        return weights
-    select = logits if selection_bias is None else logits + jax.lax.stop_gradient(selection_bias)
-    threshold = jax.lax.top_k(select, topk)[0][..., -1:]
-    chosen = select >= threshold
-    if selection_bias is not None:
-        # The bias gets the load error as its gradient; the 0 * keeps its custom VJP on the backward path.
-        load = jnp.mean(chosen.astype(jnp.float32), axis=tuple(range(chosen.ndim - 1)))
-        weights = weights + 0.0 * _load_error_grad(selection_bias, jax.lax.stop_gradient(load))
-    kept = jnp.where(chosen, weights, 0.0)
-    if renorm:
-        kept = kept / jnp.sum(kept, axis=-1, keepdims=True)
-    return kept
-
-
-@jax.custom_vjp
-def _load_error_grad(bias: Float[Array, " E"], load: Float[Array, " E"]) -> Float[Array, " E"]:
-    """Identity on ``bias`` whose backward returns ``load - mean(load)``: a sign-SGD step on it is the
-    auxiliary-loss-free balance update (overloaded blocks' biases fall)."""
-    return bias
-
-
-def _load_error_grad_fwd(bias, load):
-    return bias, load
-
-
-def _load_error_grad_bwd(load, g):
-    del g
-    return load - jnp.mean(load), jnp.zeros_like(load)
-
-
-_load_error_grad.defvjp(_load_error_grad_fwd, _load_error_grad_bwd)
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
-def _entropy_balanced(logits: Float[Array, "... E"], weight: float) -> Float[Array, "... E"]:
-    """Identity on ``logits`` whose backward adds ``d(weight * -H(mean_t softmax(logits_t))) / d logits``."""
-    return logits
-
-
-def _entropy_balanced_fwd(logits, weight):
-    return logits, logits
-
-
-def _entropy_balanced_bwd(weight, logits, g):
-    def neg_entropy(lg):
-        mean_p = jnp.mean(jax.nn.softmax(lg, axis=-1).reshape(-1, lg.shape[-1]), axis=0)
-        return weight * jnp.sum(mean_p * jnp.log(mean_p + 1e-9))
-
-    return (g + jax.grad(neg_entropy)(logits),)
-
-
-_entropy_balanced.defvjp(_entropy_balanced_fwd, _entropy_balanced_bwd)
 
 
 def _mixture_load_stats(weights: Float[Array, "... E"]) -> dict[str, jax.Array]:
@@ -2723,7 +2658,7 @@ class CausalSelfAttention(eqx.Module):
             v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
         else:
             experts = self.cfg.switchhead_experts
-            weights = _switchhead_weights(kv_in, self.switch_v_gate, experts, self.cfg.switchhead_topk)
+            weights = switchhead_weights(kv_in, self.switch_v_gate, experts, self.cfg.switchhead_topk)
             v_experts = rearrange(v_flat, "... (m e d) -> ... m e d", e=experts, d=head_dim)
             v = jnp.einsum("bsmed,bsme->bsmd", v_experts, weights.astype(v_experts.dtype))
 
@@ -2964,7 +2899,7 @@ class CausalSelfAttention(eqx.Module):
             stats.update(
                 _switchhead_stats(
                     "v",
-                    _switchhead_weights(
+                    switchhead_weights(
                         x if kv_input is None else kv_input,
                         self.switch_v_gate,
                         self.cfg.switchhead_experts,
@@ -2974,7 +2909,7 @@ class CausalSelfAttention(eqx.Module):
             )
         if self.switch_o_gate is not None:
             # Each head's read is copied to its experts, weighted, and contracted with the (n e h) rows of w_o.
-            weights = _switchhead_weights(x, self.switch_o_gate, self.cfg.switchhead_experts, self.cfg.switchhead_topk)
+            weights = switchhead_weights(x, self.switch_o_gate, self.cfg.switchhead_experts, self.cfg.switchhead_topk)
             stats.update(_switchhead_stats("o", weights))
             attn_out = attn_out[:, :, :, None, :] * weights[..., None].astype(attn_out.dtype)
         # Merge heads (and SwitchHead experts) into hidden dim while keeping model-axis sharding for w_o.
@@ -4797,6 +4732,12 @@ def _shared_experts_local(
     return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
 
 
+def _zeros_like_abstract(a: jax.ShapeDtypeStruct) -> jax.Array:
+    """Zeros with ``a``'s shape, dtype and (named) sharding."""
+    spec = a.sharding.spec if isinstance(a.sharding, NamedSharding) else None
+    return jnp.zeros(a.shape, a.dtype, out_sharding=spec)
+
+
 def moe_and_shared_fused(
     mlp: MoEMLP,
     shared: tuple[DenseMLP, ...],
@@ -4865,16 +4806,24 @@ def moe_and_shared_fused(
             jnp.einsum("td,de->te", flats.get(n, x_flat), w, out_sharding=_batch_spec())
             for n, w in zip(names, weights, strict=True)
         ]
-    routed, stats = mlp(
-        part_inputs.get("latent", x) if part_inputs else x,
-        projected=parts[: len(moe_weights)],
-        hash_token_ids=hash_token_ids,
-        noise_key=noise_key,
-        router_tok_rows=router_tok_rows,
-        router_seed_bias=router_seed_bias,
-        overlap=overlap,
-        router_embed=router_embed,
-    )
+
+    def routed_mlp():
+        return mlp(
+            part_inputs.get("latent", x) if part_inputs else x,
+            projected=parts[: len(moe_weights)],
+            hash_token_ids=hash_token_ids,
+            noise_key=noise_key,
+            router_tok_rows=router_tok_rows,
+            router_seed_bias=router_seed_bias,
+            overlap=overlap,
+            router_embed=router_embed,
+        )
+
+    if mlp.cfg.routed_off:
+        # No routing or dispatch: zeros shaped like the routed output and stats (traced abstractly, never run).
+        routed, stats = jax.tree.map(_zeros_like_abstract, jax.eval_shape(routed_mlp))
+    else:
+        routed, stats = routed_mlp()
     if overlap is not None:
         return routed, stats
     if not gated:
@@ -7226,13 +7175,7 @@ class Transformer(eqx.Module):
             stacked_blocks=stack(softmax_layers, False),
             kda_blocks=stack(kda_layers, True) if kda_layers else None,
             stacked_blocks_tail=(
-                stack(
-                    softmax_tail,
-                    False,
-                    _final_extra_config(tail_cfg, cfg.lm_head_extra_dim) if cfg.lm_head_extra_dim else tail_cfg,
-                )
-                if softmax_tail
-                else None
+                stack(softmax_tail, False, _final_layer_config(cfg, tail_cfg)) if softmax_tail else None
             ),
             kda_blocks_tail=stack(kda_tail, True, tail_cfg) if kda_tail else None,
             final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="final"),
@@ -8905,6 +8848,15 @@ def _widen_shared_down(expert: "DenseMLP", cfg: GrugModelConfig, key: PRNGKeyArr
     return eqx.tree_at(lambda m: m.w_down, expert, reshard(w_down, spec))
 
 
+def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> GrugModelConfig:
+    """The softmax tail stack's config when it holds only the final layer: ``lm_head_extra_dim`` and
+    ``final_shared_only`` apply to it."""
+    out = _final_extra_config(tail_cfg, cfg.lm_head_extra_dim) if cfg.lm_head_extra_dim else tail_cfg
+    if cfg.final_shared_only:
+        out = dataclasses.replace(out, routed_off=True, shared_expert_intermediate_dim=cfg.final_shared_intermediate_dim)
+    return out
+
+
 def _final_extra_config(tail_cfg: GrugModelConfig, extra: int) -> GrugModelConfig:
     """The final layer's config under ``lm_head_extra_dim``: its routed or shared experts also write the
     lm_head-only slice."""
@@ -8936,6 +8888,7 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         latent_out_dim=cfg.hidden_dim,
         latent_out_full_layers=(),
         lm_head_extra_dim=0,  # model-level: only the final layer's config writes the slice (final_write_extra)
+        final_shared_only=False,  # model-level: the final layer's config carries routed_off
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,

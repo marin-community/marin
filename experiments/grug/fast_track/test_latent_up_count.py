@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import experiments.grug.fast_track.test_ngram_stat as t
-from experiments.grug.fast_track.model import mixture_weights
+from experiments.grug.fast_track.gating import mixture_weights
 from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight
 
 

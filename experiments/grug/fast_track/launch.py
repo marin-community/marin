@@ -532,6 +532,9 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     optimizer = _apply_settings(optimizer, optimizer_settings or {})
+    if model.final_shared_only:
+        # The final layer's routed path never runs: keep its weights out of the optimizer.
+        optimizer = dataclasses.replace(optimizer, frozen_paths=r"(?:^|\.)stacked_blocks_tail\.stacked\.mlp\.")
     if model.expert_write_masked:
         blocks = model.expert_write_blocks or model.tail_expert_write_blocks
         paths = (
