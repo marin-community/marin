@@ -262,7 +262,7 @@ def shell_tool(machine: Machine, *, timeout: float, output_limit_bytes: int, use
         machine: Where commands run; files persist between calls until the caller closes it.
         timeout: Seconds per command before the machine reports it timed out.
         output_limit_bytes: Bytes kept of each of stdout and stderr.
-        user: User the commands run as. RolloutEngine runs a task's shell as ``TaskSpec.agent_user``;
+        user: User the commands run as. RolloutEngine runs a task's shell as ``TaskExecution.agent_user``;
             pass it to act as the solver does. None is the machine's default user, as for ``Command``.
     """
 
