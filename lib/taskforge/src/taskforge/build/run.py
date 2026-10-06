@@ -7,13 +7,15 @@ provenance.
 ``run_build`` enforces the library rules a program cannot opt out of: the task's verifier (each
 stage's verifier for a staged task) is the output of a GRADER step, the controls are the output of
 a CONTROLS step, the two roles are separate steps, the execution settings prepare exactly the task's
-stages (``check_execution``), and the controls are a complete set for the task
+stages (``check_execution``), the submission convention can carry the task's answer
+(``submission_compatibility``), and the controls are a complete set for the task
 (``validate_controls``). Controls are not replayed here; ``validate`` does that. A build whose
 controls include a candidate ``b.try_grader`` graded (other than a grader's reference answer or the
 empty answer) fails, so a program cannot fit its controls to its grader. The draft is written to
 ``<item_dir>/draft/``.
 """
 
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,15 @@ from pydantic import TypeAdapter
 from taskcompendium.environment import EnvironmentFile
 from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec, TextMessage, VerifierSpec
+from taskcompendium.submission import (
+    AnswerCall,
+    FinalAction,
+    JsonAnswer,
+    JsonValueAnswer,
+    PlainText,
+    SubmissionConvention,
+    submission_compatibility,
+)
 
 from taskforge.build.sdk import (
     GRADED_RESOURCE_PREFIX,
@@ -34,14 +45,18 @@ from taskforge.build.sdk import (
     Grader,
 )
 from taskforge.build.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole
-from taskforge.canonical import write_atomic
+from taskforge.canonical import pretty_json, write_atomic
 from taskforge.ledger.records import EntryKind, span
 from taskforge.proposal.model import TaskProposal
 from taskforge.spec.controls import Control, Workspace, controls_json, validate_controls
-from taskforge.spec.draft import check_execution
+from taskforge.spec.draft import MACHINE_ANSWER_TYPES, check_execution
 
 DRAFT_DIR = "draft"
 SCRATCH_DIR = "scratch"
+CONVENTION_TYPES: dict[str, type[SubmissionConvention]] = {
+    convention.__name__: convention for convention in (PlainText, JsonAnswer, JsonValueAnswer, AnswerCall, FinalAction)
+}
+"""The submission conventions a draft can record, by class name (``convention.json``'s ``type``)."""
 
 
 @dataclass(frozen=True)
@@ -61,10 +76,11 @@ class Provenance:
 
 @dataclass(frozen=True)
 class TaskDraft:
-    """A built task. ``execution`` is what validation passes to RolloutEngine beside ``task``."""
+    """A built task. ``execution`` and ``convention`` are what validation runs ``task`` with."""
 
     task: TaskSpec
     execution: TaskExecution
+    convention: SubmissionConvention
     controls: tuple[Control, ...]
     provenance: Provenance
 
@@ -147,10 +163,36 @@ def check_controls_not_graded(
         )
 
 
+def check_convention(task: TaskSpec, convention: SubmissionConvention) -> None:
+    """Raise ``BuildFailure`` unless ``convention`` can carry ``task``'s answer.
+
+    A task whose answer is the machine state submits nothing through a convention, so any
+    recordable convention fits it.
+    """
+    if type(convention).__name__ not in CONVENTION_TYPES:
+        raise BuildFailure(f"convention: {type(convention).__name__} is not one of {sorted(CONVENTION_TYPES)}", None)
+    if task.answer_type in MACHINE_ANSWER_TYPES:
+        return
+    compatibility = submission_compatibility(task, convention)
+    if not compatibility.compatible:
+        raise BuildFailure(f"convention {convention.id!r}: {'; '.join(compatibility.reasons)}", None)
+
+
+def convention_json(convention: SubmissionConvention) -> bytes:
+    """``convention`` with its class name, as ``load_convention`` reads it."""
+    return pretty_json({"type": type(convention).__name__, "convention": convention}).encode()
+
+
+def load_convention(content: bytes) -> SubmissionConvention:
+    record = json.loads(content)
+    return CONVENTION_TYPES[record["type"]].model_validate(record["convention"])
+
+
 def _write_draft(directory: Path, draft: TaskDraft) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     write_atomic(directory / "task.json", draft.task.model_dump_json(indent=2).encode())
     write_atomic(directory / "execution.json", draft.execution.model_dump_json(indent=2).encode())
+    write_atomic(directory / "convention.json", convention_json(draft.convention))
     write_atomic(directory / "controls.json", controls_json(draft.controls))
     write_atomic(directory / "provenance.json", _PROVENANCE.dump_json(draft.provenance, indent=2))
 
@@ -198,6 +240,7 @@ async def run_build(
             check_execution(output.task, output.execution)
         except ValueError as error:
             raise BuildFailure(f"execution: {error}", None) from error
+        check_convention(output.task, output.convention)
         try:
             validate_controls(output.task, output.controls)
         except ValueError as error:
@@ -205,6 +248,7 @@ async def run_build(
         draft = TaskDraft(
             task=output.task,
             execution=output.execution,
+            convention=output.convention,
             controls=output.controls,
             provenance=Provenance(
                 item_id=item_id,
@@ -238,6 +282,7 @@ def load_draft(directory: Path) -> TaskDraft:
     return TaskDraft(
         task=TaskSpec.model_validate_json((directory / "task.json").read_bytes()),
         execution=TaskExecution.model_validate_json((directory / "execution.json").read_bytes()),
+        convention=load_convention((directory / "convention.json").read_bytes()),
         controls=_CONTROLS.validate_json((directory / "controls.json").read_bytes()),
         provenance=_PROVENANCE.validate_json((directory / "provenance.json").read_bytes()),
     )

@@ -110,7 +110,9 @@ async def test_failed_check_names_the_step(proposal, program_source, tmp_path, s
             "CONTROLS step",
         ),
         # The execution settings prepare a stage the task does not have.
-        ("execution=EXECUTION, controls=", 'execution=TaskExecution(stages={"extra": {}}), controls=', "execution:"),
+        ("execution=EXECUTION, convention=", 'execution=TaskExecution(stages={"extra": {}}), convention=', "execution:"),
+        # The convention cannot carry the task's text answer.
+        ('CONVENTION = PlainText(id="plain_text")', 'CONVENTION = JsonValueAnswer(id="json")', "convention 'json'"),
         # The control set lacks a shortcut or reward-hack control.
         (
             'control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT',
@@ -122,9 +124,13 @@ async def test_failed_check_names_the_step(proposal, program_source, tmp_path, s
 async def test_output_that_breaks_a_library_rule_fails_the_build(
     proposal, program_source, tmp_path, services, old, new, message
 ):
-    source = program_source.replace(old, new).replace(
-        "from taskcompendium.grading_result import Outcome",
-        "from taskcompendium.grading_result import Outcome\nfrom verifyit.spec import ExactSpec",
+    source = (
+        program_source.replace(old, new)
+        .replace(
+            "from taskcompendium.grading_result import Outcome",
+            "from taskcompendium.grading_result import Outcome\nfrom verifyit.spec import ExactSpec",
+        )
+        .replace("import PlainText", "import JsonValueAnswer, PlainText")
     )
     assert source != program_source
     program = compile_program(source, proposal.digest)

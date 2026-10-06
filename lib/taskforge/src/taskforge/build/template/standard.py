@@ -33,6 +33,7 @@ from taskcompendium.environment import DockerBuild, EnvironmentFile, Environment
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec, format_conversation
+from taskcompendium.submission import PlainText
 from verifyit.spec import ExactSpec, NumericSpec
 
 from taskforge.build.sdk import Build, BuildOutput, Grader
@@ -61,6 +62,8 @@ ATTEMPTS = 3
 RESEARCH_TURNS = 32
 EXECUTION = TaskExecution()
 """Template tasks have one stage and set no deadlines or agent user."""
+CONVENTION = PlainText(id="plain_text")
+"""Template tasks take a plain-text final reply."""
 SOURCE_DATASET = "taskforge"
 
 TASK_CONTEXT = """\
@@ -489,4 +492,4 @@ async def build(b: Build) -> BuildOutput:
     text = await instructions(b, made, graded, "")
     task = await assemble(b, machine, graded, text)
     fixed = await controls(b, task, graded, "")
-    return BuildOutput(task=task, execution=EXECUTION, controls=fixed)
+    return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=fixed)

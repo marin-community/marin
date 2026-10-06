@@ -102,8 +102,10 @@ from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, StdoutR
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
+from taskcompendium.submission import PlainText
 
 EXECUTION = TaskExecution()
+CONVENTION = PlainText(id="plain_text")
 
 GRADE = GRADE_SOURCE
 
@@ -168,7 +170,7 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    return BuildOutput(task=task, execution=EXECUTION, controls=await fixed_controls(b, task))
+    return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=await fixed_controls(b, task))
 """.replace(
     "GRADE_SOURCE", repr(GRADE)
 )
