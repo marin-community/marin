@@ -31,7 +31,10 @@ uv pip install --no-config --python "$agent_work/venv-torch/bin/python" --index-
   "amd-torch-device-gfx942==$TORCH_VERSION+rocm$ROCM_VERSION" \
   "amd-torch-device-gfx950==$TORCH_VERSION+rocm$ROCM_VERSION" \
   numpy
-uv pip install --no-config --python "$agent_work/venv-torch/bin/python" packaging "$AMD_SMI_DIR"
+# amdsmi (MAMF-finder's power and clock telemetry) builds in its source tree, which is read-only under /opt.
+rm -rf "$agent_work/amd_smi_src"
+cp -r "$AMD_SMI_DIR" "$agent_work/amd_smi_src"
+uv pip install --no-config --python "$agent_work/venv-torch/bin/python" packaging "$agent_work/amd_smi_src"
 
 curl -fsSL -o "$agent_work/mamf/mamf-finder.py" "$MAMF_URL"
 echo "$MAMF_SHA" >"$agent_work/mamf/SOURCE_SHA"
