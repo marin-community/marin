@@ -60,6 +60,14 @@ class InvalidTask(Exception):
     """The task is malformed: a reference is missing or its grading contract is invalid."""
 
 
+class GradingInfraError(RuntimeError):
+    """A grading failure with diagnostic fields for the unscored verdict."""
+
+    def __init__(self, message: str, **detail: object) -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
 @dataclass(frozen=True)
 class Reward:
     reward: float
@@ -223,8 +231,8 @@ def numeric_tolerance(spec: NumericSpec) -> float:
     return tolerance
 
 
-def infra_error(message: str) -> Reward:
-    return Reward(0.0, Status.INFRA_ERROR, {"error": message})
+def infra_error(message: str, **detail: object) -> Reward:
+    return Reward(0.0, Status.INFRA_ERROR, {"error": message, **detail})
 
 
 def write_reward(logs_dir: Path, reward: Reward) -> None:
@@ -360,6 +368,9 @@ def run(spec_path: Path, workspace: Path) -> Reward:
         return invalid_task(f"cannot read verifier spec {spec_path}: {error}")
     try:
         return _validated_reward(grade(spec, tests_dir=spec_path.parent, workspace=workspace))
+    except GradingInfraError as error:
+        logger.error("grader failed: %s", error)
+        return infra_error(f"{type(error).__name__}: {error}", **error.detail)
     except Exception as error:
         logger.error("grader crashed: %s", traceback.format_exc())
         return infra_error(f"{type(error).__name__}: {error}")

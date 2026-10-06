@@ -58,6 +58,14 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
+For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
+budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
+request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with
+each request. Reference verdicts record `attempt_count` and `attempts` in `detail`; checklist
+verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
+and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
+`infra_error`, with the available attempt diagnostics in `detail`.
+
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
 invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes
