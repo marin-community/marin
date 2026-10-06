@@ -266,6 +266,7 @@ def evidence_summary(outcomes: list[Outcome]) -> dict[str, Any]:
         "graded": stats.graded,
         "mean_reward": stats.mean_reward,
         "solved": stats.solved,
+        "timed_out": stats.timed_out,
     }
 
 

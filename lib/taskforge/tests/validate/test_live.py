@@ -133,6 +133,7 @@ def evidence_summary(evidence: Evidence, kind: TrialKind) -> dict[str, object]:
         "graded": stats.graded,
         "mean_reward": stats.mean_reward,
         "solved": stats.solved,
+        "timed_out": stats.timed_out,
     }
 
 

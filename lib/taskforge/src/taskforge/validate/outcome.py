@@ -14,7 +14,7 @@ only; ungraded ones make the evidence incomplete.
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rolloutengine.contracts import RolloutData
+from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, RolloutData
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
 
@@ -40,8 +40,8 @@ class Cause(StrEnum):
     ATTEMPT_TIMEOUT = "attempt_timeout"
     """``TaskExecution.attempt_timeout`` expired."""
     AGENT_TIMEOUT = "agent_timeout"
-    """``TaskExecution.agent_timeout`` expired. The rollout keeps the grade RolloutEngine gave the
-    state the agent left, but the trial is not counted as graded."""
+    """``TaskExecution.agent_timeout`` expired before the first response, so there was nothing to
+    grade. A deadline after that is a ``Graded`` trial with ``timed_out`` set."""
     CLEANUP = "cleanup"
     """Removing a stage's private grader files failed before the next stage could run."""
     MODEL_UNAVAILABLE = "model_unavailable"
@@ -100,6 +100,11 @@ class Graded:
     @property
     def grade(self) -> GradeResult:
         return self.rollout.grade
+
+    @property
+    def timed_out(self) -> bool:
+        """Whether the agent deadline ended the trial; the grade is of the state the agent left."""
+        return self.rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON
 
     @property
     def reward(self) -> float:
