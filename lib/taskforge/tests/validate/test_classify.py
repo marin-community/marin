@@ -8,7 +8,9 @@ from rolloutengine.contracts import GenerationLimitReached, ModelRequest, ModelT
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.environment import EnvironmentKind, HealthcheckSpec, StdoutReward
-from taskcompendium.grading import Outcome, skipped_verifier
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading import skipped_verifier
+from taskcompendium.grading_result import Outcome
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from taskforge.llm.client import GlmRequestRejected, GlmUnavailable
@@ -23,13 +25,14 @@ def engine(model, factory=None) -> ShellboxRolloutEngine:
         {} if factory is None else {EnvironmentKind.SHELLSIM: factory},
         max_turns=4,
         command_timeout=10,
+        cleanup_timeout=10,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
 
 
-async def outcome_of(task, model, factory=None):
+async def outcome_of(task, model, factory=None, execution=TaskExecution()):
     try:
-        result = await engine(model, factory).run(task)
+        result = await engine(model, factory).run(task, execution=execution)
     except Exception as error:
         return trial_outcome(error)
     return trial_outcome(result)
@@ -113,26 +116,29 @@ async def test_failing_task_setup_is_a_non_retryable_task_defect(file_task, fake
 
 
 async def test_agent_timeout_before_any_grade_scores_a_failed_attempt(math_task, fakes):
-    task = math_task.model_copy(update={"agent_timeout": 0.01})
-    outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
+    outcome = await outcome_of(
+        math_task, fakes.script_model([fakes.text("395")], hang_from=0), execution=TaskExecution(agent_timeout=0.01)
+    )
 
     assert isinstance(outcome, Graded)
     assert (outcome.reward, outcome.grade.passed, outcome.rollout.stop_reason) == (0.0, False, "agent_timeout")
 
 
 async def test_agent_timeout_after_work_keeps_the_engine_grade(file_task, fakes):
-    task = file_task.model_copy(update={"agent_timeout": 1})
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
 
-    outcome = await outcome_of(task, model, fakes.flaky_factory(0, RuntimeError))
+    outcome = await outcome_of(
+        file_task, model, fakes.flaky_factory(0, RuntimeError), execution=TaskExecution(agent_timeout=1)
+    )
 
     assert isinstance(outcome, Graded)
     assert (outcome.reward, outcome.rollout.stop_reason) == (1.0, "agent_timeout")
 
 
 async def test_attempt_timeout(math_task, fakes):
-    task = math_task.model_copy(update={"attempt_timeout": 0.01})
-    outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
+    outcome = await outcome_of(
+        math_task, fakes.script_model([fakes.text("395")], hang_from=0), execution=TaskExecution(attempt_timeout=0.01)
+    )
 
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.ATTEMPT_TIMEOUT, True)
 

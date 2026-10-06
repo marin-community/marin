@@ -4,7 +4,7 @@
 from collections import Counter
 
 from rolloutengine.contracts import RolloutData
-from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.validate.evidence import Complete, Evidence, Incomplete, RewardStats
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded

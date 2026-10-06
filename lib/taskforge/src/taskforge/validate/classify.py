@@ -18,6 +18,7 @@ import traceback
 from dataclasses import replace
 
 from rolloutengine.contracts import (
+    AGENT_TIMEOUT_STOP_REASON,
     LENGTH_STOP_REASON,
     GenerationLimitReached,
     RolloutContractError,
@@ -26,8 +27,8 @@ from rolloutengine.contracts import (
     RolloutOperation,
 )
 from shellbox.machine import UnsupportedMachineSpec
-from taskcompendium.grading import GradeResult, GradingFailure
-from taskcompendium.grading import Outcome as GradeStatus
+from taskcompendium.grading_result import GradeResult, GradingFailure
+from taskcompendium.grading_result import Outcome as GradeStatus
 
 from taskforge.llm.client import GlmContextExhausted, GlmRequestRejected, GlmUnavailable
 from taskforge.validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, Ungraded
@@ -41,10 +42,7 @@ GRADING_FAILURES = {
 }
 ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ", "Environment healthcheck failed", "Task stage ")
 """Message prefixes of the setup, healthcheck and stage-setup errors RolloutEngine raises."""
-AGENT_TIMEOUT_STOP_REASON = "agent_timeout"
-UNGRADED_AGENT_TIMEOUT = (
-    "TaskSpec.agent_timeout expired before the engine graded the attempt; scored as a failed attempt"
-)
+UNGRADED_AGENT_TIMEOUT = "TaskExecution.agent_timeout expired before the first response; scored as a failed attempt"
 
 
 def classify(failure: BaseException | RolloutData) -> Cause:
@@ -61,30 +59,21 @@ def classify(failure: BaseException | RolloutData) -> Cause:
 def trial_outcome(result: RolloutData | Exception) -> Outcome:
     """The outcome of one engine run: what ``ShellboxRolloutEngine.run`` returned or raised.
 
-    An ``AGENT_TIMEOUT`` is a budget stop: the trial keeps the grade the engine gave the partial
-    state, or, when the engine graded nothing, scores zero as a failed attempt. Either way its stop
-    reason is ``AGENT_TIMEOUT_STOP_REASON``.
+    An agent timeout is a budget stop: RolloutEngine grades the state the agent left and returns
+    the rollout with stop reason ``agent_timeout``. When the deadline expired before the first
+    response there is nothing to grade, and the trial scores zero as a failed attempt.
     """
     if isinstance(result, RolloutData):
         if result.grade.status in GRADED_STATUSES:
             return Graded(result)
+        if result.stop_reason == AGENT_TIMEOUT_STOP_REASON and result.grade.status is GradeStatus.UNAVAILABLE:
+            return Graded(replace(result, grade=GradeResult(GradeStatus.GRADED, 0.0, UNGRADED_AGENT_TIMEOUT, False)))
         return Ungraded(classify(result), result.grade.error or str(result.grade.status), result)
     cause = classify(result)
     detail = "".join(traceback.format_exception(result))
     if not isinstance(result, RolloutInterrupted):
         return Ungraded(cause, detail, None)
-    if cause is Cause.AGENT_TIMEOUT:
-        return _budget_stop(result.rollout, detail)
     return Ungraded(cause, detail, result.rollout)
-
-
-def _budget_stop(rollout: RolloutData, detail: str) -> Outcome:
-    rollout = replace(rollout, stop_reason=AGENT_TIMEOUT_STOP_REASON)
-    if rollout.grade.status in GRADED_STATUSES:
-        return Graded(rollout)
-    if rollout.grade.status is GradeStatus.UNAVAILABLE:
-        return Graded(replace(rollout, grade=GradeResult(GradeStatus.GRADED, 0.0, UNGRADED_AGENT_TIMEOUT, False)))
-    return Ungraded(_grade_cause(rollout), detail, rollout)
 
 
 def _exception_cause(error: BaseException) -> Cause:
@@ -124,6 +113,8 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
     operation = error.operation
     if operation is RolloutOperation.ATTEMPT:
         return Cause.ATTEMPT_TIMEOUT
+    if operation is RolloutOperation.CLEANUP:
+        return Cause.CLEANUP
     original = error.__cause__
     if original is not None:
         cause = _exception_cause(original)
@@ -136,8 +127,6 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
         return Cause.MACHINE_START_TIMEOUT if timed_out else Cause.MACHINE_START
     if operation is RolloutOperation.PREPARE:
         return Cause.SESSION_PREPARE
-    if timed_out and operation in (RolloutOperation.MODEL, RolloutOperation.ADVANCE):
-        return Cause.AGENT_TIMEOUT
     if operation is RolloutOperation.ADVANCE:
         return Cause.TOOL_EXECUTION
     if operation is RolloutOperation.GRADE:
@@ -153,6 +142,8 @@ def _grade_cause(rollout: RolloutData) -> Cause:
         return Cause.GRADER_INFRA if grade.failure is None else GRADING_FAILURES[grade.failure]
     if grade.status is GradeStatus.SKIPPED:
         return Cause.VERIFIER_SKIPPED
+    if grade.status is GradeStatus.INVALID_TASK:
+        return Cause.INVALID_TASK
     if rollout.stop_reason == LENGTH_STOP_REASON and not rollout.steps:
         return Cause.GENERATION_LIMIT
     return Cause.NO_GRADE

@@ -32,6 +32,7 @@ from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.machine import MachineFactory
 from taskcompendium.environment import EnvironmentKind
+from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import Submission
 
@@ -45,12 +46,17 @@ type RolloutModel = Callable[[ModelRequest], Awaitable[ModelTurn]]
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """Everything ``ShellboxRolloutEngine`` takes except the model, and what the factories can run."""
+    """Everything ``ShellboxRolloutEngine`` takes except the model, and what the factories can run.
+
+    ``cleanup_timeout`` bounds each cleanup action (closing a session or machine, removing a stage
+    grader); the engine records a cleanup that fails or overruns in ``grade.diagnostics``.
+    """
 
     factories: Mapping[EnvironmentKind, MachineFactory]
     capabilities: Mapping[EnvironmentKind, FactoryCapabilities]
     max_turns: int
     command_timeout: float
+    cleanup_timeout: float
     convention: Submission
 
     def engine(self, model: RolloutModel) -> ShellboxRolloutEngine:
@@ -59,6 +65,7 @@ class EngineSettings:
             self.factories,
             max_turns=self.max_turns,
             command_timeout=self.command_timeout,
+            cleanup_timeout=self.cleanup_timeout,
             convention=self.convention,
         )
 
@@ -84,20 +91,30 @@ class TrialPlan:
             raise ValueError("A trial plan needs k >= 1 and max_retries >= 0")
 
 
-async def run_trials(task: TaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel) -> list[Outcome]:
-    """Run ``plan.k`` trials of ``task`` concurrently; return one final outcome per trial, in order."""
+async def run_trials(
+    task: TaskSpec, execution: TaskExecution, plan: TrialPlan, settings: EngineSettings, model: RolloutModel
+) -> list[Outcome]:
+    """Run ``plan.k`` trials of ``task`` with ``execution`` concurrently; return one final outcome per
+    trial, in order."""
     async with asyncio.TaskGroup() as group:
-        trials = [group.create_task(run_trial(task, plan, settings, model, str(index))) for index in range(plan.k)]
+        trials = [
+            group.create_task(run_trial(task, execution, plan, settings, model, str(index))) for index in range(plan.k)
+        ]
     return [trial.result() for trial in trials]
 
 
 async def run_trial(
-    task: TaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel, trial: str
+    task: TaskSpec,
+    execution: TaskExecution,
+    plan: TrialPlan,
+    settings: EngineSettings,
+    model: RolloutModel,
+    trial: str,
 ) -> Outcome:
     """Run one trial, attempting it again after a backoff while it fails for a retryable cause."""
-    refusals = task_refusals(task, settings.capabilities)
+    refusals = task_refusals(task, execution, settings.capabilities)
     if refusals:
-        with _attempt_span(task, plan, trial, 0) as fields:
+        with _attempt_span(task, execution, plan, trial, 0) as fields:
             outcome = Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None)
             _record(fields, outcome, plan, trial, 0)
         return outcome
@@ -105,7 +122,7 @@ async def run_trial(
     backoff = copy.copy(plan.retry_backoff)
     attempt = 0
     while True:
-        outcome = await _attempt(engine, task, plan, trial, attempt)
+        outcome = await _attempt(engine, task, execution, plan, trial, attempt)
         if isinstance(outcome, Graded) or not outcome.retryable or attempt == plan.max_retries:
             return outcome
         await asyncio.sleep(backoff.next_interval())
@@ -116,27 +133,38 @@ def refusal_detail(refusals: Sequence[Refusal]) -> str:
     return "; ".join(f"{refusal.where}: {refusal.reason}: {refusal.detail}" for refusal in refusals)
 
 
-def task_digest(task: TaskSpec) -> str:
-    return hashlib.sha256(task.model_dump_json().encode()).hexdigest()
+def task_digest(task: TaskSpec, execution: TaskExecution) -> str:
+    """The sha256 of the task and the execution settings it runs with."""
+    payload = f"{task.model_dump_json()}\n{execution.model_dump_json()}"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 @contextmanager
-def _attempt_span(task: TaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
+def _attempt_span(
+    task: TaskSpec, execution: TaskExecution, plan: TrialPlan, trial: str, attempt: int
+) -> Iterator[SpanFields]:
     with span(
         plan.ledger,
         EntryKind.TRIAL,
         item_id=plan.item_id,
         round=plan.round,
         step=f"{plan.kind}/{trial}/{attempt}",
-        input_hash=task_digest(task),
+        input_hash=task_digest(task, execution),
     ) as fields:
         yield fields
 
 
-async def _attempt(engine: ShellboxRolloutEngine, task: TaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Outcome:
-    with _attempt_span(task, plan, trial, attempt) as fields:
+async def _attempt(
+    engine: ShellboxRolloutEngine,
+    task: TaskSpec,
+    execution: TaskExecution,
+    plan: TrialPlan,
+    trial: str,
+    attempt: int,
+) -> Outcome:
+    with _attempt_span(task, execution, plan, trial, attempt) as fields:
         try:
-            result: RolloutData | Exception = await engine.run(task)
+            result: RolloutData | Exception = await engine.run(task, execution=execution)
         except Exception as error:
             result = error
         outcome = trial_outcome(result)
