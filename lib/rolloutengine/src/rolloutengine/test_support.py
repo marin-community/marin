@@ -18,7 +18,7 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.contracts import ModelRequest, ModelTurn, TokenContract
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
 
@@ -90,5 +90,10 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
     )
 
 
-def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
+def engine(model, factories=None, *, sessions=None, token_contract=TokenContract.EXACT) -> ShellboxRolloutEngine:
+    return ShellboxRolloutEngine(
+        model.complete,
+        {} if factories is None else factories,
+        sessions=sessions,
+        token_contract=token_contract,
+    )

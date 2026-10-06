@@ -57,11 +57,13 @@ from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
+    ModelRequest,
     ModelTurn,
     RolloutContractError,
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
+    TokenContract,
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -282,6 +284,38 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
         verifier_machine=machine_runtime(),
     )
     assert (submitted.grade.status, submitted.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+@dataclass
+class RetokenizingModel:
+    """A chat endpoint that re-encodes the previous response with a different token."""
+
+    messages: list[dict]
+    requests: list[ModelRequest] = field(default_factory=list)
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
+        index = len(self.requests) - 1
+        prompt = (10, 11, 99, 90, 91) if request.prefix_token_ids else (10, 11)
+        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
+
+
+async def test_text_contract_grades_retokenized_turns_without_training_tokens():
+    model = RetokenizingModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+
+    result = await engine(model, {"local": FixtureImageFactory()}, token_contract=TokenContract.TEXT).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+    assert result.metrics["token_contract"] == "text"
+    assert [(step.turn.prompt_token_ids, step.turn.response_token_ids) for step in result.steps] == [
+        ((10, 11), (20,)),
+        ((10, 11, 99, 90, 91), (21,)),
+    ]
+    assert result.response_token_ids == (99, 90, 91, 21)
+    assert result.loss_mask == (0, 0, 0, 0)
+    assert result.logprobs is None
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
