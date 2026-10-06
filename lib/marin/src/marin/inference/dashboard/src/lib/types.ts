@@ -49,6 +49,7 @@ export interface AssistantMessage {
   error: string | null
   /** The model request finished; partial or failed responses stay unrated. */
   completed?: boolean
+  finishReason?: string
   toolCalls?: ToolCall[]
   requestDebug?: VllmRequestDebug
 }
