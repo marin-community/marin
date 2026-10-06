@@ -3,13 +3,9 @@
 
 """Bind a separate four-pass teacher study to a completed nonpromoted continuation."""
 
-import json
-import os
 from dataclasses import dataclass, replace
 
-from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep, artifact_identity
-from marin.execution.remote import remote
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
@@ -20,6 +16,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     restored_round,
     write_once,
 )
+from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.collection_recovery import CollectionRecovery, StudentContextAmendment
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.interrupted_calibration import (
@@ -37,15 +34,13 @@ from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
 from experiments.post_training.russell_rsi.launch_rsi_continuation import PROTOCOL as CONTINUATION_PROTOCOL
 from experiments.post_training.russell_rsi.launch_rsi_continuation import qualified_champion
 from experiments.post_training.russell_rsi.launch_teacher_sft import (
-    TEACHER_PIP_PACKAGES,
     CollectionBinding,
     StudentTrainingTemplate,
     TeacherCollectionConfig,
     collect_teacher_dataset,
+    run_teacher_remote,
     teacher_sft_steps,
 )
-from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
-from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_collection import (
     STUDENT_ROWS,
@@ -67,7 +62,7 @@ MAXIMUM_NEW_FAMILIES = 4
 
 
 def pinned_record(config: dict, name: str) -> dict:
-    return json.loads(pinned_bytes(config[f"{name}_uri"], config[f"{name}_sha256"]))
+    return PinnedFile(config[f"{name}_uri"], config[f"{name}_sha256"]).read_json()
 
 
 def original_retention_task_ids(source: dict, retention_identity: str) -> tuple[str, ...]:
@@ -239,12 +234,7 @@ def run_four_pass_collection(config: FourPassCollectionConfig) -> None:
 
 
 def run_four_pass_collection_remote(config: FourPassCollectionConfig) -> None:
-    remote(
-        run_four_pass_collection,
-        resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
-        pip_packages=list(TEACHER_PIP_PACKAGES),
-        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
-    )(config)
+    run_teacher_remote(run_four_pass_collection, config)
 
 
 @dataclass(frozen=True)
@@ -272,12 +262,7 @@ def run_recovery_four_pass_collection(config: RecoveryFourPassCollectionConfig) 
 
 
 def run_recovery_four_pass_collection_remote(config: RecoveryFourPassCollectionConfig) -> None:
-    remote(
-        run_recovery_four_pass_collection,
-        resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
-        pip_packages=list(TEACHER_PIP_PACKAGES),
-        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
-    )(config)
+    run_teacher_remote(run_recovery_four_pass_collection, config)
 
 
 def four_pass_teacher_workflow(config: dict) -> dict[str, ArtifactStep]:

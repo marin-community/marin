@@ -4,13 +4,10 @@
 """Bind eight teacher families to new coding evidence and retained qualified rows."""
 
 import json
-import os
 from dataclasses import asdict, dataclass, replace
 
-from fray.types import ResourceConfig
 from levanter.tokenizers import MarinTokenizer
 from marin.execution.lazy import ArtifactStep, artifact_identity
-from marin.execution.remote import remote
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
@@ -36,10 +33,10 @@ from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
 )
 from experiments.post_training.russell_rsi.launch_teacher_sft import (
     SFT_LEARNING_RATE,
-    TEACHER_PIP_PACKAGES,
     CollectionBinding,
     StudentTrainingTemplate,
     TeacherCollectionConfig,
+    run_teacher_remote,
     teacher_sft_steps,
 )
 from experiments.post_training.russell_rsi.rollout_eval import (
@@ -47,7 +44,6 @@ from experiments.post_training.russell_rsi.rollout_eval import (
     calibration_evaluation_journal,
     run_development_evaluation,
 )
-from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_chat_study import PROTOCOL as RETAINED_PROTOCOL
 from experiments.post_training.russell_rsi.teacher_chat_study import collect_chat_dataset, qualified_row
@@ -367,12 +363,7 @@ def run_diversity_collection(config: DiversityCollectionConfig) -> None:
 
 
 def run_diversity_remote(config: DiversityCollectionConfig) -> None:
-    remote(
-        run_diversity_collection,
-        resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
-        pip_packages=list(TEACHER_PIP_PACKAGES),
-        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
-    )(config)
+    run_teacher_remote(run_diversity_collection, config)
 
 
 def diversity_workflow(config: dict) -> dict[str, ArtifactStep]:

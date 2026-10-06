@@ -202,13 +202,18 @@ def collect_teacher_dataset(
     )
 
 
-def run_teacher_collection_remote(config: TeacherCollectionConfig) -> None:
+def run_teacher_remote(worker: Callable[[CollectionConfig], None], config: CollectionConfig) -> None:
+    """Run a teacher collection worker with its shared CPU and credential settings."""
     remote(
-        run_teacher_collection,
+        worker,
         resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
         pip_packages=list(TEACHER_PIP_PACKAGES),
         env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
     )(config)
+
+
+def run_teacher_collection_remote(config: TeacherCollectionConfig) -> None:
+    run_teacher_remote(run_teacher_collection, config)
 
 
 def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:

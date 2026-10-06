@@ -15,12 +15,10 @@ from pathlib import Path
 from typing import cast
 
 import httpx
-from fray.types import ResourceConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.remote import remote
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath
@@ -38,10 +36,10 @@ from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.launch_teacher_sft import (
-    TEACHER_PIP_PACKAGES,
     CollectionBinding,
     StudentTrainingTemplate,
     TeacherCollectionConfig,
+    run_teacher_remote,
     teacher_sft_steps,
 )
 from experiments.post_training.russell_rsi.rollout_eval import qemu_factory
@@ -505,12 +503,7 @@ def collect_chat_dataset(
 
 
 def run_chat_study_remote(config: ChatCollectionConfig) -> None:
-    remote(
-        run_chat_study_collection,
-        resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
-        pip_packages=list(TEACHER_PIP_PACKAGES),
-        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
-    )(config)
+    run_teacher_remote(run_chat_study_collection, config)
 
 
 def chat_study_workflow(config: dict) -> dict[str, ArtifactStep]:
