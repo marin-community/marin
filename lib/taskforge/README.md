@@ -184,6 +184,18 @@ or on a package the order does not name.
   `items/idea--<id>/batches/<reproposal>/`: `plan/{request,completions}.json` and
   `slots/<slot>/{request,completions}.json` with `repair_error.txt` or `failure.txt`, completions in
   the shape of the author's `completions.json`. Both resume from the run root's event logs.
+- `queue.run.run_queue(ideas, policy, services, failed) -> RunSummary`: runs every idea and every
+  unfinished item of the run rooted at `services.root` in one asyncio process. `services.slots` (the
+  run's width) bounds concurrent phases, not requests. An item whose log ends `ACCEPTED` or
+  `REJECTED` is skipped, `FAILED` is skipped unless `failed` is `FailedItems.RETRY`, and `ABANDONED`
+  re-enters. One item's exception is recorded in `RunSummary.failed` and never cancels a sibling.
+  `RunSummary` also counts ungraded trial attempts by cause and `GlmUnavailable` outside trials.
+- `queue.job.run_job(config, inputs, failed)`: the laptop and Iris boundary. `queue.config.RunConfig`
+  (`load_run_config`; every field required) names the host, the GLM endpoint as `LaptopGlm` or
+  `RelayGlm` with an explicit `Pool`, the builders' Parallel key source, the `LoopPolicy`, the
+  `EngineConfig`, the width and `restore_from`. `inputs` is an `InputsFactory`: a function of the
+  run's `GlmClient` and run root that returns `RunInputs(ideas, source, checks, rubric,
+  check_context)`. `scripts/run_queue.py` runs it from a config file.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -382,6 +394,22 @@ the loop records where an accepted task fell (`DECIDED.band`, the pass rate, and
 reason), so a log tells a calibrated acceptance from a consumer's acceptance outside the band
 without opening `decision.json`.
 
+An unattended run is one asyncio process. Models and sandboxes are remote, so one process reaches
+hundreds-wide without a coordination store. The width semaphore is acquired around phases, so an item
+waiting out a retry backoff holds no slot, and there is no request limiter: `GlmClient` pools 512
+connections and holds while the router drains. A throttle is added only after `RunSummary` shows a
+failure that needs it. Item status is the item's event log, so a relaunch on the same run root, or on
+an Iris attempt restored from the previous attempt's archive (`restore_from`), resumes every item.
+
+The GLM pool is always named. Validation we drive ourselves (live tests, probes, laptop runs) uses
+the interactive `high` pool; the committed unattended configuration (`docs/policy.example.json`)
+names `bulk`. A config holds no secret: `LaptopGlm` names a token file and `RelayGlm` the environment
+variable that holds the token, and the Parallel key is a file or a variable name in the same way.
+Under Iris, `queue.job.host_secrets` removes those variables and the submitter keys Iris forwards
+from the process environment and from `IRIS_JOB_ENV` before any sandbox exists, because Iris copies
+`IRIS_JOB_ENV` into every child job. First-run policy values (`k=8`, band `[0.125, 0.875]`,
+`adversary_k=2`, all three adversary roles, width 256) live in the policy example, not in code.
+
 ## Testing
 
 Run every command from `lib/taskforge`. Do not pass a partial marker expression such as
@@ -427,6 +455,10 @@ The cluster scripts run on Iris and document their submit commands in their docs
 `scripts/build_image_job.py` builds a `DockerBuild` context and pushes it to a registry digest
 through `scripts/push_image_task.py`, `scripts/iris_machine_probe.py` probes the shellbox Iris
 backend, and `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task.
+`scripts/run_queue.py` runs a queue from a run config on a laptop or in an Iris task, and
+`scripts/cluster_queue_probe.py` is the fail-fast preflight for an unattended run: GLM health for
+both pools, machine creation without leaked credentials, a width of concurrent validation rounds,
+the Finelog mirror, resume from the event logs, and a registry image pull.
 
 ## Evidence
 
