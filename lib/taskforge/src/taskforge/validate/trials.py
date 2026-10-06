@@ -10,6 +10,10 @@ Every attempt of every trial is one ``TRIAL`` ledger span (``step`` is ``<kind>/
 ``Ungraded`` with a retryable cause, up to ``max_retries`` times, waiting ``plan.retry_backoff``
 between attempts.
 
+Validation owns its trials' deadlines: ``TrialPlan.deadlines`` replaces the agent and attempt
+deadlines of the builder's ``TaskExecution`` (``Deadlines.apply``), so every trial is bounded
+whatever the builder set, and the ledger's ``input_hash`` covers the effective execution.
+
 ``EngineSettings.factories`` and ``EngineSettings.capabilities`` come from
 ``taskforge.sandbox.factories.machine_factories`` and ``factory_capabilities`` for the same host. A
 task those factories cannot run (``task_refusals``) is not started: each of its trials is one
@@ -71,8 +75,35 @@ class EngineSettings:
 
 
 @dataclass(frozen=True)
+class Deadlines:
+    """The agent and attempt deadlines, in seconds, that validation imposes on every trial.
+
+    They are a property of the validation run, not of the task, so they live beside the
+    ``TaskExecution`` a builder returns rather than in it or in the ``TaskSpec``.
+    """
+
+    agent_timeout: float
+    attempt_timeout: float
+
+    def __post_init__(self) -> None:
+        if not 0 < self.agent_timeout < self.attempt_timeout:
+            raise ValueError("Deadlines need 0 < agent_timeout < attempt_timeout")
+
+    def apply(self, execution: TaskExecution) -> TaskExecution:
+        """``execution`` with these deadlines in place of its own, including every stage's agent deadline."""
+        stages = {
+            name: stage.model_copy(update={"agent_timeout": self.agent_timeout})
+            for name, stage in execution.stages.items()
+        }
+        return execution.model_copy(
+            update={"agent_timeout": self.agent_timeout, "attempt_timeout": self.attempt_timeout, "stages": stages}
+        )
+
+
+@dataclass(frozen=True)
 class TrialPlan:
-    """Which item the trials belong to, how many run, how they retry, and where they are recorded.
+    """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
+    are recorded.
 
     ``retry_backoff`` is a template: each trial waits on its own copy.
     """
@@ -81,6 +112,7 @@ class TrialPlan:
     round: int
     kind: TrialKind
     k: int
+    deadlines: Deadlines
     max_retries: int
     retry_backoff: ExponentialBackoff
     evidence_dir: Path
@@ -94,8 +126,8 @@ class TrialPlan:
 async def run_trials(
     task: TaskSpec, execution: TaskExecution, plan: TrialPlan, settings: EngineSettings, model: RolloutModel
 ) -> list[Outcome]:
-    """Run ``plan.k`` trials of ``task`` with ``execution`` concurrently; return one final outcome per
-    trial, in order."""
+    """Run ``plan.k`` trials of ``task`` with ``execution`` under ``plan.deadlines`` concurrently; return
+    one final outcome per trial, in order."""
     async with asyncio.TaskGroup() as group:
         trials = [
             group.create_task(run_trial(task, execution, plan, settings, model, str(index))) for index in range(plan.k)
@@ -111,7 +143,9 @@ async def run_trial(
     model: RolloutModel,
     trial: str,
 ) -> Outcome:
-    """Run one trial, attempting it again after a backoff while it fails for a retryable cause."""
+    """Run one trial of ``task`` with ``execution`` under ``plan.deadlines``, attempting it again after a
+    backoff while it fails for a retryable cause."""
+    execution = plan.deadlines.apply(execution)
     refusals = task_refusals(task, execution, settings.capabilities)
     if refusals:
         with _attempt_span(task, execution, plan, trial, 0) as fields:

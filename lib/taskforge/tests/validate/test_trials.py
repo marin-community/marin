@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_trials: concurrency, per-trial retry on retryable causes, refusals, ledger spans and rollout evidence."""
+"""run_trials: deadlines, concurrency, retries on retryable causes, refusals, ledger spans and rollout evidence."""
 
 import asyncio
 import json
 
 from rigging.timing import ExponentialBackoff
+from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import TaskExecution
 from taskcompendium.submission import PlainText
@@ -16,9 +17,10 @@ from taskforge.llm.client import GlmRequestRejected
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.draft import shell_command
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
-from taskforge.validate.trials import EngineSettings, TrialPlan, run_trials
+from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 
 EXECUTION = TaskExecution()
+DEADLINES = Deadlines(agent_timeout=30, attempt_timeout=60)
 
 
 def settings(factory, capabilities=None) -> EngineSettings:
@@ -32,12 +34,13 @@ def settings(factory, capabilities=None) -> EngineSettings:
     )
 
 
-def plan(tmp_path, k: int = 3, max_retries: int = 2) -> TrialPlan:
+def plan(tmp_path, k: int = 3, max_retries: int = 2, deadlines: Deadlines = DEADLINES) -> TrialPlan:
     return TrialPlan(
         item_id="item",
         round=1,
         kind=TrialKind.SOLVER,
         k=k,
+        deadlines=deadlines,
         max_retries=max_retries,
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
         evidence_dir=tmp_path / "evidence",
@@ -119,3 +122,47 @@ async def test_trials_run_concurrently(tmp_path, math_task, fakes):
     )
 
     assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0] * 20
+
+
+async def test_validation_deadlines_replace_the_builders_agent_deadline(tmp_path, file_task, fakes):
+    # The builder allows an hour; validation's agent deadline ends the trial after the first shell turn.
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
+    deadlines = Deadlines(agent_timeout=0.5, attempt_timeout=30)
+
+    outcomes = await run_trials(
+        file_task,
+        TaskExecution(agent_timeout=3600),
+        plan(tmp_path, k=1, deadlines=deadlines),
+        settings(fakes.flaky_factory(0, RuntimeError)),
+        model,
+    )
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].timed_out
+    assert (outcomes[0].reward, outcomes[0].rollout.stop_reason) == (1.0, AGENT_TIMEOUT_STOP_REASON)
+
+
+async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadlines(tmp_path, file_task, fakes):
+    factory = fakes.flaky_factory(failures=0, error=RuntimeError, delay=5)
+    deadlines = Deadlines(agent_timeout=0.1, attempt_timeout=0.2)
+
+    outcomes = await run_trials(
+        file_task,
+        EXECUTION,
+        plan(tmp_path, k=1, max_retries=0, deadlines=deadlines),
+        settings(factory),
+        fakes.script_model([]),
+    )
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.ATTEMPT_TIMEOUT
+
+
+async def test_the_ledger_input_hash_covers_the_deadlines(tmp_path, math_task, fakes):
+    model = fakes.script_model([fakes.text("395")])
+    factory = fakes.flaky_factory(0, RuntimeError)
+    short, long = Deadlines(agent_timeout=30, attempt_timeout=60), Deadlines(agent_timeout=60, attempt_timeout=120)
+
+    for deadlines in (short, short, long):
+        await run_trials(math_task, EXECUTION, plan(tmp_path, k=1, deadlines=deadlines), settings(factory), model)
+
+    first, again, other = (entry.input_hash for entry in ledger(tmp_path))
+    assert first == again != other

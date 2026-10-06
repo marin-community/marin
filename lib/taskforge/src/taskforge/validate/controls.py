@@ -51,7 +51,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import TOKEN_FIELDS, served_tokens
 from taskforge.spec.controls import Control, Workspace, reply, shell_turn, validate_controls
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
-from taskforge.validate.trials import EngineSettings, TrialPlan, run_trial
+from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
 WORKSPACE_REPLY = "The workspace is ready for grading."
 NO_GENERATION_PROMPT: dict[str, object] = {"add_generation_prompt": False}
@@ -155,13 +155,14 @@ class ControlOutcome:
 
 @dataclass(frozen=True)
 class ControlPlan:
-    """Which item the controls belong to, how they retry, and where they are recorded.
+    """Which item the controls belong to, their deadlines, how they retry, and where they are recorded.
 
     Each control is one ``CONTROL`` trial named by its id.
     """
 
     item_id: str
     round: int
+    deadlines: Deadlines
     max_retries: int
     retry_backoff: ExponentialBackoff
     evidence_dir: Path
@@ -173,6 +174,7 @@ class ControlPlan:
             round=self.round,
             kind=TrialKind.CONTROL,
             k=1,
+            deadlines=self.deadlines,
             max_retries=self.max_retries,
             retry_backoff=self.retry_backoff,
             evidence_dir=self.evidence_dir,

@@ -77,7 +77,7 @@ from taskforge.sandbox.factories import IRIS_DOCKER, SHELLSIM, MachineHost, mach
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
 from taskforge.validate.evidence import Complete, Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
-from taskforge.validate.trials import EngineSettings, TrialPlan, run_trials
+from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 
 GLM_TOKEN_ENV = "GLM_API_TOKEN"
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
@@ -102,6 +102,7 @@ POLICY = LLMPolicy(max_continuations=0)
 MAX_TURNS = 12
 COMMAND_TIMEOUT = 120
 CLEANUP_TIMEOUT = 120
+DEADLINES = Deadlines(agent_timeout=1800, attempt_timeout=2400)
 EXECUTION = TaskExecution()
 # The probe measures the shipped Iris backend, so it does not refuse docker tasks up front: the
 # DOCKER row is the backend's own create-time checks (registry images, network ALLOW only).
@@ -294,6 +295,7 @@ async def run_phase(
         round=0,
         kind=TrialKind.SOLVER,
         k=k,
+        deadlines=DEADLINES,
         max_retries=max_retries,
         retry_backoff=ExponentialBackoff(initial=5, maximum=60),
         evidence_dir=directory,
