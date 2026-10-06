@@ -24,7 +24,7 @@ from taskcompendium.environment import EnvironmentKind, ExitCodeReward
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
@@ -119,7 +119,7 @@ def rollout_engine(model: GlmRolloutModel, max_turns: int = 6) -> ShellboxRollou
         max_turns=max_turns,
         command_timeout=30,
         cleanup_timeout=30,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
 
 

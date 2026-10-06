@@ -39,7 +39,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
@@ -64,7 +64,7 @@ def task(environment: EnvironmentSpec, **update) -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content="hi"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer(1, tolerance_abs=0, tolerance_rel=0),
+        verifier=numeric_answer("1", tolerance_abs=0, tolerance_rel=0),
         environment=environment,
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
     ).model_copy(update=update)
@@ -257,7 +257,7 @@ async def test_rollout_engine_refuses_the_file_timestamps_shellsim_lacks():
         max_turns=1,
         command_timeout=1,
         cleanup_timeout=1,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     assert not SHELLSIM.file_timestamps
     with pytest.raises(ValueError, match="timestamps"):

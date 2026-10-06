@@ -151,7 +151,7 @@ def test_partial_control_needs_a_grader_that_reports_components():
         validate_controls(file_task(), [*file_controls(), HALF])
 
 
-def test_answer_task_controls_with_extraction_error_validate():
+def test_answer_task_controls_with_a_submission_failure_validate():
     controls = [
         control("gold", ControlKind.POSITIVE, ControlCategory.KNOWN_CORRECT, Transcript((reply("12"),)), GRADED_ONE),
         control(
@@ -159,7 +159,7 @@ def test_answer_task_controls_with_extraction_error_validate():
             ControlKind.MALFORMED,
             ControlCategory.EMPTY_OR_MALFORMED,
             Transcript((reply(""),)),
-            Expectation(Outcome.EXTRACTION_ERROR),
+            Expectation(Outcome.SUBMISSION_FAILURE),
         ),
         control("wrong", ControlKind.NEGATIVE, ControlCategory.PLAUSIBLE_WRONG, Transcript((reply("13"),)), GRADED_ZERO),
         control(
@@ -230,8 +230,8 @@ def test_control_labels_must_match_their_expected_grade(kind, category, expect, 
 @pytest.mark.parametrize(
     "status,bounds,message",
     [
-        (Outcome.EXTRACTION_ERROR, {"reward_max": 0.0}, "no reward bounds"),
-        (Outcome.INFRA_ERROR, {}, "graded result or an extraction error"),
+        (Outcome.SUBMISSION_FAILURE, {"reward_max": 0.0}, "no reward bounds"),
+        (Outcome.INFRA_ERROR, {}, "graded result or a submission failure"),
         (Outcome.GRADED, {"reward_min": 0.8, "reward_max": 0.2}, "reversed"),
         (Outcome.GRADED, {"reward_max": 1.5}, "outside"),
     ],
@@ -258,14 +258,14 @@ def test_replay_mismatches_with_the_task_are_rejected():
             "short", ControlKind.NEGATIVE, ControlCategory.TASK_SPECIFIC_SHORTCUT, Transcript((reply("1"),)), GRADED_ZERO
         ),
     ]
-    extraction_on_shell = replace(empty, payload=Transcript((reply(""),)), expect=Expectation(Outcome.EXTRACTION_ERROR))
+    failure_on_shell = replace(empty, payload=Transcript((reply(""),)), expect=Expectation(Outcome.SUBMISSION_FAILURE))
     unfinished = replace(wrong, payload=Transcript((shell_turn(("x", "echo 13 > /workspace/answer")),)))
 
     with pytest.raises(ValueError, match="without a machine"):
         validate_controls(answer_task(), [shell_on_answer_task, *answer_controls])
     with pytest.raises(ValueError, match="requires an executable"):
         validate_controls(answer_task(), [empty, *answer_controls])
-    with pytest.raises(ValueError, match="extraction error from a shell verifier"):
-        validate_controls(file_task(), [gold, extraction_on_shell, wrong, hack])
+    with pytest.raises(ValueError, match="submission failure from a shell verifier"):
+        validate_controls(file_task(), [gold, failure_on_shell, wrong, hack])
     with pytest.raises(ValueError, match="does not end with a reply"):
         validate_controls(file_task(), [gold, empty, unfinished, hack])

@@ -54,11 +54,19 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from verifyit.candidate import CandidateSpec
+from verifyit.spec import Mode
 
 type Reward = StdoutReward | ExitCodeReward | FileReward
 
-TEXT_ANSWER_KINDS = frozenset({VerifierKind.EXACT_ANSWER, VerifierKind.NUMERIC_ANSWER, VerifierKind.MCQ_ANSWER})
 TEXT_ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER})
+ANSWER_TYPES_BY_KIND: dict[str, frozenset[AnswerType]] = {
+    VerifierKind.EXACT_ANSWER: TEXT_ANSWER_TYPES | {AnswerType.JSON},
+    VerifierKind.NUMERIC_ANSWER: TEXT_ANSWER_TYPES,
+    VerifierKind.MCQ_ANSWER: TEXT_ANSWER_TYPES,
+    Mode.STRUCTURED_EXACT: frozenset({AnswerType.JSON}),
+    VerifierKind.PREDICTED_ACTION: frozenset({AnswerType.NATIVE_ACTION}),
+}
+"""The answer types each answer verifier can grade (TaskCompendium's submission envelopes)."""
 MACHINE_ANSWER_TYPES = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
 DEFAULT_REWARD = "reward"
 """The one reward component every graded result reports."""
@@ -159,8 +167,8 @@ def shell_verifier(
 def answer_verifier(spec: CandidateSpec) -> VerifierSpec:
     """A generic verifyit answer grader; the build SDK's name for ``verifier_descriptor``.
 
-    Only verifyit's candidate modes (exact, numeric, mcq, predicted_action)
-    grade a final answer without a private runtime; RolloutEngine refuses the
+    Only verifyit's candidate modes (exact, numeric, mcq, predicted_action,
+    structured_exact) grade a final answer without a private runtime; RolloutEngine refuses the
     other modes on a task without an application-supplied session.
     """
     return verifier_descriptor(spec)
@@ -292,10 +300,10 @@ def _check_grader(spec: TaskSpec, execution: TaskExecution, grader: VerifierSpec
         return
     if spec.answer_type in MACHINE_ANSWER_TYPES:
         raise ValueError(f"A {spec.answer_type.value!r} answer requires a shell verifier, not {grader.kind!r}")
-    if grader.kind == VerifierKind.PREDICTED_ACTION and spec.answer_type != AnswerType.NATIVE_ACTION:
-        raise ValueError("A predicted_action verifier requires a native_action answer")
-    if grader.kind in TEXT_ANSWER_KINDS and spec.answer_type not in TEXT_ANSWER_TYPES:
-        raise ValueError(f"A {grader.kind!r} verifier requires a text or number answer")
+    allowed = ANSWER_TYPES_BY_KIND.get(grader.kind)
+    if allowed is not None and spec.answer_type not in allowed:
+        names = " or ".join(sorted(answer_type.value for answer_type in allowed))
+        raise ValueError(f"A {grader.kind!r} verifier requires a {names} answer, not {spec.answer_type.value!r}")
 
 
 def _check_shell_grader(spec: TaskSpec, execution: TaskExecution, grader: VerifierSpec) -> None:
