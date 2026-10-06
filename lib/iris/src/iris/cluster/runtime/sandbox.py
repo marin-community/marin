@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a task's container profile withholds from it, independent of backend.
+"""Map a container profile to the cluster resources its task container receives.
 
-The worker (Docker/process) and Kubernetes backends both consult
-:func:`task_isolation` rather than checking for ``CONTAINER_PROFILE_SANDBOX``
-themselves, so the sandbox rule lives in one place.
+:func:`task_isolation` returns a backend-neutral :class:`TaskIsolation`;
+``CONTAINER_PROFILE_SANDBOX`` withholds every cluster resource and all other
+profiles receive all of them.
 """
 
 from dataclasses import dataclass
