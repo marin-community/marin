@@ -210,9 +210,20 @@ def _policy_rejections(
 
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
+    if record.step_status not in (None, "SUCCESS"):
+        return f"step {record.step_status.lower()}"
     if record.status == RunStatus.SUCCEEDED:
         return declared_metric_gap(record) or "no metrics recorded"
     return f"status {record.status.value}"
+
+
+def display_status(record: EvalRunRecord) -> str:
+    """Use the StepSpec state when its run has not completed successfully."""
+    if record.step_status is None or record.step_status == "SUCCESS":
+        return record.status.value
+    if record.step_status == "RUNNING":
+        return "running"
+    return "step_failed"
 
 
 def cell_payload(measurement: Measurement) -> dict:
@@ -285,7 +296,7 @@ def _missing_cells(
             missing[model][benchmark] = {
                 "reason": reason,
                 "run_id": record.run_id,
-                "status": record.status.value,
+                "status": display_status(record),
                 "created_at": record.created_at,
             }
     return missing
@@ -460,7 +471,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "suites": eval_suites(eval_names),
         "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
-        "statuses": sorted({r.status.value for r in records}),
+        "statuses": sorted({display_status(r) for r in records}),
         "versions": sorted(set(POLICIES) | {r.version for r in records if r.version}),
         "facets": facets,
         "archived_models": sorted(archived_models),
@@ -488,7 +499,7 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
                 "version": version,
                 "created_at": newest.created_at,
                 "n_evals": len(members),
-                "n_succeeded": sum(1 for record in members if record.status == RunStatus.SUCCEEDED),
+                "n_succeeded": sum(1 for record in members if display_status(record) == RunStatus.SUCCEEDED),
                 "group_id": newest.group_id,
             }
         )
@@ -524,7 +535,8 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
             {
                 "run_id": record.run_id,
                 "eval_name": record.evaluation.name,
-                "status": record.status.value,
+                "status": display_status(record),
+                "step_status": record.step_status,
                 "created_at": record.created_at,
                 "version": record.version,
                 "headline": headline,

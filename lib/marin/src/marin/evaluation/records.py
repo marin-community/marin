@@ -483,6 +483,8 @@ class EvalRunRecord(BaseModel):
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus
+    step_status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """StepSpec state observed by a dashboard reader. Absent on records from older launchers."""
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]

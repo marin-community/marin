@@ -25,6 +25,7 @@ export interface RunRow {
   accelerator: string | null
   region: string | null
   status: string
+  step_status: string | null
   results_path: string | null
   git_sha: string | null
   image_digest: string | null
@@ -285,6 +286,7 @@ export interface EvalRecord {
   eval: { name: string; mechanism: string; tasks: EvalTask[] }
   hardware: { platform: string; accelerator: string; region_or_cluster: string }
   status: string
+  step_status?: string | null
   error: string | null
   results_path: string
   metrics: Record<string, Record<string, number>>
@@ -558,6 +560,7 @@ export interface ModelRun {
   run_id: string
   eval_name: string
   status: string
+  step_status: string | null
   created_at: string | null
   version: string | null
   headline: PanelCell | null
@@ -610,6 +613,7 @@ export interface GroupMember {
   run_id: string
   eval_name: string
   status: string
+  step_status: string | null
   created_at: string
   headline: PanelCell | null
 }
@@ -623,7 +627,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: RunStatus | 'mixed'
+  status: RunStatus | 'mixed' | 'running' | 'step_failed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

@@ -59,6 +59,25 @@ def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
     assert qwen["cells"]["mmlu"]["value"] == pytest.approx(0.719)
 
 
+def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
+    records = list_records(str(tmp_path))
+    newest = max(
+        (record for record in records if record.model.name == "qwen3-8b" and record.evaluation.name == "mmlu"),
+        key=lambda record: record.created_at,
+    )
+    store.refresh(
+        [
+            record.model_copy(update={"step_status": "RUNNING"}) if record.run_id == newest.run_id else record
+            for record in records
+        ]
+    )
+
+    qwen = next(row for row in _panel(store)["rows"] if row["model"] == "qwen3-8b")
+    assert qwen["cells"]["mmlu"]["run_id"] != newest.run_id
+    run = next(row for row in store.fetch_runs() if row["run_id"] == newest.run_id)
+    assert run["status"] == "running"
+
+
 def test_panel_reports_coverage_of_the_selected_benchmarks(store):
     rows = {row["model"]: row for row in _panel(store)["rows"]}
     # snowball ran every headline suite; llama3-8b only mmlu and aime. Coverage makes that visible, and no

@@ -14,7 +14,10 @@ materialization reads and writes at most 128 run IDs per batch within the prefix
 Object checks finish before that transaction begins; parsed records from those checks remain in
 memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
-value as `None`. Current writers include the field.
+value as `None`. Current writers include the field. For runs with a per-eval StepSpec, EvalDash also
+reads `{run_id}/.executor_status`. A score is eligible only after that step reaches `SUCCESS`; runs
+without a step status retain the record's historical behavior. Run lists show the step state when it
+is still running or has failed, and run detail shows both the evaluator result and the step state.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
@@ -23,9 +26,11 @@ Canonical `evals` roots have precedence when the same migrated `run_id` exists i
 Record discovery runs every 10 minutes using a delimiter-based directory listing and checks only
 `*/record.json`. It does not recursively enumerate results, samples, trajectories, or other evaluator
 payloads. New record bodies are read with up to 16 concurrent requests. Known objects carry a GCS
-generation, S3 ETag, or local content hash in the PostgreSQL source inventory; their first recheck is
-spread across the first day, then each is HEADed once per 24 hours and reread only when its version
-changes. A missing object must be absent on two successful checks before its source is removed. A
+generation, S3 ETag, or local content hash plus the StepSpec state in the PostgreSQL source inventory.
+Running or failed steps, and recent runs still waiting for a status file, are checked on each scan.
+Completed steps and older records are checked once per 24 hours after their first recheck is spread
+across the first day. The record body is reread only when its version or step state changes. A missing
+object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
 the last valid record while surfacing the error on the Debug page. Failures in a serving instance's
 generation check or the scheduled reconciliation pass remain visible there until a later check or

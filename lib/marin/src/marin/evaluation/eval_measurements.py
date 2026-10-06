@@ -36,6 +36,7 @@ from marin.evaluation.metric_selection import (
 )
 from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
+from marin.execution.step_status import STATUS_SUCCESS
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
 _INTEGRALITY_TOLERANCE = 1e-6
@@ -257,6 +258,8 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     The benchmark is the registry eval name (the leaderboard column); a record's task entries roll up
     to it exactly as the dashboard has always rolled them up, with the group-aggregate rule preserved.
     """
+    if record.step_status not in (None, STATUS_SUCCESS):
+        return None
     task_scores, missing_declared_metric = _task_scores(record)
     scores = _rollup_scores(task_scores)
     if not scores or missing_declared_metric:
