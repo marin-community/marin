@@ -15,9 +15,10 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.mini_swe_agent import convert_mini_swe_agent_to_atif
 from harbor.agents.utils import get_api_key_var_names_from_model_name
-from harbor.environments.base import BaseEnvironment
+from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.models.agent.context import AgentContext
 
 from shellbox.backends.qemu.environment import QemuEnvironment
@@ -260,20 +261,38 @@ class NativeMiniAgent(BaseAgent):
                         data = trajectory.read_bytes()
                         (self.logs_dir / trajectory.name).write_bytes(data)
             assert process is not None
-            if process.returncode != 0:
-                raise RuntimeError(f"Native mini controller failed with exit code {process.returncode}")
-            native = json.loads(trajectory.read_bytes())
-            atif = convert_mini_swe_agent_to_atif(native, environment.session_id)
-            (self.logs_dir / "trajectory.json").write_text(json.dumps(atif.to_json_dict(), indent=2))
-            context.cost_usd = native["info"]["model_stats"]["instance_cost"]
-            context.metadata = (context.metadata or {}) | {
-                "runtime": "adapted-host-native-mini-qemu",
-                "exit_status": native["info"]["exit_status"],
-            }
-            # Only assistant messages have provider responses; provider usage is optional.
-            usage = [m["extra"]["response"].get("usage") or {} for m in native["messages"] if m["role"] == "assistant"]
-            context.n_input_tokens = sum(item.get("prompt_tokens", 0) for item in usage)
-            context.n_output_tokens = sum(item.get("completion_tokens", 0) for item in usage)
-            context.n_cache_tokens = sum(
-                (item.get("prompt_tokens_details") or {}).get("cached_tokens", 0) for item in usage
+            exit_error = (
+                NonZeroAgentExitCodeError(
+                    f"Native mini controller failed with exit code {process.returncode}",
+                    result=ExecResult(return_code=process.returncode, stdout=controller_log.read_text(errors="replace")),
+                )
+                if process.returncode != 0
+                else None
             )
+            try:
+                if trajectory.exists():
+                    native = json.loads(trajectory.read_bytes())
+                    atif = convert_mini_swe_agent_to_atif(native, environment.session_id)
+                    (self.logs_dir / "trajectory.json").write_text(json.dumps(atif.to_json_dict(), indent=2))
+                    context.cost_usd = native["info"]["model_stats"]["instance_cost"]
+                    context.metadata = (context.metadata or {}) | {
+                        "runtime": "adapted-host-native-mini-qemu",
+                        "exit_status": native["info"]["exit_status"],
+                    }
+                    # Only assistant messages have provider responses; provider usage is optional.
+                    usage = [
+                        m["extra"]["response"].get("usage") or {} for m in native["messages"] if m["role"] == "assistant"
+                    ]
+                    context.n_input_tokens = sum(item.get("prompt_tokens", 0) for item in usage)
+                    context.n_output_tokens = sum(item.get("completion_tokens", 0) for item in usage)
+                    context.n_cache_tokens = sum(
+                        (item.get("prompt_tokens_details") or {}).get("cached_tokens", 0) for item in usage
+                    )
+            except (ValueError, KeyError, TypeError) as error:
+                if exit_error is not None:
+                    raise exit_error from error
+                raise
+            if exit_error is not None:
+                raise exit_error
+            if not trajectory.exists():
+                raise RuntimeError("Native mini controller produced no trajectory")

@@ -15,6 +15,7 @@ import pytest
 pytest.importorskip("harbor")
 pytest.importorskip("minisweagent")
 
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
@@ -175,7 +176,7 @@ def test_native_mini_limits_exceeded_gets_batch_eof_without_extra_request(tmp_pa
         async def scenario():
             environment = await running_environment(tmp_path)
             try:
-                with pytest.raises(RuntimeError, match="controller failed"):
+                with pytest.raises(NonZeroAgentExitCodeError, match="controller failed"):
                     await native_agent(tmp_path, endpoint, "agent.step_limit=1").run(
                         "Fixture task", environment, AgentContext()
                     )
@@ -251,7 +252,7 @@ def test_native_mini_guest_process_start_errors_match_local_environment(tmp_path
         async def scenario():
             environment = await running_environment(tmp_path)
             try:
-                with pytest.raises(RuntimeError, match="controller failed"):
+                with pytest.raises(NonZeroAgentExitCodeError, match="controller failed"):
                     await native_agent(tmp_path, endpoint, "agent.step_limit=1", f"environment.cwd={cwd}").run(
                         "Fixture task", environment, AgentContext()
                     )
