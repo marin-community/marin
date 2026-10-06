@@ -7,14 +7,15 @@ import pytest
 from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, GenerationLimitReached, ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.machine import UnsupportedMachineSpec
-from taskcompendium.environment import EnvironmentKind, HealthcheckSpec, StdoutReward
-from taskcompendium.execution import TaskExecution
+from taskcompendium.environment import EnvironmentKind, ExitCodeReward, HealthcheckSpec, StdoutReward
+from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading import skipped_verifier
 from taskcompendium.grading_result import Outcome
+from taskcompendium.models import AnswerType, StageRewardStrategy
 from taskcompendium.submission import PlainText
 
 from taskforge.llm.client import GlmRequestRejected, GlmUnavailable
-from taskforge.spec.draft import file, shell_command, shell_verifier
+from taskforge.spec.draft import assemble, environment, file, shell_command, shell_verifier, stage, staged
 from taskforge.validate.classify import trial_outcome
 from taskforge.validate.outcome import Cause, Graded, Ungraded
 
@@ -192,3 +193,24 @@ async def test_model_failure_after_a_turn_is_ungraded_even_though_the_engine_gra
 
     assert isinstance(outcome, Ungraded) and outcome.cause is Cause.MODEL_UNAVAILABLE
     assert outcome.rollout is not None and outcome.rollout.grade.reward == 1.0
+
+
+async def test_a_stage_whose_working_directory_cannot_be_found_is_a_task_defect(file_task, fakes):
+    execution = TaskExecution(stages={"only": StageExecution(workdir_files=(file("/notes.txt", "n\n"),))})
+    grader = shell_verifier(("sh", "-c", "test -f /workspace/sum.txt"), ExitCodeReward(), timeout=5)
+    task = assemble(
+        "staged",
+        "Write the sum to /workspace/sum.txt.",
+        AnswerType.FILE,
+        environment(EnvironmentKind.SHELLSIM),
+        staged(StageRewardStrategy.FINAL),
+        file_task.source,
+        execution=execution,
+        stages=(stage("only", grader),),
+    )
+
+    outcome = await outcome_of(
+        task, fakes.script_model([]), fakes.faulty_factory(failing_argv=("pwd",)), execution=execution
+    )
+
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.TASK_SETUP, False)
