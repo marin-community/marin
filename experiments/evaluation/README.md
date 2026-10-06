@@ -194,6 +194,10 @@ same CPU orchestrator used by the CLI and writes eval outputs to the launcher's 
 its artifact path contains the pipeline cache record. The slice
 override is a runtime arg, so changing it does not change the artifact identity.
 
+The policy launcher calls the CLI directly. In a pipeline, the step is marked successful only after
+the whole orchestrator job finishes, so its cache does not cover an individual eval that completed
+before an orchestrator failure. The runner's per-eval record guard applies to both launch paths.
+
 For produced models, pass the producer handles in `deps` and resolve their locations in
 `resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.
 The resolver returns a plain `ModelConfig` with the target URI and identity; a drafted arm also

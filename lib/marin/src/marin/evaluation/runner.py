@@ -182,7 +182,11 @@ def _read_record_if_exists(path: str) -> EvalRunRecord | None:
 
 
 def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> _RecordPublication:
-    """Publish a record atomically and report whether a prior success was preserved."""
+    """Preserve per-eval success across parent retries, including unfinished pipeline steps.
+
+    Policy launches use the runner directly, and a pipeline step completes only after the group job.
+    The record write therefore needs its own atomic success guard.
+    """
     destination = conditional_object(record_path(prefix, record.run_id))
     payload = record.model_dump_json(indent=2, by_alias=True).encode()
     while True:
