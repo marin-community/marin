@@ -11,14 +11,12 @@ from enum import StrEnum
 from typing import NoReturn, Protocol
 
 from fray.client import JobHandle
-from iris.client.client import IrisClient, Job, iris_ctx
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.client.client import Job, iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretSpec, resolve_secret_spec
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
-from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
@@ -56,9 +54,6 @@ logger = logging.getLogger(__name__)
 _INFERENCE_ROLE = "inference"
 _ORCHESTRATOR_ROLE = "orchestrator"
 _JUDGE_ROLE = "judge"
-_ORCHESTRATOR_CPU = 4.0
-_ORCHESTRATOR_MEMORY = "16g"
-_ORCHESTRATOR_DISK = "80g"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 _HOSTED_JUDGE_STARTUP_ATTEMPTS = 3
@@ -122,19 +117,12 @@ class LaunchProvenance:
     launch_host: str
 
 
-@dataclass(frozen=True, kw_only=True)
-class EvaluationWork:
-    """Inputs captured by one step without a reference back to its StepSpec."""
-
+@dataclass(frozen=True)
+class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env_keys: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Evaluation(EvaluationWork):
-    step: StepSpec
 
 
 @dataclass(frozen=True)
@@ -161,6 +149,7 @@ class EvaluationBatch:
     evaluations: tuple[Evaluation, ...]
     provenance: LaunchProvenance
     submission_cluster: str
+    max_concurrent: int
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     source_model_config: ModelConfigRef | None = None
@@ -306,7 +295,7 @@ def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tupl
 
 def _run_one_evaluation(
     batch: EvaluationBatch,
-    evaluation: EvaluationWork,
+    evaluation: Evaluation,
     session: RemoteInferenceSession,
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
@@ -440,7 +429,7 @@ def _run_one_evaluation(
 
 def _record_startup_failure(
     batch: EvaluationBatch,
-    evaluation: EvaluationWork,
+    evaluation: Evaluation,
     orchestrator_job_id: str,
     exc: RemoteInferenceStartupError,
     role: str,
@@ -490,7 +479,7 @@ def _remote_inference_with_startup_retry(
 
 def _evaluate_with_hosted_judge(
     batch: EvaluationBatch,
-    evaluation: EvaluationWork,
+    evaluation: Evaluation,
     session: RemoteInferenceSession,
     orchestrator_job_id: str,
     runtime_env: Mapping[str, str],
@@ -520,7 +509,7 @@ def _evaluate_with_hosted_judge(
         )
 
 
-def run_evaluation_step(batch: EvaluationBatch, evaluation: EvaluationWork, _output_path: str) -> dict[str, str]:
+def run_evaluation_step(batch: EvaluationBatch, evaluation: Evaluation, _output_path: str) -> dict[str, str]:
     """Serve one evaluation inside its StepSpec and write its result record."""
     configure_coreweave_s3()
     orchestrator_job_id = str(iris_ctx().job_id)
@@ -571,12 +560,13 @@ def run_evaluation_step(batch: EvaluationBatch, evaluation: EvaluationWork, _out
     return {"record_path": path}
 
 
-def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
+def run_evaluation_steps(steps: tuple[StepSpec, ...], max_concurrent: int) -> None:
     """Run each independent evaluation step, skipping successful steps on restart."""
-    if not batch.evaluations:
+    if not steps:
         raise ValueError("an evaluation batch requires at least one evaluation")
-    StepRunner().run(evaluation.step for evaluation in batch.evaluations)
-    return [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
+    if max_concurrent < 1:
+        raise ValueError("max_concurrent must be at least 1")
+    StepRunner().run(steps, max_concurrent=max_concurrent)
 
 
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
@@ -587,51 +577,6 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
         session,
         model=replace(session.model, endpoint=endpoint),
         metrics_url=f"{address}/metrics" if session.metrics_url is not None else None,
-    )
-
-
-def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
-    """Submit a resolved batch to one CPU orchestrator."""
-    constraints = None
-    if batch.accelerator.target_cluster and batch.accelerator.target_cluster != batch.submission_cluster:
-        constraints = [
-            Constraint.create(
-                key=CLUSTER_CONSTRAINT_KEY,
-                op=ConstraintOp.EQ,
-                value=batch.accelerator.target_cluster,
-            )
-        ]
-    elif batch.accelerator.region:
-        constraints = [region_constraint([batch.accelerator.region])]
-    launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
-    for name, spec in sorted(batch.secret_env.items()):
-        launch_env[name] = resolve_secret_spec(spec).value
-    job = client.submit(
-        entrypoint=Entrypoint.from_callable(run_evaluation_batch, batch),
-        name=f"eval-{batch.group_id}",
-        resources=ResourceSpec(
-            cpu=_ORCHESTRATOR_CPU,
-            memory=_ORCHESTRATOR_MEMORY,
-            disk=_ORCHESTRATOR_DISK,
-        ),
-        environment=EnvironmentSpec(env_vars=launch_env),
-        constraints=constraints,
-        max_retries_failure=0,
-        priority_band=batch.priority_band,
-    )
-    logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)
-    return SubmittedEvaluationBatch(
-        group_id=batch.group_id,
-        job=job,
-        records_prefix=batch.records_prefix,
-        model_name=batch.model.name,
-        evaluations=tuple(
-            SubmittedEvaluation(
-                run_id=evaluation.identity.run_id,
-                eval_name=evaluation.identity.eval_ref.name,
-            )
-            for evaluation in batch.evaluations
-        ),
     )
 
 

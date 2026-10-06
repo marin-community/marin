@@ -44,7 +44,7 @@ import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
 from marin.evaluation.eval_measurements import measurements_from_records
-from marin.evaluation.eval_policy import record_policy_violations
+from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -77,6 +77,7 @@ from .metrics import (
     build_meta,
     build_model_detail,
     build_panel,
+    dashboard_measurements,
     display_status,
     panel_request,
     record_headline,
@@ -540,7 +541,7 @@ class RecordStore:
         protocol_records = [
             record for record in records if record.evaluation.name == task and not record_policy_violations(record)
         ]
-        protocols = declared_protocols(measurements_from_records(protocol_records))
+        protocols = declared_protocols(dashboard_measurements(protocol_records))
         points = []
         for record in task_records:
             headline = record_headline(record, protocols.get(task))

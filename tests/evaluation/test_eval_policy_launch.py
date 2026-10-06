@@ -108,14 +108,14 @@ def test_verified_launch_rejects_changed_source_before_contacting_iris(tmp_path,
         replace(spec, version=None), LaunchProvenance(git_sha="abc", launch_host="test"), "test"
     ).evaluations[0]
     assert changed_config.identity.run_id != ad_hoc.identity.run_id
-    assert changed_config.step.hash_attrs["evaluation"] != ad_hoc.step.hash_attrs["evaluation"]
+    assert changed_config.identity.eval_ref != ad_hoc.identity.eval_ref
 
     monkeypatch.setattr("experiments.evaluation.launch.EVALCHEMY", replace(EVALCHEMY, commit="f" * 40))
     changed_runtime = build_evaluation_batch(
         replace(spec, version=None), LaunchProvenance(git_sha="abc", launch_host="test"), "test"
     ).evaluations[0]
     assert changed_runtime.identity.run_id != changed_config.identity.run_id
-    assert changed_runtime.step.hash_attrs["eval_runtime"] != changed_config.step.hash_attrs["eval_runtime"]
+    assert changed_runtime.identity.eval_runtime != changed_config.identity.eval_runtime
 
 
 @pytest.mark.parametrize("h100_count", [2, 4, 8])
