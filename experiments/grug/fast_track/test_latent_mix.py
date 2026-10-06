@@ -64,3 +64,14 @@ def test_moe_latent_mixture_trains_its_gate(site):
 def test_mixture_gates_go_to_adam():
     for path in ("blocks.attn.latent_q.mix_gate", "blocks.mlp.latent_mix_in_gate", "blocks.mlp.latent_mix_out_gate"):
         assert _is_gate_or_router_weight(path)
+
+
+def test_mla_kv_latent_mixture_keeps_topk_blocks_and_trains_its_gate():
+    mesh, model = t._model(
+        ngram_stat_rows=0, mla=True, mla_kv_latent_dim=16, latent_mix_sites=("kv",), latent_mix_topk=1
+    )
+    attn = model.stacked_blocks.stacked.attn
+    assert attn.kv_latent_norm.weight.shape[-2:] == (4, 4)
+    loss, grads = _loss_and_grads(model, mesh)
+    assert np.isfinite(float(loss))
+    assert float(jnp.abs(grads.stacked_blocks.stacked.attn.kv_mix_gate).max()) > 0
