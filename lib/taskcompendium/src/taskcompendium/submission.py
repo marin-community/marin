@@ -6,8 +6,7 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
 from verifyit.json_objects import unique_object
@@ -55,23 +54,12 @@ def answer_call_tool() -> dict[str, object]:
     }
 
 
-class AnswerFormat(StrEnum):
-    """The envelope used to deliver a result."""
-
-    PLAIN = "plain"
-    JSON = "json"
-    JSON_VALUE = "json_value"
-    ANSWER_CALL = "answer_call"
-    FINAL_ACTION = "final_action"
-
-
-class Convention(BaseModel, ABC):
+class SubmissionConvention(BaseModel, ABC):
     """How a result is requested, delivered, and extracted."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
-    answer_format: AnswerFormat
     submission_types: ClassVar[tuple[type[Submission], ...]]
 
     @model_validator(mode="after")
@@ -82,10 +70,6 @@ class Convention(BaseModel, ABC):
 
     def supports(self, answer_type: AnswerType) -> bool:
         """Whether this convention can carry the semantic result."""
-        if self.answer_format == AnswerFormat.JSON_VALUE:
-            return answer_type == AnswerType.JSON
-        if self.answer_format == AnswerFormat.FINAL_ACTION:
-            return answer_type == AnswerType.NATIVE_ACTION
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
     @abstractmethod
@@ -93,17 +77,15 @@ class Convention(BaseModel, ABC):
         """Read the agent's submission without access to expected values."""
 
 
-class PlainText(Convention):
+class PlainText(SubmissionConvention):
     submission_types = (TextSubmission,)
-    answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
 
     def extract(self, attempt: GradingAttempt) -> TextSubmission:
         return TextSubmission(_text_answer(attempt.conversation.events[-1]))
 
 
-class JsonAnswer(Convention):
+class JsonAnswer(SubmissionConvention):
     submission_types = (TextSubmission,)
-    answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
 
     def extract(self, attempt: GradingAttempt) -> TextSubmission:
         try:
@@ -116,11 +98,13 @@ class JsonAnswer(Convention):
         return TextSubmission(answer)
 
 
-class JsonValueAnswer(Convention):
+class JsonValueAnswer(SubmissionConvention):
     """Parse the complete final assistant text as one JSON value."""
 
     submission_types = (JsonSubmission,)
-    answer_format: Literal[AnswerFormat.JSON_VALUE] = AnswerFormat.JSON_VALUE
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.JSON
 
     def extract(self, attempt: GradingAttempt) -> JsonSubmission:
         try:
@@ -129,9 +113,8 @@ class JsonValueAnswer(Convention):
             raise SubmissionFailure("JSON value submission is malformed") from error
 
 
-class AnswerCall(Convention):
+class AnswerCall(SubmissionConvention):
     submission_types = (TextSubmission,)
-    answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
 
     def extract(self, attempt: GradingAttempt) -> TextSubmission:
         response = attempt.conversation.events[-1]
@@ -151,12 +134,14 @@ class AnswerCall(Convention):
         return TextSubmission(arguments[ANSWER_FIELD])
 
 
-class FinalAction(Convention):
+class FinalAction(SubmissionConvention):
     submission_types = (ActionSubmission,)
-    answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
 
     require_call: bool = False
     max_calls: int | None = Field(default=None, gt=0)
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.NATIVE_ACTION
 
     def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:
         """Require the assistant's final message to honor the call contract."""
@@ -176,11 +161,6 @@ class FinalAction(Convention):
 
     def extract(self, attempt: GradingAttempt) -> ActionSubmission:
         return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
-
-
-SubmissionConvention = Annotated[
-    PlainText | JsonAnswer | JsonValueAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")
-]
 
 
 def _reject_json_constant(value: str) -> None:
@@ -209,21 +189,19 @@ class SubmissionCompatibility:
         return not self.reasons
 
 
-def submission_compatibility(specification: TaskSpec, convention: Convention) -> SubmissionCompatibility:
+def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
     """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
-        return SubmissionCompatibility(
-            (f"{convention.answer_format.value} cannot carry {specification.answer_type.value}",)
-        )
+        return SubmissionCompatibility((f"{type(convention).__name__} cannot carry {specification.answer_type.value}",))
     accepted = accepted_submission_types(resolve_verifier(specification.verifier))
     if not any(produced in accepted for produced in convention.submission_types):
         return SubmissionCompatibility(("Submission envelope is not accepted by the selected verifier",))
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+    if isinstance(convention, FinalAction):
         reasons = []
         if not specification.final_tools:
             reasons.append("final action requires at least one final tool")
         return SubmissionCompatibility(tuple(reasons))
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+    if isinstance(convention, AnswerCall):
         reasons = []
         if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools):
             reasons.append("final tool name collides with submit_answer")
@@ -233,17 +211,19 @@ def submission_compatibility(specification: TaskSpec, convention: Convention) ->
 
 def submission_instruction(convention: SubmissionConvention) -> str:
     """Return the instruction added after a conversation prefix."""
-    if convention.answer_format == AnswerFormat.PLAIN:
-        return "Give your answer as plain text."
-    if convention.answer_format == AnswerFormat.JSON:
-        return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
-    if convention.answer_format == AnswerFormat.JSON_VALUE:
-        return "Give your final answer as one JSON value, without Markdown fences."
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return ""
-    raise ValueError(f"Unsupported answer format: {convention.answer_format}")
+    match convention:
+        case PlainText():
+            return "Give your answer as plain text."
+        case JsonAnswer():
+            return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
+        case JsonValueAnswer():
+            return "Give your final answer as one JSON value, without Markdown fences."
+        case AnswerCall():
+            return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
+        case FinalAction():
+            return ""
+        case _:
+            raise ValueError(f"Unsupported submission convention: {type(convention).__name__}")
 
 
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
@@ -252,7 +232,7 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+    if isinstance(convention, FinalAction):
         return format_conversation(context.events)
     return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
 
@@ -303,7 +283,7 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
         {"type": "function", "function": function.model_dump(exclude_none=True)}
         for function in specification.final_tools
     ]
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+    if isinstance(convention, AnswerCall):
         tools.append(answer_call_tool())
         request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:

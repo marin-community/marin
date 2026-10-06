@@ -4,7 +4,6 @@
 """Chat request formatting and typed evidence preserve semantic grading contracts."""
 
 import pytest
-from pydantic import TypeAdapter
 from verifyit.json_comparison import NumericTypePolicy
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
@@ -23,11 +22,9 @@ from taskcompendium.models import (
 )
 from taskcompendium.submission import (
     AnswerCall,
-    AnswerFormat,
     JsonAnswer,
     JsonValueAnswer,
     PlainText,
-    SubmissionConvention,
     chat_request,
     render_instruction,
     submission_compatibility,
@@ -37,16 +34,6 @@ from taskcompendium.submission import (
 def _attempt(specification, response):
     trace = ConversationTrace(events=(*specification.context.events, response))
     return GradingAttempt(ConversationTrace.model_validate_json(trace.model_dump_json()))
-
-
-def _answer_convention(answer_format: AnswerFormat) -> SubmissionConvention:
-    if answer_format == AnswerFormat.PLAIN:
-        return PlainText(id="plain")
-    if answer_format == AnswerFormat.JSON:
-        return JsonAnswer(id="json")
-    if answer_format == AnswerFormat.ANSWER_CALL:
-        return AnswerCall(id="answer_call")
-    raise ValueError(f"Unsupported test answer format: {answer_format}")
 
 
 def _answer_action(answer: str, name: str = "submit_answer") -> AssistantToolCalls:
@@ -91,23 +78,21 @@ def test_numeric_answer_uses_explicit_tolerance(specification, response, reward)
 
 
 @pytest.mark.parametrize(
-    "answer_format,response,status,reward",
+    "convention,response,status,reward",
     [
-        (AnswerFormat.PLAIN, "12", Outcome.GRADED, 1.0),
-        (AnswerFormat.PLAIN, "12.0", Outcome.GRADED, 1.0),
-        (AnswerFormat.PLAIN, "13", Outcome.GRADED, 0.0),
-        (AnswerFormat.PLAIN, "not a number", Outcome.SUBMISSION_FAILURE, 0.0),
-        (AnswerFormat.PLAIN, r"\boxed{12}", Outcome.GRADED, 1.0),
-        (AnswerFormat.JSON, '{"answer":"12"}', Outcome.GRADED, 1.0),
-        (AnswerFormat.JSON, '{"answer":"13"}', Outcome.GRADED, 0.0),
-        (AnswerFormat.JSON, '{"answer":"12"', Outcome.SUBMISSION_FAILURE, 0.0),
+        (PlainText(id="plain"), "12", Outcome.GRADED, 1.0),
+        (PlainText(id="plain"), "12.0", Outcome.GRADED, 1.0),
+        (PlainText(id="plain"), "13", Outcome.GRADED, 0.0),
+        (PlainText(id="plain"), "not a number", Outcome.SUBMISSION_FAILURE, 0.0),
+        (PlainText(id="plain"), r"\boxed{12}", Outcome.GRADED, 1.0),
+        (JsonAnswer(id="json"), '{"answer":"12"}', Outcome.GRADED, 1.0),
+        (JsonAnswer(id="json"), '{"answer":"13"}', Outcome.GRADED, 0.0),
+        (JsonAnswer(id="json"), '{"answer":"12"', Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
-def test_chat_answer_distinguishes_wrong_and_malformed_submissions(
-    specification, answer_format, response, status, reward
-):
+def test_chat_answer_distinguishes_wrong_and_malformed_submissions(specification, convention, response, status, reward):
     specification = TaskSpec.model_validate_json(specification.model_dump_json())
-    convention = TypeAdapter(SubmissionConvention).validate_json(_answer_convention(answer_format).model_dump_json())
+    convention = type(convention).model_validate_json(convention.model_dump_json())
     assert "12" not in render_instruction(specification, convention)
     result = grade_answer(
         specification, convention, _attempt(specification, TextMessage(role="assistant", content=response))
@@ -149,18 +134,18 @@ def test_answer_call_grades_semantic_answers(specification, answer_type, verifie
     assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
-@pytest.mark.parametrize("answer_format", [AnswerFormat.PLAIN, AnswerFormat.JSON, AnswerFormat.ANSWER_CALL])
-def test_chat_request_preserves_advertised_tools(specification, answer_format):
+@pytest.mark.parametrize("convention", [PlainText(id="plain"), JsonAnswer(id="json"), AnswerCall(id="answer-call")])
+def test_chat_request_preserves_advertised_tools(specification, convention):
     task = specification.model_copy(
         update={"final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),)}
     )
-    request = chat_request(task, _answer_convention(answer_format))
+    request = chat_request(task, convention)
     assert request["tools"][0] == {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
     assert [tool["function"]["name"] for tool in request["tools"]] == (
-        ["lookup", "submit_answer"] if answer_format == AnswerFormat.ANSWER_CALL else ["lookup"]
+        ["lookup", "submit_answer"] if isinstance(convention, AnswerCall) else ["lookup"]
     )
-    assert request.get("tool_choice") == ("required" if answer_format == AnswerFormat.ANSWER_CALL else None)
-    if answer_format == AnswerFormat.ANSWER_CALL:
+    assert request.get("tool_choice") == ("required" if isinstance(convention, AnswerCall) else None)
+    if isinstance(convention, AnswerCall):
         assert request["parallel_tool_calls"] is False
 
 

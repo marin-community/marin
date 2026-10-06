@@ -97,14 +97,13 @@ def test_serialized_nemo_verifier_grades_in_fresh_process(tmp_path):
     (tmp_path / "convention.json").write_text(convention.model_dump_json())
     script = (
         "import json, sys; from pathlib import Path; "
-        "from pydantic import TypeAdapter; "
         "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.grading_contract import GradingAttempt; "
-        "from taskcompendium.submission import SubmissionConvention; "
+        "from taskcompendium.submission import FinalAction; "
         "from taskcompendium.models import TaskSpec, ConversationTrace; "
         "root = Path(sys.argv[1]); "
         "specification = TaskSpec.model_validate_json((root/'specification.json').read_text()); "
-        "convention = TypeAdapter(SubmissionConvention).validate_json((root/'convention.json').read_text()); "
+        "convention = FinalAction.model_validate_json((root/'convention.json').read_text()); "
         "conversation = ConversationTrace.model_validate_json(sys.argv[2]); "
         "result = grade_answer(specification, convention, GradingAttempt(conversation)); "
         "print(json.dumps({'status':result.status, 'reward':result.reward}))"

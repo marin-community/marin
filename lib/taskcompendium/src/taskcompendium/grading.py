@@ -50,7 +50,7 @@ from taskcompendium.models import (
     TaskSpec,
     VerifierSpec,
 )
-from taskcompendium.submission import Convention, submission_compatibility
+from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
 
 class Outcome(StrEnum):
@@ -95,7 +95,7 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
             raise TypeError("Text candidate verifier requires a text submission")
 
 
-def grade_answer(specification: TaskSpec, convention: Convention, attempt: GradingAttempt) -> GradeResult:
+def grade_answer(specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt) -> GradeResult:
     """Extract one submission and score it through the shared candidate contract."""
     verifier = resolve_verifier(specification.verifier)
     compatibility = submission_compatibility(specification, convention)

@@ -4,10 +4,9 @@
 """Typed submissions and private grading without an execution provider."""
 
 import json
-from typing import Literal
 
 import pytest
-from pydantic import JsonValue, PrivateAttr, TypeAdapter
+from pydantic import JsonValue, PrivateAttr
 from verifyit.spec import Mode
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
@@ -24,8 +23,6 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.submission import (
-    AnswerFormat,
-    Convention,
     JsonAnswer,
     JsonValueAnswer,
     PlainText,
@@ -51,13 +48,12 @@ def _attempt(task, content):
     )
 
 
-class StateAnswer(Convention):
+class StateAnswer(SubmissionConvention):
     submission_types = (StateSubmission,)
 
     def supports(self, answer_type: AnswerType) -> bool:
         return answer_type == AnswerType.STATE
 
-    answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
     value: JsonValue
 
     def extract(self, _attempt: GradingAttempt) -> StateSubmission:
@@ -105,7 +101,6 @@ def test_exact_verifier_accepts_string_json_and_acquired_state(actual, status, r
 
 
 class ChangingText(PlainText):
-    answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
     _submitted: bool = PrivateAttr(default=False)
 
     def extract(self, _attempt: GradingAttempt) -> TextSubmission:
@@ -122,7 +117,7 @@ def test_verifier_grades_the_single_extracted_submission():
 
 def test_serialized_json_convention_extracts_answer_and_scores_invalid_submission():
     task = _task(exact_answer("yes"))
-    convention = TypeAdapter(SubmissionConvention).validate_json(JsonAnswer(id="json").model_dump_json())
+    convention = JsonAnswer.model_validate_json(JsonAnswer(id="json").model_dump_json())
     valid = grade_answer(task, convention, _attempt(task, '{"answer":"yes"}'))
     invalid = grade_answer(task, convention, _attempt(task, '{"answer":'))
     assert (valid.status, valid.reward) == (Outcome.GRADED, 1.0)
