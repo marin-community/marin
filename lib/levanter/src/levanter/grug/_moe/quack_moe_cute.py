@@ -20,8 +20,12 @@ import jax.numpy as jnp
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
+from quack.activation import dswiglu
 from quack.cute_dsl_utils import get_max_active_clusters
+from quack.epilogue.frontend import gemm_epilogue
 from quack.epilogue.library import linear_act_mod
+from quack.epilogue.math import pack, unpack
+from quack.epilogue.ops import ColVecReduce
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
@@ -253,6 +257,112 @@ def quack_grouped_gemm(
         max_swizzle=max_swizzle,
         use_clc_persistence=use_clc_persistence,
     )
+
+
+@gemm_epilogue(reduces={"row_dot": ColVecReduce("row_dot", scaled=True)}, mode="packed_cd_b16x2")
+def _dswiglu_row_dot_epilogue(acc, c):
+    """SwiGLU backward on the accumulator ``dh`` and the packed ``(gate, up)`` preactivations.
+
+    D is the packed ``(d_gate, d_up)``; ``row_dot`` accumulates ``<silu(gate) * up, dh>`` per row.
+    """
+    gate, up = unpack(c)
+    d_gate, d_up, postact = dswiglu(gate, up, acc)
+    return {"D": pack(d_gate, d_up), "row_dot": (postact, acc)}
+
+
+@cute_launcher_factory
+def _build_dswiglu_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle, use_clc_persistence=False
+):
+    """Return a ``@cute.jit`` grouped dh GEMM launcher with the SwiGLU backward as its epilogue.
+
+    Signature: (stream, mA, mB, mCuSeqlens, mC, mD, mRowDot)
+      mA:[M,K] dy (k-major)  mB:[E,N,K] W2 (k-major)  mCuSeqlens:[E+1] int32
+      mC:[M,2N] packed gate/up preactivations  mD:[M,2N] packed d_gate/d_up  mRowDot:[M,N/tile_n] f32
+    """
+    gemm_type = _dswiglu_row_dot_epilogue._mint(
+        kind_sig=(("c", "c"),),
+        sm=10,
+        paired_acc=False,
+        packed_c=True,
+        prepass_sig=(),
+        rounding=RoundingMode.RN,
+        arg_forms=(),
+        add_to_output=False,
+    )
+
+    @cute.jit
+    def launcher(stream, mA, mB, mCuSeqlens, mC, mD, mRowDot):
+        gemm = gemm_type(
+            _ACC,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=use_clc_persistence,
+            use_pdl=_QUACK_USE_PDL,
+        )
+        # C and D cross in their 16-bit dtype, two lanes per packed 32-bit element along N.
+        gemm.cd_packed = "n"
+        gemm.implicit_dtype = a_dtype
+        epi_args = gemm_type.EpilogueArguments(row_dot=mRowDot)
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(mCuSeqlens, None, None)
+        gemm(mA, mB, mD, mC, epi_args, scheduler_args, varlen_args, stream)
+
+    return launcher
+
+
+def quack_grouped_dswiglu_gemm(
+    dy,
+    w,
+    gate_up,
+    cu_seqlens,
+    *,
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    use_clc_persistence=False,
+):
+    """``dh = dy @ w^T`` per expert group, followed in the epilogue by the SwiGLU backward.
+
+    dy: [M, K] rows grouped by ``cu_seqlens`` (varlen_m). w: [E, N, K] (k-major, as ``b_major='k'``).
+    gate_up: [M, 2N] interleaved gate/up preactivations from ``quack_gated_grouped_gemm``.
+    Returns ``(d_gate_up, row_dot)``: the interleaved preactivation cotangent [M, 2N] and each
+    row's ``<silu(gate) * up, dh>`` [M] in fp32. The SwiGLU backward runs in fp32 on the fp32
+    accumulator. Rows past ``cu_seqlens[-1]`` are unspecified in both outputs.
+    """
+    M = dy.shape[0]
+    N = w.shape[1]
+    if gate_up.shape != (M, 2 * N):
+        raise ValueError(f"gate_up must be [{M}, {2 * N}], got {gate_up.shape}")
+    launcher = _build_dswiglu_launcher(
+        a_dtype=_cute_dtype(dy.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
+    )
+    ts = cjax.TensorSpec
+    row_dot_tiles = -(-N // tile_mn[1])
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((M, 2 * N), gate_up.dtype),
+            jax.ShapeDtypeStruct((M, row_dot_tiles), jnp.float32),
+        ),
+        input_spec=(
+            ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
+            ts(mode=(0, 1, 2), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
+            ts(static=False),
+            ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
+        ),
+        output_spec=(ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False), ts(static=False)),
+        use_static_tensors=False,
+    )
+    d_gate_up, row_dot_partials = call(dy, w, cu_seqlens.astype(jnp.int32), gate_up)
+    return d_gate_up, jnp.sum(row_dot_partials, axis=-1)
 
 
 def quack_grouped_wgrad(
