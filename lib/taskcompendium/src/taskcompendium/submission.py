@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submission conventions for semantic answer tasks."""
+"""Submission conventions for semantic answer tasks.
+
+An answer is the task's semantic result, identified by TaskSpec.answer_type.
+A submission is the typed value a convention extracts from a completed attempt
+for grading. Plain text, {"answer":"12"}, and submit_answer(answer="12") can
+all yield TextSubmission("12") for the same numeric answer.
+"""
 
 import json
 from abc import ABC, abstractmethod
