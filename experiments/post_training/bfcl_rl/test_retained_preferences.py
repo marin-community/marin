@@ -628,6 +628,8 @@ def _native_pair_collection(
     resolved["train_data_sources"][0]["relative_path"] = "bfcl_complement"
     skyrl["trainer"]["policy"]["model"]["source_uri"] = locator.uri
     skyrl["trainer"]["seed"] = seed
+    if model == "teacher" and fault == "unmatched_literal_tool_calls":
+        skyrl["generator"]["engine_init_kwargs"]["tool_call_parser"] = "qwen3_coder"
     skyrl["generator"]["trajectory_retention"]["run_id"] = f"{root.name}-collection"
     skyrl["terminal_bench_config"]["harbor"].update(
         name="opencode", version="1.18.2", agent_profiles=list(NATIVE_AGENT_PROFILES)
@@ -714,6 +716,13 @@ def _native_pair_collection(
                     + json.dumps(assistant["tool_calls"][0]["function"])
                     + "\n</tool_call>"
                 )
+                if model == "teacher" and fault == "unmatched_literal_tool_calls":
+                    raw_call = (
+                        "TEACHER_REASONING\n</think>\n<tool_call><function=lookup>"
+                        "<parameter=key>TEACHER_ARGUMENT</parameter></function></tool_call>"
+                    )
+                    if index == 0:
+                        raw_call = "TEACHER_REASONING\n</think>\nNO_CAPTURED_TOOL_CALL"
                 if model == "student" and index == 0 and fault == "malformed_calls":
                     raw_call += "RAW_LOOP " * 20
                 completions = [
@@ -946,12 +955,11 @@ def test_native_dpo_sealed_batches_from_unfinished_producers_preserve_verified_p
     assert report["unmatched_branches"][0]["teacher_without_student"] == [[tasks[2].source_id, "codex@0.118.0", 0]]
 
 
-def test_native_dpo_excludes_auxiliary_title_capture_without_changing_verifier_grade(tmp_path: Path):
+@pytest.mark.parametrize("fault", ["auxiliary_capture", "unmatched_literal_tool_calls"])
+def test_native_dpo_excludes_unusable_capture_without_changing_verifier_grade(tmp_path: Path, fault: str):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
     partition = replace(PARTITION, complement=tasks)
-    teacher = _native_pair_collection(
-        tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, "auxiliary_capture"
-    )
+    teacher = _native_pair_collection(tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, fault)
     student = _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, "none")
     tokenizer_path = tmp_path / "student-tokenizer"
     _native_pair_tokenizer(tokenizer_path)
@@ -962,13 +970,15 @@ def test_native_dpo_excludes_auxiliary_title_capture_without_changing_verifier_g
         result = build_native_preference_cache(config, partition)
     assert result.num_preferences == 1
     report = json.loads((tmp_path / "cache/selection.json").read_text())
-    assert report["excluded_branches"] == [
-        {
-            "source_id": f"teacher-collection/teacher-{tasks[0].name}",
-            "reason": "tool_free_auxiliary_capture",
-            "verifier_outcome": "correct",
-        }
-    ]
+    [excluded] = report["excluded_branches"]
+    assert excluded["source_id"] == f"teacher-collection/teacher-{tasks[0].name}"
+    assert excluded["reason"] == (
+        "tool_free_auxiliary_capture" if fault == "auxiliary_capture" else "unmatched_literal_tool_calls"
+    )
+    assert excluded["verifier_outcome"] == "correct"
+    if fault == "unmatched_literal_tool_calls":
+        assert excluded["retained_uri"].endswith("records/0.json.gz")
+        assert excluded["native_trace_uri"].endswith(f"{tasks[0].name}/result.json")
     assert report["preferences"][0]["chosen"]["task_source_id"] == tasks[1].source_id
     assert report["collections"][0]["dispositions"]["opencode@1.18.2/correct"] == 2
 

@@ -17,6 +17,7 @@ from levanter.tokenizers import load_tokenizer
 from marin.datakit.chat_normalize import InvalidToolCallPolicy, RepeatedToolCallPolicy, normalize_chat_to_parquet
 from marin.datakit.chat_render import chat_training_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from marin.datakit.download.rollout_transforms import ToolCallLiteralFormatError
 from marin.datakit.normalize import DedupMode
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -161,7 +162,28 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                             }
                         )
                         trace = replace(trace, messages=messages)
-                    destination.write(json.dumps(native_chat_document(trace), ensure_ascii=False) + "\n")
+                    try:
+                        document = native_chat_document(trace)
+                    except ToolCallLiteralFormatError as error:
+                        excluded_branches.append(
+                            {
+                                "source_id": source_id,
+                                "reason": "unmatched_literal_tool_calls",
+                                "verifier_outcome": evidence.retained.rollout.outcome.value,
+                                "retained_uri": evidence.retained_uri,
+                                "native_trace_uri": evidence.native_uri,
+                                "error": str(error),
+                            }
+                        )
+                        selected.append(
+                            NativePreferenceBranch(
+                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED),
+                                source_id,
+                                initial_prompt,
+                            )
+                        )
+                        continue
+                    destination.write(json.dumps(document, ensure_ascii=False) + "\n")
                 selected.append(NativePreferenceBranch(evidence.retained.rollout, source_id, initial_prompt))
             branches.append(selected)
             reports.append(json.loads(StoragePath(audit_path).read_text()))
