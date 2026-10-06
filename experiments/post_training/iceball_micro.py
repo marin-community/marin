@@ -57,7 +57,6 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -343,7 +342,7 @@ def iceball_rl_spec(
         name=rl_name,
         version=version or resolve_version(rl_base_name, None),
         config_yaml=ICEBALL_RL_CONFIG,
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=sft,
             tokenizer_uri=QWEN_TOKENIZER,

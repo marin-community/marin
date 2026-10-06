@@ -25,7 +25,6 @@ class MegatronDraftPolicy:
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
     eval_batch_size: int
-    micro_forward_batch_size_per_gpu: int
     tensor_model_parallel_size: int
     pipeline_model_parallel_size: int
     context_parallel_size: int
@@ -114,7 +113,6 @@ def draft_sft_plan(
             "max_steps": max_steps,
             "update_epochs_per_batch": 1,
             "eval_batch_size": policy.eval_batch_size,
-            "micro_forward_batch_size_per_gpu": policy.micro_forward_batch_size_per_gpu,
             "eval_before_train": False,
             "eval_interval": -1,
             "ckpt_interval": checkpoint_interval,
@@ -140,8 +138,6 @@ def draft_sft_plan(
             "enforce_eager": False,
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "async_engine": True,
-            "batched": False,
             "engine_init_kwargs": {"async_scheduling": False},
             "speculative_decoding": {
                 "method": "eagle3",
