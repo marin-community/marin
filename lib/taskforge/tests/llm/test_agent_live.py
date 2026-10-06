@@ -289,7 +289,7 @@ def test_web_search_through_parallel(glm_settings, parallel_key):
 
     async def go() -> tuple[AgentRun, float]:
         async with GlmClient(endpoint(glm_settings)) as client, httpx.AsyncClient() as http:
-            tools = web_tools(http, parallel_key)
+            tools = web_tools(http, parallel_key.value)
             return await timed_agent(client, policy, messages, tools, 20, ledger_record("web", "web"))
 
     # Releases can land while the agent runs, so its answer may match PyPI before or after the run.
