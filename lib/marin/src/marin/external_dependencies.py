@@ -91,9 +91,9 @@ MARIN_SKYRL = ExternalDependency(
 )
 
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-staged-candidate-4c6a2cc228a2",
-    source_commit="4c6a2cc228a22f2e889a12268df75d41db51483b",
-    version="0.0.0.dev20261005+marin.4c6a2cc228a2.cu132",
+    release_tag="marin-vllm-gpu-staged-candidate-47b411d5785d",
+    source_commit="47b411d5785d1c3dee0328334472d70310c53feb",
+    version="0.0.0.dev20261006+marin.47b411d5785d.cu132",
     torch_backend="cu132",
     torch_version="2.14.1+cu132",
     wheels=(
@@ -102,13 +102,13 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             sm_targets=("10.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-staged-candidate-4c6a2cc228a2/"
-                "vllm-0.0.0.dev20261005%2Bmarin.4c6a2cc228a2.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
+                "marin-vllm-gpu-staged-candidate-47b411d5785d/"
+                "vllm-0.0.0.dev20261006%2Bmarin.47b411d5785d.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
             ),
-            sha256="4b2a7e8d440745a5c0c9fc4614694bc468297a9b65d1e27c9921bb26438b3700",
+            sha256="34b45989785fb556c22e40a89f6d0c496b1235c03b457ce0fc35fb28a2050d0d",
             constraints_url=(
                 "https://raw.githubusercontent.com/marin-community/vllm/"
-                "4c6a2cc228a22f2e889a12268df75d41db51483b/infra/release/gpu-constraints-aarch64.txt"
+                "47b411d5785d1c3dee0328334472d70310c53feb/infra/release/gpu-constraints-aarch64.txt"
             ),
         ),
         VllmGpuWheel(
@@ -116,13 +116,13 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-staged-candidate-4c6a2cc228a2/"
-                "vllm-0.0.0.dev20261005%2Bmarin.4c6a2cc228a2.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
+                "marin-vllm-gpu-staged-candidate-47b411d5785d/"
+                "vllm-0.0.0.dev20261006%2Bmarin.47b411d5785d.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="5c7ed50bf671c137609cc50384b2aa08cbae3e48b6aae3749ce72a6e656e470c",
+            sha256="720b4651a42a0a579f3c7fe1e585bcbb3dd2a68aed548974a48f162229a592d6",
             constraints_url=(
                 "https://raw.githubusercontent.com/marin-community/vllm/"
-                "4c6a2cc228a22f2e889a12268df75d41db51483b/infra/release/gpu-constraints.txt"
+                "47b411d5785d1c3dee0328334472d70310c53feb/infra/release/gpu-constraints.txt"
             ),
         ),
     ),
