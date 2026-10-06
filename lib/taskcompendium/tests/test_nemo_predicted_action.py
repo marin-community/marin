@@ -19,40 +19,11 @@ from taskcompendium.models import (
     ConversationToolCall,
     ConversationTrace,
     TaskSpec,
-    TextMessage,
-    ToolResult,
 )
+from taskcompendium.pipeline.chat_messages import assistant_message, chat_conversation
 from taskcompendium.submission import FinalAction, chat_request, render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
-
-
-def _assistant_message(message: dict) -> TextMessage | AssistantToolCalls:
-    if message.get("tool_calls"):
-        return AssistantToolCalls(
-            calls=tuple(
-                ConversationToolCall(
-                    call_id=call["id"],
-                    name=call["function"]["name"],
-                    arguments=json.loads(call["function"]["arguments"]),
-                )
-                for call in message["tool_calls"]
-            ),
-            content=message.get("content"),
-        )
-    return TextMessage(role="assistant", content=message["content"])
-
-
-def _chat_conversation(messages: list[dict]) -> ConversationTrace:
-    events = []
-    for message in messages:
-        if message["role"] == "assistant":
-            events.append(_assistant_message(message))
-        elif message["role"] == "tool":
-            events.append(ToolResult(call_id=message["tool_call_id"], content=message["content"]))
-        else:
-            events.append(TextMessage(role=message["role"], content=message["content"]))
-    return ConversationTrace(events=tuple(events))
 
 
 def _action(name: str, arguments: str) -> dict:
@@ -108,7 +79,7 @@ def test_serialized_nemo_verifier_grades_in_fresh_process(tmp_path):
         "result = grade_answer(specification, convention, GradingAttempt(conversation)); "
         "print(json.dumps({'status':result.status, 'reward':result.reward}))"
     )
-    response = _assistant_message(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
+    response = assistant_message(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
     conversation = ConversationTrace(events=(*specification.context.events, response))
     completed = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path), conversation.model_dump_json()],
@@ -230,7 +201,7 @@ def test_predicted_action_task_roundtrip_preserves_source_context():
 def test_predicted_action_chat_evidence_distinguishes_wrong_and_invalid_submission(response, reward, status):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    trace = _chat_conversation([*chat_request(specification, convention)["messages"], response])
+    trace = chat_conversation([*chat_request(specification, convention)["messages"], response])
     restored = ConversationTrace.model_validate_json(trace.model_dump_json())
     result = grade_answer(specification, convention, GradingAttempt(restored))
     assert (result.status, result.reward) == (status, reward)
@@ -282,7 +253,7 @@ def test_predicted_action_chat_request_preserves_source_history_and_tools():
     assert request["messages"][-1]["content"] == row["responses_create_params"]["input"][-1]["content"]
     assert "tool_choice" not in request
     assert request["parallel_tool_calls"] is False
-    trace = _chat_conversation(
+    trace = chat_conversation(
         [*request["messages"], _action(row["expected_action"]["name"], row["expected_action"]["arguments"])]
     )
     trace = ConversationTrace.model_validate_json(trace.model_dump_json())
@@ -316,7 +287,7 @@ def test_imported_final_call_constraints_distinguish_invalid_submission(require_
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["tool_choice"] = "required" if require_call else "auto"
     specification, convention = import_row(row, canonical_sha256(row))
-    final = _assistant_message({"role": "assistant", "content": "No action"})
+    final = assistant_message({"role": "assistant", "content": "No action"})
     attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
     result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("submission_failure" if require_call else "graded", 0.0)
@@ -332,7 +303,7 @@ def test_imported_parallel_actions_accept_multiple_final_calls():
     row["expected_action"] = {"type": "function_call_batch", "calls": [original_call, original_call]}
     specification, convention = import_row(row, canonical_sha256(row))
     single = _action(original_call["name"], original_call["arguments"])["tool_calls"][0]
-    final = _assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
+    final = assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
     attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
     result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("graded", 1.0)

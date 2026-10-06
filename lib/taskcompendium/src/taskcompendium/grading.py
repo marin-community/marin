@@ -10,8 +10,6 @@ policies, and score calculation. Submission conventions own evidence extraction;
 execution runtimes own provider decoding and workspace lifecycle.
 """
 
-import json
-
 from pydantic import JsonValue
 from verifyit.candidate import (
     CandidateSpec,
@@ -28,11 +26,10 @@ from verifyit.spec import (
     PredictedActionSpec,
     Spec,
     StructuredExactSpec,
-    mode_of,
-    spec_to_table,
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
+from taskcompendium.grader import grader_package
 from taskcompendium.grading_contract import (
     ActionSubmission,
     GradingAttempt,
@@ -103,9 +100,7 @@ def structured_exact(expected: JsonValue, *, numeric_types: NumericTypePolicy = 
 
 def verifier_descriptor(spec: Spec) -> VerifierSpec:
     """Store a conversion-selected shared verifier contract in the private task slot."""
-    parameters = spec_to_table(spec)
-    parameters.pop("mode")
-    descriptor = VerifierSpec(kind=mode_of(spec), parameters_json=json.dumps(parameters))
+    descriptor = grader_package(spec).verifier
     validate_verifier(descriptor)
     return descriptor
 
