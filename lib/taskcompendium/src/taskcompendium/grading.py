@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Extract TaskCompendium submission evidence for shared pure candidate graders."""
+"""Bridge TaskCompendium submissions to verifyit's pure candidate graders.
+
+This module checks task/convention compatibility, acquires one typed submission,
+adapts it to verifyit inputs, and maps rewards and submission failures to
+GradeResult. verifyit owns verifier-spec validation, numeric parsing, comparison
+policies, and score calculation. Submission conventions own evidence extraction;
+execution runtimes own provider decoding and workspace lifecycle.
+"""
 
 import json
 from dataclasses import dataclass
