@@ -27,7 +27,6 @@ ORDER = (
     "loop",
     "queue",
 )
-FOUNDATION = frozenset({"canonical", "ledger", "spec", "sandbox", "llm"})
 ROOT = Path(taskforge.__file__).parent
 
 
@@ -63,11 +62,6 @@ def edges() -> Iterator[tuple[str, str, str]]:
 def test_every_package_has_a_place_in_the_order():
     packages = {package_of(module) for module in ROOT.rglob("*.py") if module.relative_to(ROOT) != Path("__init__.py")}
     assert packages <= set(ORDER), f"add {sorted(packages - set(ORDER))} to ORDER and the README"
-
-
-def test_foundation_packages_import_only_each_other():
-    wrong = [f"{at}: {src} imports {dst}" for at, src, dst in edges() if src in FOUNDATION and dst not in FOUNDATION]
-    assert not wrong, "\n".join(wrong)
 
 
 def test_imports_point_only_downstream_in_the_package_order():
