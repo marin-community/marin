@@ -78,43 +78,29 @@ def _launch(service, name: str, *, profile: int = 0, band: int = 0):
     return service.launch_job(request, None)
 
 
-@pytest.mark.parametrize(
-    ("parent_profile", "allowed"),
-    [
-        pytest.param(job_pb2.CONTAINER_PROFILE_PRIVILEGED, True, id="parent-privileged"),
-        pytest.param(job_pb2.CONTAINER_PROFILE_DEFAULT, False, id="parent-default"),
-    ],
-)
-def test_task_launches_an_elevated_child_only_when_its_parent_holds_that_profile(auth_service, parent_profile, allowed):
-    with identity_scope(_ADMIN):
-        _launch(auth_service, "/alice/parent", profile=parent_profile)
-
-    with identity_scope(_ALICE_TASK):
-        if allowed:
-            _launch(auth_service, "/alice/parent/child", profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED)
-            return
-        with pytest.raises(ConnectError) as exc:
-            _launch(auth_service, "/alice/parent/child", profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED)
-    assert exc.value.code == Code.PERMISSION_DENIED
+_PRIVILEGED = {"profile": job_pb2.CONTAINER_PROFILE_PRIVILEGED}
+_PRODUCTION = {"band": job_pb2.PRIORITY_BAND_PRODUCTION}
 
 
 @pytest.mark.parametrize(
-    ("parent_band", "allowed"),
+    ("parent", "child", "allowed"),
     [
-        pytest.param(job_pb2.PRIORITY_BAND_PRODUCTION, True, id="parent-production"),
-        pytest.param(job_pb2.PRIORITY_BAND_INTERACTIVE, False, id="parent-interactive"),
+        pytest.param(_PRIVILEGED, _PRIVILEGED, True, id="privileged-under-privileged"),
+        pytest.param({"profile": job_pb2.CONTAINER_PROFILE_DEFAULT}, _PRIVILEGED, False, id="privileged-under-default"),
+        pytest.param(_PRODUCTION, _PRODUCTION, True, id="production-under-production"),
+        pytest.param({"band": job_pb2.PRIORITY_BAND_INTERACTIVE}, _PRODUCTION, False, id="production-under-interactive"),
     ],
 )
-def test_task_launches_a_production_child_only_under_a_production_parent(auth_service, parent_band, allowed):
+def test_task_gives_a_child_an_admin_gated_setting_only_when_its_parent_holds_it(auth_service, parent, child, allowed):
     with identity_scope(_ADMIN):
-        _launch(auth_service, "/alice/parent", band=parent_band)
+        _launch(auth_service, "/alice/parent", **parent)
 
     with identity_scope(_ALICE_TASK):
         if allowed:
-            _launch(auth_service, "/alice/parent/child", band=job_pb2.PRIORITY_BAND_PRODUCTION)
+            _launch(auth_service, "/alice/parent/child", **child)
             return
         with pytest.raises(ConnectError) as exc:
-            _launch(auth_service, "/alice/parent/child", band=job_pb2.PRIORITY_BAND_PRODUCTION)
+            _launch(auth_service, "/alice/parent/child", **child)
     assert exc.value.code == Code.PERMISSION_DENIED
 
 
