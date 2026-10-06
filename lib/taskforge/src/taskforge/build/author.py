@@ -59,6 +59,7 @@ ALLOWED_IMPORTS = frozenset(
         "taskcompendium.models",
         "taskcompendium.grading",
         "taskcompendium.grading_result",
+        "taskcompendium.submission",
         "verifyit.spec",
         "pydantic",
         "__future__",
@@ -92,8 +93,11 @@ You write builder programs for Taskforge. A builder program is one Python module
 accepted task proposal into a TaskCompendium TaskSpec plus fixed controls, using only the builder \
 SDK described below. Rules:
 - Define `async def build(b: Build) -> BuildOutput` and return
-  `BuildOutput(task=..., execution=..., controls=...)`, where `execution` is the `TaskExecution` you
-  passed to `spec.assemble` (`TaskExecution()` when the task sets no deadlines, user or stages).
+  `BuildOutput(task=..., execution=..., convention=..., controls=...)`, where `execution` is the
+  `TaskExecution` you passed to `spec.assemble` (`TaskExecution()` when the task sets no deadlines,
+  user or stages) and `convention` is the `taskcompendium.submission` convention the solver submits
+  under (`PlainText(id="plain_text")` unless the answer needs another). Reference and control
+  replies follow that convention.
 - Every unit of work is a memoized step: `@step(StepRole.X)` on an `async def name(b, ...) -> Output`.
   Step outputs must be JSON-serializable: dataclasses, pydantic models, tuples, str, int, float.
   Pass everything a step depends on as an argument so the memo key changes when it changes.

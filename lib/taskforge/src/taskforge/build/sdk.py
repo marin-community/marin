@@ -31,6 +31,7 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import resolve_verifier
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.submission import SubmissionConvention
 from verifyit.candidate import grade_text_candidate
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec
 
@@ -107,10 +108,17 @@ class BuildOutput:
 
     ``execution`` is the ``TaskExecution`` passed to ``spec.assemble`` for ``task``: deadlines,
     the agent user, and each stage's files, setup and healthcheck. ``TaskExecution()`` sets none.
+
+    ``convention`` is the ``taskcompendium.submission`` convention the solver submits under, for
+    example ``PlainText(id="plain_text")``: RolloutEngine appends its submission instruction to the
+    task prompt and extracts the answer with it. Reference replies and control replies follow it.
+    It must be compatible with the task (``submission_compatibility``); a task whose answer is the
+    machine state submits nothing through it. Like ``execution``, it is not part of the TaskSpec.
     """
 
     task: TaskSpec
     execution: TaskExecution
+    convention: SubmissionConvention
     controls: tuple[Control, ...]
 
 
