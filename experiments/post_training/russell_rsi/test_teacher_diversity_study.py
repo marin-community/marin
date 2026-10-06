@@ -31,6 +31,7 @@ from experiments.post_training.russell_rsi import (
 from experiments.post_training.russell_rsi.bootstrap_loop import QualifiedTask
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import seal_study_calibration
+from experiments.post_training.russell_rsi.launch_teacher_diversity_sft import SFT_VERSION, durable_sft_stages
 from experiments.post_training.russell_rsi.launch_teacher_sft import StudentTrainingTemplate, TeacherCollectionConfig
 from experiments.post_training.russell_rsi.rollout_eval import calibration_evaluation_journal
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
@@ -569,3 +570,28 @@ def test_full_36_task_calibration_preserves_conditional_rl_barriers(diversity_in
     set_pin(post, "qualification", pinned(tmp_path, "missing-step0", qualification))
     with pytest.raises(ValueError, match="complete finite optimizer"):
         diversity_post_workflow(post, "calibrate")
+
+
+def test_durable_sft_preserves_collection_and_science(diversity_inputs, tmp_path):
+    original = diversity_workflow(diversity_inputs)
+    updated = durable_sft_stages(original)
+    assert artifact_identity(updated["collect"]) == artifact_identity(original["collect"])
+    assert updated["train"].deps == original["train"].deps
+    before = original["train"].build_config(
+        StepContext.for_fingerprint(deps=original["train"].deps, runtime_arg_keys=original["train"].runtime_args)
+    )
+    after = updated["train"].build_config(
+        StepContext.for_fingerprint(deps=updated["train"].deps, runtime_arg_keys=updated["train"].runtime_args)
+    )
+    assert updated["train"].version == updated["reload"].version == SFT_VERSION
+    assert updated["reload"].deps == (updated["train"],)
+    reload_config = updated["reload"].build_config(
+        StepContext.for_fingerprint(deps=updated["reload"].deps, runtime_arg_keys=updated["reload"].runtime_args)
+    )
+    assert reload_config.model.identity.endswith(updated["train"].fingerprint())
+    assert reload_config.model.location.endswith("hf/step-3")
+    assert updated["train"].fingerprint() != original["train"].fingerprint()
+    trainer = after.train_config.trainer
+    assert trainer.tracker == (JsonLoggerConfig(metric_destination="<output_path>/optimizer-telemetry"),)
+    restored = replace(trainer, id=before.train_config.trainer.id, tracker=before.train_config.trainer.tracker)
+    assert replace(after, train_config=replace(after.train_config, trainer=restored)) == before

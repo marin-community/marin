@@ -14,6 +14,10 @@ import jax
 logger = logging.getLogger(__name__)
 
 
+class FatalTrackerError(RuntimeError):
+    """A tracker failure that must stop its caller."""
+
+
 class Tracker(abc.ABC):
     """
     A tracker is responsible for logging metrics, hyperparameters, and artifacts.
@@ -115,6 +119,7 @@ class CompositeTracker(Tracker):
 
     Exceptions from any single member tracker are caught and logged so that one
     failing backend (e.g. W&B losing connectivity) doesn't take down the others.
+    FatalTrackerError propagates for required durable storage.
     Wrap members in :class:`~levanter.tracker.BackgroundTracker` if you also
     want isolation from latency.
     """
@@ -126,6 +131,8 @@ class CompositeTracker(Tracker):
         for tracker in self.loggers:
             try:
                 getattr(tracker, op)(*args, **kwargs)
+            except FatalTrackerError:
+                raise
             except Exception:
                 logger.exception(
                     "Tracker '%s' raised during %s; continuing with remaining trackers.",
@@ -152,8 +159,7 @@ class CompositeTracker(Tracker):
         self._for_each("capture_stall_diagnostics")
 
     def finish(self):
-        # finish() exceptions are logged and swallowed too; a tracker failing to
-        # flush at the very end of a run shouldn't crash the trainer's shutdown.
+        # Optional backend failures do not stop shutdown; required storage errors do.
         self._for_each("finish")
 
 
