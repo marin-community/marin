@@ -105,11 +105,12 @@ def default_setup_script(
         # uv sync writes .pth links for editable path sources but does not invoke
         # the build backend, so rust-dev mode (editable = true) leaves native
         # extensions unbuilt. Build every maturin member explicitly.
-        "if grep -q 'editable = true' pyproject.toml 2>/dev/null; then"
+        "if sed -n '/BEGIN RUST-DEV SOURCES/,/END RUST-DEV SOURCES/p' pyproject.toml"
+        " | grep -q 'editable = true'; then"
         " echo 'rust-dev mode: building native extensions';"
-        " for crate in lib/*/pyproject.toml; do"
-        ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
-        ' uv pip install -e "$(dirname "$crate")";'
+        " for crate in lib/*/rust/pyproject.toml; do"
+        ' if grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null; then'
+        ' uv pip install -e "$(dirname "$crate")"; fi;'
         " done;"
         " fi",
     ]
