@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Chat request formatting and typed evidence preserve semantic grading contracts."""
+"""Submission extraction and model-visible requests preserve task contracts."""
 
 import pytest
-from verifyit.json_comparison import NumericTypePolicy
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
 from taskcompendium.grading_contract import GradingAttempt
@@ -32,8 +31,7 @@ from taskcompendium.submission import (
 
 
 def _attempt(specification, response):
-    trace = ConversationTrace(events=(*specification.context.events, response))
-    return GradingAttempt(ConversationTrace.model_validate_json(trace.model_dump_json()))
+    return GradingAttempt(ConversationTrace(events=(*specification.context.events, response)))
 
 
 def _answer_action(answer: str, name: str = "submit_answer") -> AssistantToolCalls:
@@ -55,64 +53,28 @@ def specification() -> TaskSpec:
 
 
 @pytest.mark.parametrize(
-    "response,reward",
-    [("12.05", 1.0), ("12.2", 0.0)],
-)
-def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
-    specification = specification.model_copy(
-        update={"verifier": numeric_answer("12.0", tolerance_abs="0.1", tolerance_rel="0.0")}
-    )
-    convention = PlainText(id="plain")
-
-    result = grade_answer(
-        specification,
-        convention,
-        GradingAttempt(
-            conversation=ConversationTrace(
-                events=(*specification.context.events, TextMessage(role="assistant", content=response))
-            ),
-        ),
-    )
-
-    assert (result.status, result.reward) == ("graded", reward)
-
-
-@pytest.mark.parametrize(
     "convention,response,status,reward",
     [
-        (PlainText(id="plain"), "12", Outcome.GRADED, 1.0),
-        (PlainText(id="plain"), "12.0", Outcome.GRADED, 1.0),
-        (PlainText(id="plain"), "13", Outcome.GRADED, 0.0),
         (PlainText(id="plain"), "not a number", Outcome.SUBMISSION_FAILURE, 0.0),
-        (PlainText(id="plain"), r"\boxed{12}", Outcome.GRADED, 1.0),
         (JsonAnswer(id="json"), '{"answer":"12"}', Outcome.GRADED, 1.0),
         (JsonAnswer(id="json"), '{"answer":"13"}', Outcome.GRADED, 0.0),
         (JsonAnswer(id="json"), '{"answer":"12"', Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
-def test_chat_answer_distinguishes_wrong_and_malformed_submissions(specification, convention, response, status, reward):
-    specification = TaskSpec.model_validate_json(specification.model_dump_json())
-    convention = type(convention).model_validate_json(convention.model_dump_json())
-    assert "12" not in render_instruction(specification, convention)
+def test_answer_conventions_distinguish_wrong_and_malformed_submissions(
+    specification, convention, response, status, reward
+):
     result = grade_answer(
         specification, convention, _attempt(specification, TextMessage(role="assistant", content=response))
     )
     assert (result.status, result.reward) == (status, reward)
 
 
-def test_chat_exact_comparison_uses_unicode_and_whitespace_normalization(specification):
-    task = specification.model_copy(update={"verifier": exact_answer("Straße Park"), "answer_type": AnswerType.TEXT})
-    convention = PlainText(id="plain")
-    result = grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content="STRASSE   PARK")))
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
-
-
-def test_text_convention_retains_but_rejects_tool_call_evidence(specification):
+def test_plain_text_rejects_tool_call_evidence(specification):
     convention = PlainText(id="plain")
     attempt = _attempt(specification, _answer_action("12"))
     result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
-    assert attempt.conversation.events[-1].calls[0].arguments == {"answer": "12"}
 
 
 @pytest.mark.parametrize(
@@ -134,19 +96,25 @@ def test_answer_call_grades_semantic_answers(specification, answer_type, verifie
     assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
-@pytest.mark.parametrize("convention", [PlainText(id="plain"), JsonAnswer(id="json"), AnswerCall(id="answer-call")])
-def test_chat_request_preserves_advertised_tools(specification, convention):
+@pytest.mark.parametrize(
+    "convention,tool_names,tool_choice",
+    [
+        (PlainText(id="plain"), ["lookup"], None),
+        (JsonAnswer(id="json"), ["lookup"], None),
+        (AnswerCall(id="answer-call"), ["lookup", "submit_answer"], "required"),
+    ],
+)
+def test_submission_request_preserves_tools_and_keeps_answer_private(specification, convention, tool_names, tool_choice):
     task = specification.model_copy(
         update={"final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),)}
     )
     request = chat_request(task, convention)
     assert request["tools"][0] == {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
-    assert [tool["function"]["name"] for tool in request["tools"]] == (
-        ["lookup", "submit_answer"] if isinstance(convention, AnswerCall) else ["lookup"]
-    )
-    assert request.get("tool_choice") == ("required" if isinstance(convention, AnswerCall) else None)
-    if isinstance(convention, AnswerCall):
+    assert [tool["function"]["name"] for tool in request["tools"]] == tool_names
+    assert request.get("tool_choice") == tool_choice
+    if tool_choice == "required":
         assert request["parallel_tool_calls"] is False
+    assert "12" not in render_instruction(task, convention)
 
 
 def test_answer_call_name_collision_cannot_change_source_tool(specification):
@@ -160,25 +128,22 @@ def test_answer_call_name_collision_cannot_change_source_tool(specification):
 
 
 @pytest.mark.parametrize(
-    "content,status,reward",
+    "content",
     [
-        ('{"value":16.0,"nested":[true,null]}', Outcome.GRADED, 1.0),
-        ('{"value":17,"nested":[true,null]}', Outcome.GRADED, 0.0),
-        ('{"value":16,"value":17}', Outcome.SUBMISSION_FAILURE, 0.0),
-        ('{"value":16,"nested":{"x":1,"\\u0078":2}}', Outcome.SUBMISSION_FAILURE, 0.0),
-        ('{"value":NaN}', Outcome.SUBMISSION_FAILURE, 0.0),
-        ('{"value":1e400}', Outcome.SUBMISSION_FAILURE, 0.0),
-        ('{"value":', Outcome.SUBMISSION_FAILURE, 0.0),
+        '{"value":16,"value":17}',
+        '{"value":16,"nested":{"x":1,"\\u0078":2}}',
+        '{"value":NaN}',
+        '{"value":1e400}',
+        '{"value":',
     ],
 )
-def test_json_value_chat_grading_rejects_ambiguous_and_nonfinite_values(specification, content, status, reward):
+def test_json_value_rejects_ambiguous_and_nonfinite_submissions(specification, content):
     task = specification.model_copy(
         update={"answer_type": AnswerType.JSON, "verifier": structured_exact({"value": 16, "nested": [True, None]})}
     )
-    task = TaskSpec.model_validate_json(task.model_dump_json())
     convention = JsonValueAnswer(id="json-value")
     result = grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content=content)))
-    assert (result.status, result.reward) == (status, reward)
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
 def test_incompatible_result_convention_and_verifier_cannot_form_chat_request(specification):
@@ -195,16 +160,3 @@ def test_direct_chat_cannot_acquire_state_for_structured_verifier(specification)
     )
     with pytest.raises(NotImplementedError):
         chat_request(task, JsonValueAnswer(id="json-value"))
-
-
-def test_json_chat_strict_numeric_policy_survives_task_roundtrip(specification):
-    task = specification.model_copy(
-        update={
-            "answer_type": AnswerType.JSON,
-            "verifier": structured_exact({"value": 16}, numeric_types=NumericTypePolicy.STRICT),
-        }
-    )
-    task = TaskSpec.model_validate_json(task.model_dump_json())
-    convention = JsonValueAnswer(id="json-value")
-    result = grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content='{"value":16.0}')))
-    assert (result.status, result.reward) == (Outcome.GRADED, 0.0)

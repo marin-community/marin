@@ -7,6 +7,7 @@ import json
 
 import pytest
 from pydantic import JsonValue, PrivateAttr
+from verifyit.json_comparison import NumericTypePolicy
 from verifyit.spec import Mode
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
@@ -75,11 +76,18 @@ def test_structured_exact_compares_json_types_and_order(actual, reward):
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-@pytest.mark.parametrize("actual,reward", [({"value": 16.0}, 1.0), ({"value": 17}, 0.0)])
-def test_json_answer_and_acquired_state_share_structured_grading(actual, reward):
-    verifier = structured_exact({"value": 16})
-    chat_task = _task(verifier, AnswerType.JSON)
-    state_task = _task(verifier, AnswerType.STATE)
+@pytest.mark.parametrize(
+    "actual,policy,reward",
+    [
+        ({"value": 16.0}, NumericTypePolicy.VALUE, 1.0),
+        ({"value": 17}, NumericTypePolicy.VALUE, 0.0),
+        ({"value": 16.0}, NumericTypePolicy.STRICT, 0.0),
+    ],
+)
+def test_json_answer_and_acquired_state_share_structured_grading(actual, policy, reward):
+    verifier = structured_exact({"value": 16}, numeric_types=policy)
+    chat_task = TaskSpec.model_validate_json(_task(verifier, AnswerType.JSON).model_dump_json())
+    state_task = TaskSpec.model_validate_json(_task(verifier, AnswerType.STATE).model_dump_json())
     chat_result = grade_answer(chat_task, JsonValueAnswer(id="json-value"), _attempt(chat_task, json.dumps(actual)))
     state_result = grade_answer(state_task, StateAnswer(id="state", value=actual), _attempt(state_task, "Done."))
     assert (chat_result.status, chat_result.reward) == (Outcome.GRADED, reward)
