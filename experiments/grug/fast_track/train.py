@@ -89,6 +89,7 @@ from experiments.grug.fast_track.flip_detector import (
 )
 from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
+from experiments.grug.fast_track.logit_decomp import LOGIT_DECOMP_FIELDS, logit_decomp_stats
 from experiments.grug.fast_track.model import (
     ATTN_PROBE_KEYS,
     ATTN_PROBE_STAT,
@@ -325,6 +326,10 @@ class GrugTrainerConfig:
     # held-out sequences, plus each head's per-token ablation loss change, to this npz (``_head_probe_dump``).
     head_probe_path: str | None = None
     head_probe_sequences: int = 32
+    # After training, write per-token statistics splitting the final (EMA) logits into the residual-stream head and
+    # the ``lm_head_extra_dim`` slice (``model.logit_decomp_stats``) on held-out sequences to this npz.
+    logit_decomp_path: str | None = None
+    logit_decomp_sequences: int = 64
     # Written by process 0 once the final eval has run; a restarted job that finds it exits instead of retraining
     # (a preemption during the post-training blend evals otherwise reran the whole run).
     completion_marker_path: str | None = None
@@ -1888,6 +1893,50 @@ def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
         logger.info("wrote %d final params to %s", len(host), path)
 
 
+def _logit_decomp_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
+    """Write ``model.logit_decomp_stats`` for fixed held-out sequences to ``path`` (process 0): ``tokens`` /
+    ``segments`` ``[N, S]``, ``stats`` ``[N, S, F]`` (``LOGIT_DECOMP_FIELDS``) and the probe tokens' ``unigram``
+    log-frequencies used for the frequency alignment."""
+    params = _apply_qb_betas(params, qb_betas)
+    mp = config.trainer.trainer.mp
+    vocab = config.model.vocab_size
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _routing_dump_sequences,
+            config.data,
+            seq_len=config.model.max_seq_len,
+            num_sequences=config.trainer.logit_decomp_sequences,
+        ).result()
+    counts = np.bincount(tokens[segments >= 0].reshape(-1), minlength=vocab).astype(np.float64) + 1.0
+    unigram = np.log(counts / counts.sum()).astype(np.float32)
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    batch = jax.device_count()
+
+    def global_batch(host: np.ndarray) -> jax.Array:
+        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
+
+    @jax.jit
+    def decomp(params, ids, segs, unigram):
+        return logit_decomp_stats(_cast_to_compute(mp, params), ids, segs, unigram)
+
+    stats = []
+    with set_mesh(mesh):
+        uni = jnp.asarray(unigram)
+        for start in range(0, len(tokens), batch):
+            ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
+            stats.append(np.asarray(multihost_utils.process_allgather(decomp(params, ids, segs, uni), tiled=True)))
+    if jax.process_index() == 0:
+        with fsspec.open(path, "wb") as f:
+            np.savez(
+                f,
+                tokens=tokens,
+                segments=segments,
+                stats=np.concatenate(stats, axis=0).astype(np.float32),
+                fields=np.asarray(LOGIT_DECOMP_FIELDS),
+                unigram=unigram,
+            )
+
+
 def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
     """Probe every softmax-attention query head of a non-AttnRes model (dense or MoE, with its QB routing biases
     ``qb_betas``) on fixed held-out sequences and write
@@ -2877,6 +2926,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if config.trainer.head_probe_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _head_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.head_probe_path)
+            if config.trainer.logit_decomp_path is not None:
+                probed = state.ema_params if state.ema_params is not None else state.params
+                _logit_decomp_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.logit_decomp_path)
             if config.trainer.final_param_dump_path is not None:
                 _dump_final_params(
                     state.params, config.trainer.final_param_dump_patterns, config.trainer.final_param_dump_path
