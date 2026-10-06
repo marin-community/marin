@@ -25,6 +25,7 @@ from taskcompendium.environment import (
 )
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
+from rolloutengine.contracts import TaskSetupError, TaskSetupTimeout
 
 
 async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
@@ -52,28 +53,41 @@ async def _run_setup_commands(
     machine: Machine,
     commands: Iterable[EnvironmentCommand],
     failure_prefix: str,
+    stage: str | None,
 ) -> None:
     for command in commands:
         result = await machine.run(_machine_command(command))
         if result.reason == ExitReason.TIMED_OUT:
-            raise TimeoutError(f"{failure_prefix} timed out")
+            raise TaskSetupTimeout(f"{failure_prefix} timed out", stage=stage, command=command.argv)
         if result.exit_code != 0:
-            raise RuntimeError(f"{failure_prefix} failed: {result.reason}, exit={result.exit_code}")
+            raise TaskSetupError(
+                f"{failure_prefix} failed: {result.reason}, exit={result.exit_code}",
+                stage=stage,
+                command=command.argv,
+                exit_code=result.exit_code,
+            )
 
 
-async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec) -> None:
+async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec, stage: str | None) -> None:
     loop = asyncio.get_running_loop()
     grace_end = loop.time() + healthcheck.start_period
     failures = 0
     while True:
         in_grace = loop.time() < grace_end
         result = await machine.run(_machine_command(healthcheck.command))
+        if result.reason == ExitReason.TIMED_OUT:
+            raise TaskSetupTimeout("Environment healthcheck timed out", stage=stage, command=healthcheck.command.argv)
         if result.exit_code == 0:
             return
         if not in_grace:
             failures += 1
             if failures >= healthcheck.retries:
-                raise RuntimeError(f"Environment healthcheck failed after {failures} attempts")
+                raise TaskSetupError(
+                    f"Environment healthcheck failed after {failures} attempts",
+                    stage=stage,
+                    command=healthcheck.command.argv,
+                    exit_code=result.exit_code,
+                )
         await asyncio.sleep(healthcheck.start_interval if in_grace else healthcheck.interval)
 
 
@@ -131,7 +145,7 @@ async def _task_machine(
                 raise
             resources.push_async_callback(cleanup.run, "machine_close", machine.close)
             await _install_files(machine, environment.files)
-            await _run_setup_commands(machine, environment.setup, "Environment setup command")
+            await _run_setup_commands(machine, environment.setup, "Environment setup command", None)
             if environment.healthcheck is not None:
-                await _wait_for_healthcheck(machine, environment.healthcheck)
+                await _wait_for_healthcheck(machine, environment.healthcheck, None)
         yield machine

@@ -129,6 +129,7 @@ class ShellboxRolloutEngine:
                 self.factories,
                 cleanup,
                 StageExecution(agent_user=execution.agent_user),
+                None,
             )
         else:
             session = self.sessions[task.environment.interaction](task, machine)
@@ -165,7 +166,7 @@ class ShellboxRolloutEngine:
                 }
             )
             session = _ShellboxTaskSession(
-                phase, machine, convention, self.command_timeout, self.factories, cleanup, stage_execution
+                phase, machine, convention, self.command_timeout, self.factories, cleanup, stage_execution, stage.name
             )
             try:
                 record = await self._run_session(phase, session, record, agent_timeout=stage_execution.agent_timeout)

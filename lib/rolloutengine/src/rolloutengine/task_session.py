@@ -29,7 +29,7 @@ from taskcompendium.submission import (
 )
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskSetupError, Transition
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
 
@@ -85,6 +85,7 @@ class _ShellboxTaskSession:
         factories: Mapping[EnvironmentKind, MachineFactory],
         cleanup: _Cleanup,
         execution: StageExecution,
+        stage: str | None,
     ):
         self.task = task
         self.machine = machine
@@ -93,11 +94,12 @@ class _ShellboxTaskSession:
         self.factories = factories
         self.cleanup = cleanup
         self.execution = execution
+        self.stage = stage
 
     async def prepare(self) -> SessionStart:
         available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
         if not set(self.task.environment_requirements.capabilities) <= available:
-            raise ValueError("The task environment does not supply its required capabilities")
+            raise TaskSetupError("The task environment does not supply its required capabilities", stage=self.stage)
         if self.execution.workdir_files or self.execution.setup or self.execution.healthcheck is not None:
             assert self.machine is not None
             if self.execution.workdir_files:
@@ -114,9 +116,9 @@ class _ShellboxTaskSession:
                         for file in self.execution.workdir_files
                     ),
                 )
-            await _run_setup_commands(self.machine, self.execution.setup, "Task stage setup")
+            await _run_setup_commands(self.machine, self.execution.setup, "Task stage setup", self.stage)
             if self.execution.healthcheck is not None:
-                await _wait_for_healthcheck(self.machine, self.execution.healthcheck)
+                await _wait_for_healthcheck(self.machine, self.execution.healthcheck, self.stage)
         return session_start(self.task, self.convention)
 
     async def advance(self, turn: ModelTurn) -> Transition:
