@@ -63,6 +63,11 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--resume-run-id` selects exactly one existing Harbor run under the configured records prefix and
+reuses its recorded results directory after checking model, hosted judge, policy, runtime, and version.
+Pass the original model and evaluation settings. Add `--retry-unscored-harbor-trials` to remove known
+unscored trials before Harbor resumes; scored outcomes (including zero-reward agent failures) and
+unknown errors remain intact. Recovery is disabled by default;
 `--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
