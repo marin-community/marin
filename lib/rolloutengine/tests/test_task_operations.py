@@ -4,6 +4,7 @@
 """Task machines, shell grading, and the shell tool outside an engine rollout."""
 
 import json
+from dataclasses import dataclass, field
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -20,6 +21,7 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
 
 from rolloutengine.cleanup import Cleanup
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn
 from rolloutengine.grading import shell_grade
 from rolloutengine.machines import task_machine
 from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_tool_definition
@@ -139,3 +141,28 @@ async def test_shell_tool_contract_matches_the_engine_session():
         assert machine is not None
         result = await machine.run(Command(("sh", "-c", command), timeout=5))
     assert model.requests[1].messages[-1]["content"] == shell_observation(result)
+
+
+async def test_length_cut_tool_call_is_graded_without_execution():
+    @dataclass
+    class BudgetCutModel:
+        requests: list = field(default_factory=list)
+
+        async def complete(self, request):
+            self.requests.append(request)
+            call = {"name": SHELL_TOOL_NAME, "arguments": json.dumps({"command": "echo 12 > /workspace/answer"})}
+            message = {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function", "function": call}]}
+            return ModelTurn(message, (10, 11), (20,), None, LENGTH_STOP_REASON)
+
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM, files=(EnvironmentFile(path="/workspace/answer", content=b"0"),)
+            )
+        }
+    )
+    model = BudgetCutModel()
+    result = await engine(model, SHELLSIM).run(task, execution=TaskExecution())
+    assert len(model.requests) == 1
+    assert result.stop_reason == LENGTH_STOP_REASON
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 0.0)

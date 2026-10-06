@@ -212,10 +212,18 @@ For example, prompt tokens `[1, 2]` and response tokens `[3, 4]` require the nex
 prompt to start with `[1, 2, 3, 4]`. Observation tokens follow that prefix.
 
 A model adapter raises `GenerationLimitReached` when a rendered prompt exceeds
-its configured limit. The exception contains the rendered prompt tokens.
+its configured limit. The exception contains the rendered prompt tokens. If the
+server rejects the prompt without rendering it, the adapter passes
+`ModelRequest.prefix_token_ids` instead. That prefix is empty on the first request.
 The engine retains completed turns and grades their result with stop reason `length`.
 If no turn completed, it returns an empty response with no grade.
 It does not include the observation that exceeded the limit in a retained response.
+
+A model adapter reports `stop_reason="length"` for every response that ends on
+its output token budget. This includes a response that the server's tool parser
+reports as tool calls. vLLM's GLM tool parser reports such a response with finish
+reason `tool_calls`. The default session does not execute tool calls from a
+`length` response.
 
 `RolloutData` contains the conversation, grade, token IDs, loss mask, optional log
 probabilities, and per-step records. Model tokens initially have mask value `1`.

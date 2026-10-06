@@ -32,7 +32,12 @@ class SessionStart:
 
 @dataclass(frozen=True)
 class ModelTurn:
-    """Exact tokens and the parsed message from one inference request."""
+    """Exact tokens and the parsed message from one inference request.
+
+    ``stop_reason`` is ``LENGTH_STOP_REASON`` whenever generation ended on the output token budget,
+    including a reply that a server's tool parser reports as tool calls. The default session does
+    not execute tool calls from such a turn.
+    """
 
     message: dict[str, Any]
     prompt_token_ids: tuple[int, ...]
@@ -44,7 +49,12 @@ class ModelTurn:
 
 
 class GenerationLimitReached(Exception):
-    """The rendered prompt leaves no permitted generation budget."""
+    """The rendered prompt leaves no permitted generation budget.
+
+    ``prompt_token_ids`` are the rendered prompt tokens. An adapter whose server rejects an
+    over-limit prompt without rendering it passes ``ModelRequest.prefix_token_ids`` instead, which
+    is empty on the first request. The engine uses these tokens only when no turn completed.
+    """
 
     def __init__(self, prompt_token_ids: tuple[int, ...]):
         self.prompt_token_ids = prompt_token_ids
