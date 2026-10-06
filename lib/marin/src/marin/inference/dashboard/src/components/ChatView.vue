@@ -103,7 +103,10 @@ watch(
     props.conversation.messages
       .map((message) => {
         if (message.role === 'tool') return JSON.stringify(message.result).length
-        return message.content.length + (message.role === 'assistant' ? message.thinking.length : 0)
+        if (message.role === 'assistant') {
+          return `${message.content.length + message.thinking.length}:${message.finishReason ?? ''}`
+        }
+        return message.content.length
       })
       .join(','),
   async () => {
