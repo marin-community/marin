@@ -21,7 +21,6 @@ Axis names used in the shape annotations:
 
 import dataclasses
 import functools
-import logging
 import math
 from collections.abc import Callable
 from enum import auto, IntEnum, StrEnum
@@ -33,6 +32,7 @@ from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
+from levanter.grug._moe.availability import quack_grouped_gemm_available
 from levanter.grug._moe.common import (
     _assignment_validity,
     _deinterleave_gate_up,
@@ -52,11 +52,6 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
-
-logger = logging.getLogger(__name__)
-
-# QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
-_SM100_COMPUTE_CAPABILITY = 10.0
 
 # Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
 # back to a single chunk when the local expert count is not divisible.
@@ -194,27 +189,6 @@ class _CuteExpertMlp:
         return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot_cotangent
 
 
-@functools.cache
-def _quack_grouped_gemm_available() -> bool:
-    if jax.default_backend() != "gpu":
-        return False
-    if float(jax.devices("gpu")[0].compute_capability) < _SM100_COMPUTE_CAPABILITY:
-        return False
-    try:
-        # `sonic_cute` pulls in `quack_moe_cute`, which imports QuACK's varlen entry points at
-        # module scope, so this covers a QuACK that is missing or has moved them.
-        import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
-    except ImportError as exc:
-        logger.warning(
-            "SM100 GPU present but the QuACK grouped-GEMM kernels did not import (%s). "
-            "The ragged expert MLP falls back to ragged_dot, which computes the same function "
-            "more slowly. Install levanter's `gpu` extra to use them.",
-            exc,
-        )
-        return False
-    return True
-
-
 def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
@@ -222,7 +196,7 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _Expe
     activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
     portable `ragged_dot` path, which computes the same function.
     """
-    if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
+    if activation_fn is jax.nn.silu and quack_grouped_gemm_available():
         return _CuteExpertMlp()
     return _RaggedDotExpertMlp(activation_fn)
 
