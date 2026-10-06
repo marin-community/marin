@@ -145,7 +145,7 @@ Grouped inline resources can contain:
 }
 ```
 
-File materializers must reject unsafe destinations and collisions, and enforce byte limits. No resource materializer is implemented here; the execution runtime must implement the declared mounts and role isolation.
+File materializers must reject unsafe destinations and collisions, and enforce byte limits. The schema and pure candidate grading do not materialize resources. Execution runtimes supply mounts and role isolation; the runtime module grades acquired evidence and materializes files for private grading.
 
 ## What can we import?
 
