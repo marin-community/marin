@@ -216,6 +216,8 @@ def durable_diversity_post_workflow(config: dict, stage: str) -> dict[str, Artif
         or record_path(reload_result["records_prefix"], record["run_id"]) != reload_evidence["evidence_uri"]
         or record["status"] != RunStatus.SUCCEEDED
         or record["error"] is not None
+        or not record["metrics"]
+        or not any(record["metrics"].values())
         or record["model"]["config"]["identity"] != reload["config"]["model"]["identity"]
         or record["model"]["location"] != reload["config"]["model"]["location"]
         or record["eval"]["name"] != reload["config"]["evals"]

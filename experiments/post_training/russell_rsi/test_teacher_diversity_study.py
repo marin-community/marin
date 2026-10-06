@@ -722,6 +722,7 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diver
                 "run_id": reload_run_id,
                 "status": "succeeded",
                 "error": None,
+                "metrics": {"mmlu_abstract_algebra_0shot": {"sample_len": 1.0, "acc,none": 0.0}},
                 "model": {
                     "location": bound["model"]["location"],
                     "config": {"identity": bound["model"]["identity"]},
@@ -794,6 +795,7 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diver
     canonical_record = json.loads(canonical_raw)
     for failed_record in (
         {**canonical_record, "status": "failed", "error": {"message": "worker failed"}},
+        {**canonical_record, "metrics": {}},
         {**canonical_record, "model": {"location": "another-export", "config": {"identity": "another-model"}}},
     ):
         raw = json.dumps(failed_record, sort_keys=True).encode()
