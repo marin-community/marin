@@ -147,6 +147,18 @@ def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient(intermediate):
     _assert_bfloat16_close(row_dot, expected)
 
 
+def test_gated_grouped_gemm_without_preact_returns_the_same_swiglu():
+    _require_sm100()
+    kernels = importlib.import_module("levanter.grug._moe.quack_moe_cute")
+    rng = np.random.default_rng(5)
+    x = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    w = jnp.asarray(rng.normal(0, 0.2, (3, 64, 128)), dtype=jnp.bfloat16)
+    cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
+    _preact, with_preact = jax.jit(lambda a, b: kernels.quack_gated_grouped_gemm(a, b, cu, return_preact=True))(x, w)
+    without_preact = jax.jit(lambda a, b: kernels.quack_gated_grouped_gemm(a, b, cu))(x, w)
+    np.testing.assert_array_equal(np.asarray(without_preact), np.asarray(with_preact))
+
+
 def test_muon_symmetric_gemm_matches_gram_matrix():
     _require_sm100()
     kernels = importlib.import_module("levanter.grug._moe.quack_symmetric_cute")

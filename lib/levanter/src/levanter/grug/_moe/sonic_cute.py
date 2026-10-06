@@ -77,7 +77,8 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
+    # The primal runs only when nothing differentiates it, so it skips the pre-activations' store.
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
     return _zero_inactive_grouped_rows(y, cu)
 
@@ -118,6 +119,15 @@ def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
+
+
+def _expert_mlp_quack_apply(x_dispatch, w13_il, moe_w2, cu):
+    """``_expert_mlp_quack_wgrad_fwd``'s output alone, without writing the pre-activations.
+
+    Returns ``(y, h)``: ``h`` is the gate/up stage's output, the last residual the fwd produces.
+    """
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, **_QUACK_GATED_KW)
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW), h
 
 
 def _expert_mlp_quack_wgrad_backward(res, dy):
