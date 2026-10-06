@@ -26,7 +26,7 @@ from experiments.post_training.russell_rsi.calibration_recovery import (
     grade_only_recovery_step,
 )
 from experiments.post_training.russell_rsi.coding_analysis_recovery import CodingAnalysisAmendment
-from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
+from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch import (
     MODEL,
@@ -73,7 +73,7 @@ def execute_loop(config: dict) -> None:
     parent = adopted(config["parent"], LevanterCheckpoint)
     retention = adopted(config["retention"])
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
     recovery = config.get("initial_calibration_recovery")
     initial_calibration = (
         calibration_recovery_step(

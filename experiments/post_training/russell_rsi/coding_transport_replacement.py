@@ -16,7 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.evaluation.pipeline import EvalStepConfig, EvaluationResult
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
-from experiments.post_training.russell_rsi.coding_eval_feedback import CodingEvidenceConfig, CodingPanel, PanelItem
+from experiments.post_training.russell_rsi.coding_eval_feedback import CodingEvidenceConfig, CodingPanel
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     CODING_TRANSPORT_RETRY_BUDGET,
@@ -162,7 +162,7 @@ def prepare_coding_replacement(
         run=run_replacement_coding,
     )
     panel_value = PinnedFile(retention.source["panel_uri"], retention.source["panel_sha256"]).read_json()
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
 
     def evidence_config(ctx: StepContext):
         if ctx.is_fingerprint:

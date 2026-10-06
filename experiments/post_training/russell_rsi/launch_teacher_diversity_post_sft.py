@@ -161,7 +161,7 @@ def qualified_optimizer_telemetry(qualification: dict, amendment: dict, trained:
 
 
 def durable_diversity_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
-    """Use completed version 17 training without changing any original study gate."""
+    """Apply the original study gates to completed training with durable optimizer evidence."""
     study = pinned_record(config, "sft_config")
     if study["version"] != COLLECTION_VERSION or study["collection_version"] != COLLECTION_VERSION:
         raise ValueError("Durable post-SFT must retain its exact version 15 collection inputs")

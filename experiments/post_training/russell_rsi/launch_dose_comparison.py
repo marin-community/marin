@@ -38,7 +38,6 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
-    PanelItem,
     collect_coding_eval_evidence,
 )
 from experiments.post_training.russell_rsi.dose_qualification import qualified_dose_source
@@ -569,7 +568,7 @@ def main(config_uri: str, config_sha256: str) -> list[ArtifactStep]:
     source = json.loads(pinned_bytes(config["replay_uri"], config["replay_sha256"]))
     schedule = dose_replay_plan(source, completed.plan)
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
     source_loop = json.loads(pinned_bytes(config["source_loop_uri"], config["source_loop_sha256"]))
     for key in (
         "parent",

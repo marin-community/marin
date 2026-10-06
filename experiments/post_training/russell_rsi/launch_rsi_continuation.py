@@ -35,7 +35,6 @@ from experiments.post_training.russell_rsi.calibrated_trial import bounded_sched
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
-    PanelItem,
     collect_coding_eval_evidence,
 )
 from experiments.post_training.russell_rsi.launch import (
@@ -282,7 +281,7 @@ def continuation_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     ) or completed.plan.retention_identity != artifact_identity(retention):
         raise ValueError("Continuation parent or retention differs from its source round")
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
     panel_digest = compact_json_sha256(asdict(panel))
     scores = []
     task_ids: tuple[str, ...] = ()

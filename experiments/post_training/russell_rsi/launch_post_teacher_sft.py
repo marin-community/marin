@@ -36,7 +36,6 @@ from experiments.post_training.russell_rsi.calibrated_trial import bounded_sched
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
-    PanelItem,
     collect_coding_eval_evidence,
 )
 from experiments.post_training.russell_rsi.launch import (
@@ -478,7 +477,7 @@ def post_sft_evaluation_stages(
     version = config["version"]
     runtime = RuntimeBundle(**config["runtime_bundle"])
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
     panel_digest = compact_json_sha256(asdict(panel))
     if study is None:
         parent_retention = json.loads(pinned_bytes(config["parent_retention_uri"], config["parent_retention_sha256"]))

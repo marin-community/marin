@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select from completed coding v9 and retention v10 without evaluator dependencies."""
+"""Select from completed coding and retention evidence without evaluator dependencies."""
 
 import hashlib
 import json
@@ -25,7 +25,6 @@ from experiments.post_training.russell_rsi.calibration_recovery import PinnedFil
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
-    PanelItem,
     coding_evidence_payload,
     collect_coding_eval_evidence,
 )
@@ -438,7 +437,7 @@ def completed_coding_evidence(config: dict, original: dict[str, ArtifactStep]) -
     )
     result = coding_result(coding, config["source_config"], old_config)
     panel_value = PinnedFile(source["panel_uri"], source["panel_sha256"]).read_json()
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
     evidence_config = CodingEvidenceConfig(
         result["records_prefix"],
         tuple(result["run_ids"]),

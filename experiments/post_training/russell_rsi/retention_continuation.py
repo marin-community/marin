@@ -26,7 +26,6 @@ from experiments.post_training.russell_rsi.calibration_recovery import PinnedFil
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
-    PanelItem,
     coding_evidence_payload,
 )
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
@@ -368,7 +367,7 @@ def completed_coding_evidence(
     if evidence_pair[0] != evidence_pair[1]:
         raise ValueError("Coding evidence requires both URI and hash")
     panel_value = _pin(source, "panel").read_json()
-    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    panel = CodingPanel.from_dict(panel_value)
     evidence_config = CodingEvidenceConfig(
         result["records_prefix"],
         tuple(result["run_ids"]),

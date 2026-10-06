@@ -59,6 +59,11 @@ class CodingPanel:
     items: tuple[PanelItem, ...]
     protocols: dict[str, str]
 
+    @classmethod
+    def from_dict(cls, record: dict) -> "CodingPanel":
+        """Read the stored panel items in their original order."""
+        return cls(tuple(PanelItem(**item) for item in record["items"]), record["protocols"])
+
 
 @dataclass(frozen=True)
 class CodingEvidenceConfig:
