@@ -45,9 +45,7 @@ def write_tasks(path: str, tasks: Iterable[TaskSpec]) -> None:
 
 def read_task_records(path: str) -> Iterator[str]:
     """Read validated TaskSpec JSON without changing its persisted fields."""
-    for value in _read_task_records(path):
-        TaskSpec.model_validate_json(value)
-        yield value
+    yield from _validated_task_records(_read_task_records(path))
 
 
 def _validated_task_records(records: Iterable[str]) -> Iterator[str]:
