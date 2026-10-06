@@ -30,6 +30,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -146,6 +147,20 @@ def _token_spec() -> P:
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return _partition_spec_of(x) or _batch_spec()
+
+
+def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
+    """Per-token top-k expert indices, in ``jax.lax.top_k``'s order, from a fused GPU kernel.
+
+    XLA sorts every row of a few hundred logits in full; the kernel selects in registers.
+    """
+    token_spec = _token_spec()
+    return shard_map(
+        lambda local: top_k_indices(local, k),
+        mesh=get_abstract_mesh(),
+        in_specs=P(*token_spec, None),
+        out_specs=P(*token_spec, None),
+    )(reshard(logits, P(*token_spec, None)))
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -1001,8 +1016,8 @@ class MoEMLP(eqx.Module):
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
+        selected_experts = _router_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+        qb_alpha = jnp.take_along_axis(biased_logits, selected_experts[:, -1:], axis=-1)
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
