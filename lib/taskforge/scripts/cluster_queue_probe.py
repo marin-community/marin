@@ -28,7 +28,8 @@ Checks:
    environment variable reaches a docker sandbox.
 3. ``width``: ``--items`` concurrent validation rounds of a null-environment math task (controls,
    then one solver trial each) complete with ``Complete`` evidence; the TRIAL ledger rows show the
-   concurrency reached and the wall time.
+   concurrency reached and the wall time, and the solver attempt files show the requests sent, the
+   retried attempts by outcome and HTTP status (429s among them) and the time held in retried attempts.
 4. ``finelog``: the ledger mirror connected and confirmed its flush of the EVENT and TRIAL rows that
    checks 3 and 5 wrote, so it runs after check 5. Read the rows back after the job ends with the
    ``query-finelog`` SQL printed as ``FINELOG_QUERY``.
@@ -43,9 +44,9 @@ import argparse
 import asyncio
 import json
 import os
-import sys
 import time
 import traceback
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -65,7 +66,7 @@ from taskforge.build.run import Provenance, TaskDraft
 from taskforge.ledger.finelog import LEDGER_NAMESPACE, CompositeLedger, FlushResult, connect_finelog_ledger
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind, Ledger
-from taskforge.llm.client import FinishReason, GlmClient, GlmEndpoint, Pool, Usage
+from taskforge.llm.client import AttemptOutcome, FinishReason, GlmClient, GlmEndpoint, Pool, Usage
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.loop.program import LEDGER_DIR
 from taskforge.proposal.model import TaskProposal, parse
@@ -89,6 +90,7 @@ from taskforge.spec.draft import assemble, environment
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
+from taskforge.validate.attempts import load_outcome
 from taskforge.validate.controls import ServerTokenizer
 from taskforge.validate.evidence import Complete, Evidence
 from taskforge.validate.outcome import TrialKind
@@ -197,6 +199,26 @@ def max_concurrency(spans: list[tuple[float, float]]) -> int:
     return peak
 
 
+def request_attempts(evidence_root: Path) -> dict[str, Any]:
+    """The GLM request attempts recorded in the solver rollouts' turn metadata under ``evidence_root``."""
+    attempts = [
+        attempt
+        for path in sorted(evidence_root.rglob("attempt-*.json"))
+        if (rollout := load_outcome(path).rollout) is not None
+        for step in rollout.steps
+        for attempt in step.turn.metadata.get("attempts", ())
+    ]
+    retried = [a for a in attempts if a["outcome"] != AttemptOutcome.COMPLETED]
+    return {
+        "completed_attempts": sum(1 for a in attempts if a["outcome"] == AttemptOutcome.COMPLETED),
+        "retried_attempts": len(retried),
+        "retried_by_outcome": dict(Counter(a["outcome"] for a in retried)),
+        "retried_by_status": {str(k): v for k, v in Counter(a["http_status"] for a in retried).items()},
+        "status_429": sum(1 for a in retried if a["http_status"] == 429),
+        "retry_hold_time": sum(a["duration"] for a in retried),
+    }
+
+
 async def check_glm(probe: Probe, endpoint: GlmEndpoint) -> dict[str, Any]:
     async with httpx.AsyncClient() as http:
         response = await http.get(f"{endpoint.base_url.removesuffix('/v1')}/health", timeout=HEALTH_TIMEOUT)
@@ -272,6 +294,7 @@ async def check_width(probe: Probe, endpoint: GlmEndpoint, ledger: Ledger, root:
         "incomplete": incomplete,
         "controls_not_met": violated,
         "solved": sum(evidence.reward_stats(TrialKind.SOLVER).solved for _, evidence in rounds),
+        **request_attempts(root / "width"),
     }
     if incomplete:
         raise CheckFailed(f"{len(incomplete)} of {probe.items} rounds left trials ungraded: {incomplete[:20]}")
@@ -419,17 +442,17 @@ def main() -> None:
         results=results,
     )
     started = time.monotonic()
-    failed = False
+    probe.report["ok"] = False
     try:
         asyncio.run(run_probe(probe))
-    except Exception:
-        failed = True
-    probe.report["wall_time"] = time.monotonic() - started
-    probe.report["ok"] = not failed
-    (results / "probe.json").write_text(json.dumps(probe.report, indent=1, default=str))
-    print("PROBE_REPORT " + json.dumps(probe.report, default=str), flush=True)
-    if failed:
-        sys.exit(1)
+        probe.report["ok"] = True
+    except Exception as error:
+        probe.report["error"] = {"error": repr(error)[:4000], "trace": traceback.format_exc()[-4000:]}
+        raise
+    finally:
+        probe.report["wall_time"] = time.monotonic() - started
+        (results / "probe.json").write_text(json.dumps(probe.report, indent=1, default=str))
+        print("PROBE_REPORT " + json.dumps(probe.report, default=str), flush=True)
 
 
 def probe_root(config: RunConfig) -> Path:
