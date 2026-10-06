@@ -230,7 +230,7 @@ def diversity_inputs(study_inputs, tmp_path):
 def test_current_coding_is_independent_of_historical_lineage_and_compiles_sft(diversity_inputs, tmp_path):
     config = diversity_inputs
     original_bytes = Path(config["original_study"]["uri"]).read_bytes()
-    original, _, _ = require_diversity_condition(config)
+    original = require_diversity_condition(config).original_study
     assert config["current_coding_sha256"] != original["candidate_coding_sha256"]
     outputs = diversity_workflow(config)
     trained = outputs["train"]

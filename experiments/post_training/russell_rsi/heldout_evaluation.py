@@ -35,6 +35,13 @@ FINAL_ITEMS_PER_SUITE = 2 * PANEL_ITEMS_PER_SUITE
 
 
 @dataclass(frozen=True)
+class PanelPartitions:
+    heldout: set[tuple[str, str]]
+    excluded: set[tuple[str, str]]
+    items_per_suite: int
+
+
+@dataclass(frozen=True)
 class HeldoutComparisonConfig:
     parent: CodingEvidenceConfig
     champion: CodingEvidenceConfig
@@ -46,13 +53,10 @@ class HeldoutComparisonConfig:
 
 def final_evaluation_size(working_panel: CodingPanel, manifest: dict) -> int:
     """Return the validated union size for each final coding suite."""
-    _, _, size = _panel_partitions(working_panel, manifest)
-    return size
+    return _panel_partitions(working_panel, manifest).items_per_suite
 
 
-def _panel_partitions(
-    working_panel: CodingPanel, manifest: dict
-) -> tuple[set[tuple[str, str]], set[tuple[str, str]], int]:
+def _panel_partitions(working_panel: CodingPanel, manifest: dict) -> PanelPartitions:
     suites = set(CODING_SUITES)
     working = {(item.suite, item.benchmark_id) for item in working_panel.items}
     if (
@@ -99,7 +103,7 @@ def _panel_partitions(
         raise ValueError("Final coding suites require a 64-item or 96-item union")
     if manifest.get("evaluation_items_per_suite", FINAL_ITEMS_PER_SUITE) != size:
         raise ValueError("The declared final evaluation size differs from its frozen union")
-    return heldout, excluded, size
+    return PanelPartitions(heldout=heldout, excluded=excluded, items_per_suite=size)
 
 
 def heldout_rows(
@@ -110,8 +114,8 @@ def heldout_rows(
 ) -> tuple[tuple[list[dict], ...], CodingPanel]:
     """Validate the full final archives before selecting the held-out rows."""
     working = {(item.suite, item.benchmark_id): item.prompt_sha256 for item in working_panel.items}
-    heldout, excluded, size = _panel_partitions(working_panel, manifest)
-    expected = set(working) | excluded | heldout
+    partitions = _panel_partitions(working_panel, manifest)
+    expected = set(working) | partitions.excluded | partitions.heldout
     if len(records) != len(CODING_SUITES) or {record["eval"]["name"] for record in records} != set(CODING_SUITES):
         raise ValueError("Final records must identify each coding suite exactly once")
     selected, items, protocols = [], [], {}
@@ -120,11 +124,11 @@ def heldout_rows(
         suite = record["eval"]["name"]
         normalized = deepcopy(record)
         evaluation = normalized["eval"]
-        if evaluation["evalchemy"]["max_eval_instances"] != size:
+        if evaluation["evalchemy"]["max_eval_instances"] != partitions.items_per_suite:
             raise ValueError("The final evaluation must run the complete frozen union per suite")
         evaluation["evalchemy"]["max_eval_instances"] = PANEL_ITEMS_PER_SUITE
         for task in evaluation["tasks"]:
-            if task["benchmark"]["n_attempted"] != size:
+            if task["benchmark"]["n_attempted"] != partitions.items_per_suite:
                 raise ValueError("The final evaluation did not attempt the complete union")
             task["benchmark"]["n_attempted"] = PANEL_ITEMS_PER_SUITE
         if protocol_digest(normalized) != working_panel.protocols[suite]:
@@ -148,7 +152,7 @@ def heldout_rows(
             if key in working and prompt_hash != working[key]:
                 raise ValueError("Final evaluation changed a frozen working prompt")
             seen.add(key)
-            if key in heldout:
+            if key in partitions.heldout:
                 items.append(PanelItem(suite, key[1], prompt_hash))
                 subset.append(row)
         selected.append(subset)

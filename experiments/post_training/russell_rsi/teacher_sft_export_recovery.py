@@ -67,7 +67,14 @@ class ExportRecoveryConfig:
     output_path: str
 
 
-def recovery_inputs(config: ExportRecoveryConfig) -> tuple[dict, dict, dict]:
+@dataclass(frozen=True)
+class RecoveryInputs:
+    amendment: dict
+    training_config: dict
+    numeric_proof: dict
+
+
+def recovery_inputs(config: ExportRecoveryConfig) -> RecoveryInputs:
     """Validate immutable producer and numerical evidence before writing an export."""
     amendment = config.amendment.read_json()
     if amendment["protocol"] != PROTOCOL or amendment["original_telemetry_gate"] != "UNMET":
@@ -129,7 +136,7 @@ def recovery_inputs(config: ExportRecoveryConfig) -> tuple[dict, dict, dict]:
         or any(manifest_pins[name]["sha256"] != expected[source] for name, source in numeric_names.items())
     ):
         raise ValueError("Numerical manifest differs from the amended producer evidence")
-    return amendment, hparams, proof
+    return RecoveryInputs(amendment=amendment, training_config=hparams, numeric_proof=proof)
 
 
 def save_recovery_metadata(config: ExportRecoveryConfig, hparams: dict, destination: Path) -> dict:
@@ -237,7 +244,10 @@ def copy_saved_shard(fs: RecoveryStorage, source: str, destination: str, shard: 
 
 
 def run_export_recovery(config: ExportRecoveryConfig) -> None:
-    amendment, hparams, proof = recovery_inputs(config)
+    inputs = recovery_inputs(config)
+    amendment = inputs.amendment
+    hparams = inputs.training_config
+    proof = inputs.numeric_proof
     export = prefix_join(config.output_path, "hf/step-3")
     try:
         StoragePath(config.output_path).relative_to(StoragePath(amendment["producer"]["root"]))

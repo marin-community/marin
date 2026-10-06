@@ -78,6 +78,13 @@ class DiversityCollectionConfig:
     study: dict
 
 
+@dataclass(frozen=True)
+class DiversityEvidence:
+    original_study: dict
+    lineage: dict
+    bank: dict
+
+
 def diversity_bank(config: dict, original: dict) -> dict:
     """Keep the admitted source bank and bind each prospective addition to review."""
     retained = pinned_record(original, "bank_record")
@@ -131,7 +138,7 @@ def diversity_bank(config: dict, original: dict) -> dict:
     return bank
 
 
-def require_diversity_condition(config: dict) -> tuple[dict, dict, dict]:
+def require_diversity_condition(config: dict) -> DiversityEvidence:
     """Audit old lineage separately from the new coding and family-selection decision."""
     if config["protocol"] != PROTOCOL:
         raise ValueError("Wrong teacher diversity protocol")
@@ -258,7 +265,7 @@ def require_diversity_condition(config: dict) -> tuple[dict, dict, dict]:
     }
     if decision != expected:
         raise ValueError("Diversity study differs from its prospective decision")
-    return original, lineage, bank
+    return DiversityEvidence(original_study=original, lineage=lineage, bank=bank)
 
 
 def diversity_plan(config: dict, records: dict[str, str], tokenizer: MarinTokenizer) -> dict:
@@ -403,7 +410,10 @@ def validated_diversity_post_workflow(config: dict, stage: str, *, trained: Arti
     if config["protocol"] != PROTOCOL or config["runtime_commit"] != MARIN_SKYRL.commit:
         raise ValueError("Diversity post-SFT protocol or runtime differs")
     study = pinned_record(config, "sft_config")
-    original, lineage, bank_record = require_diversity_condition(study)
+    evidence = require_diversity_condition(study)
+    original = evidence.original_study
+    lineage = evidence.lineage
+    bank_record = evidence.bank
     for key in ("parent", "bank", "runtime_bundle"):
         if config[key] != study[key]:
             raise ValueError(f"Diversity post-SFT changed its {key}")
