@@ -36,6 +36,7 @@ from levanter.kernels.pallas.short_conv import (
     short_conv,
     short_conv_reference,
 )
+from levanter.kernels.pallas.short_conv import pallas_gpu
 from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -292,18 +293,22 @@ def test_kernel_call_is_wrapped_in_a_shard_map_under_a_mesh():
         assert banned not in text, f"short_conv lowered through an unexpected {banned}"
 
 
+@pytest.mark.parametrize("packed_bf16", [True, False], ids=["packed-bf16", "fp32-then-bf16"])
 @pytest.mark.parametrize("segments", SEGMENT_KINDS)
 @pytest.mark.parametrize("shape", [(2, 512, 256), (1, 256, 1536)], ids=lambda s: "x".join(str(v) for v in s))
-def test_pallas_short_conv_matches_reference_on_gpu(shape, segments):
+def test_pallas_short_conv_matches_reference_on_gpu(shape, segments, packed_bf16, monkeypatch):
     """The compiled kernels at their default launch shapes, not the interpreter: forward and ``dx``
     bitwise, ``dw`` within fp32-accumulation error. Only meaningful with a GPU present.
 
     512 rows span several sequence blocks in both directions, and 1536 channels span several
     channel blocks, so block halos and channel edges are both exercised. 256 channels narrow
-    the forward's channel block below its default.
+    the forward's channel block below its default. Without packed bf16, the path GPUs older than
+    SM90 take, the kernels round through fp32 and must give the same bits.
     """
     if jax.default_backend() != "gpu":
         pytest.skip("requires the JAX GPU backend")
+    if not packed_bf16:
+        monkeypatch.setattr(pallas_gpu, "_packed_bf16_arithmetic", lambda: False)
     batch, seq_len, channels = shape
     weight, x, _, cotangent = _inputs(batch, seq_len, channels, 4, seed=31, dtype=jnp.bfloat16, packed=False)
     segment_ids = _segment_ids(segments, batch, seq_len, np.random.default_rng(32))
@@ -317,6 +322,8 @@ def test_pallas_short_conv_matches_reference_on_gpu(shape, segments):
     got = jax.jit(kernel_fn)(weight, x)
     _, kernel_vjp = jax.vjp(kernel_fn, weight, x)
     got_dw, got_dx = jax.jit(kernel_vjp)(cotangent)
+    lowered = jax.jit(kernel_fn).lower(weight, x).as_text()
+    assert ("bf16x2" in lowered) == packed_bf16, "the kernel did not take the requested rounding path"
     want = jax.jit(reference_fn)(weight, x)
     _, reference_vjp = jax.vjp(reference_fn, weight, x)
     _, want_dx = jax.jit(reference_vjp)(cotangent)

@@ -213,8 +213,21 @@ def _fma(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
     return out
 
 
+# PTX's packed bf16 add and multiply (``add.rn.bf16x2``, ``mul.rn.bf16x2``) need SM90 or newer.
+_PACKED_BF16_MIN_COMPUTE_CAPABILITY = 9.0
+
+
+@functools.cache
+def _packed_bf16_arithmetic() -> bool:
+    """Whether this process's GPU runs packed bf16 adds and multiplies."""
+    device = jax.devices()[0]
+    return device.platform == "gpu" and float(device.compute_capability) >= _PACKED_BF16_MIN_COMPUTE_CAPABILITY
+
+
 def _use_asm(dtype, exact: bool) -> bool:
-    return exact and not _FORCE_INTERPRET and jnp.dtype(dtype) == jnp.dtype(jnp.bfloat16)
+    """Whether to round bf16 with packed PTX. Older GPUs and the interpreter take the fp32 op and
+    bf16 cast, which rounds the same way."""
+    return exact and not _FORCE_INTERPRET and jnp.dtype(dtype) == jnp.dtype(jnp.bfloat16) and _packed_bf16_arithmetic()
 
 
 def _mul_round(weight_row: jax.Array, row: jax.Array, dtype, exact: bool) -> jax.Array:
