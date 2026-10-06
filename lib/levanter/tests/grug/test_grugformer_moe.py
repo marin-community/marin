@@ -2084,7 +2084,9 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
         return out, counts, jnp.zeros((), jnp.bfloat16)
 
     def loss(*args):
-        out, _, staged = jax.checkpoint(layer)(*args)
+        # A fresh function for each fill: jax.checkpoint caches its trace by function, and a cached
+        # trace would keep the previous fill in the recompute and the backward.
+        out, _, staged = jax.checkpoint(lambda *operands: layer(*operands))(*args)
         return jnp.sum(out * cotangent) + jnp.sum(staged)
 
     def run(*args):
