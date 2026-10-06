@@ -193,7 +193,9 @@ def test_retain_needs_no_completed_coding_and_selection_refuses_incomplete_reten
 
 
 @pytest.mark.parametrize("saved_evidence", [False, True])
-def test_retention_continuation_has_one_retention_and_no_coding_inference(completed_coding, tmp_path, saved_evidence):
+def test_retention_continuation_has_one_retention_and_no_coding_inference(
+    completed_coding, tmp_path, saved_evidence, monkeypatch
+):
     config, source, original, failure, _, _, old_selection, pin = completed_coding
     if saved_evidence:
         saved = completed_coding.saved
@@ -231,15 +233,24 @@ def test_retention_continuation_has_one_retention_and_no_coding_inference(comple
             ).model_dump(mode="json", by_alias=True)
             pin(record_path(saved["records_prefix"], run_id), value)
             records.append(value)
-        evidence = pin(
-            tmp_path / "coding-evidence/coding-evidence.json",
-            {
-                "model_identity": failure["source"]["model_identity"],
-                "panel_sha256": old_selection.record.panel_sha256,
-                "scores": {"humanevalplus": 25 / 32, "mbppplus": 27 / 32},
-                "records_sha256": [compact_json_sha256(value) for value in records],
-            },
-        )
+        canonical = {
+            "model_identity": failure["source"]["model_identity"],
+            "panel_sha256": old_selection.record.panel_sha256,
+            "scores": {"humanevalplus": 25 / 32, "mbppplus": 27 / 32},
+            "records_sha256": [compact_json_sha256(value) for value in records],
+            "rows": [{"suite": "humanevalplus", "benchmark_id": "0", "output": "saved answer"}],
+        }
+
+        def archive_evidence(bound):
+            assert bound.records_prefix == saved["records_prefix"]
+            assert bound.run_ids == tuple(saved["run_ids"])
+            assert bound.results_paths == tuple(saved["results_paths"])
+            assert bound.model_identity == canonical["model_identity"]
+            assert compact_json_sha256(asdict(bound.panel)) == canonical["panel_sha256"]
+            return canonical
+
+        monkeypatch.setattr(retention_continuation, "coding_evidence_payload", archive_evidence)
+        evidence = pin(tmp_path / "coding-evidence/coding-evidence.json", canonical)
         pin(
             tmp_path / "coding-evidence/.artifact.json",
             {"fingerprint": original["coding-sft"].fingerprint(), "output_path": str(tmp_path / "coding-evidence")},
@@ -272,6 +283,15 @@ def test_retention_continuation_has_one_retention_and_no_coding_inference(comple
     assert final.selection.selection.original_parent == old_selection.original_parent
     assert outputs["terminal"].run is seal_retention_continuation
     if saved_evidence:
+        for changed in (
+            {**canonical, "scores": {"humanevalplus": 1.0, "mbppplus": 1.0}},
+            {**canonical, "rows": [{**canonical["rows"][0], "output": "changed answer"}]},
+        ):
+            changed_pin = pin(tmp_path / "coding-evidence/coding-evidence.json", changed)
+            config["coding_evidence_sha256"] = changed_pin["sha256"]
+            with pytest.raises(ValueError, match="changed its model or panel"):
+                retention_continuation_stages(config, prepared)
+        config["coding_evidence_sha256"] = pin(tmp_path / "coding-evidence/coding-evidence.json", canonical)["sha256"]
         pin(tmp_path / "coding-evidence/.artifact.json", {"fingerprint": "different-producer"})
         with pytest.raises(ValueError, match="original producer"):
             retention_continuation_stages(config, prepared)

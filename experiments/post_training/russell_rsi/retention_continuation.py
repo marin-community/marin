@@ -23,7 +23,12 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
-from experiments.post_training.russell_rsi.coding_eval_feedback import CodingEvidenceConfig, CodingPanel, PanelItem
+from experiments.post_training.russell_rsi.coding_eval_feedback import (
+    CodingEvidenceConfig,
+    CodingPanel,
+    PanelItem,
+    coding_evidence_payload,
+)
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     InterruptedSelectionConfig,
@@ -362,6 +367,16 @@ def completed_coding_evidence(
     evidence_pair = ("coding_evidence_uri" in config, "coding_evidence_sha256" in config)
     if evidence_pair[0] != evidence_pair[1]:
         raise ValueError("Coding evidence requires both URI and hash")
+    panel_value = _pin(source, "panel").read_json()
+    panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    evidence_config = CodingEvidenceConfig(
+        result["records_prefix"],
+        tuple(result["run_ids"]),
+        tuple(result["results_paths"]),
+        artifact_identity(model),
+        panel,
+        "",
+    )
     if evidence_pair[0]:
         evidence_pin = _pin(config, "coding_evidence")
         evidence = evidence_pin.read_json()
@@ -384,6 +399,7 @@ def completed_coding_evidence(
             or tuple(record["results_path"] for record in records) != tuple(result["results_paths"])
             or any(record["group_id"] != result["group_id"] for record in records)
             or evidence["records_sha256"] != [compact_json_sha256(record) for record in records]
+            or evidence != coding_evidence_payload(evidence_config)
         ):
             raise ValueError("Completed coding evidence changed its model or panel")
         coding_evidence = ArtifactStep.adopt(
@@ -400,22 +416,11 @@ def completed_coding_evidence(
             kind=EvaluationResult,
             config={"producer_identity": artifact_identity(old_coding), **asdict(result_pin)},
         )
-        panel_value = _pin(source, "panel").read_json()
-        panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
 
-        def evidence_config(ctx: StepContext):
-            return CodingEvidenceConfig(
-                result["records_prefix"],
-                tuple(result["run_ids"]),
-                tuple(result["results_paths"]),
-                artifact_identity(model),
-                panel,
-                ctx.output_path,
-            )
+        def bound_evidence(ctx: StepContext):
+            return replace(evidence_config, output_path=ctx.output_path)
 
-        coding_evidence = replace(
-            old_evidence, version=version, deps=(saved_result, model), build_config=evidence_config
-        )
+        coding_evidence = replace(old_evidence, version=version, deps=(saved_result, model), build_config=bound_evidence)
     return coding_evidence, result_pin, journal_pin
 
 
