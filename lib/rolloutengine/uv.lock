@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <3.14"
 
 [options]
@@ -1997,7 +1997,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
-    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../finestore" },
     { name = "marin-rigging", editable = "../rigging" },
     { name = "marin-shellbox", editable = "../shellbox" },
@@ -2007,7 +2006,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], editable = "../verifyit" },
 ]
-provides-extras = ["harbor", "pipeline"]
+provides-extras = ["pipeline"]
 
 [package.metadata.requires-dev]
 test = [

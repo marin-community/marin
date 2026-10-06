@@ -11,7 +11,6 @@ import pytest
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, Result
 
 from taskcompendium.grader import grader_config
-from taskcompendium.grading import grade_task
 from taskcompendium.models import ConversationTrace, FunctionCall, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import calendar, nemo_actions, shell_files
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
@@ -24,6 +23,7 @@ from taskcompendium.runtime.controls import tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import ActorTask, RolloutRecord, Termination
 from taskcompendium.runtime.shell import ShellFactory
+from taskcompendium.runtime.task_grading import grade_task
 
 from .pipeline_stages import run_stages
 from .test_pipeline import BatchService

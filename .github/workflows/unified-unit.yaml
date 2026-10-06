@@ -306,8 +306,8 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "lib/taskcompendium/uv.lock"
-      - name: Test TaskCompendium and Harbor adapters
-        run: uv run --project lib/taskcompendium --frozen --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
+      - name: Test TaskCompendium
+        run: uv run --project lib/taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
       - name: Type-check TaskCompendium
         working-directory: lib/taskcompendium

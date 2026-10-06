@@ -3,9 +3,11 @@
 
 """Convert OpenAI chat messages to typed conversation evidence."""
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from verifyit.json_objects import unique_object
 
 from taskcompendium.models import (
     AssistantToolCalls,
@@ -22,7 +24,14 @@ class ChatFunction(BaseModel):
     model_config = ConfigDict(strict=True, allow_inf_nan=False)
 
     name: str = Field(min_length=1)
-    arguments: Json[dict[str, JsonValue]]
+    arguments: dict[str, JsonValue]
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def decode_arguments(cls, value: str) -> dict[str, JsonValue]:
+        if not isinstance(value, str):
+            raise ValueError("Provider tool arguments must be a JSON string")
+        return json.loads(value, object_pairs_hook=unique_object)
 
 
 class ChatToolCall(BaseModel):

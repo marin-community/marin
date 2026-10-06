@@ -8,12 +8,12 @@ from dataclasses import replace
 import pytest
 
 from taskcompendium.grader import grader_config
-from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import calendar_tasks, reasoning_tasks
 from taskcompendium.pipeline.models import CheckStatus, RawRow
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import PlainText
 
 
 @pytest.fixture
@@ -26,9 +26,9 @@ def encoded_file(value):
 
 
 def answer_grade(task, answer):
-    return grade_answer(
+    return grade_task(
         task,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 

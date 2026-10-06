@@ -30,10 +30,11 @@ from taskcompendium.environment import (
     VerifierArtifact,
 )
 from taskcompendium.execution import TaskExecution
-from taskcompendium.grading import grade_answer, validate_verifier
+from taskcompendium.grading import validate_verifier
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
-from taskcompendium.submission import Submission
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import SubmissionConvention
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
@@ -79,7 +80,7 @@ def _validate_task(task: TaskSpec, execution: TaskExecution) -> None:
 
 async def _grade_rollout(
     task: TaskSpec,
-    convention: Submission,
+    convention: SubmissionConvention,
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[EnvironmentKind, MachineFactory],
@@ -91,7 +92,7 @@ async def _grade_rollout(
         return GradeResult(Outcome.SKIPPED, None, parameters.reason)
     if task.verifier.kind != VerifierKind.SHELL:
         conversation = chat_conversation(list(messages))
-        return await asyncio.to_thread(grade_answer, task, convention, conversation)
+        return await asyncio.to_thread(grade_task, task, convention, conversation)
     if machine is None:
         raise ValueError("Shell grading requires a task machine")
     verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)

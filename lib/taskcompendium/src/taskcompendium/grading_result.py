@@ -10,7 +10,7 @@ from typing import Any
 
 class Outcome(StrEnum):
     GRADED = "graded"
-    EXTRACTION_ERROR = "extraction_error"
+    SUBMISSION_FAILURE = "submission_failure"
     INVALID_TASK = "invalid_task"
     INFRA_ERROR = "infra_error"
     UNAVAILABLE = "unavailable"

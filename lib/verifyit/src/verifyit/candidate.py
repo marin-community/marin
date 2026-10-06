@@ -13,14 +13,24 @@ from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.modes.grade_math import grade_numeric_candidate
 from verifyit.modes.grade_mcq import grade_mcq_candidate
 from verifyit.modes.grade_predicted_action import validate_predicted_action
-from verifyit.spec import ExactSpec, McqSpec, Mode, NumericSpec, PredictedActionSpec, spec_from_table
+from verifyit.modes.grade_structured_exact import validate_structured_exact
+from verifyit.numeric import extract_numeric_candidate
+from verifyit.spec import (
+    ExactSpec,
+    McqSpec,
+    Mode,
+    NumericSpec,
+    PredictedActionSpec,
+    StructuredExactSpec,
+    spec_from_table,
+)
 
 TextSpec = ExactSpec | NumericSpec | McqSpec
-CandidateSpec = TextSpec | PredictedActionSpec
+CandidateSpec = TextSpec | PredictedActionSpec | StructuredExactSpec
 
 
 def supports_candidate_mode(mode: str) -> bool:
-    return mode in (Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION)
+    return mode in (Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT)
 
 
 def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
@@ -39,6 +49,9 @@ def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
     if isinstance(spec, McqSpec):
         grade_mcq_candidate(spec, spec.expected)
         return spec
+    if isinstance(spec, StructuredExactSpec):
+        validate_structured_exact(spec)
+        return spec
     assert isinstance(spec, PredictedActionSpec)
     validate_predicted_action(spec)
     return spec
@@ -50,8 +63,5 @@ def grade_text_candidate(spec: TextSpec, candidate: str) -> Reward:
         return grade_exact_candidate(spec, candidate)
     if isinstance(spec, McqSpec):
         return grade_mcq_candidate(spec, candidate)
-    try:
-        value = float(candidate.strip())
-    except ValueError:
-        value = float("nan")
-    return grade_numeric_candidate(spec, value)
+    numeric_tolerance(spec)
+    return grade_numeric_candidate(spec, extract_numeric_candidate(candidate))

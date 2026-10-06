@@ -6,18 +6,18 @@
 import base64
 import json
 
-from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_arc_injection
 from taskcompendium.pipeline.models import CheckStatus, RawRow
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import PlainText
 
 
 def grade(task, answer):
-    return grade_answer(
+    return grade_task(
         task,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 

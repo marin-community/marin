@@ -5,12 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "taskcompendium"
 version = "0.1.0"
-description = "Semantic answer tasks and Harbor direct-chat lowerings"
+description = "Semantic task contracts, submission extraction, and shared grading"
 requires-python = ">=3.12,<3.14"
 dependencies = ["marin-rigging>=0.2.139.dev37117265303", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
 
 [project.optional-dependencies]
-harbor = ["harbor"]
 pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore", "numpy>=1.26", "pyarrow>=15.0"]
 
 [dependency-groups]
@@ -22,7 +21,6 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [tool.uv.sources]
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
 verifyit = { path = "../verifyit", editable = true }
 marin-shellbox = { path = "../shellbox", editable = true }
 marin-finestore = { path = "../finestore", editable = true }

@@ -7,9 +7,7 @@ from verifyit.spec import JsonSchemaSpec
 
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
 from taskcompendium.grader import grader_package, script_package
-from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import Outcome
-from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor, read_specification
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -21,9 +19,10 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import PlainText
 
-PLAIN = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+PLAIN = PlainText(id="plain")
 
 
 def _task(package, answer_type=AnswerType.TEXT):
@@ -41,14 +40,13 @@ def _conversation(task, answer):
     return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
 
 
-def test_json_schema_grader_reads_private_schema_and_scores_document(tmp_path):
+def test_json_schema_grader_reads_private_schema_and_scores_document():
     package = grader_package(
         JsonSchemaSpec(schema="schema.json"),
         (inline_resource("schema.json", b'{"type":"object","required":["value"]}'),),
     )
     task = _task(package)
-    lowered = lower_to_harbor(task, PLAIN, HarborEnvironmentConfig(), tmp_path / "task")
-    task = read_specification(lowered / "specification.json")
+    task = TaskSpec.model_validate_json(task.model_dump_json())
 
     good = grade_task(task, PLAIN, _conversation(task, '{"value": 1}'))
     bad = grade_task(task, PLAIN, _conversation(task, "{}"))

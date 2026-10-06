@@ -11,7 +11,6 @@ import asyncio
 from dataclasses import replace
 
 from taskcompendium.grader import grader_config
-from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, TaskSpec
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, VerificationReport
@@ -21,6 +20,7 @@ from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import EnvironmentFactory, Termination
 from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory
+from taskcompendium.runtime.task_grading import grade_task
 
 
 async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_steps: int) -> VerificationReport:

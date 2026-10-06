@@ -240,7 +240,7 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import ShellboxRolloutEngine
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 
 async def run_task(
@@ -255,7 +255,7 @@ async def run_task(
         max_turns=20,
         command_timeout=120,
         cleanup_timeout=30,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     return await engine.run(task, execution=TaskExecution())
 ```
@@ -279,7 +279,7 @@ commits and new files.
 From the Marin repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
 uv run --project lib/rolloutengine --group test pytest lib/rolloutengine/tests -q
 ```
 

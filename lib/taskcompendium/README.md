@@ -10,21 +10,22 @@ and intended use.
 For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
 and the [experiment flow](../../experiments/post_training/task_curation/README.md).
 
-TaskCompendium defines private `TaskSpec` records, submission conventions, importers,
-and grading contracts. It exports direct-chat Harbor tasks. The separate
-[rollout engine](../rolloutengine/README.md) executes tasks through Shellbox.
-Harbor runs model trials and invokes private graders. Shellbox supplies isolated execution machines.
+TaskCompendium stores a task's semantic contract, extracts one final submission, and
+grades it through the shared verifier library. A caller chooses a submission convention
+while expected answers and verifier files stay private. Execution, model requests, tool
+dispatch, environment setup, and lifecycle management belong to the caller's runtime; the
+separate [rollout engine](../rolloutengine/README.md) executes tasks through Shellbox.
 
 ## Task records
 
 A task contains:
 
 - `context`: Public text messages, function calls, and tool results before the first model turn.
-- `answer_type`: Text, number, final function calls, files, or environment state.
+- `answer_type`: Text, number, JSON, final function calls, files, or environment state.
 - `final_tools`: Advertised functions that terminate the task.
 - `interaction_tools`: Executable function declarations for the episode runtime.
 - `output_paths`: Absolute paths that the episode runtime captures.
-- `verifier`: Private grading parameters and capability requirements.
+- `verifier`: Private grading parameters, private files, and capability requirements.
 - `environment_requirements`: Task capabilities.
 - `environment`: Executable machine inputs and an optional task-session selector.
 - `source`: Dataset, revision, row, and importer revision.
@@ -33,6 +34,7 @@ A task contains:
 `TaskSpec.model_dump_json()` serializes a task.
 `TaskSpec.model_validate_json()` validates it. Applications own dataset file formats and storage.
 The serialized task contains private reference answers. Do not send the whole record to the model.
+Readers reject other `schema_version` values; the current version is `0.25`.
 
 Conversation events retain tool-call IDs and order. They exclude provider reasoning state.
 `answer_type` describes the result, independently of its submission format.
@@ -45,25 +47,100 @@ Place public files in `environment.files` and private files in `VerifierSpec.fil
 preparation separately from the task definition.
 See [task rollouts](../../docs/references/task-rollouts.md) for executable fields, stages, and token contracts.
 
-## Submissions and grading
+## Submission conventions
 
-`SubmissionConvention` supports plain text, an `{"answer": "..."}` JSON object,
-or a final `submit_answer(answer: string)` call. These conventions extract a string for the same verifier.
-`FinalAction` captures native function calls with optional required-call and maximum-call constraints.
-Neither convention executes final function calls.
+An answer is the task's semantic result, identified by `answer_type`. A submission is the typed
+value a convention extracts from a completed attempt for grading. `PlainText`, `JsonAnswer`
+(an `{"answer": "..."}` object), and `AnswerCall` (a final `submit_answer(answer: string)` call)
+each extract a `TextSubmission` for the same text or numeric verifier. `JsonValueAnswer` parses
+the complete final text as one JSON value for `answer_type=json`. `FinalAction` captures native
+function calls as an `ActionSubmission`, with optional required-call and maximum-call
+constraints. No convention executes final function calls.
 
-Pure candidate scoring uses `verifyit`: `exact`, `numeric`, `mcq`, and `predicted_action`.
-Numeric tolerances must be explicit. Shell tasks use `ShellVerifierSpec`.
-Application sessions use `ExternalVerifierSpec` for private parameters and
-`environment.interaction` to select the session. Staged tasks use `StageVerifierSpec`.
-Group grading belongs to the training application.
+`convention.supports(answer_type)` checks the result kind. `submission_compatibility(task,
+convention)` also checks that the convention produces an evidence type the private candidate
+verifier accepts, that `FinalAction` has final tools, and that no task function is named
+`submit_answer`. A custom convention extends `SubmissionConvention`, declares its
+`submission_types`, and extracts already acquired evidence from a `GradingAttempt`; it must not
+reach a live workspace. `submission_instruction(convention)` and `answer_call_tool()` supply the
+instruction and tool definition that a runtime adds to the public conversation.
 
-Schema loading accepts verifier descriptors without an implementation.
-Export and launch validate runtime support and reject unsupported kinds or requirements.
-`structured_exact` has no implementation in this package.
+## Grading
 
-A wrong answer receives a numeric grade. An invalid submission receives `extraction_error` with no reward.
-Malformed provider messages fail at the harness boundary. Verifier failures receive `infra_error` with no reward.
+Pure candidate scoring uses `verifyit`: `exact`, `numeric`, `mcq`, `predicted_action`, and
+`structured_exact`. `grade_answer(task, convention, GradingAttempt(conversation))` validates the
+private verifier and the convention's compatibility, calls `extract` once, and scores the
+submission. Numeric references are literal strings with explicit absolute and relative
+tolerances. `structured_exact` compares JSON values with numeric value equality by default and
+`numeric_types="strict"` for exact scalar types. Verifier parameters reject duplicate keys and
+nonfinite numbers at every nesting level.
+
+A valid wrong answer is `graded` with reward `0.0`. Malformed text, JSON, numeric, or
+final-action evidence is `submission_failure` with reward `0.0`. Invalid private configuration
+raises; a candidate verifier with capability requirements or a private grading environment
+raises `NotImplementedError` from the pure boundary. Malformed provider messages fail at the
+harness boundary. Verifier failures are `infra_error` with no reward.
+
+Runtime evidence grading lives in `taskcompendium.runtime.task_grading`. Its synchronous
+`grade_task` accepts a conversation and already acquired `RuntimeEvidence`, delegates candidate
+kinds to `grade_answer`, and materializes `environment.files` and `VerifierSpec.files` for
+file and script graders. Script verdicts retain `invalid_task` and `infra_error` status and
+details separately from graded rewards.
+
+Shell tasks use `ShellVerifierSpec`. Application sessions use `ExternalVerifierSpec` for
+private parameters and `environment.interaction` to select the session. Staged tasks use
+`StageVerifierSpec`. `validate_verifier` checks each kind's payload. Group grading belongs to
+the training application.
+
+Private verifier factories:
+
+```python
+from taskcompendium.grading import exact_answer, numeric_answer, structured_exact, verifier_descriptor
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
+from taskcompendium.verifiers.predicted_action import predicted_action_verifier
+
+text_verifier = exact_answer("expected text")
+number_verifier = numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0)
+mcq_verifier = multiple_choice_answer("C", options=4)
+json_verifier = structured_exact({"value": 16})
+```
+
+Create a semantic task and grade a final response:
+
+```python
+from taskcompendium.grading import grade_answer, numeric_answer
+from taskcompendium.grading_contract import GradingAttempt
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    ConversationTrace,
+    EnvironmentRequirements,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
+from taskcompendium.submission import PlainText
+
+spec = TaskSpec(
+    id="arithmetic-7-plus-5",
+    context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
+    environment_requirements=EnvironmentRequirements(),
+    answer_type=AnswerType.NUMBER,
+    verifier=numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0),
+    source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
+)
+convention = PlainText(id="plain")
+
+
+def score_final_response(content: str):
+    conversation = ConversationTrace(events=(*spec.context.events, TextMessage(role="assistant", content=content)))
+    return grade_answer(spec, convention, GradingAttempt(conversation))
+```
+
+Built-in conventions read `conversation.events[-1]`, the final assistant message or call
+batch. Runtimes decode provider responses into `TextMessage` or `AssistantToolCalls` with
+`taskcompendium.chat` before constructing a `ConversationTrace`; tool-call arguments become
+decoded JSON objects there.
 
 ## Importers
 
@@ -76,71 +153,14 @@ Malformed provider messages fail at the harness boundary. Verifier failures rece
 - Harbor, SWE, and SkyRL importers produce executable tasks for the
   [rollout engine](../rolloutengine/README.md).
 
-## Direct-chat Harbor export
-
-A lowering pairs a compatible submission convention with a Harbor environment configuration.
-The direct-chat configuration accepts text, numeric, and native-action tasks without machine requirements.
-It records final calls without execution. Shell, file, and state tasks require the separate rollout engine.
-
-For multiple presentations, use `compatible_lowerings` and `select_lowerings` with an explicit selection policy and RNG key.
-
-```python
-from pathlib import Path
-
-from taskcompendium.grading import numeric_answer
-from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
-
-spec = TaskSpec(
-    id="arithmetic-7-plus-5",
-    context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
-    environment_requirements=EnvironmentRequirements(),
-    answer_type=AnswerType.NUMBER,
-    verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
-    source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
-)
-convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-environment_config = HarborEnvironmentConfig()
-lower_to_harbor(spec, convention, environment_config, Path("/tmp/arithmetic-task"))
-```
-
-The exported package contains `instruction.md`, `task.toml`, `specification.json`,
-`submission_convention.json`, and `environment_config.json`.
-The model receives the public conversation and submission instructions. It cannot read package files.
-The custom verifier reads the private task and typed `submission.json` conversation.
-`chat-response.json` retains the provider response for diagnostics.
-`taskcompendium-result.json` records the grading outcome.
-
-Run the exported task through the pinned Harbor fork:
-
-```python
-import asyncio
-
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
-
-result = asyncio.run(
-    run_trial(
-        Path("/tmp/arithmetic-task"),
-        environment_config,
-        ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY"),
-        Path("/tmp/arithmetic-trials"),
-        "arithmetic-run",
-    )
-)
-```
-
-`api_key_env` stores the environment-variable name. The agent resolves its value in its process.
-The fork supplies [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155).
-
 ## Local checks
 
 From the Marin repository root:
 
 ```bash
 task_test_prefix=$(mktemp -d -t taskcompendium-tests.XXXXXX)
-MARIN_PREFIX="$task_test_prefix" uv run --project lib/taskcompendium --frozen --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
+MARIN_PREFIX="$task_test_prefix" uv run --project lib/taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
 ```
 
-Python 3.12 or 3.13 is required. Package dependencies and the Harbor revision are in [pyproject.toml](pyproject.toml).
+Python 3.12 or 3.13 is required. Package dependencies are in [pyproject.toml](pyproject.toml).
 For type checks, run `uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check` from this package directory after dependency installation.

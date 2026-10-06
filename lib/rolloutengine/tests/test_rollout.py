@@ -45,7 +45,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import AnswerCall, PlainText
 
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
@@ -111,7 +111,7 @@ def arithmetic_task() -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content="What is six plus six?"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer(12, tolerance_abs=0, tolerance_rel=0),
+        verifier=numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0),
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
     )
 
@@ -123,7 +123,7 @@ def engine(model, factories, *, cleanup_timeout=5, sessions=None, max_turns=3) -
         max_turns=max_turns,
         command_timeout=5,
         cleanup_timeout=cleanup_timeout,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
         sessions=sessions,
     )
 
@@ -176,7 +176,7 @@ async def test_executable_answer_call_keeps_submission_tool_and_finishes():
         max_turns=3,
         command_timeout=5,
         cleanup_timeout=5,
-        convention=SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
+        convention=AnswerCall(id="answer-call"),
     )
 
     result = await runner.run(task, execution=TaskExecution())

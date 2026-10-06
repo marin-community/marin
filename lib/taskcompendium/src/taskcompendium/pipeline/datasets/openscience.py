@@ -9,7 +9,6 @@ import re
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import McqSpec
 
-from taskcompendium.grading import multiple_choice_answer, resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -27,6 +26,8 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.task_grading import resolve_verifier
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 RUBRIC = ReviewRubric(
     id="openscience-quality",

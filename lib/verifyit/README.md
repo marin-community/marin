@@ -42,10 +42,23 @@ process exit after a verdict has been written.
 For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
 candidate when the output contains a box marker. Its braces must be balanced and its content must be
 nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
-expected answer. Without a box marker, `math` grades the last nonempty line and `numeric` grades the
-last number. Numeric expected values and absolute and relative tolerances must be finite. Tolerances
-must also be nonnegative. The effective tolerance,
-`max(tolerance_abs, tolerance_rel * abs(expected))`, must be finite.
+expected answer. Without a box marker, both modes read the last nonempty line. Numeric mode
+extracts exactly one integer, decimal, scientific-notation value or integer fraction from that line.
+Surrounding prose is ignored, including negation: `Definitely not 42` extracts `42`.
+When a box is present, its entire content must be a numeric literal, optionally wrapped in math delimiters.
+Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
+`2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
+
+Numeric private `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
+are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
+`tolerance_rel = 0.0` accepts both `1/2` and `0.5` without losing integer or decimal precision.
+The effective tolerance is `max(tolerance_abs, tolerance_rel * abs(expected))`. Float tolerances
+are converted to exact rational values through their decimal spelling before comparison;
+`0.01` permits an exact difference of `1/100`. Native float expected values are rejected
+because rounding may already have changed their meaning. `grade_numeric_candidate_float`
+compares already parsed floats directly with an explicit absolute tolerance; MMMU uses
+`0.0` and JEEBench uses `0.01` to retain their source scoring rules.
+Literal components and expanded decimal powers are limited to 4096 digits before parsing.
 
 [`spec.py`](src/verifyit/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`
@@ -122,3 +135,9 @@ uv run --group test pytest lib/verifyit/tests
 Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset policy belongs to the converter that emits a grader: source parsing conventions, calendar postconditions and abstention rules should be packaged as task-owned scripts.
 
 A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
+
+`StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
+Its TOML reference is encoded as a JSON string so null and nested JSON types survive
+`render_spec` and `parse_spec`; private JSON descriptors keep decoded values. Its `numeric_types`
+defaults to `"value"`; set `"strict"` to distinguish integers from floats. Structured and predicted-action
+candidate JSON rejects duplicate object keys.

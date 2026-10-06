@@ -21,9 +21,9 @@ from taskcompendium.models import (
 )
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
-    AnswerFormat,
+    AnswerCall,
     FinalAction,
-    Submission,
+    SubmissionConvention,
     conversation_messages,
     submission_request,
 )
@@ -36,13 +36,13 @@ from rolloutengine.machines import _install_files, _run_setup_commands, _wait_fo
 SHELL_TOOL_NAME = "shell"
 
 
-def _task_submission(task: TaskSpec, convention: Submission) -> Submission:
+def _task_submission(task: TaskSpec, convention: SubmissionConvention) -> SubmissionConvention:
     if task.answer_type == AnswerType.NATIVE_ACTION:
         return FinalAction(id="final-action")
     return convention
 
 
-def session_start(task: TaskSpec, convention: Submission) -> SessionStart:
+def session_start(task: TaskSpec, convention: SubmissionConvention) -> SessionStart:
     """Prepare only the public task fields for inference."""
     convention = _task_submission(task, convention)
     if task.environment.interaction is not None or task.answer_type in (AnswerType.FILE, AnswerType.STATE):
@@ -80,7 +80,7 @@ class _ShellboxTaskSession:
         self,
         task: TaskSpec,
         machine: Machine | None,
-        convention: Submission,
+        convention: SubmissionConvention,
         command_timeout: float,
         factories: Mapping[EnvironmentKind, MachineFactory],
         cleanup: _Cleanup,
@@ -129,9 +129,7 @@ class _ShellboxTaskSession:
         observations = []
         final_tools = {function.name for function in self.task.final_tools}
         for call in message.calls:
-            if call.name in final_tools or (
-                self.convention.answer_format == AnswerFormat.ANSWER_CALL and call.name == ANSWER_CALL_NAME
-            ):
+            if call.name in final_tools or (isinstance(self.convention, AnswerCall) and call.name == ANSWER_CALL_NAME):
                 return Transition(done=True)
             if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
                 observations.append(

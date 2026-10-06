@@ -15,7 +15,7 @@ from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import StageVerifierSpec, TaskSpec
-from taskcompendium.submission import Submission, conversation_messages
+from taskcompendium.submission import SubmissionConvention, conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
@@ -62,7 +62,7 @@ class ShellboxRolloutEngine:
         max_turns: int,
         command_timeout: float,
         cleanup_timeout: float,
-        convention: Submission,
+        convention: SubmissionConvention,
         sessions: Mapping[str, Callable[[TaskSpec, Machine | None], TaskSession]] | None = None,
     ):
         if max_turns < 1 or command_timeout <= 0 or cleanup_timeout <= 0:
@@ -136,7 +136,12 @@ class ShellboxRolloutEngine:
         return await self._run_session(task, session, agent_timeout=execution.agent_timeout)
 
     async def _run_stages(
-        self, task: TaskSpec, execution: TaskExecution, machine: Machine, convention: Submission, cleanup: _Cleanup
+        self,
+        task: TaskSpec,
+        execution: TaskExecution,
+        machine: Machine,
+        convention: SubmissionConvention,
+        cleanup: _Cleanup,
     ) -> RolloutData:
         specification = StageVerifierSpec.model_validate_json(task.verifier.parameters_json)
         record = None
