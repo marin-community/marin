@@ -2051,9 +2051,14 @@ class LatentProj(eqx.Module):
 def mixture_weights(
     x: Float[Array, "... D"], gate: Float[Array, "D E"], experts: int, topk: int
 ) -> Float[Array, "... E"]:
-    """``_switchhead_weights`` for a single group over arbitrary leading axes."""
-    flat = x.reshape(1, -1, x.shape[-1])
-    return _switchhead_weights(flat, gate, experts, topk).reshape(*x.shape[:-1], experts)
+    """SwitchHead's sigmoid top-k weights for one group of ``experts`` blocks, over any leading axes of ``x``
+    (computed in place, so the weights keep ``x``'s batch sharding)."""
+    logits = jnp.einsum("...d,de->...e", x, gate).astype(jnp.float32)
+    weights = jax.nn.sigmoid(logits)
+    if topk >= experts:
+        return weights
+    threshold = jax.lax.top_k(logits, topk)[0][..., -1:]
+    return jnp.where(logits >= threshold, weights, 0.0)
 
 
 class CausalSelfAttention(eqx.Module):
