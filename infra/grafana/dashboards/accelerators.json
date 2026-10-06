@@ -1969,7 +1969,7 @@
       "id": 400,
       "type": "timeseries",
       "title": "H100 allocation by applied priority · incomplete history",
-      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with no verified historical band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Recent live samples use node-bound nonterminal Kubernetes requests and matching allocatable capacity, including setup and lingering pods. They are cached briefly and are never written to Finelog.",
+      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with no verified historical band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2170,6 +2170,26 @@
                 "value": "none"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet unresolved-model GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
           }
         ]
       },
@@ -2269,6 +2289,11 @@
               "selector": "missing_task_metadata",
               "text": "Missing task metadata",
               "type": "number"
+            },
+            {
+              "selector": "unknown_model_gpu_requests",
+              "text": "Fleet unresolved-model GPU requests",
+              "type": "number"
             }
           ]
         }
@@ -2278,7 +2303,7 @@
       "id": 401,
       "type": "timeseries",
       "title": "Blackwell (GB200) allocation by applied priority · incomplete history",
-      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with no verified historical band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Recent live samples use node-bound nonterminal Kubernetes requests and matching allocatable capacity, including setup and lingering pods. They are cached briefly and are never written to Finelog.",
+      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with no verified historical band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2479,6 +2504,26 @@
                 "value": "none"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet unresolved-model GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
           }
         ]
       },
@@ -2578,6 +2623,11 @@
               "selector": "missing_task_metadata",
               "text": "Missing task metadata",
               "type": "number"
+            },
+            {
+              "selector": "unknown_model_gpu_requests",
+              "text": "Fleet unresolved-model GPU requests",
+              "type": "number"
             }
           ]
         }
@@ -2587,7 +2637,7 @@
       "id": 402,
       "type": "table",
       "title": "Allocation history coverage",
-      "description": "Incomplete samples include unverified historical capacity and pod setup/cleanup lifetimes. Setup requests are possible additional allocation, not allocated GPU counts. Metadata gaps may contain CPU or GPU tasks. Missing regional sources remain explicit.",
+      "description": "Incomplete samples include unverified historical capacity and pod setup/cleanup lifetimes. Setup requests are possible additional allocation, not allocated GPU counts. Metadata gaps may contain CPU or GPU tasks. Missing regional sources remain explicit. Fleet model gaps report requests whose GPU family cannot be resolved. They appear on both rows as the same fleet-wide gap, not as allocation assigned to either model.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2606,7 +2656,140 @@
             "align": "auto"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "GPU"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Samples"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes/sample"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Incomplete"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Setup gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet metadata gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet model gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet gap GPUs (max)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Missing clusters"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "History status"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "showHeader": true,
@@ -2654,7 +2837,7 @@
             },
             {
               "selector": "resolution_minutes",
-              "text": "Minutes per sample",
+              "text": "Minutes/sample",
               "type": "number"
             },
             {
@@ -2664,12 +2847,27 @@
             },
             {
               "selector": "setup_gap_samples",
-              "text": "Unresolved setup",
+              "text": "Setup gaps",
               "type": "number"
             },
             {
               "selector": "metadata_gap_samples",
               "text": "Fleet metadata gaps",
+              "type": "number"
+            },
+            {
+              "selector": "missing_source_samples",
+              "text": "Source gaps",
+              "type": "number"
+            },
+            {
+              "selector": "unknown_model_gap_samples",
+              "text": "Fleet model gaps",
+              "type": "number"
+            },
+            {
+              "selector": "max_unknown_model_gpu_requests",
+              "text": "Fleet gap GPUs (max)",
               "type": "number"
             },
             {
@@ -2683,6 +2881,28 @@
               "type": "string"
             }
           ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "GPU": 0,
+              "Samples": 1,
+              "Minutes/sample": 2,
+              "Incomplete": 3,
+              "Setup gaps": 4,
+              "Fleet metadata gaps": 5,
+              "Source gaps": 6,
+              "Fleet model gaps": 7,
+              "Fleet gap GPUs (max)": 8,
+              "Missing clusters": 9,
+              "History status": 10
+            },
+            "renameByName": {}
+          }
         }
       ]
     },
@@ -2698,7 +2918,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Historical values recover Running GPU requests. Unresolved setup, pod cleanup, missing metadata and historical capacity leave every historical point incomplete. Unknown priority applies to recovered requests with an unavailable applied band. Idle is shown only for complete recent live samples. The coverage table reports the selected range and resolution."
+        "content": "Historical values recover Running GPU requests. Unresolved setup, pod cleanup, missing metadata and historical capacity leave every historical point incomplete. Unknown priority applies to recovered requests with an unavailable applied band. Idle remains blank because historical capacity and full allocation are unavailable. Missing regional reads leave blank spans. The coverage table reports the selected range and resolution."
       },
       "fieldConfig": {
         "defaults": {},

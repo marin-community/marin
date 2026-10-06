@@ -8,10 +8,11 @@ from types import SimpleNamespace
 
 import duckdb
 import pyarrow as pa
+import pytest
 from config import ClusterTarget
 from conftest import bridge_config, install_finelog_dialect_macros
 from errors import UpstreamError
-from gpu_allocation_history import DAY_MS, history_rows, live_rows, metadata_table
+from gpu_allocation_history import DAY_MS, history_rows, metadata_table
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -150,36 +151,6 @@ def test_history_does_not_project_counts_past_the_metadata_observation_range():
     assert all(row["batch"] is None and row["idle"] is None for row in rows)
 
 
-def test_live_allocation_includes_bound_setup_and_pods_after_controller_finish():
-    nodes = [
-        {
-            "cluster": CLUSTER,
-            "node": "gpu-node",
-            "gpu_model": "H100_NVLINK_80GB",
-            "gpu_capacity": 16,
-            "gpu_allocatable": 16,
-        }
-    ]
-    pods = [
-        {"cluster": CLUSTER, "node": node, "gpu_request_count": gpus, "phase": phase, "priority_class": priority}
-        for node, gpus, phase, priority in [
-            ("gpu-node", 4, "Pending", "iris-batch"),
-            ("gpu-node", 8, "Running", "iris-interactive"),
-            ("", 8, "Pending", "iris-interactive"),
-            ("gpu-node", 8, "Succeeded", "iris-interactive"),
-        ]
-    ]
-    row = next(r for r in live_rows(nodes, pods, (CLUSTER,), 60_000) if r["model"] == "H100")
-    assert row["batch"] == 4 and row["interactive"] == 8
-    assert row["allocated"] == 12 and row["idle"] == 4 and row["capacity"] == 16
-    assert row["incomplete"] == 0
-
-
-def test_live_source_failure_does_not_fill_missing_capacity_with_idle():
-    error = {"cluster": CLUSTER, "error_class": "auth", "error": "denied"}
-    assert all(row["idle"] is None and row["incomplete"] == 1 for row in live_rows([error], [error], (CLUSTER,), 60_000))
-
-
 def _database_source(database):
     queries = []
 
@@ -215,11 +186,15 @@ def test_bridge_reads_whole_emissions_and_shares_inputs_between_both_models():
         )
         for ts, root in [(20_000, "/u/old"), (50_000, "/u/root")]:
             for job in ("", root):
-                database.execute('INSERT INTO "iris.task_state" VALUES (?,?,?,0,0,1)', [_time(ts), CLUSTER, job])
+                database.execute(
+                    'INSERT INTO "iris.task_state" VALUES (?,?,?,0,0,?)',
+                    [_time(ts), CLUSTER, job, 2 if root == "/u/root" else 1],
+                )
         source, queries = _database_source(database)
         registry = Registry(
             [
                 _attempt("/u/root/0", 4, 50_000),
+                _attempt("/u/root/unresolved", 8, 50_000, model="AUTO"),
                 {**_attempt("/u/old/0", 8, 10_000, 40_000), "rootJobId": "/u/old"},
             ]
         )
@@ -231,6 +206,12 @@ def test_bridge_reads_whole_emissions_and_shares_inputs_between_both_models():
             assert first.json()[0]["batch"] == 4
             assert first.json()[0]["missing_task_metadata"] == 0
             assert second.json()[0]["batch"] == 0
+            assert first.json()[0]["unknown_model_gpu_requests"] == 8
+            assert second.json()[0]["unknown_model_gpu_requests"] == 8
+            coverage = client.get("/finelog/marin/v1/gpu/allocation", params={**params, "view": "coverage"})
+            assert coverage.status_code == 200
+            assert all(row["unknown_model_gap_samples"] == 1 for row in coverage.json())
+            assert all(row["max_unknown_model_gpu_requests"] == 8 for row in coverage.json())
             assert len(queries) == len(registry.requests) == 1
 
 
@@ -263,9 +244,12 @@ def test_bridge_refresh_reuses_closed_days_when_the_week_window_moves(monkeypatc
             assert len(queries) == len(registry.requests) == first_reads + 1
 
 
-def test_bridge_reports_regional_access_failure_without_manufacturing_idle():
+@pytest.mark.parametrize("available_cluster", [None, "cw-us-east-02a"])
+def test_bridge_reports_regional_access_failure_without_manufacturing_idle(available_cluster):
     class UnavailableRegistry(Registry):
-        def gpu_allocation_metadata(self, *args, **kwargs):
+        def gpu_allocation_metadata(self, cluster, *args, **kwargs):
+            if cluster == available_cluster:
+                return [_attempt("/u/root/0", 4, 30_000)]
             raise UpstreamError("iris", "regional metadata RPC unavailable")
 
     with duckdb.connect() as database:
@@ -274,10 +258,21 @@ def test_bridge_reports_regional_access_failure_without_manufacturing_idle():
             """CREATE TABLE "iris.task_state" (ts TIMESTAMP, cluster VARCHAR, root_job_id VARCHAR,
                assigned BIGINT, building BIGINT, running BIGINT)"""
         )
+        for cluster in [CLUSTER, available_cluster]:
+            if cluster:
+                for root in ["", "/u/root"]:
+                    database.execute(
+                        'INSERT INTO "iris.task_state" VALUES (?,?,?,0,0,1)', [_time(50_000), cluster, root]
+                    )
         source, _ = _database_source(database)
         with _client(source, UnavailableRegistry([])) as client:
             response = client.get(
-                "/finelog/marin/v1/gpu/allocation", params={"from": 60_000, "to": 120_000, "clusters": CLUSTER}
+                "/finelog/marin/v1/gpu/allocation",
+                params={
+                    "from": 60_000,
+                    "to": 120_000,
+                    "clusters": ",".join(c for c in [CLUSTER, available_cluster] if c),
+                },
             )
             assert response.status_code == 200
             assert all(

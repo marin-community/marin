@@ -118,7 +118,7 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from gpu_allocation_history import CLUSTER_NAMES as GPU_CLUSTERS
 from gpu_allocation_history import MODELS as GPU_MODELS
-from gpu_allocation_history import allocation_history, live_rows
+from gpu_allocation_history import allocation_history
 from hero_health import (
     EVAL_HISTORY_LENGTH,
     EvalHistory,
@@ -221,9 +221,6 @@ _K8S_FINELOG_CACHE_KEY = "finelog"
 _DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
-_GPU_LIVE_STEP_MS = 60_000
-_GPU_LIVE_CACHE_SECONDS = 120
-_GPU_LIVE_CACHE_KEY = "gpu-allocation-live"
 
 
 def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
@@ -732,30 +729,6 @@ def create_app(
                     cache_ttl=config.cache_ttl,
                     now_ms=time.time_ns() // 1_000_000,
                 )
-                now_ms = time.time_ns() // 1_000_000
-                if k8s_fleet is not None and round(end.timestamp() * 1000) >= now_ms - _GPU_LIVE_STEP_MS:
-
-                    def read_live() -> list[dict]:
-                        began = time.time_ns() // 1_000_000
-                        nodes = k8s_fleet.nodes()
-                        workloads = k8s_fleet.workload_allocations()
-                        finished = time.time_ns() // 1_000_000
-                        return live_rows(nodes, workloads, clusters, (began + finished) // 2)
-
-                    minute = (now_ms // _GPU_LIVE_STEP_MS) * _GPU_LIVE_STEP_MS
-                    k8s_cache.get_or_compute(
-                        (_GPU_LIVE_CACHE_KEY, clusters, minute), read_live, ttl=_GPU_LIVE_CACHE_SECONDS
-                    )
-                    # Retain only short-lived reads already sampled inside the range.
-                    # These never write Finelog or become durable history.
-                    for bucket in range(minute - _GPU_LIVE_CACHE_SECONDS * 1000, minute + 1, _GPU_LIVE_STEP_MS):
-                        sampled = k8s_cache.get_if_present((_GPU_LIVE_CACHE_KEY, clusters, bucket))
-                        if sampled is not None:
-                            rows.extend(
-                                row
-                                for row in sampled
-                                if start.timestamp() * 1000 <= row["time"] < end.timestamp() * 1000
-                            )
                 return sorted(rows, key=lambda row: (row["model"], row["time"]))
 
             rows = finelog_cache.get_or_compute(key, run)
@@ -771,6 +744,11 @@ def create_app(
                             "resolution_minutes": points[0]["resolution_minutes"] if points else None,
                             "setup_gap_samples": sum(r["setup_gpu_requests"] > 0 for r in points),
                             "metadata_gap_samples": sum(r["missing_task_metadata"] > 0 for r in points),
+                            "missing_source_samples": sum(bool(r["missing_clusters"]) for r in points),
+                            "unknown_model_gap_samples": sum(r["unknown_model_gpu_requests"] > 0 for r in points),
+                            "max_unknown_model_gpu_requests": max(
+                                (r["unknown_model_gpu_requests"] for r in points), default=0
+                            ),
                             "missing_clusters": ",".join(
                                 sorted({c for r in points for c in r["missing_clusters"].split(",") if c})
                             ),

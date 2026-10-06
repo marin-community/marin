@@ -392,7 +392,7 @@ target, missing, and off-target counts across the selected clusters. The table k
 each pool's scaling work, bounds, policy, conditions, and problem reasons visible.
 GCE clusters have no CoreWeave NodePool objects and return no rows.
 
-![GPU allocation history with explicit gaps](../../docs/assets/grafana-gpu-allocation.png)
+![GPU allocation history with explicit gaps](../../docs/images/grafana-gpu-allocation.png)
 
 The H100 and Blackwell (GB200) allocation panels on Fleet accelerators default to
 seven days. They sample retained Running GPU requests at common instants: every
@@ -407,10 +407,8 @@ Historical points are incomplete. Retained metadata does not establish exact
 node binding during setup, pod cleanup after an attempt ends, or historical
 Kubernetes allocatable capacity. The coverage table quantifies setup and metadata
 gaps and names unavailable regional sources. Missing allocation does not become
-unknown priority or idle. Recent live reads include node-bound setup and lingering
-nonterminal pods, using the same numerator and denominator as Cluster Capacity;
-only complete live samples have an idle band. These reads remain in a two-minute
-memory cache and do not write Finelog.
+unknown priority or idle. A missing regional source leaves a blank span instead of
+a reduced fleet total. Cluster Capacity remains the live allocation reference.
 
 `/finelog/marin/v1/gpu/allocation` shares daily inputs across both panels. Closed
 days cache for one hour and the current day follows the normal bridge TTL, within

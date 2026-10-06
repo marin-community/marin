@@ -292,7 +292,9 @@ def history_rows(
                     "model": model,
                     **{
                         band.value: (
-                            running[model, band] if any(begin <= at < stop for begin, stop in available_scopes) else None
+                            running[model, band]
+                            if not unavailable and any(begin <= at < stop for begin, stop in available_scopes)
+                            else None
                         )
                         for band in Priority
                     },
@@ -307,66 +309,6 @@ def history_rows(
                 }
             )
     return result
-
-
-def live_rows(nodes: list[dict], workloads: list[dict], clusters: tuple[str, ...], sampled_at: int) -> list[dict]:
-    """Use exactly Cluster Capacity's live numerator and denominator."""
-    counts = {model: {band.value: 0 for band in Priority} for model in MODELS}
-    capacity = {model: 0 for model in MODELS}
-    missing = {r["cluster"] for r in [*nodes, *workloads] if r["cluster"] in clusters and "error_class" in r}
-    node_models = {}
-    unresolved = 0
-    for node in nodes:
-        if node["cluster"] not in clusters or "error_class" in node:
-            continue
-        gpus = node["gpu_allocatable"] or node["gpu_capacity"]
-        if not gpus:
-            continue
-        model = next((m for m in MODELS if node["gpu_model"].upper().startswith(m)), None)
-        if model is None:
-            unresolved += gpus
-            continue
-        capacity[model] += gpus
-        node_models[node["cluster"], node["node"]] = model
-    classes = {f"iris-{band.value}": band for band in Priority if band != Priority.UNKNOWN}
-    for pod in workloads:
-        if (
-            pod["cluster"] not in clusters
-            or "error_class" in pod
-            or not pod["node"]
-            or pod["phase"] in ("Succeeded", "Failed")
-        ):
-            continue
-        if not pod["gpu_request_count"]:
-            continue
-        model = node_models.get((pod["cluster"], pod["node"]))
-        if model is None:
-            unresolved += pod["gpu_request_count"]
-            continue
-        band = classes.get(pod["priority_class"], Priority.UNKNOWN)
-        counts[model][band.value] += pod["gpu_request_count"]
-    rows = []
-    for model in MODELS:
-        allocated = sum(counts[model].values())
-        complete = not (missing or unresolved or allocated > capacity[model])
-        rows.append(
-            {
-                "time": sampled_at,
-                "model": model,
-                **counts[model],
-                "idle": capacity[model] - allocated if complete else None,
-                "capacity": capacity[model] if complete else None,
-                "allocated": allocated,
-                "incomplete": int(not complete),
-                "resolution_minutes": 1,
-                "setup_gpu_requests": 0,
-                "missing_task_metadata": 0,
-                "unknown_model_gpu_requests": unresolved,
-                "status": "Live Kubernetes allocation" if complete else "Incomplete live Kubernetes snapshot",
-                "missing_clusters": ",".join(sorted(missing)),
-            }
-        )
-    return rows
 
 
 def allocation_history(

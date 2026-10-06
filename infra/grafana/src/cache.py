@@ -122,8 +122,3 @@ class TtlCache(Generic[V]):
     def __len__(self) -> int:
         with self._guard:
             return len(self._entries)
-
-    def get_if_present(self, key: Hashable) -> V | None:
-        """Read a live cached outcome without starting upstream work."""
-        entry = self._live(key)
-        return self._resolve(entry) if entry is not None else None
