@@ -36,6 +36,7 @@ class FakeJudgeServer(ThreadingHTTPServer):
     message_fields: dict
     response_fields: dict
     raw_body: str | None
+    usage_tokens: list[int]
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -47,6 +48,10 @@ class _Handler(BaseHTTPRequestHandler):
         inputs = request.get("messages", request.get("input"))
         server.prompts.append(inputs if isinstance(inputs, str) else inputs[-1]["content"])
         reply = server.replies[min(len(server.prompts) - 1, len(server.replies) - 1)]
+        usage = {}
+        if server.usage_tokens:
+            index = min(len(server.prompts) - 1, len(server.usage_tokens) - 1)
+            usage = {"usage": {"completion_tokens": server.usage_tokens[index]}}
         body = json.dumps(
             {
                 "id": "chatcmpl-fake",
@@ -64,6 +69,7 @@ class _Handler(BaseHTTPRequestHandler):
                         ),
                     }
                 ],
+                **usage,
             }
         ).encode()
         if self.path.endswith("/responses"):
@@ -107,6 +113,7 @@ def fake_judge(monkeypatch):
     server.message_fields = {}
     server.response_fields = {}
     server.raw_body = None
+    server.usage_tokens = []
     server.finish_reason = "stop"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -193,6 +200,53 @@ def test_second_attempt_is_accepted(tmp_path, fake_judge):
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
     reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
     assert reward.reward == 1.0
+    assert reward.detail["attempt_count"] == 2
+    assert reward.detail["attempts"] == [
+        {"finish_reason": "stop", "completion_tokens": None},
+        {"finish_reason": "stop", "completion_tokens": None},
+    ]
+
+
+def test_reference_retries_truncation_with_budget_and_records_attempts(tmp_path, fake_judge):
+    fake_judge.replies = ["SCORE: 1", "SCORE: 0.5"]
+    fake_judge.finish_reasons = ["length", "stop"]
+    fake_judge.usage_tokens = [1024, 1600]
+    spec = JudgeSpec(
+        references=(REFERENCE,),
+        exact_gate=False,
+        max_completion_tokens=1024,
+        incomplete_retry_tokens=2048,
+        reasoning_effort="low",
+    )
+
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
+
+    assert (reward.reward, reward.status) == (0.5, Status.SCORED)
+    assert [request["max_completion_tokens"] for request in fake_judge.requests] == [1024, 2048]
+    assert [request["reasoning_effort"] for request in fake_judge.requests] == ["low", "low"]
+    assert reward.detail["attempt_count"] == 2
+    assert reward.detail["attempts"] == [
+        {"finish_reason": "length", "completion_tokens": 1024},
+        {"finish_reason": "stop", "completion_tokens": 1600},
+    ]
+
+
+def test_reference_exhausted_truncation_is_unscored_with_attempts(tmp_path, fake_judge):
+    fake_judge.replies = ["SCORE: 1"]
+    fake_judge.finish_reasons = ["length", "length"]
+    fake_judge.usage_tokens = [1024, 2048]
+    spec = JudgeSpec(references=(REFERENCE,), exact_gate=False, max_completion_tokens=1024, incomplete_retry_tokens=2048)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+
+    reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
+
+    assert (reward.reward, reward.status) == (0.0, Status.INFRA_ERROR)
+    assert reward.detail["attempt_count"] == 2
+    assert reward.detail["attempts"] == [
+        {"finish_reason": "length", "completion_tokens": 1024},
+        {"finish_reason": "length", "completion_tokens": 2048},
+    ]
 
 
 def test_missing_endpoint_configuration_is_an_infra_error(tmp_path, unconfigured_judge):
@@ -228,6 +282,47 @@ def test_checklist_scores_the_fraction_of_criteria_the_judge_passes(tmp_path, fa
     assert [c["passed"] for c in reward.detail["criteria"]] == [True, False, True]
     assert len(fake_judge.prompts) == 3
     assert CRITERIA[1] in fake_judge.prompts[1] and CRITERIA[0] not in fake_judge.prompts[1]
+
+
+def test_checklist_records_attempts_per_criterion(tmp_path, fake_judge):
+    fake_judge.replies = ["SCORE: 1", "SCORE: 1", "SCORE: 0"]
+    fake_judge.finish_reasons = ["length", "stop", "stop"]
+    fake_judge.usage_tokens = [1024, 1500, 100]
+    spec = JudgeSpec(
+        rubric="checklist",
+        criteria=CRITERIA[:2],
+        max_completion_tokens=1024,
+        incomplete_retry_tokens=2048,
+    )
+
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate"))
+
+    assert (reward.reward, reward.status) == (0.5, Status.SCORED)
+    assert [request["max_completion_tokens"] for request in fake_judge.requests] == [1024, 2048, 1024]
+    assert [criterion["attempt_count"] for criterion in reward.detail["criteria"]] == [2, 1]
+    assert [criterion["attempts"] for criterion in reward.detail["criteria"]] == [
+        [
+            {"finish_reason": "length", "completion_tokens": 1024},
+            {"finish_reason": "stop", "completion_tokens": 1500},
+        ],
+        [{"finish_reason": "stop", "completion_tokens": 100}],
+    ]
+
+
+def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(tmp_path, fake_judge):
+    fake_judge.replies = ["SCORE: 1"]
+    fake_judge.finish_reasons = ["stop", "length", "length"]
+    fake_judge.usage_tokens = [10, 1024, 2048]
+    spec = JudgeSpec(rubric="checklist", criteria=CRITERIA[:2], max_completion_tokens=1024, incomplete_retry_tokens=2048)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+
+    reward = run(spec_path, _workspace(tmp_path, "candidate"))
+
+    assert (reward.reward, reward.status) == (0.0, Status.INFRA_ERROR)
+    assert [criterion["attempt_count"] for criterion in reward.detail["criteria"]] == [1, 2]
+    assert [attempt["finish_reason"] for attempt in reward.detail["criteria"][1]["attempts"]] == ["length", "length"]
+    assert [attempt["completion_tokens"] for attempt in reward.detail["criteria"][1]["attempts"]] == [1024, 2048]
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
@@ -270,6 +365,25 @@ def test_constraints_that_pass_hand_over_to_the_judge(tmp_path, fake_judge):
 def test_checklist_without_criteria_is_an_invalid_task(tmp_path, unconfigured_judge):
     with pytest.raises(grade_judge.InvalidTask):
         grade_judge.grade(JudgeSpec(rubric="checklist"), tmp_path, _workspace(tmp_path, "text"))
+
+
+@pytest.mark.parametrize("rubric", ["reference", "checklist"])
+@pytest.mark.parametrize(
+    "budgets",
+    [
+        {"max_completion_tokens": 0},
+        {"max_completion_tokens": 1024, "incomplete_retry_tokens": 1024},
+    ],
+)
+def test_score_rubrics_reject_invalid_budgets_before_judge_call(tmp_path, fake_judge, rubric, budgets):
+    spec = JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=(CRITERIA[0],), exact_gate=False, **budgets)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+
+    reward = run(spec_path, _workspace(tmp_path, "candidate"))
+
+    assert reward.status is Status.INVALID_TASK
+    assert fake_judge.requests == []
 
 
 @pytest.mark.parametrize("rubric", ["reference", "checklist"])
