@@ -1539,6 +1539,34 @@ def test_file_evalchemy_chat_template_kwargs_override_model_per_key(tmp_path, mo
     assert evalchemy.chat_template_kwargs == expected
 
 
+def test_model_evalchemy_concurrency_limits_the_effective_launch(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    model = replace(models()["qwen3-8b"], evalchemy_num_concurrent=4)
+    definition = EvalchemyDefinition(
+        name="gpqa-diamond",
+        config_path=Path("experiments/evaluation/configs/evalchemy/gpqa-diamond.yaml"),
+    )
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.num_concurrent == 4
+
+
 @pytest.mark.parametrize(
     ("config_name", "enable_thinking"),
     (

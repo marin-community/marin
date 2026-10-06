@@ -27,6 +27,12 @@ the evaluated model at each request. It counts the rendered prompt with the serv
 tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
 their independently configured models and are not subject to this evaluated-model budget.
 
+Evalchemy's 30-minute timeout starts separately for each request after it acquires a client
+concurrency slot. A transport attempt may use that full window; retrying does not extend it.
+`evalchemy_num_concurrent` in a model config limits simultaneous requests to that model's endpoint.
+K2 is limited to four after its 16-request runs saturated serving and produced mostly timed-out
+generations. Effective concurrency is recorded in each run's Evalchemy provenance.
+
 Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
 the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
 boundary above.

@@ -205,6 +205,7 @@ class ModelConfigRef(BaseModel):
     serve: ModelServeConfig
     generation: ModelGenerationConfig
     agent: ModelAgentConfig
+    evalchemy_num_concurrent: int | None = None
 
 
 class ModelRef(BaseModel):

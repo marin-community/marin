@@ -137,6 +137,11 @@ class EvalchemyDefinition:
                 model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
             ),
             max_gen_toks=max_gen_toks,
+            num_concurrent=(
+                min(config.num_concurrent, model.evalchemy_num_concurrent)
+                if model.evalchemy_num_concurrent is not None
+                else config.num_concurrent
+            ),
             max_eval_instances=effective_limit,
             extra_gen_kwargs={
                 **config.extra_gen_kwargs,

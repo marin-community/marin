@@ -5,6 +5,7 @@ location: IFM/K2-Horizon-MoVA-36B-A4B
 revision: 7730b92d1b574e04663b04023d5d6fa83475432f
 tokenizer: IFM/K2-Horizon-MoVA-36B-A4B
 apply_chat_template: true
+evalchemy_num_concurrent: 4
 generation:
   thinking_off_template_kwargs:
     reasoning_effort: low
