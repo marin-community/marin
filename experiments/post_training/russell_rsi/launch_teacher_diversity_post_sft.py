@@ -8,6 +8,7 @@ import json
 import click
 import numpy as np
 from marin.evaluation.records import RunStatus, record_path
+from marin.execution.artifact import artifact_record_identity
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, artifact_identity
@@ -16,7 +17,7 @@ from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
+from experiments.post_training.russell_rsi.calibration_recovery import LAUNCH_PROTOCOL, PinnedFile
 from experiments.post_training.russell_rsi.launch_interrupted_calibration_sft import (
     foreground_build_options,
     require_reviewed_source,
@@ -41,7 +42,6 @@ from experiments.post_training.russell_rsi.teacher_diversity_study import (
 from experiments.post_training.russell_rsi.teacher_four_pass import pinned_record
 
 AMENDMENT_PROTOCOL = "teacher-diversity-durable-sft-binding-v1"
-LAUNCH_PROTOCOL = "russell-rsi-foreground-launch-proof-v1"
 PERMITTED_CHANGES = ["training_version", "trainer_id", "tracker", "reload_binding"]
 METRIC_KEYS = {
     "loss": "train/loss",
@@ -95,7 +95,7 @@ def completed_durable_producer(config: dict, role: str, expected: ArtifactStep, 
     if producer_pin.uri != prefix_join(launch["output_path"], ".artifact.json"):
         raise ValueError("Durable SFT record is outside its producer output")
     record = producer_pin.read_json()
-    identity = f"{record['name']}@{record['version']}:{record['fingerprint']}"
+    identity = artifact_record_identity(record)
     if (
         identity != launch["producer_identity"]
         or record["version"] != SFT_VERSION

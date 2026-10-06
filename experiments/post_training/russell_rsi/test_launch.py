@@ -404,14 +404,12 @@ def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_r
     training = ArtifactStep.adopt("documents/bootstrap-bank", "2026.10.04", "/tmp/bank")
     retention = ArtifactStep.adopt("documents/retention", "2026.10.04", "/tmp/retention")
     parent = ArtifactStep.adopt("checkpoints/pinned-parent", "2026.09.21", "/tmp/model", kind=LevanterCheckpoint)
-    runtime = RuntimeBundle("/tmp/runtime.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64)
     calibration = ArtifactStep.adopt("documents/bank-difficulty", "2026.10.04", "/tmp/difficulty")
     terminals = bootstrap_round_workflow(
         training,
         retention,
         parent,
         "2026.10.04",
-        runtime,
         {"backend": "qemu"},
         round_number=1,
         panel=CodingPanel((), {}),
@@ -434,7 +432,6 @@ def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_r
         retention,
         parent,
         "2026.10.04",
-        runtime,
         {"backend": "qemu"},
         round_number=2,
         panel=CodingPanel((), {}),
@@ -456,7 +453,6 @@ def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_r
         retention,
         parent,
         "2026.10.04",
-        runtime,
         {"backend": "qemu"},
         round_number=2,
         panel=CodingPanel((), {}),

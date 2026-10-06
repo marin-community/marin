@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.runner import EndpointRoute
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, artifact_record_identity
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile
@@ -21,7 +21,7 @@ from taskcompendium.parquet import read_tasks
 
 from experiments.evaluation.pipeline import EvalStepConfig
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
-from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
+from experiments.post_training.russell_rsi.calibration_recovery import LAUNCH_PROTOCOL, PinnedFile
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
@@ -45,7 +45,6 @@ from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_PROB
 
 PROTOCOL = "russell-rsi-completed-sft-selection-v1"
 VERSION = "2026.10.06.11"
-LAUNCH_PROTOCOL = "russell-rsi-foreground-launch-proof-v1"
 CODING_SOURCE_FILE = "experiments/post_training/russell_rsi/coding_transport_replacement.py"
 RETENTION_SOURCE_FILE = "experiments/post_training/russell_rsi/retention_continuation.py"
 JOURNAL_SOURCE_FILE = "experiments/post_training/russell_rsi/interrupted_calibration.py"
@@ -104,7 +103,7 @@ def completed_producer(pins: dict, version: str) -> CompletedProducer:
     ):
         raise ValueError("Completed producer has no matching successful artifact-main preflight")
     record = pinned_at(pins["producer_record"], str(StoragePath(launch["output_path"]) / ".artifact.json"))
-    identity = f"{record['name']}@{record['version']}:{record['fingerprint']}"
+    identity = artifact_record_identity(record)
     if (
         identity != launch["producer_identity"]
         or record["version"] != version

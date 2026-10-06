@@ -14,6 +14,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from haliax import Axis
+from levanter.compat import MODEL_MANIFEST_FILENAME
 from levanter.compat.hf_checkpoints import (
     DEFAULT_MAX_SHARD_SIZE,
     _save_tokenizer_pretrained,
@@ -184,7 +185,7 @@ def save_recovery_metadata(config: ExportRecoveryConfig, hparams: dict, destinat
         if converter._resolve_save_reference_code(None):
             converter._save_code_local(str(destination))
         # The parent's publication manifest describes its weights, not this saved SFT export.
-        parent_manifest = destination / ".marinskyrl-model-manifest.json"
+        parent_manifest = destination / MODEL_MANIFEST_FILENAME
         if parent_manifest.exists():
             parent_manifest.unlink()
         _save_tokenizer_pretrained(tokenizer, str(destination))

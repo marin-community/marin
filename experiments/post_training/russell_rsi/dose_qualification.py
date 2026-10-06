@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from levanter.compat import MODEL_MANIFEST_FILENAME
+from marin.execution.artifact import artifact_record_identity
 from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.storage_path import prefix_join
 
@@ -134,7 +136,7 @@ def qualified_dose_source(evidence: dict) -> QualifiedDoseSource:
     rl_dependency = f"{rl['name']}@{rl['version']}"
     optimizer_dependency = f"{optimizer['name']}@{optimizer['version']}"
     rl_identity = f"{rl_dependency}:{rl['fingerprint']}"
-    reload_identity = f"{reload['name']}@{reload['version']}:{reload['fingerprint']}"
+    reload_identity = artifact_record_identity(reload)
     requested = yaml.safe_load(rl["config"]["launch_config_yaml"])
     terminal = json.loads(read("terminal", requested["artifacts"]["terminal_manifest_uri"]))
     resolved = json.loads(read("resolved", requested["artifacts"]["resolved_config_uri"]))
@@ -186,7 +188,7 @@ def qualified_dose_source(evidence: dict) -> QualifiedDoseSource:
         or not reload["result"]["results_paths"]
     ):
         raise ValueError("Dose source optimizer, reload, or export dependency linkage differs")
-    manifest = json.loads(read("export_manifest", prefix_join(export_uri, ".marinskyrl-model-manifest.json")))
+    manifest = json.loads(read("export_manifest", prefix_join(export_uri, MODEL_MANIFEST_FILENAME)))
     index_bytes = read("export_index", prefix_join(export_uri, "model.safetensors.index.json"))
     index = json.loads(index_bytes)
     published = {item["path"]: item for item in manifest["files"]}

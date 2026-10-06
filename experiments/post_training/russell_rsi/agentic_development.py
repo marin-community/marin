@@ -24,6 +24,7 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig, VerifierConfig
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.trial import Trial
+from marin.execution.artifact import artifact_record_identity
 from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.serve import local_inference
 from minisweagent.config import get_config_from_spec
@@ -95,7 +96,7 @@ class FrozenProducer:
 
     def validate(self) -> None:
         record = self.record.read_json()
-        identity = f"{record['name']}@{record['version']}:{record['fingerprint']}"
+        identity = artifact_record_identity(record)
         if identity != self.identity:
             raise ValueError("Checkpoint producer identity differs from its frozen record")
         match record["result_type"]:

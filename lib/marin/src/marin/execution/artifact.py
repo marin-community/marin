@@ -24,8 +24,9 @@ import functools
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
-from typing import Self, TypeVar, cast
+from typing import Any, Self, TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -176,6 +177,11 @@ class ArtifactRecord(BaseModel):
     """The canonical config JSON the ``fingerprint`` hashes, kept for the drift diff."""
     provenance: Provenance | None = None
     """Who/when/which-commit/which-argv produced this — ``None`` for a minimal manual write."""
+
+
+def artifact_record_identity(record: Mapping[str, Any]) -> str:
+    """Return the recipe identity from a saved artifact record."""
+    return f"{record['name']}@{record['version']}:{record['fingerprint']}"
 
 
 # The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable

@@ -22,6 +22,8 @@ from rigging.runtime_bundle import RuntimeBundle
 from experiments.post_training.russell_rsi.bootstrap_loop import ATTEMPTS_PER_TASK, CALIBRATION_TEMPERATURE, write_once
 from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256, pinned_bytes
 
+LAUNCH_PROTOCOL = "russell-rsi-foreground-launch-proof-v1"
+
 
 @dataclass(frozen=True)
 class PinnedFile:

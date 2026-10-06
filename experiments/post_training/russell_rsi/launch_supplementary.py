@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 
 import click
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, artifact_record_identity
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import RemoteCallable
@@ -42,7 +42,7 @@ def selected_checkpoint(config: dict) -> SelectedCheckpoint:
     if parent.checkpoint_identity != config["parent"]["artifact_identity"] or not promotes(selected, parent):
         raise ValueError("The selected checkpoint does not pass the unchanged parent promotion gate")
     record = json.loads(pinned_bytes(config["checkpoint_record_uri"], config["checkpoint_record_sha256"]))
-    identity = f"{record['name']}@{record['version']}:{record['fingerprint']}"
+    identity = artifact_record_identity(record)
     if identity != selected.checkpoint_identity:
         raise ValueError("The export record does not identify the selected checkpoint")
     match record["result_type"]:

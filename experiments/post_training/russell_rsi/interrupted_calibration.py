@@ -359,7 +359,6 @@ def interrupted_evaluation_stages(
         raise ValueError("Interrupted evaluation changed its incumbent baseline")
     outputs = post_sft_evaluation_stages(
         config,
-        model=model,
         retention=retention,
         export_uri=export_uri,
         checkpoints=[("sft", model)],

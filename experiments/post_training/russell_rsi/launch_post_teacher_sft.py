@@ -449,7 +449,6 @@ def post_sft_stages(
         return {**outputs, "terminal": outputs["reload"] if outputs else saved_decision}
     return post_sft_evaluation_stages(
         config,
-        model=model,
         retention=retention,
         export_uri=export_uri,
         checkpoints=checkpoints,
@@ -462,7 +461,6 @@ def post_sft_stages(
 def post_sft_evaluation_stages(
     config: dict,
     *,
-    model: ArtifactStep,
     retention: ArtifactStep,
     export_uri: str,
     checkpoints: list[tuple[str, ArtifactStep]],

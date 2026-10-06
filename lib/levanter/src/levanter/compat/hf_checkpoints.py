@@ -58,6 +58,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
+from levanter.compat import MODEL_MANIFEST_FILENAME
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
@@ -1411,7 +1412,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 # This supports LFS patterns, not all .gitattributes rules.
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
-        ignore_files.append(".marinskyrl-model-manifest.json")
+        ignore_files.append(MODEL_MANIFEST_FILENAME)
 
         if reference_fs is not None:
             os.makedirs(path, exist_ok=True)

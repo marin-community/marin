@@ -6,6 +6,7 @@
 from dataclasses import replace
 
 import click
+from marin.execution.artifact import artifact_record_identity
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
@@ -39,7 +40,7 @@ MISSING_SLOTS = 3
 def bound_terminal_record(pins: dict, expected: ArtifactStep, status: str) -> dict:
     producer = PinnedFile(**pins["producer"])
     record = producer.read_json()
-    identity = f"{record['name']}@{record['version']}:{record['fingerprint']}"
+    identity = artifact_record_identity(record)
     status_pin = PinnedFile(**pins["status"])
     status_pin.read_bytes()
     if (
@@ -191,7 +192,6 @@ def incomplete_diversity_evaluation(config: dict) -> dict[str, ArtifactStep]:
         raise ValueError("SFT-only evaluation must use its new frozen output version")
     return post_sft_evaluation_stages(
         {**original, "version": config["version"]},
-        model=inputs.model,
         retention=inputs.retention,
         export_uri=inputs.export_uri,
         checkpoints=[("sft", inputs.model)],
