@@ -88,3 +88,12 @@ def test_zeroing_a_heads_output_rows_silences_only_its_contribution():
     contrib = np.asarray(metrics[HEAD_PROBE_STAT])[..., HEAD_PROBE_FIELDS.index("contrib_norm")]
     assert float(np.abs(contrib[0, :, :, 1]).max()) == 0.0
     assert float(contrib[0, :, :, 0].min()) > 0 and float(contrib[1, :, :, 1].min()) > 0
+
+
+def test_moe_baseline_records_head_stats_too():
+    moe = {k: v for k, v in _DENSE.items() if k not in ("dense_mlp", "latent_dim")}
+    mesh, model = t._model(**moe)
+    tokens = jax.random.randint(jax.random.PRNGKey(4), (2, 16), 0, t._VOCAB)
+    with jax.set_mesh(mesh), head_probe():
+        _, metrics = eqx.filter_jit(lambda m: m(tokens))(model)
+    assert np.asarray(metrics[HEAD_PROBE_STAT]).shape == (model.config.num_layers, 2, 16, 4, len(HEAD_PROBE_FIELDS))

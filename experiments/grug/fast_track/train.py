@@ -1887,14 +1887,16 @@ def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
         logger.info("wrote %d final params to %s", len(host), path)
 
 
-def _head_probe_dump(config: "GrugRunConfig", params: Transformer, mesh: Mesh, path: str) -> None:
-    """Probe every softmax-attention query head of a dense, non-AttnRes model on fixed held-out sequences and write
+def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
+    """Probe every softmax-attention query head of a non-AttnRes model (dense or MoE, with its QB routing biases
+    ``qb_betas``) on fixed held-out sequences and write
     ``path`` (process 0): ``tokens`` / ``segments`` ``[N, S]``, ``stats`` ``[L, N, S, H, F]`` (``HEAD_PROBE_FIELDS``),
     the per-token next-token ``loss`` ``[N, S]``, and ``ablation_dloss`` ``[L, H, N, S]``: each token's loss with
     that head's output projection rows zeroed, minus the full model's."""
     cfg = config.model
-    if cfg.attn_res or not cfg.dense_mlp or params.stacked_blocks_tail is not None:
-        raise ValueError("head_probe supports the dense baseline (one scanned softmax-attention stack)")
+    if cfg.attn_res or params.stacked_blocks_tail is not None or params.kda_blocks is not None:
+        raise ValueError("head_probe supports the baseline recipe (one scanned softmax-attention stack)")
+    params = _apply_qb_betas(params, qb_betas)
     mp = config.trainer.trainer.mp
     heads, head_dim = cfg.num_heads, cfg.inferred_head_dim
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -2870,7 +2872,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 dump_routing(state)
             if config.trainer.head_probe_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
-                _head_probe_dump(config, probed, mesh, config.trainer.head_probe_path)
+                _head_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.head_probe_path)
             if config.trainer.final_param_dump_path is not None:
                 _dump_final_params(
                     state.params, config.trainer.final_param_dump_patterns, config.trainer.final_param_dump_path

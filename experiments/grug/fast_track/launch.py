@@ -822,7 +822,7 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     "--head-probe",
     is_flag=True,
     help="After training, write per-token query-head attention stats and head ablations to <output>/head_probe.npz "
-    "(dense baseline only).",
+    "(baseline recipe, dense or MoE).",
 )
 @click.option(
     "--xla-memory-report",

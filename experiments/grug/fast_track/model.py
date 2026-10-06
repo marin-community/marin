@@ -7073,6 +7073,8 @@ class Transformer(eqx.Module):
                     if k == _COMPRESS_LOSS or k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
                 }
             )
+            if HEAD_PROBE_STAT in stacked_router_stats:
+                router_metrics[HEAD_PROBE_STAT] = stacked_router_stats[HEAD_PROBE_STAT]  # [L, B, S, H, F]
             if return_routing:
                 if cfg.loop_passes != 1:
                     raise ValueError("return_routing needs loop_passes=1 (passes merge the per-layer stats)")
