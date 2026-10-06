@@ -6,6 +6,7 @@
 import gzip
 import hashlib
 import html
+import http.client
 import json
 import logging
 import re
@@ -19,7 +20,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, quote, urlencode
 
 from fsspec.callbacks import Callback
 from rigging.filesystem.storage_path import StoragePath
@@ -152,8 +153,8 @@ class ProfileCache:
             try:
                 StoragePath(source_uri).download_to(str(downloaded), recursive=True, callback=progress)
                 run_path = self._xprof_run_path(downloaded)
-                if not any(run_path.glob("*/*.xplane.pb")) and not any(run_path.glob("*/*.xplane.riegeli")):
-                    raise FileNotFoundError(f"no XPlane files found under {source_uri}")
+                if not any(run_path.glob("*/*.xplane.pb")):
+                    raise FileNotFoundError(f"no XPlane protobuf files found under {source_uri}")
                 (downloaded / _SOURCE_MARKER).write_text(source_uri)
                 downloaded.rename(target)
             finally:
@@ -261,6 +262,56 @@ class ProfileStageManager:
             self._progress.pop(oldest_uri, None)
 
 
+class RustProxy:
+    """Forward viewer requests to the loopback xprof-rs process."""
+
+    def __init__(self, port: int):
+        self._port = port
+
+    def __call__(self, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
+        method = environ.get("REQUEST_METHOD", "GET")
+        path = environ.get("PATH_INFO", "/")
+        if method not in ("GET", "HEAD") and not (
+            method == "POST" and path.rstrip("/") in ("/generate_cache", "/data/plugin/profile/generate_cache")
+        ):
+            return _response(start_response, "405 Method Not Allowed", b"Method Not Allowed\n", "text/plain")
+
+        target = quote(path, safe="/%")
+        if query := environ.get("QUERY_STRING"):
+            target += f"?{query}"
+        connection = http.client.HTTPConnection("127.0.0.1", self._port, timeout=600)
+        headers = {"Accept-Encoding": environ.get("HTTP_ACCEPT_ENCODING", "identity")}
+        try:
+            connection.request(method, target, headers=headers)
+            reply = connection.getresponse()
+        except OSError:
+            connection.close()
+            logger.exception("xprof-rs backend request failed")
+            return _response(start_response, "502 Bad Gateway", b"xprof-rs backend unavailable\n", "text/plain")
+
+        omitted = {
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+        }
+        response_headers = [(name, value) for name, value in reply.getheaders() if name.lower() not in omitted]
+        start_response(f"{reply.status} {reply.reason}", response_headers)
+
+        def chunks() -> Iterable[bytes]:
+            try:
+                while chunk := reply.read(256 * 1024):
+                    yield chunk
+            finally:
+                connection.close()
+
+        return chunks()
+
+
 class XprofGateway:
     """Serve gateway routes and delegate XProf routes."""
 
@@ -277,6 +328,8 @@ class XprofGateway:
             return self._open(environ, start_response)
         if path == "/progress":
             return self._progress(environ, start_response)
+        if path.rstrip("/") in ("/capture_profile", "/data/plugin/profile/capture_profile"):
+            return _response(start_response, "404 Not Found", b"Not Found\n", "text/plain")
         return self._serve_xprof(path, environ, start_response)
 
     def shutdown(self) -> None:
