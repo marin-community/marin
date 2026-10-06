@@ -113,7 +113,10 @@ class ShardWriter:
 
     def __init__(self, path: str, schema: pa.Schema) -> None:
         self._schema = schema
-        StoragePath(path).parent.mkdirs()
+        parent = StoragePath(path).parent
+        # S3 prefixes need no creation; makedirs can attempt to create the bucket.
+        if parent.scheme != "s3":
+            parent.mkdirs()
         self._stack = contextlib.ExitStack()
         temp_path = self._stack.enter_context(atomic_rename(path))
         handle = self._stack.enter_context(StoragePath(temp_path).open("wb"))

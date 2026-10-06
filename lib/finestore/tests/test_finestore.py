@@ -31,7 +31,10 @@ from finestore.layout import (
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
+from fsspec.core import OpenFile
+from fsspec.implementations.memory import MemoryFileSystem
 from rigging import timing
+from rigging.filesystem import factory
 from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
 
@@ -39,6 +42,36 @@ from rigging.filesystem.storage_path import StoragePath
 def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
     result = reader.scan(table, **kwargs)
     return [] if result is None else result.to_pylist()
+
+
+def test_s3_shard_write_succeeds_without_bucket_creation(monkeypatch):
+    filesystem = MemoryFileSystem()
+
+    def reject_makedirs(path, exist_ok=True):
+        raise OSError("InvalidRegion: Region does not match")
+
+    monkeypatch.setattr(filesystem, "makedirs", reject_makedirs)
+    monkeypatch.setattr(factory, "url_to_fs", lambda url: (filesystem, url))
+    monkeypatch.setattr(factory, "open_url", lambda url, mode, **kwargs: OpenFile(filesystem, url, mode))
+    path = "s3://shard-mkdir-regression/nested/shard.parquet"
+    table = pa.table({"score": [1, 2]})
+
+    with shard_writer.ShardWriter(path, table.schema) as writer:
+        writer.write_table(table)
+
+    with filesystem.open(path, "rb") as handle:
+        assert pq.read_table(handle).to_pylist() == [{"score": 1}, {"score": 2}]
+
+
+@pytest.mark.parametrize("prefix", ["", "file://"])
+def test_local_shard_write_creates_parent_directories(tmp_path, prefix):
+    path = tmp_path / "nested" / "shard.parquet"
+    table = pa.table({"score": [1, 2]})
+
+    with shard_writer.ShardWriter(f"{prefix}{path}", table.schema) as writer:
+        writer.write_table(table)
+
+    assert pq.read_table(path).to_pylist() == [{"score": 1}, {"score": 2}]
 
 
 def test_round_trip_and_projection(tmp_path):
