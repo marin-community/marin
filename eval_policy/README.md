@@ -17,4 +17,10 @@ September 24 `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `ifbench`, `mrcr`, `nupa`, 
 
 Verified cohorts pin parsed benchmark configs and evaluator commits. Changing either requires a new cohort label. September 24 chat benchmarks set `enable_thinking` explicitly; September 16 keeps the model YAML setting. EvalDash separates model configurations by source-YAML fingerprint.
 
+Each policy submission creates a fresh run ID for every benchmark and AIME24 repeat. An Iris retry
+reuses that run ID and its per-eval StepSpec state, so it skips steps that already reached `SUCCESS`.
+To publish a changed Harbor or Evalchemy config or runtime as a verified cohort, add a new version
+to the policy maps, source digests, and runtime pins before launching. The existing verified labels
+continue to use their original pins.
+
 Pi benchmarks require an explicit `thinking_format` in the model YAML's `agent.agent_kwargs` or the Harbor policy's agent kwargs. Choose `chat-template` or `qwen-chat-template` to match the model's request format; this does not select thinking on or off. Preflight constructs Pi to reject missing or invalid provider settings before submission.

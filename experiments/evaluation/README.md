@@ -148,7 +148,7 @@ selector for the others.
 ## Records and the dashboard index
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
-is the source of truth: normalized model configuration, hardware, status (`succeeded` / `failed` /
+records the evaluator's result: normalized model configuration, hardware, status (`succeeded` / `failed` /
 `artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
 the `group_id`
 shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
@@ -163,6 +163,9 @@ Normal results and startup failure records are written under each eval's step lo
 are cached, while failed steps remain retryable. A record written before the step reaches `SUCCESS`
 can be replaced on retry. An evaluator already launched before the first success may still share
 the same results directory, so inspect active child jobs before treating its archive as settled.
+Each new launch gets a new run directory, including repeat launches of the same benchmark. The
+step identity records the model configuration digest, resolved evaluator configuration, runtime
+revision, and policy label; those settings remain visible when diagnosing a cached step.
 
 For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
 on the shared server. It includes prompt tokens, generation tokens, elapsed time, and generation

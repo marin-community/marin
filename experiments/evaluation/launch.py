@@ -29,6 +29,7 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
@@ -105,12 +106,12 @@ def _launch_user() -> str:
 
 def _run_id(model_name: str, eval_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_name}-{eval_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_name}-{eval_key}-{uuid.uuid4().hex}"
 
 
 def _group_id(model_name: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_name}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_name}-{uuid.uuid4().hex}"
 
 
 def _capability_origin(cluster: str) -> str:
@@ -309,7 +310,19 @@ def build_evaluation_batch(
                 step=StepSpec(
                     name=f"eval/{model.name}/{eval_key}",
                     override_output_path=prefix_join(records_prefix, run_id),
-                    hash_attrs={"run_id": run_id, "group_id": group_id, "eval_runtime": definition.runtime_descriptor},
+                    hash_attrs={
+                        "run_id": run_id,
+                        "group_id": group_id,
+                        "policy_version": spec.version,
+                        "model_config": model_config_digest(source_model_config),
+                        "evaluation": definition.record_ref.model_dump(mode="json"),
+                        "eval_runtime": definition.runtime_descriptor,
+                        "judge_config": (
+                            model_config_digest(ModelConfigRef.model_validate(asdict(judge.model)))
+                            if judge is not None
+                            else None
+                        ),
+                    },
                 ),
                 secret_env_keys=tuple(definition.secret_env),
             )
