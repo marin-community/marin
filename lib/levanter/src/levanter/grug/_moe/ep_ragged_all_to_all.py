@@ -529,12 +529,23 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
     assignments = routing.sorted_indices.shape[0]
     hidden_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
+    positions = jnp.argsort(routing.sorted_indices)
     with jax.named_scope("combine"):
         # The combine's transpose: every accepted row's cotangent is its token's output cotangent
         # times its routing weight, rounded once, as the fused gather-sum's backward rounds it.
-        sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
-        token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
-        returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)  # [TK, H]
+        # The transport reads only the accepted rows.
+        if sonic_gather_sum_available():
+            returned_cotangent = sonic_scatter_rows(  # [TK, H]
+                out_cotangent,
+                positions.reshape(weights.shape),
+                routing.accepted,
+                rows=assignments,
+                weights=weights_f32,
+            )
+        else:
+            sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
+            token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
+            returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)
 
     dispatch_cotangent = _transport_buffer(
         assignments,
@@ -581,7 +592,6 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
 
     with jax.named_scope("combine"):
         if expert_side:
-            positions = jnp.argsort(routing.sorted_indices)
             assignment_output_dot = output_dot[:, 0][positions].reshape(weights.shape)
             # d/dw of w * <dout, y> is <dout, y> = <dy, y> / w. Dropped and padding assignments
             # carry no weight and get a zero gradient without the division.
