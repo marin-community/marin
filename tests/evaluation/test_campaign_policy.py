@@ -7,7 +7,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from marin.evaluation.campaign_policy import CAMPAIGNS, OCTOBER_5_ORIGINAL_HARBOR_COMMIT, OCTOBER_5_VERSION
+from marin.evaluation.campaign_policy import (
+    CAMPAIGNS,
+    OCTOBER_5_ORIGINAL_HARBOR_COMMIT,
+    OCTOBER_5_VERSION,
+    OCTOBER_6_VERSION,
+)
 from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.harbor import driver_config
@@ -153,16 +158,25 @@ def test_campaign_rejects_runtime_and_source_drift():
 
 
 @pytest.mark.parametrize("mechanism", ["evalchemy", "harbor"])
-def test_campaign_admits_only_its_pinned_runtime(mechanism):
+@pytest.mark.parametrize("version", [OCTOBER_5_VERSION, OCTOBER_6_VERSION])
+def test_campaign_admits_only_its_pinned_runtime(mechanism, version):
     _, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
     evaluation = evaluation.model_copy(update={"mechanism": mechanism})
-    allowed = CAMPAIGN.runtimes[mechanism]
-    assert runtime_violations(OCTOBER_5_VERSION, evaluation, mechanism + "@" + allowed) == ()
-    assert runtime_violations(OCTOBER_5_VERSION, evaluation, mechanism + "@" + "0" * 40)
+    allowed = CAMPAIGNS[version].runtimes[mechanism]
+    assert runtime_violations(version, evaluation, mechanism + "@" + allowed) == ()
+    other = OCTOBER_6_VERSION if version == OCTOBER_5_VERSION else OCTOBER_5_VERSION
+    assert runtime_violations(version, evaluation, mechanism + "@" + CAMPAIGNS[other].runtimes[mechanism])
 
 
-@pytest.mark.parametrize("commit", [CAMPAIGN.runtimes["harbor"], OCTOBER_5_ORIGINAL_HARBOR_COMMIT])
-def test_october5_recovery_preserves_original_records_and_checks_preflight_pin(commit):
+@pytest.mark.parametrize(
+    "version,commit",
+    [
+        (OCTOBER_5_VERSION, CAMPAIGN.runtimes["harbor"]),
+        (OCTOBER_5_VERSION, OCTOBER_5_ORIGINAL_HARBOR_COMMIT),
+        (OCTOBER_6_VERSION, CAMPAIGNS[OCTOBER_6_VERSION].runtimes["harbor"]),
+    ],
+)
+def test_campaign_preserves_historical_records_and_checks_preflight_pin(version, commit):
     _, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
     evaluation = evaluation.model_copy(
         update={
@@ -170,9 +184,9 @@ def test_october5_recovery_preserves_original_records_and_checks_preflight_pin(c
             "harbor": HarborRef(**CAMPAIGN.harbor["tb2-recovery"].identity.model_dump(), harbor_config_commit=commit),
         }
     )
-    assert runtime_violations(OCTOBER_5_VERSION, evaluation, "harbor@" + commit) == ()
+    assert runtime_violations(version, evaluation, "harbor@" + commit) == ()
     assert evaluation.harbor is not None
     mismatched = evaluation.model_copy(
         update={"harbor": evaluation.harbor.model_copy(update={"harbor_config_commit": "0" * 40})}
     )
-    assert runtime_violations(OCTOBER_5_VERSION, mismatched, "harbor@" + commit)
+    assert runtime_violations(version, mismatched, "harbor@" + commit)
