@@ -23,6 +23,8 @@ from shellbox.machine import (
 
 logger = logging.getLogger(__name__)
 
+# The parent waits so setsid is not a process-group leader and cannot detach.
+START_COMMAND = 'exec 3<&0; setsid "$@" <&3 & wait "$!"'
 RUN_COMMAND = 'pidfile=$1; shift; echo $$ > "$pidfile"; ' 'trap \'rm -f "$pidfile"\' EXIT; "$@"'
 INTERRUPT_TIMEOUT = 10
 STOP_COMMAND = (
@@ -77,7 +79,21 @@ class DockerMachine:
         for key, value in command.env.items():
             args.extend(("-e", f"{key}={value}"))
         pidfile = f"/tmp/.shellbox-command-{uuid.uuid4().hex}"
-        args.extend((self.name, "setsid", "sh", "-c", RUN_COMMAND, "shellbox-command", pidfile, *command.argv))
+        args.extend(
+            (
+                self.name,
+                "sh",
+                "-c",
+                START_COMMAND,
+                "shellbox-start",
+                "sh",
+                "-c",
+                RUN_COMMAND,
+                "shellbox-command",
+                pidfile,
+                *command.argv,
+            )
+        )
         try:
             completed = await docker(*args, stdin=command.stdin, timeout=command.timeout)
         except (TimeoutError, asyncio.CancelledError) as interruption:
