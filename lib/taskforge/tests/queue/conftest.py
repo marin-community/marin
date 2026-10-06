@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
@@ -42,7 +41,7 @@ from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, Triage
 from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
-from taskforge.validate.trials import Deadlines, EngineSettings
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
 
 PROPOSAL = """---
 id: "IDEA/SLOT"
@@ -161,6 +160,7 @@ async def build(b: Build) -> BuildOutput:
 CALL = ModelCall(Usage(100, 50, 40, 0), wall_time=0.1, finish_reason=FinishReason.TOOL_CALLS)
 YIELDS = 20
 ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
+FAST = RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1)
 
 
 def proposal(idea: str, slot: int) -> TaskProposal:
@@ -291,7 +291,7 @@ def loop_policy(k: int = 4, max_validation_retries: int = 0) -> LoopPolicy:
         deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
         max_retries=0,
         token_contract_retries=0,
-        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+        retry_backoff=FAST,
     )
     return LoopPolicy(
         proposals_per_idea=1,
@@ -300,7 +300,7 @@ def loop_policy(k: int = 4, max_validation_retries: int = 0) -> LoopPolicy:
         max_build_revisions=1,
         max_repairs=1,
         max_validation_retries=max_validation_retries,
-        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+        retry_backoff=FAST,
         output_token_budget=1_000_000,
         validation=validation,
     )
@@ -322,7 +322,7 @@ class QueueRun:
         ledger = JsonlLedger(self.root / LEDGER_DIR)
         factories = {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
         endpoint = GlmEndpoint(base_url=self.glm_base_url, token="test-token", pool=Pool.HIGH)
-        async with GlmClient(endpoint, backoff=ExponentialBackoff(initial=0.001, maximum=0.001)) as client:
+        async with GlmClient(endpoint, backoff=FAST.schedule()) as client:
             services = LoopServices(
                 client=client,
                 source=self.source,
