@@ -12,10 +12,11 @@ from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine,
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 
 
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_leader(monkeypatch):
     async def docker_exec(*args, stdin=b"", timeout=None):
         process = await asyncio.create_subprocess_exec(
-            *args[args.index("fixture") + 1 :],
+            *args[args.index("shellbox-test-container") + 1 :],
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -25,7 +26,7 @@ def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_lea
         return DockerCommandResult(process.returncode, stdout, stderr)
 
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker_exec)
-    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
+    machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")))
     result = asyncio.run(
         machine.run(
             Command(("sh", "-c", 'read -r value; printf "%s\\n" "$value"; exit 23'), stdin=b"answer\n", timeout=5)

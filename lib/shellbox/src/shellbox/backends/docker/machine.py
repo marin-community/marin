@@ -23,7 +23,8 @@ from shellbox.machine import (
 logger = logging.getLogger(__name__)
 
 # The parent waits so setsid is not a process-group leader and cannot detach.
-START_COMMAND = 'exec 3<&0; setsid "$@" <&3 & wait "$!"'
+# Keep stdin available because non-interactive shells redirect background jobs to /dev/null.
+START_COMMAND = 'exec 3<&0; setsid "$@" <&3 3<&- & wait "$!"'
 RUN_COMMAND = 'pidfile=$1; shift; echo $$ > "$pidfile"; ' 'trap \'rm -f "$pidfile"\' EXIT; "$@"'
 INTERRUPT_TIMEOUT = 10
 STOP_COMMAND = (
