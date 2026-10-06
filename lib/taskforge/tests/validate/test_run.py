@@ -168,7 +168,7 @@ class HonestAdversary:
         return ModelTurn(message, prompt, (21,), (-0.5,), "stop" if done else "tool_calls")
 
 
-async def test_a_pass_that_ends_on_the_roles_sentinel_reply_is_no_finding(tmp_path, file_task, rounds, fakes):
+async def test_only_an_ambiguity_pass_that_ends_on_its_sentinel_reply_is_no_finding(tmp_path, file_task, rounds, fakes):
     draft = rounds.draft(file_task, (), PLAIN)
     policy = rounds.policy(adversary_k=2)
     honest = HonestAdversary(fakes.shell("echo 60 > /workspace/sum.txt"))
@@ -176,7 +176,8 @@ async def test_a_pass_that_ends_on_the_roles_sentinel_reply_is_no_finding(tmp_pa
     adversaries = await run_adversaries(draft, policy, rounds.site(tmp_path), settings(fakes), honest)
     summary = summarize(ValidationEvidence("ab" * 32, (), (), adversaries), policy)
 
-    assert summary.findings == ()
+    assert [f.kind for f in summary.findings] == [FindingKind.SHORTCUT_PASSED] * 2 + [FindingKind.LEAK_PASSED] * 2
+    assert all(len(f.new_controls) == 1 for f in summary.findings)
     assert summary.roles == {
         role: RoleStats(required=2, graded=2, passes=2, sentinel_replies=2) for role in AdversaryRole
     }

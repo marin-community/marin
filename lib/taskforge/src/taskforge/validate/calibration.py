@@ -8,10 +8,12 @@
 adversary statistics and a closed set of ``Finding``s. Findings come from graded results even when
 the evidence is incomplete: a violated control, an adversary pass or a task defect is reported
 whatever else is ungraded. Band findings (``TOO_HARD``, ``TOO_EASY``) need complete evidence and at
-least ``k`` graded solver trials. An adversary pass that ends on its role's sentinel reply is no
-finding: the role concluded there was nothing to exploit, and a machine-state task graded the
-honest work it did first. A ``SHORTCUT`` or ``LEAK`` pass is also rendered as a negative control the
-revised program must ship, so the next round's control replay proves the fix.
+least ``k`` graded solver trials. An ``AMBIGUITY`` pass that ends on the role's sentinel reply is no
+finding: the role found no reading that changes the answer, so it solved the task under the intended
+one. A ``SHORTCUT`` or ``LEAK`` pass is a finding whatever the adversary replied last: the grade, not the
+adversary's own account, is the evidence, and ``RoleStats.sentinel_replies`` counts those replies to
+measure the false-positive rate. Each such pass is also rendered as a negative control the revised
+program must ship, so the next round's control replay proves the fix.
 
 The summary records the policy digest and band, so a decision is reproducible from
 ``calibration.json`` alone and a policy change shows as a different summary.
@@ -361,7 +363,7 @@ def _adversary_findings(adversaries: Mapping[AdversaryRole, Sequence[Outcome]], 
     findings = []
     for role, outcomes in _by_role(adversaries):
         for index, outcome in enumerate(outcomes):
-            if not (isinstance(outcome, Graded) and solved(outcome)) or _declared_nothing(role, outcome):
+            if not (isinstance(outcome, Graded) and solved(outcome)) or _ambiguity_declared_nothing(role, outcome):
                 continue
             kind = PASS_KINDS[role]
             lines = [f"The {role} adversary was graded as passing.", *_trial_lines(f"adversary/{role}/{index}", outcome)]
@@ -380,10 +382,10 @@ def _by_role(adversaries: Mapping[AdversaryRole, Sequence[Outcome]]) -> list[tup
     return [(role, adversaries[role]) for role in AdversaryRole if role in adversaries]
 
 
-def _declared_nothing(role: AdversaryRole, outcome: Graded) -> bool:
-    """Whether the trial ended on its role's sentinel reply: a machine-state task can pass on the honest work
-    an adversary did before it concluded there was nothing to exploit, and that pass is no finding."""
-    return (final_reply(outcome.rollout) or "").strip() == SENTINEL_REPLIES[role]
+def _ambiguity_declared_nothing(role: AdversaryRole, outcome: Graded) -> bool:
+    """Whether an ambiguity trial ended on its sentinel reply: no reading changed the answer, so its pass
+    solved the task as intended. A shortcut or leak pass stays a finding whatever the adversary concluded."""
+    return role is AdversaryRole.AMBIGUITY and (final_reply(outcome.rollout) or "").strip() == SENTINEL_REPLIES[role]
 
 
 def _named_outcomes(evidence: RoundEvidence) -> list[tuple[str, Outcome]]:
