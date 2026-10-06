@@ -8,6 +8,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
@@ -24,6 +25,10 @@ from rigging.timing import Duration
 
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
+from experiments.post_training.russell_rsi.coding_analysis_recovery import (
+    PartitionedCodingAnalysisConfig,
+    analyze_partitioned_coding_eval_failures,
+)
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingAnalysisConfig, analyze_coding_failures
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
 from experiments.post_training.russell_rsi.interrupted_calibration import PACKAGED_PYTHONPATH
@@ -45,6 +50,8 @@ WORKER_SETTINGS = {
 SOURCE_FILES = (
     "experiments/post_training/russell_rsi/coding_analysis_worker.py",
     "experiments/post_training/russell_rsi/coding_eval_feedback.py",
+    "experiments/post_training/russell_rsi/coding_analysis_recovery.py",
+    "experiments/post_training/russell_rsi/completed_partitioned_coding_analysis.py",
     "experiments/post_training/glm.py",
 )
 
@@ -56,6 +63,19 @@ class RegionalCodingAnalysisConfig:
     decision: PinnedFile
     evidence: PinnedFile
     source_files: dict[str, str]
+
+
+@dataclass(frozen=True)
+class RegionalPartitionedCodingAnalysisConfig:
+    analysis: CodingAnalysisConfig
+    input_pin: PinnedFile
+    failure: PinnedFile
+    evidence: PinnedFile
+    source_files: dict[str, str]
+    manifest: PinnedFile
+
+    def partitioned(self) -> PartitionedCodingAnalysisConfig:
+        return PartitionedCodingAnalysisConfig(self.analysis, self.manifest.uri, self.manifest.sha256)
 
 
 def worker_source_files() -> dict[str, str]:
@@ -139,19 +159,20 @@ async def context_preflight(config: RegionalCodingAnalysisConfig, base_url: str,
         )
 
 
-def run_regional_coding_analysis(config: RegionalCodingAnalysisConfig) -> None:
-    config.input_pin.read_bytes()
-    config.evidence.read_bytes()
-    config.decision.read_bytes()
+def require_regional_worker_source(
+    output_path: str, expected_files: dict[str, str], inputs: tuple[PinnedFile, ...]
+) -> None:
+    for pin in inputs:
+        pin.read_bytes()
     distribution = importlib.metadata.distribution(MARIN_SKYRL.distribution)
     direct_url = json.loads(distribution.read_text("direct_url.json") or "null")
     source_files = worker_source_files()
     if not isinstance(direct_url, dict) or "vcs_info" not in direct_url:
         raise ValueError("Regional analyst runtime has no pinned VCS provenance")
-    if source_files != config.source_files or direct_url["vcs_info"]["commit_id"] != MARIN_SKYRL.commit:
+    if source_files != expected_files or direct_url["vcs_info"]["commit_id"] != MARIN_SKYRL.commit:
         raise ValueError("Regional analyst loaded different source or runtime")
     write_once(
-        StoragePath(config.analysis.output_path) / "analysis-worker-provenance.json",
+        StoragePath(output_path) / "analysis-worker-provenance.json",
         {
             "source_files": source_files,
             "branch_root": str(Path(__file__).resolve().parents[3]),
@@ -160,10 +181,24 @@ def run_regional_coding_analysis(config: RegionalCodingAnalysisConfig) -> None:
         },
     )
 
+
+def run_regional_coding_analysis(config: RegionalCodingAnalysisConfig) -> None:
+    require_regional_worker_source(
+        config.analysis.output_path, config.source_files, (config.input_pin, config.evidence, config.decision)
+    )
     asyncio.run(analyze_coding_failures(config.analysis, before_issue=partial(context_preflight, config)))
 
 
-def regional_analysis_request(config: RegionalCodingAnalysisConfig) -> JobRequest:
+def run_regional_partitioned_coding_analysis(config: RegionalPartitionedCodingAnalysisConfig) -> None:
+    require_regional_worker_source(
+        config.analysis.output_path,
+        config.source_files,
+        (config.input_pin, config.evidence, config.failure, config.manifest),
+    )
+    analyze_partitioned_coding_eval_failures(config.partitioned())
+
+
+def regional_worker_request(output_path: str, entrypoint: Entrypoint) -> JobRequest:
     if not os.environ.get(GLM_TOKEN_ENV):
         raise ValueError("Regional analyst requires the approved GLM token in its private environment")
     resources = ResourceConfig.with_cpu(
@@ -173,8 +208,8 @@ def regional_analysis_request(config: RegionalCodingAnalysisConfig) -> JobReques
         target_cluster=WORKER_SETTINGS["cluster"],
     )
     return JobRequest(
-        name=f"russell-coding-analysis-{hashlib.sha256(config.analysis.output_path.encode()).hexdigest()[:12]}",
-        entrypoint=Entrypoint.from_callable(run_regional_coding_analysis, args=(config,)),
+        name=f"russell-coding-analysis-{hashlib.sha256(output_path.encode()).hexdigest()[:12]}",
+        entrypoint=entrypoint,
         resources=resources,
         environment=create_environment(
             extras=dependency_groups_for_resources(resources, None),
@@ -193,15 +228,36 @@ def regional_analysis_request(config: RegionalCodingAnalysisConfig) -> JobReques
     )
 
 
-def submit_regional_coding_analysis(config: RegionalCodingAnalysisConfig) -> None:
-    attempt = AttemptJournal(StoragePath(config.analysis.output_path) / "worker-submission", asdict(config))
+def regional_analysis_request(config: RegionalCodingAnalysisConfig) -> JobRequest:
+    return regional_worker_request(
+        config.analysis.output_path, Entrypoint.from_callable(run_regional_coding_analysis, args=(config,))
+    )
 
+
+def submit_regional_worker(output_path: str, binding: dict, request_factory: Callable[[], JobRequest]) -> None:
+    attempt = AttemptJournal(StoragePath(output_path) / "worker-submission", binding)
     if attempt.saved_result() is not None:
         return
-    request = regional_analysis_request(config)
+    request = request_factory()
 
     async def submit() -> dict:
         current_client().submit(request, adopt_existing=True).wait(raise_on_failure=True)
         return {"worker_completed": True}
 
     asyncio.run(attempt.run(submit))
+
+
+def submit_regional_coding_analysis(config: RegionalCodingAnalysisConfig) -> None:
+    submit_regional_worker(config.analysis.output_path, asdict(config), partial(regional_analysis_request, config))
+
+
+def regional_partitioned_analysis_request(config: RegionalPartitionedCodingAnalysisConfig) -> JobRequest:
+    return regional_worker_request(
+        config.analysis.output_path, Entrypoint.from_callable(run_regional_partitioned_coding_analysis, args=(config,))
+    )
+
+
+def submit_regional_partitioned_coding_analysis(config: RegionalPartitionedCodingAnalysisConfig) -> None:
+    submit_regional_worker(
+        config.analysis.output_path, asdict(config), partial(regional_partitioned_analysis_request, config)
+    )

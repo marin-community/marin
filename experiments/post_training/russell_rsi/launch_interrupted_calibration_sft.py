@@ -36,6 +36,12 @@ from experiments.post_training.russell_rsi.completed_coding_analysis import (
 from experiments.post_training.russell_rsi.completed_coding_analysis import (
     completed_coding_analysis_stages,
 )
+from experiments.post_training.russell_rsi.completed_partitioned_coding_analysis import (
+    PROTOCOL as PARTITIONED_ANALYSIS_PROTOCOL,
+)
+from experiments.post_training.russell_rsi.completed_partitioned_coding_analysis import (
+    completed_partitioned_analysis_stages,
+)
 from experiments.post_training.russell_rsi.completed_sft_selection import (
     EXTRACTION_PROTOCOL,
     completed_coding_extraction_stages,
@@ -120,6 +126,7 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
             "extract-completed-coding",
             "analyze-completed-coding",
             "select-recovered-retention",
+            "analyze-partitioned-coding",
         ]
     ),
     required=True,
@@ -131,6 +138,16 @@ def main(
     configure_coreweave_s3()
     require_reviewed_source(source_review_uri, source_review_sha256)
     config = json.loads(pinned_bytes(config_uri, config_sha256))
+    if stage == "analyze-partitioned-coding":
+        if resolve_version(PARTITIONED_ANALYSIS_PROTOCOL, None) != config["version"]:
+            raise click.UsageError("Partitioned coding analysis version differs from its frozen configuration")
+        previous = PinnedFile(**config["original_config"]).read_json()
+        extraction = PinnedFile(**previous["extraction_config"]).read_json()
+        source = PinnedFile(**extraction["source_config"]).read_json()
+        original = chat_study_post_workflow(source, "evaluate-interrupted")
+        return [
+            completed_partitioned_analysis_stages(config, PinnedFile(config_uri, config_sha256), original)["terminal"]
+        ]
     if stage == "analyze-completed-coding":
         if resolve_version(COMPLETED_ANALYSIS_PROTOCOL, None) != config["version"]:
             raise click.UsageError("Completed coding analysis version differs from its frozen configuration")
