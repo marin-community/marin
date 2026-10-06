@@ -25,6 +25,7 @@ from rigging.config_discovery import find_project_root
 
 from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
+    DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
     launch_group,
@@ -108,7 +109,7 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
         f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
-        f"priority={priority_band_name(batch.priority_band)}"
+        f"priority={priority_band_name(batch.priority_band)}  max_concurrent={batch.max_concurrent}"
     )
     if batch.judge is not None:
         click.echo(
@@ -181,6 +182,13 @@ def cli() -> None:
 )
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
+@click.option(
+    "--max-concurrent",
+    type=click.IntRange(min=1),
+    default=DEFAULT_EVAL_CONCURRENCY,
+    show_default=True,
+    help="Maximum evaluations serving at the same time.",
+)
 @click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
 @click.option(
     "--version",
@@ -219,6 +227,7 @@ def launch(
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
+    max_concurrent: int,
     seed: int | None,
     version: str | None,
     description: str | None,
@@ -259,6 +268,7 @@ def launch(
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
+        max_concurrent=max_concurrent,
         seed=seed,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,

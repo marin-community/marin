@@ -13,6 +13,7 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
+from marin.evaluation.eval_measurements import measurement_from_record
 from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
@@ -65,15 +66,16 @@ def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
         (record for record in records if record.model.name == "qwen3-8b" and record.evaluation.name == "mmlu"),
         key=lambda record: record.created_at,
     )
-    store.refresh(
-        [
-            record.model_copy(update={"step_status": "RUNNING"}) if record.run_id == newest.run_id else record
-            for record in records
-        ]
-    )
+    running = newest.model_copy(update={"step_status": "RUNNING"})
+    assert measurement_from_record(running) is not None
+    store.refresh([running if record.run_id == newest.run_id else record for record in records])
 
     qwen = next(row for row in _panel(store)["rows"] if row["model"] == "qwen3-8b")
     assert qwen["cells"]["mmlu"]["run_id"] != newest.run_id
+    assert all(point["run_id"] != newest.run_id for point in store.history("qwen3-8b", "mmlu"))
+    detail = store.model_detail("qwen3-8b")
+    assert detail is not None
+    assert all(point["run_id"] != newest.run_id for point in detail["history"]["mmlu"])
     run = next(row for row in store.fetch_runs() if row["run_id"] == newest.run_id)
     assert run["status"] == "running"
 

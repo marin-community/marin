@@ -226,6 +226,16 @@ def display_status(record: EvalRunRecord) -> str:
     return "step_failed"
 
 
+def score_eligible(record: EvalRunRecord) -> bool:
+    """Whether EvalDash can publish scores from this observed record."""
+    return record.step_status in (None, "SUCCESS")
+
+
+def dashboard_measurements(records: Iterable[EvalRunRecord]) -> list[Measurement]:
+    """Extract scores from records whose observed steps are complete."""
+    return measurements_from_records(record for record in records if score_eligible(record))
+
+
 def cell_payload(measurement: Measurement) -> dict:
     """One panel cell: the value, its interval and what that interval covers, and its provenance."""
     interval = measurement_interval(measurement)
@@ -321,7 +331,7 @@ def build_panel(
     """
     eligible = _panel_records(records, request.cohort_version)
     metadata = run_metadata(eligible)
-    measurements = measurements_from_records(eligible)
+    measurements = dashboard_measurements(eligible)
     protocols = declared_protocols(measurements)
     # Family columns are resolved after selection, so apply completeness to the effective panel below.
     selection = select(
@@ -410,7 +420,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     """
     eligible = _panel_records(records, request.cohort_version)
     metadata = run_metadata(eligible)
-    measurements = measurements_from_records(eligible)
+    measurements = dashboard_measurements(eligible)
     selection = select(
         measurements,
         replace(request, completeness=Completeness.ANY),
@@ -480,6 +490,8 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
 
 def record_headline(record: EvalRunRecord, protocol: MetricProtocol | None = None) -> dict | None:
     """One run's headline score with its interval, or None when the run produced no primary metric."""
+    if not score_eligible(record):
+        return None
     measurement = measurement_from_record(record)
     if measurement is None or (protocol is not None and not matches_protocol(measurement, protocol)):
         return None
@@ -526,7 +538,7 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
     for record in records:
         violations = record_policy_violations(record)
         protocol = protocols.get(record.evaluation.name)
-        measurement = measurement_from_record(record)
+        measurement = measurement_from_record(record) if score_eligible(record) else None
         headline = None if violations else record_headline(record, protocol)
         protocol_mismatch = (
             measurement is not None and protocol is not None and not matches_protocol(measurement, protocol)
@@ -564,7 +576,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
     and ``runs`` spans every run for the model (smoke included), newest first.
     """
-    protocols = declared_protocols(measurements_from_records(_panel_records(records)))
+    protocols = declared_protocols(dashboard_measurements(_panel_records(records)))
     model_records = [record for record in records if comparison_model_name(record.model) == model]
     if not model_records:
         return None

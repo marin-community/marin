@@ -259,6 +259,8 @@ documents how to register a Hugging Face model or object-store checkpoint.
   for multiple files.
 - `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
+- `--max-concurrent N` caps simultaneous evaluation steps (default 8). Each step serves one
+  candidate and, when configured, one judge.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
@@ -272,7 +274,8 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--records-prefix` changes the result store.
 
 Each selected evaluation runs as its own step with its own model server. The orchestrator starts up
-to eight steps at once. An evaluation or inference failure gets a record for that eval; other steps continue.
+to eight steps at once by default; `--max-concurrent N` limits simultaneous evaluations. An
+evaluation or inference failure gets a record for that eval; other steps continue.
 On restart, completed steps are skipped.
 
 ### Harbor credentials

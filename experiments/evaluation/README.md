@@ -4,7 +4,8 @@ A one-command path from "model + eval suite" to recorded results. Pick a registe
 catalog-schema model file, then select registered or file-backed evaluations. The launcher sizes a
 serving slice and submits one CPU orchestrator job for the whole launch. Each selected eval runs as
 an independent `StepSpec` with its own model server and durable `record.json`. StepRunner starts up
-to eight evals at once, so a suite fills in as results finish. Each eval has its own record, child
+to eight evals at once by default; `--max-concurrent` sets the serving limit for a launch. A suite
+fills in as results finish. Each eval has its own record, child
 jobs, logs, and parquet; the launch shares a `group_id`. Evaldash scans those records and step
 statuses into its Postgres query index.
 
@@ -64,6 +65,7 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--max-concurrent` caps simultaneous evaluation steps (each starts a candidate and optional judge);
 `--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
