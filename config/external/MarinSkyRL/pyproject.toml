@@ -10,4 +10,4 @@ prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "e1541cc769946d3d74d27fbe8c6379ecbc797b85" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "ba4256a446db25335b67028f87b8b5322b212b40" }
