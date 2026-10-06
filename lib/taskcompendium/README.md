@@ -237,23 +237,7 @@ The caller must await grading. File or environment-state conventions may perform
 
 A valid correct answer produces `GradeResult(status=graded, reward=1.0)`; a valid wrong answer produces `graded` with reward `0.0`. Malformed text, JSON, numeric, or final-action evidence produces `submission_failure` with reward `0.0`. Invalid private configuration and infrastructure failures raise; the execution runtime must preserve those errors separately from wrong or invalid submissions.
 
-`taskcompendium.chat` normalizes OpenAI-compatible messages into shared conversation types, decoding every function call into an argument object. A malformed assistant response raises `SubmissionFailure` before a grading attempt is constructed. The caller can expose that failure as a zero-reward outcome:
-
-```python
-from taskcompendium.chat import assistant_message
-from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.grading_contract import SubmissionFailure
-
-async def score_chat_response(response: dict):
-    try:
-        final = assistant_message(response)
-    except SubmissionFailure as error:
-        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-    conversation = ConversationTrace(events=(*spec.context.events, final))
-    return await grade_answer(spec, convention, GradingAttempt(conversation, workspace=object()))
-```
-
-The decoder performs no model request or tool dispatch. Network and execution failures propagate separately; callers must catch only submission failures when assigning reward zero.
+Execution runtimes decode provider responses into `TextMessage` or `AssistantToolCalls` before constructing a `ConversationTrace`. Tool-call arguments must be decoded JSON objects. A runtime may expose malformed provider output as `submission_failure` with reward `0.0`; network and execution errors remain separate.
 
 ## Dataset conversion
 
