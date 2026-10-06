@@ -174,18 +174,13 @@ class SubmittedEvaluationBatch:
     evaluations: tuple[SubmittedEvaluation, ...]
 
 
-class _RecordPublication(StrEnum):
-    WRITTEN = "written"
-    PRESERVED_SUCCESS = "preserved_success"
-
-
 def _read_record_if_exists(path: str) -> EvalRunRecord | None:
     current = conditional_object(path).read()
     return EvalRunRecord.model_validate_json(current.data) if current is not None else None
 
 
-def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> _RecordPublication:
-    """Preserve the first successful record after a parent loses its eval step lease.
+def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> bool:
+    """Return whether this attempt wrote its record, preserving an existing success.
 
     An evaluator child can outlive the parent that held the StepSpec lock. Its late result must not
     replace an earlier success from another attempt.
@@ -195,10 +190,10 @@ def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> _Rec
     while True:
         current = destination.read()
         if current is not None and EvalRunRecord.model_validate_json(current.data).status is RunStatus.SUCCEEDED:
-            return _RecordPublication.PRESERVED_SUCCESS
+            return False
         try:
             destination.write(payload, expected_version=current.version if current is not None else None)
-            return _RecordPublication.WRITTEN
+            return True
         except ConditionalWriteError:
             continue
 
@@ -216,7 +211,7 @@ def _record(
     tasks: tuple[EvalTaskRef, ...] | None = None,
     serving: ServingParams | None = None,
     inference_metrics: InferenceMetrics | None = None,
-) -> tuple[str, _RecordPublication]:
+) -> tuple[str, bool]:
     """Return the record path and whether this attempt published or preserved a prior success."""
     evaluation = identity.eval_ref
     if tasks is not None:
@@ -297,12 +292,12 @@ def _record(
         log_tails=log_tails,
     )
     path = record_path(batch.records_prefix, identity.run_id)
-    publication = _write_record_preserving_success(record, batch.records_prefix)
-    if publication is _RecordPublication.WRITTEN:
+    published = _write_record_preserving_success(record, batch.records_prefix)
+    if published:
         logger.info("wrote eval record %s (status=%s)", path, status.value)
     else:
         logger.info("preserved successful eval record %s", path)
-    return path, publication
+    return path, published
 
 
 def _job_role(role: str, index: int) -> str:
@@ -473,7 +468,7 @@ def _run_one_evaluation(
 
     effective = session.effective_serving
     serving = ServingParams(**asdict(effective), effective=True) if effective is not None else None
-    path, publication = _record(
+    path, published = _record(
         batch,
         evaluation.identity,
         status,
@@ -487,7 +482,7 @@ def _run_one_evaluation(
         serving=serving,
         inference_metrics=inference_metrics,
     )
-    if publication is _RecordPublication.WRITTEN:
+    if published:
         record_rollout_run(
             rollout_run_record(
                 run_id=evaluation.identity.run_id,
@@ -506,11 +501,7 @@ def _run_one_evaluation(
                 },
             )
         )
-    failure = (
-        f"{evaluation.identity.eval_ref.name} ({status.value})"
-        if error is not None and publication is _RecordPublication.WRITTEN
-        else None
-    )
+    failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None and published else None
     return _EvaluationExecution(
         record_path=path,
         failure=failure,
