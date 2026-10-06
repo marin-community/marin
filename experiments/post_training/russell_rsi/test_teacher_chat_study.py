@@ -24,6 +24,7 @@ from experiments.post_training.russell_rsi import test_teacher_collection, test_
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.contract_tasks import digest
+from experiments.post_training.russell_rsi.rollout_eval import run_calibration_evaluation
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_chat_study import collect_remaining_rows, qualified_row
 from experiments.post_training.russell_rsi.teacher_collection import TeacherTask
@@ -248,6 +249,7 @@ def test_chat_sft_dose_and_calibration_preserve_exported_checkpoint(study_inputs
     qualification["source_config_sha256"] = post["sft_config_sha256"]
     pin(post, "qualification", qualification)
     calibrated = study.chat_study_post_workflow(post, "calibrate")
+    assert calibrated["calibration"].run.fn is run_calibration_evaluation
     assert artifact_identity(trained) not in {
         artifact_identity(step) for step in graph_handles([calibrated["terminal"]])
     }

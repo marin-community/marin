@@ -46,6 +46,9 @@ from experiments.post_training.russell_rsi.sources import compact_json_sha256
 DEVELOPMENT_MAX_TURNS = 16
 DEVELOPMENT_COMMAND_TIMEOUT = 120
 SUPPLEMENTARY_TASKS = 4
+CALIBRATION_TASKS = 32
+CALIBRATION_SAMPLES = 8
+CALIBRATION_STARTUP_ATTEMPTS = 3
 
 
 def require_journal_submission(task: TaskSpec) -> None:
@@ -162,6 +165,74 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
     )
     journal.seal()
     return journal
+
+
+def calibration_evaluation_journal(config: DevelopmentEvaluationConfig) -> EvaluationJournal:
+    """Bind the complete 32-task, eight-sample calibration before inference."""
+    from taskcompendium.parquet import read_tasks  # noqa: PLC0415
+
+    from experiments.post_training.russell_rsi.token_preflight import (  # noqa: PLC0415
+        PREFLIGHT_PROBES,
+        preflight_task,
+    )
+
+    provenance = development_worker_provenance()
+    parquet = StoragePath(config.tasks_path).read_bytes()
+    tasks = list(read_tasks(config.tasks_path))
+    if (
+        len(tasks) != CALIBRATION_TASKS
+        or len({task.id for task in tasks}) != CALIBRATION_TASKS
+        or config.limit != CALIBRATION_TASKS
+        or config.samples_per_task != CALIBRATION_SAMPLES
+        or config.temperature != 1.0
+        or config.startup_attempts != CALIBRATION_STARTUP_ATTEMPTS
+        or config.require_reward_variation
+    ):
+        raise ValueError("Calibration differs from the frozen 256-slot protocol")
+    for task in tasks:
+        require_journal_submission(task)
+    probes = [
+        preflight_task(index, instruction, value) for index, (instruction, value) in enumerate(PREFLIGHT_PROBES, 1)
+    ]
+    journal = EvaluationJournal(
+        StoragePath(prefix_join(config.output_path, "journal")),
+        {
+            "protocol": "russell-calibration-journal-v1",
+            "worker_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "worker_provenance": {
+                "modules": {name: value["sha256"] for name, value in provenance["modules"].items()},
+                "skyrl": provenance["skyrl"],
+            },
+            "config": asdict(config),
+            "parquet_sha256": hashlib.sha256(parquet).hexdigest(),
+            "settings": {
+                "context_tokens": CONTEXT_TOKENS,
+                "prompt_tokens": PROMPT_TOKENS,
+                "response_tokens": RESPONSE_TOKENS,
+                "stop_token_ids": list(STOP_TOKEN_IDS),
+                "chat_template_kwargs": CHAT_TEMPLATE_KWARGS,
+                "max_turns": DEVELOPMENT_MAX_TURNS,
+                "command_timeout": DEVELOPMENT_COMMAND_TIMEOUT,
+            },
+            "attempts": {
+                "task": {
+                    f"{task.id}/{index}": digest(task.model_dump(mode="json"))
+                    for task in tasks
+                    for index in range(config.samples_per_task)
+                },
+                "preflight": {
+                    str(index): compact_json_sha256(task.model_dump(mode="json")) for index, task in enumerate(probes, 1)
+                },
+            },
+        },
+    )
+    journal.seal()
+    return journal
+
+
+def run_calibration_evaluation(config: DevelopmentEvaluationConfig) -> None:
+    journal = calibration_evaluation_journal(config)
+    run_development_evaluation(config, journal=journal)
 
 
 def run_supplementary_evaluation(config: SupplementaryEvaluationConfig) -> None:
@@ -290,7 +361,13 @@ async def evaluate_development(
     async with httpx.AsyncClient(timeout=600, transport=http_transport or httpx.AsyncHTTPTransport(retries=0)) as client:
 
         async def tokenize(request: dict) -> dict:
-            response = await client.post(base_url.removesuffix("/v1") + "/tokenize", json=request["json"])
+            url = base_url.removesuffix("/v1") + "/tokenize"
+            attempt = ACTIVE_ATTEMPT.get()
+            response = (
+                await client.post(url, json=request["json"])
+                if attempt is None
+                else await attempt.post(client, url, request["json"])
+            )
             response.raise_for_status()
             return response.json()
 
@@ -369,16 +446,20 @@ async def evaluate_development(
         await run_token_preflight(
             lambda request: turn(request, temperature=0.0), client, config.output_path, journal=journal
         )
-        engine = ShellboxRolloutEngine(
-            turn,
-            {
-                EnvironmentKind.DOCKER: qemu_factory(runtime_manifest, config.runtime_bundle),
-                EnvironmentKind.SHELLSIM: ShellSimMachineFactory(),
-            },
-            max_turns=DEVELOPMENT_MAX_TURNS,
-            command_timeout=DEVELOPMENT_COMMAND_TIMEOUT,
-            convention=SubmissionConvention(id="russell-dev", answer_format=AnswerFormat.PLAIN),
-            submission_sink=preserve_supplementary_submission if journal is not None else None,
+        engine = (
+            None
+            if journal is not None and journal.complete()
+            else ShellboxRolloutEngine(
+                turn,
+                {
+                    EnvironmentKind.DOCKER: qemu_factory(runtime_manifest, config.runtime_bundle),
+                    EnvironmentKind.SHELLSIM: ShellSimMachineFactory(),
+                },
+                max_turns=DEVELOPMENT_MAX_TURNS,
+                command_timeout=DEVELOPMENT_COMMAND_TIMEOUT,
+                convention=SubmissionConvention(id="russell-dev", answer_format=AnswerFormat.PLAIN),
+                submission_sink=preserve_supplementary_submission if journal is not None else None,
+            )
         )
         semaphore = asyncio.Semaphore(ROLLOUT_CONCURRENCY)
         records = {}
@@ -416,6 +497,7 @@ async def evaluate_development(
                             slot_counts["exhausted_samples"] += 1
 
                     async def rollout_attempt() -> dict:
+                        assert engine is not None
                         _, record = await rollout_evidence(
                             engine,
                             task,
@@ -545,7 +627,6 @@ def run_development_evaluation(config: DevelopmentEvaluationConfig, *, journal: 
     """Own the model server for one fixed development evaluation."""
     provenance = development_worker_provenance()
     write_once(StoragePath(prefix_join(config.output_path, "worker-import-provenance.json")), provenance)
-    runtime_manifest = install_runtime_bundle(config.runtime_bundle)
     if journal is not None and journal.complete():
 
         def reject_saved_request(request: httpx.Request) -> httpx.Response:
@@ -556,12 +637,13 @@ def run_development_evaluation(config: DevelopmentEvaluationConfig, *, journal: 
                 config,
                 "https://saved.invalid/v1",
                 "russell-dev",
-                runtime_manifest,
+                {},
                 journal=journal,
                 http_transport=httpx.MockTransport(reject_saved_request),
             )
         )
         return
+    runtime_manifest = install_runtime_bundle(config.runtime_bundle)
     with local_inference(
         ServedModelConfig(
             weights=config.model_uri,

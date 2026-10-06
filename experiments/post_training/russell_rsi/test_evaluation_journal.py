@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 from dataclasses import asdict, replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -29,12 +30,15 @@ from experiments.post_training.russell_rsi.evaluation_journal import AttemptJour
 from experiments.post_training.russell_rsi.rollout_eval import (
     DevelopmentEvaluationConfig,
     SupplementaryEvaluationConfig,
+    calibration_evaluation_journal,
     evaluate_development,
     preserve_supplementary_submission,
+    run_calibration_evaluation,
+    run_development_evaluation,
     supplementary_evaluation_journal,
 )
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
-from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_INSTRUCTION, preflight_task
+from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_INSTRUCTION, PREFLIGHT_PROBES, preflight_task
 
 QEMU_TEST_IMAGE = "unit@sha256:" + "0" * 64
 
@@ -461,3 +465,80 @@ def test_initial_model_failure_grades_only_received_syntax_rejection_without_ret
     assert received["token_ids"] == [71, 72]
     assert received["text"] == "<tool_call>{invalid</tool_call>"
     assert received["finish_reason"] == "stop"
+
+
+@pytest.fixture
+def calibration_config(frozen_comparison):
+    config = frozen_comparison.evaluation
+    tasks = [preflight_task(index, PREFLIGHT_INSTRUCTION, 23) for index in range(101, 133)]
+    write_tasks(config.tasks_path, tasks)
+    return replace(config, limit=32, samples_per_task=8, temperature=1.0)
+
+
+def test_completed_journal_reconstructs_without_http_or_runtime(tmp_path, frozen_comparison, monkeypatch):
+    config = frozen_comparison.evaluation
+    server = TokenServer(tmp_path / "journal")
+    journal = supplementary_evaluation_journal(frozen_comparison)
+    asyncio.run(
+        evaluate_development(
+            config,
+            "https://unit.test/v1",
+            "unit",
+            {"source_image": QEMU_TEST_IMAGE, "directory_name": "unused"},
+            journal=journal,
+            http_transport=httpx.MockTransport(server),
+        )
+    )
+    assert len(server.completions) == 2 * (4 + len(PREFLIGHT_PROBES))
+    assert len(list((tmp_path / "journal/0/task").glob("*/*/result.json"))) == 4
+    response_urls = {json.loads(p.read_text())["url"] for p in (tmp_path / "journal").rglob("response.json")}
+    assert response_urls == {"https://unit.test/tokenize", "https://unit.test/v1/completions"}
+    traces = tmp_path / "parent/traces.jsonl"
+    content = traces.read_bytes()
+    traces.unlink()
+
+    def unexpected_start(*args, **kwargs):
+        pytest.fail("Saved calibration attempted runtime or model startup")
+
+    monkeypatch.setattr("experiments.post_training.russell_rsi.rollout_eval.install_runtime_bundle", unexpected_start)
+    monkeypatch.setattr("experiments.post_training.russell_rsi.rollout_eval.local_inference", unexpected_start)
+    run_development_evaluation(config, journal=journal)
+    assert traces.read_bytes() == content
+    summary = json.loads((tmp_path / "parent/failure_summary.json").read_text())
+    assert summary["categories"] == {"passed": 4}
+    assert len(server.completions) == 2 * (4 + len(PREFLIGHT_PROBES))
+
+
+def test_calibration_issued_incomplete_and_changed_binding_refuse_replay(tmp_path, calibration_config):
+    config = calibration_config
+    journal = calibration_evaluation_journal(config)
+    assert len(journal.binding["attempts"]["task"]) == 256
+    task_key, task_sha = next(iter(journal.binding["attempts"]["task"].items()))
+    attempt = journal.attempt("task", task_key, task_sha)
+    requests = []
+
+    def interrupted(request):
+        requests.append(request)
+        raise httpx.ReadError("Lost response", request=request)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(interrupted)) as client:
+
+            async def operation():
+                await attempt.post(client, "https://unit.test/v1/completions", {"prompt": [1]})
+                return {}
+
+            with pytest.raises(httpx.ReadError):
+                await attempt.run(operation)
+
+    asyncio.run(run())
+    assert (Path(str(attempt.directory)) / "turns/000/issued.json").exists()
+    with pytest.raises(RuntimeError, match="incomplete"):
+        run_calibration_evaluation(config)
+    with pytest.raises(ValueError, match="Immutable record differs"):
+        calibration_evaluation_journal(replace(config, model_identity="changed-model"))
+    tasks = [preflight_task(index, PREFLIGHT_INSTRUCTION, 24) for index in range(101, 133)]
+    write_tasks(config.tasks_path, tasks)
+    with pytest.raises(ValueError, match="Immutable record differs"):
+        calibration_evaluation_journal(config)
+    assert len(requests) == 1

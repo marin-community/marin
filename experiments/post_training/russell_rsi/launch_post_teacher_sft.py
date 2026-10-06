@@ -55,6 +55,12 @@ from experiments.post_training.russell_rsi.replay import (
     sampled_replay_plan,
     validate_replay_plan,
 )
+from experiments.post_training.russell_rsi.rollout_eval import (
+    CALIBRATION_SAMPLES,
+    CALIBRATION_STARTUP_ATTEMPTS,
+    run_calibration_evaluation,
+    run_development_evaluation,
+)
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
@@ -366,11 +372,12 @@ def post_sft_stages(
         runtime,
         f"{protocol}-calibration",
         relative_path="train.parquet",
-        samples_per_task=8,
+        samples_per_task=CALIBRATION_SAMPLES,
         temperature=CALIBRATION_TEMPERATURE,
         require_reward_variation=False,
         limit=len(source_plan.task_bank),
-        startup_attempts=3,
+        startup_attempts=CALIBRATION_STARTUP_ATTEMPTS,
+        evaluation_runner=run_development_evaluation if study is None else run_calibration_evaluation,
     )
     plan = post_sft_plan(
         source_plan, model=artifact_identity(model), calibration=artifact_identity(calibration), protocol=protocol

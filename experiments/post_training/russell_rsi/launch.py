@@ -349,6 +349,7 @@ def development_step(
     require_reward_variation: bool = False,
     limit: int = 32,
     startup_attempts: int = 1,
+    evaluation_runner: Callable[[DevelopmentEvaluationConfig], None] = run_development_evaluation,
 ) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> DevelopmentEvaluationConfig:
         if model.artifact_type is SkyRLRun:
@@ -388,7 +389,7 @@ def development_step(
         deps=(data, model),
         build_config=build_config,
         run=remote(
-            run_development_evaluation,
+            evaluation_runner,
             # Remote workers inherit the required CW02 root coordinator; SkyRL and public eval submit separate roots.
             resources=ResourceConfig.with_gpu("H100", 8, cpu=32, ram="512GB", disk="2TB"),
             pip_packages=[MARIN_SKYRL.requirement()],
