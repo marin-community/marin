@@ -3,9 +3,11 @@
 
 """Web search and page extraction tools for the agent loop, over Parallel's REST API.
 
-``web_search`` posts to ``/v1/search`` and ``web_fetch`` to ``/v1/extract`` through the caller's
+``web_search`` posts to ``/v1/search`` and ``web_fetch`` to ``/v1beta/extract`` through the caller's
 ``httpx.AsyncClient``, so concurrent agents share one connection pool; the model sees Parallel's
-JSON response body unchanged. A 400 or 422 means the model's arguments were rejected, so the body
+JSON response body unchanged. ``/v1/extract`` serves Parallel's cached copy of a page, which was
+five days stale for a PyPI project page; the beta endpoint takes a ``fetch_policy`` that refetches
+pages older than ``FETCH_MAX_AGE``. A 400 or 422 means the model's arguments were rejected, so the body
 goes back to the model as an error result. A 408, 429, 5xx or transport error is retried with
 exponential backoff, up to ``MAX_ATTEMPTS`` requests; after that, and on every other non-2xx
 status, the error raises for the caller to classify.
@@ -22,7 +24,10 @@ from taskforge.llm.agent import AgentTool
 
 logger = logging.getLogger(__name__)
 
-PARALLEL_API_URL = "https://api.parallel.ai/v1"
+PARALLEL_API_URL = "https://api.parallel.ai"
+EXTRACT_BETA = "search-extract-2025-10-10"
+FETCH_MAX_AGE = 600
+"""Seconds a cached page may be old before ``web_fetch`` refetches it; Parallel's minimum."""
 REQUEST_TIMEOUT = 180.0
 MAX_ATTEMPTS = 6
 MODEL_ERROR_STATUSES = frozenset({400, 422})
@@ -41,19 +46,22 @@ def web_tools(
     Args:
         http: Client the tools send through; the caller owns its lifetime.
         api_key: Parallel API key, sent as ``x-api-key``.
-        base_url: Parallel API root ending in ``/v1``.
+        base_url: Parallel API root, without a version path.
         backoff: Delay schedule between retried requests.
     """
     schedule = backoff or ExponentialBackoff(initial=1.0, maximum=30.0, factor=2.0)
 
-    async def post(path: str, body: Mapping[str, object]) -> str:
+    async def post(path: str, body: Mapping[str, object], headers: Mapping[str, str]) -> str:
         delays = schedule.copy()
         attempt = 0
         while True:
             attempt += 1
             try:
                 response = await http.post(
-                    f"{base_url}/{path}", json=body, headers={"x-api-key": api_key}, timeout=REQUEST_TIMEOUT
+                    f"{base_url}/{path}",
+                    json=body,
+                    headers={"x-api-key": api_key, **headers},
+                    timeout=REQUEST_TIMEOUT,
                 )
                 if response.status_code in MODEL_ERROR_STATUSES:
                     return f"error: Parallel rejected the request (HTTP {response.status_code}): {response.text}"
@@ -68,13 +76,14 @@ def web_tools(
                 await asyncio.sleep(delay)
 
     async def search(arguments: Mapping[str, object]) -> str:
-        return await post("search", {"objective": arguments["objective"], "search_queries": arguments["search_queries"]})
+        body = {"objective": arguments["objective"], "search_queries": arguments["search_queries"]}
+        return await post("v1/search", body, {})
 
     async def fetch(arguments: Mapping[str, object]) -> str:
-        body = {"urls": arguments["urls"]}
+        body: dict[str, object] = {"urls": arguments["urls"], "fetch_policy": {"max_age_seconds": FETCH_MAX_AGE}}
         if "objective" in arguments:
             body["objective"] = arguments["objective"]
-        return await post("extract", body)
+        return await post("v1beta/extract", body, {"parallel-beta": EXTRACT_BETA})
 
     search_tool = AgentTool(
         name="web_search",

@@ -13,7 +13,7 @@ import httpx
 import pytest
 from rigging.timing import ExponentialBackoff
 
-from taskforge.llm.web import MAX_ATTEMPTS, web_tools
+from taskforge.llm.web import EXTRACT_BETA, FETCH_MAX_AGE, MAX_ATTEMPTS, web_tools
 
 SEARCH = {"objective": "find x", "search_queries": ["x"]}
 FETCH = {"urls": ["https://example.com"]}
@@ -46,7 +46,7 @@ def fake_parallel() -> Iterator[FakeParallel]:
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
-    fake.base_url = f"http://127.0.0.1:{server.server_address[1]}/v1"
+    fake.base_url = f"http://127.0.0.1:{server.server_address[1]}"
     yield fake
     server.shutdown()
     server.server_close()
@@ -70,10 +70,11 @@ def test_search_and_fetch_post_to_parallel_and_return_its_body(fake_parallel):
     searched, fetched = call(fake_parallel, (0, SEARCH), (1, FETCH))
 
     assert (searched, fetched) == ('{"search_id": "s1", "results": []}', '{"extract_id": "e1"}')
-    (search_path, search_headers, search_body), (fetch_path, _, fetch_body) = fake_parallel.requests
+    (search_path, search_headers, search_body), (fetch_path, fetch_headers, fetch_body) = fake_parallel.requests
     assert (search_path, search_headers["x-api-key"]) == ("/v1/search", "test-key")
     assert search_body == SEARCH
-    assert (fetch_path, fetch_body) == ("/v1/extract", FETCH)
+    assert (fetch_path, fetch_headers["parallel-beta"]) == ("/v1beta/extract", EXTRACT_BETA)
+    assert fetch_body == {**FETCH, "fetch_policy": {"max_age_seconds": FETCH_MAX_AGE}}
 
 
 def test_rejected_arguments_go_back_to_the_model_and_other_client_errors_raise_unretried(fake_parallel):
