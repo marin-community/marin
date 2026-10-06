@@ -600,6 +600,32 @@ def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("remat_mode", "inherited", "expected"),
+    [
+        (model.OFFLOAD_CARRY_REMAT_MODE, None, "true"),
+        (model.OFFLOAD_CARRY_REMAT_MODE, "false", "false"),
+        ("recompute_all", None, None),
+    ],
+)
+def test_the_carry_offload_lets_rematerialization_discount_host_buffers(monkeypatch, remat_mode, inherited, expected):
+    if inherited is None:
+        monkeypatch.delenv("XLA_FLAGS", raising=False)
+    else:
+        monkeypatch.setenv("XLA_FLAGS", f"{train.XLA_HOST_MEMORY_OFFLOADING_FLAG}={inherited}")
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=remat_mode)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    settings = [
+        flag.partition("=")[2]
+        for flag in os.environ["XLA_FLAGS"].split()
+        if flag.partition("=")[0] == train.XLA_HOST_MEMORY_OFFLOADING_FLAG
+    ]
+    assert settings == ([] if expected is None else [expected])
+
+
+@pytest.mark.parametrize(
     ("moe_implementation", "expected_remat_mode"),
     [
         (train.RAGGED_MOE_IMPLEMENTATION, model.OFFLOAD_CARRY_REMAT_MODE),
