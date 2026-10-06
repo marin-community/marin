@@ -29,6 +29,7 @@ from typing import Protocol
 
 from pydantic import TypeAdapter
 from rolloutengine.contracts import RolloutData
+from rolloutengine.shell_tool import SHELL_TOOL_NAME
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AssistantToolCalls, TextMessage
 
@@ -50,7 +51,6 @@ from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungrad
 
 DETAIL_CHARS = 2000
 """Longest command list or reply quoted per trial in a finding's detail."""
-SHELL = "shell"
 
 
 @dataclass(frozen=True)
@@ -299,7 +299,7 @@ def transcript_control(role: AdversaryRole, index: int, task_digest: str, rollou
     if not turns:
         raise ValueError("The rollout has no model turn")
     last = turns[-1]
-    if isinstance(last, AssistantToolCalls) and all(call.name == SHELL for call in last.calls):
+    if isinstance(last, AssistantToolCalls) and all(call.name == SHELL_TOOL_NAME for call in last.calls):
         turns.append(reply(WORKSPACE_REPLY))
     return Control(
         id=f"adv-{role}-{index}-{task_digest[:8]}",
@@ -403,8 +403,9 @@ def _named_outcomes(evidence: RoundEvidence) -> list[tuple[str, Outcome]]:
 def _defect_findings(evidence: RoundEvidence) -> list[Finding]:
     by_cause: dict[Cause, list[tuple[str, Ungraded]]] = {}
     for name, outcome in _named_outcomes(evidence):
-        if isinstance(outcome, Ungraded) and outcome.cause in DEFECT_ROLES:
-            by_cause.setdefault(outcome.cause, []).append((name, outcome))
+        if not isinstance(outcome, Ungraded) or outcome.cause not in DEFECT_ROLES:
+            continue
+        by_cause.setdefault(outcome.cause, []).append((name, outcome))
     return [
         Finding(
             FindingKind.TASK_DEFECT,
