@@ -216,6 +216,10 @@ answer and the role solved the task as intended. `RoleStats` counts passes and s
 role, which measures each role's false-positive rate. Review consumes findings through rules; no
 model judges legitimacy.
 
+`ValidationPolicy.retry_backoff` is a `RetryBackoff` dataclass (`ExponentialBackoff`'s four
+constructor arguments) rather than an `ExponentialBackoff`, so the policy digests and serializes it
+without reading rigging's private state; each plan builds its own schedule from it.
+
 The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `validate.run` type
 those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
 `calibration.SummaryPolicy`, `calibration.RoundEvidence`), because `ValidationPolicy` holds a

@@ -20,7 +20,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from rigging.timing import ExponentialBackoff
 from taskcompendium.models import AssistantToolCalls, TextMessage
 
 from taskforge.build.run import TaskDraft
@@ -34,16 +33,7 @@ from taskforge.validate.controls import ControlOutcome, ControlVerdict, Scripted
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.solver import ValidationSite, draft_settings
-from taskforge.validate.trials import Deadlines, EngineSettings, run_trial, task_digest
-
-
-def backoff_config(backoff: ExponentialBackoff) -> dict[str, float]:
-    """The constructor arguments of ``backoff``.
-
-    ``rigging.timing.ExponentialBackoff`` exposes no public view of its configuration, so this reads
-    the attributes its constructor sets.
-    """
-    return {name: getattr(backoff, f"_{name}") for name in ("initial", "maximum", "factor", "jitter")}
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, run_trial, task_digest
 
 
 @dataclass(frozen=True)
@@ -70,7 +60,7 @@ class ValidationPolicy:
     deadlines: Deadlines
     max_retries: int
     token_contract_retries: int
-    retry_backoff: ExponentialBackoff
+    retry_backoff: RetryBackoff
 
     def __post_init__(self) -> None:
         if self.k < 1 or self.adversary_k < 1:
@@ -95,7 +85,7 @@ class ValidationPolicy:
                 "deadlines": self.deadlines,
                 "max_retries": self.max_retries,
                 "token_contract_retries": self.token_contract_retries,
-                "retry_backoff": backoff_config(self.retry_backoff),
+                "retry_backoff": self.retry_backoff,
                 "preambles": {str(role): ROLE_PREAMBLES[role] for role in self.roles},
                 "sentinels": {str(role): reply for role, reply in SENTINEL_REPLIES.items()},
             }

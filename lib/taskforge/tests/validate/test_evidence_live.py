@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from rigging.timing import ExponentialBackoff
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.submission import PlainText
@@ -39,7 +38,7 @@ from taskforge.validate.run import (
     replay_controls,
 )
 from taskforge.validate.solver import ValidationSite, run_solver
-from taskforge.validate.trials import Deadlines, EngineSettings, task_digest
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, task_digest
 
 pytestmark = pytest.mark.live_glm
 
@@ -55,7 +54,7 @@ POLICY = ValidationPolicy(
     deadlines=Deadlines(agent_timeout=900, attempt_timeout=1200),
     max_retries=2,
     token_contract_retries=2,
-    retry_backoff=ExponentialBackoff(initial=0.5, maximum=5.0),
+    retry_backoff=RetryBackoff(initial=0.5, maximum=5.0, factor=1.5, jitter=0.1),
 )
 
 

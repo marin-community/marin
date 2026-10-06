@@ -153,6 +153,21 @@ class Deadlines:
 
 
 @dataclass(frozen=True)
+class RetryBackoff:
+    """The wait between a trial's attempts, as data: ``rigging.timing.ExponentialBackoff``'s constructor
+    arguments, so a policy holding it digests and serializes them."""
+
+    initial: float
+    maximum: float
+    factor: float
+    jitter: float
+
+    def schedule(self) -> ExponentialBackoff:
+        """A fresh ``ExponentialBackoff`` with these arguments."""
+        return ExponentialBackoff(initial=self.initial, maximum=self.maximum, factor=self.factor, jitter=self.jitter)
+
+
+@dataclass(frozen=True)
 class TrialPlan:
     """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
     are recorded.
