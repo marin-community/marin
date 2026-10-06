@@ -94,12 +94,6 @@ def main() -> None:
     args = sys.argv[1:]
     root = Path(os.environ["SHELLBOX_FAKE_DOCKER_ROOT"])
     root.mkdir(parents=True, exist_ok=True)
-    if args[:2] == ["context", "inspect"]:
-        print(json.dumps({"Host": "unix://" + os.environ["SHELLBOX_FAKE_DOCKER_SOCKET"]}))
-        return
-    if args[0] == "version":
-        print("1.51")
-        return
     if args[0] == "inspect" or args[:2] == ["image", "inspect"]:
         print("linux")
         return

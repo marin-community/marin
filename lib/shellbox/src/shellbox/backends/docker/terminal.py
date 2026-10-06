@@ -7,13 +7,10 @@ import asyncio
 import base64
 import io
 import json
-import os
-import re
 import tarfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -72,21 +69,6 @@ async def _docker_output(*arguments: str) -> str:
             process.kill()
             await process.wait()
     return output.decode("utf-8").strip()
-
-
-async def docker_control_plane() -> DockerControlPlane:
-    """Resolve the local Docker CLI context and installed Engine API version."""
-    selected = os.environ.get("DOCKER_HOST") if not os.environ.get("DOCKER_CONTEXT") else None
-    if selected is None:
-        endpoint = await _docker_output("context", "inspect", "--format", "{{json .Endpoints.docker}}")
-        selected = json.loads(endpoint)["Host"]
-    transport = urlsplit(selected)
-    if transport.scheme != "unix" or transport.netloc or not transport.path.startswith("/"):
-        raise NotImplementedError("Harbor file collection requires a local Unix-socket Docker context")
-    version = await _docker_output("version", "--format", "{{.Server.APIVersion}}")
-    if re.fullmatch(r"[0-9]+\.[0-9]+", version) is None:
-        raise RuntimeError("Docker daemon returned an invalid API version")
-    return DockerControlPlane(transport.path, version)
 
 
 async def validate_linux_image(reference: str) -> None:
@@ -242,6 +224,7 @@ class DockerTerminalReader:
                     raise RuntimeError("Docker container state exceeds its byte limit")
                 payload.extend(chunk)
         state = json.loads(payload)["State"]
-        if any(type(state[key]) is not bool for key in ("Running", "Paused", "Restarting")):
+        running, paused, restarting = state["Running"], state["Paused"], state["Restarting"]
+        if not isinstance(running, bool) or not isinstance(paused, bool) or not isinstance(restarting, bool):
             raise RuntimeError("Docker returned invalid container state")
-        return {key: state[key] for key in ("Running", "Paused", "Restarting")}
+        return {"Running": running, "Paused": paused, "Restarting": restarting}

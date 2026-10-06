@@ -35,7 +35,7 @@ except ModuleNotFoundError as error:
         raise
     pytest.skip("Harbor optional dependency is unavailable", allow_module_level=True)
 from shellbox.backends.docker.environment import DockerEnvironment
-from shellbox.backends.docker.terminal import docker_control_plane
+from shellbox.backends.docker.terminal import DockerControlPlane
 from shellbox.machine import Command, ExitReason, InvalidWorkspaceFile, MachineSpec, Result, TerminalFileReader
 
 IMAGE = "python:3.12-slim-bullseye@sha256:411fa4dcfdce7e7a3057c45662beba9dcd4fa36b2e50a2bfcd6c9333e59bf0db"
@@ -330,7 +330,7 @@ def docker_boundary(tmp_path, monkeypatch):
 
 
 class FileVerifier(BaseVerifier):
-    """Test-only host verifier reads one bounded candidate through the Machine protocol."""
+    """Test-only host verifier reads a bounded candidate through TerminalFileReader."""
 
     async def verify(self) -> VerifierResult:
         machine = self.environment.machine
@@ -367,7 +367,7 @@ async def trial_for(
             "kwargs": {"local_root": str(tmp_path / "machine")},
         }
     else:
-        control = await docker_control_plane()
+        control = DockerControlPlane(os.environ["SHELLBOX_FAKE_DOCKER_SOCKET"], "1.51")
         environment_config = {
             "import_path": "shellbox.backends.docker.environment:DockerEnvironment",
             "kwargs": {"archive_socket": control.socket, "archive_api_version": control.api_version},
@@ -559,9 +559,10 @@ async def test_nonroot_image_reads_restrictive_public_file_without_widening_mode
     assert stat.S_IMODE((workspace / "input.txt").stat().st_mode) == 0o400
 
 
-async def test_host_symlink_input_is_rejected_before_machine_creation(tmp_path, docker_boundary):
+@pytest.mark.parametrize("configuration", [{"public_symlink": True}, {"workdir": "/.."}])
+async def test_unsafe_workspace_is_rejected_before_machine_creation(tmp_path, docker_boundary, configuration):
     with pytest.raises(ValueError):
-        await trial_for(tmp_path, "cat input.txt > answer.txt", public_symlink=True)
+        await trial_for(tmp_path, "cat input.txt > answer.txt", **configuration)
     assert not list(docker_boundary.glob("harbor-machine-*"))
     assert not (docker_boundary / "events.jsonl").exists()
 
@@ -595,10 +596,3 @@ async def test_oversized_archive_is_candidate_failure_and_releases_machine(tmp_p
     closed = next(docker_boundary.glob("closed/*"))
     assert not (closed / "paused").exists()
     assert not [path for path in docker_boundary.glob("harbor-machine-*") if path.is_dir()]
-
-
-async def test_root_alias_workdir_is_rejected_before_upload_or_ownership_changes(tmp_path, docker_boundary):
-    with pytest.raises(ValueError):
-        await trial_for(tmp_path, "printf 12 > answer.txt", workdir="/..")
-    assert not list(docker_boundary.glob("harbor-machine-*"))
-    assert not (docker_boundary / "events.jsonl").exists()

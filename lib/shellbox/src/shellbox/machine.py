@@ -140,7 +140,9 @@ class InvalidWorkspaceFile(Exception):
 class TerminalFileReader(Protocol):
     """Read one bounded terminal file relative to the machine workdir."""
 
-    async def read_file(self, path: str, max_bytes: int) -> bytes | None: ...
+    async def read_file(self, path: str, max_bytes: int) -> bytes | None:
+        """Return file bytes or None when absent; reject invalid files with InvalidWorkspaceFile."""
+        ...
 
 
 class Machine(Protocol):
