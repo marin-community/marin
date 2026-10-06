@@ -40,6 +40,13 @@ class GlmSettings:
     token: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class ParallelKey:
+    """Kept out of ``repr`` so a failing test's traceback, which prints its fixtures, omits the key."""
+
+    value: str = field(repr=False)
+
+
 def read_key_line(path: Path, key: str) -> str:
     """Return the value of the ``<key>=...`` line in ``path``; the value is never echoed."""
     for line in path.read_text().splitlines():
@@ -61,12 +68,12 @@ def glm_settings() -> GlmSettings:
 
 
 @pytest.fixture(scope="session")
-def parallel_key() -> str:
+def parallel_key() -> ParallelKey:
     """The Parallel API key from the ``PARALLEL_KEY=...`` line of ``TASKFORGE_PARALLEL_KEY_FILE``."""
     path = Path(os.environ.get(PARALLEL_KEY_FILE_ENV, DEFAULT_PARALLEL_KEY_FILE)).expanduser()
     if not path.exists():
         pytest.skip(f"live web test: no Parallel key file at {path}; set {PARALLEL_KEY_FILE_ENV}")
-    return read_key_line(path, PARALLEL_KEY)
+    return ParallelKey(read_key_line(path, PARALLEL_KEY))
 
 
 @dataclass
