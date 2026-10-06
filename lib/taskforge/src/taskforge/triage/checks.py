@@ -8,8 +8,8 @@ opinion), or SKIP (the property does not apply to this proposal). SKIP never cou
 failure rejects the proposal before any model call; ADVISORY failures are shown to the rubric.
 
 Every check carries a comment recording the false positives and false negatives it is expected to
-have, so a reader knows how far to trust a FAIL. Grounded proposals (``Grounding.GROUNDED``) will
-also need git checks against the cited repository; those belong in ``GROUNDED_CHECKS``.
+have, so a reader knows how far to trust a FAIL. Grounded proposals (``Grounding.GROUNDED``) run
+the same checks; none yet verifies their citations against the cited repository.
 """
 
 import itertools
@@ -23,7 +23,6 @@ from typing import Protocol
 from taskforge.proposal.model import (
     REQUIRED_HEADINGS,
     Environment,
-    Grounding,
     ProposalFormatError,
     TaskProposal,
     Verification,
@@ -316,17 +315,7 @@ CHECKS: tuple[Check, ...] = (
     RuleCheck("null_reason_only", Severity.FATAL, null_reason_only),
 )
 
-# Extension point: git checks for grounded proposals (cited commit exists, cited paths resolve,
-# evidence quoted verbatim; see build_envs grade/check_claims.py) go here. They will need repository
-# access, which they add to ``CheckContext``.
-GROUNDED_CHECKS: tuple[Check, ...] = ()
-
-CHECKS_BY_GROUNDING: Mapping[Grounding, tuple[Check, ...]] = {
-    Grounding.UNVERIFIED: CHECKS,
-    Grounding.GROUNDED: CHECKS + GROUNDED_CHECKS,
-}
-
-CHECKS_BY_NAME: Mapping[str, Check] = {c.name: c for c in CHECKS + GROUNDED_CHECKS}
+CHECKS_BY_NAME: Mapping[str, Check] = {c.name: c for c in CHECKS}
 
 
 def run_checks(p: TaskProposal, checks: Sequence[Check], ctx: CheckContext) -> tuple[CheckResult, ...]:
