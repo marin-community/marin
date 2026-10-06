@@ -50,6 +50,13 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 
 _MULTIHOST_TIMEOUT = 600
 _MP_POLICY = "params=bfloat16,compute=bfloat16,output=bfloat16"
+_ADAMW_CONFIG = {
+    "learning_rate": 1e-4,
+    "b1": 0.9,
+    "b2": 0.95,
+    "mu_dtype": jnp.bfloat16,
+    "weight_decay": 0.1,
+}
 
 
 def _log(event: str, **fields) -> None:
@@ -300,14 +307,11 @@ def main() -> None:
         optimizer = optimizer_config.build(args.steps)
         optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
     else:
-        optimizer = optax.adamw(1e-4, b1=0.9, b2=0.95, mu_dtype=jnp.bfloat16, weight_decay=0.1)
+        optimizer = optax.adamw(**_ADAMW_CONFIG)
         optimizer_contract = {
             "type": "adamw",
-            "learning_rate": 1e-4,
-            "b1": 0.9,
-            "b2": 0.95,
-            "mu_dtype": "bfloat16",
-            "weight_decay": 0.1,
+            **_ADAMW_CONFIG,
+            "mu_dtype": jnp.dtype(_ADAMW_CONFIG["mu_dtype"]).name,
         }
     checkpoint_contract = {
         "model": dataclasses.asdict(model_config),
