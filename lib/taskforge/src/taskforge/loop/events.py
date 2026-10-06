@@ -16,8 +16,9 @@ idea item's (``idea--<idea_id>``). Status is never stored. A gap or a repeat in 
 of two processes writing one run root, and an unknown schema raise ``ValueError``.
 
 An item that ended ``ABANDONED`` (validation retries spent) or ``FAILED`` (an unhandled exception)
-re-enters on the next launch: the next event clears ``terminal``, and an abandoned item resumes at
-``CONTROLS`` with a fresh retry count. ``ACCEPTED`` and ``REJECTED`` are final.
+is not final: when it is run again, the next event clears ``terminal``, and an abandoned item resumes
+at ``CONTROLS`` with a fresh retry count. Whether a launch runs it again is the caller's choice.
+``ACCEPTED`` and ``REJECTED`` are final.
 """
 
 import time
