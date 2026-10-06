@@ -31,3 +31,9 @@ COREWEAVE_INTERRUPTABLE_TOLERATION: dict = {
     "operator": "Exists",
     "effect": "NoExecute",
 }
+
+# A pod off the cluster network carries this label with its TaskNetwork value
+# ("none" or "internet"). Controller start creates one NetworkPolicy per value,
+# named EGRESS_NETWORK_POLICY_PREFIX + value, that selects those pods.
+EGRESS_LABEL = "iris.egress"
+EGRESS_NETWORK_POLICY_PREFIX = "iris-egress-"

@@ -128,6 +128,15 @@ def test_unparsable_document_scores_zero_without_raising(tests_dir, workspace):
     assert reward.detail["reason"] == "parse_error"
 
 
+def test_document_scoring_reports_parse_failure_and_schema_violation():
+    valid = grade_json_schema.grade_json_document(SCHEMA, SchemaFormat.JSON, f"```json\n{json.dumps(ORDER)}\n```")
+    malformed = grade_json_schema.grade_json_document(SCHEMA, SchemaFormat.JSON, "not JSON")
+    invalid = grade_json_schema.grade_json_document(SCHEMA, SchemaFormat.JSON, '{"name": "Ada"}')
+    assert (valid.status, valid.reward) == (Status.SCORED, 1.0)
+    assert (malformed.status, malformed.reward, malformed.detail["reason"]) == (Status.SCORED, 0.0, "parse_error")
+    assert (invalid.status, invalid.reward, invalid.detail["reason"]) == (Status.SCORED, 0.0, "schema_violation")
+
+
 @pytest.mark.parametrize("text", [None, "", "   \n\n"])
 def test_absent_or_blank_output_scores_zero_with_no_output(tests_dir, workspace, text):
     if text is not None:

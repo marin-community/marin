@@ -261,7 +261,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
+def test_taskcompendium_change_selects_dedicated_suite(tmp_path: Path) -> None:
     selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
 
     assert selection.matrix == []
@@ -269,6 +269,13 @@ def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
     assert "taskcompendium-unit" in full_selection.suites
+
+
+@pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
+def test_shared_dependency_change_selects_taskcompendium_harbor_suite(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert "taskcompendium-unit" in selection.suites
 
 
 def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:

@@ -197,6 +197,7 @@ members = [
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
+    "lib/taskcompendium",
     "lib/zephyr",
     "lib/verifyit",
     "lib/finestore",
@@ -228,6 +229,7 @@ marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 verifyit = { workspace = true }
+taskcompendium = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
