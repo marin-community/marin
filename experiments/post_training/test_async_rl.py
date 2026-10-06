@@ -20,15 +20,15 @@ def test_launcher_builds_complete_smoke_run(monkeypatch) -> None:
     assert run.evaluation.name == "evals/alice-async-rl-snowball-smoke/gsm8k-smoke"
 
 
-def test_a_null_buffer_is_accepted_as_one_slot_per_worker(monkeypatch) -> None:
+def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
-
-    run = async_rl.build_run(
+    run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18")
+    capped = async_rl.build_run(
         SNOWBALL_POLICY,
         async_rl.SMOKE_PRESET,
         version="2026.09.18",
-        settings=("trainer.fully_async.max_buffered_groups=null",),
+        settings=("trainer.rollout_buffer.max_in_flight=1",),
     )
-
-    assert run.rl.name.startswith("users/alice/checkpoints/async-rl/snowball-smoke-set-")
+    assert capped.rl.name != run.rl.name
+    assert capped.evaluation.name != run.evaluation.name
