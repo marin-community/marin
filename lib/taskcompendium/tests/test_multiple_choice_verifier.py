@@ -24,7 +24,7 @@ from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
     "response,reward",
     [("B", 1.0), (" b ", 1.0), ("C", 0.0), ("E", 0.0), ("AB", 0.0), ("Answer: B", 0.0)],
 )
-async def test_hand_authored_multiple_choice_answer(response, reward):
+def test_hand_authored_multiple_choice_answer(response, reward):
     specification = TaskSpec(
         id="hand-authored-mcq",
         context=ConversationInput(events=(TextMessage(role="user", content="Choose A, B, C, or D."),)),
@@ -35,12 +35,11 @@ async def test_hand_authored_multiple_choice_answer(response, reward):
     )
     convention = PlainText(id="plain")
 
-    result = await grade_answer(
+    result = grade_answer(
         specification,
         convention,
         GradingAttempt(
             ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-            object(),
         ),
     )
 

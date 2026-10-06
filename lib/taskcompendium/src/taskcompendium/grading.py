@@ -3,7 +3,7 @@
 
 """Bridge TaskCompendium submissions to verifyit's pure candidate graders.
 
-This module checks task/convention compatibility, acquires one typed submission,
+This module checks task/convention compatibility, extracts one typed submission,
 adapts it to verifyit inputs, and maps rewards and submission failures to
 GradeResult. verifyit owns verifier-spec validation, numeric parsing, comparison
 policies, and score calculation. Submission conventions own evidence extraction;
@@ -95,14 +95,14 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
             raise TypeError("Text candidate verifier requires a text submission")
 
 
-async def grade_answer(specification: TaskSpec, convention: Convention, attempt: GradingAttempt) -> GradeResult:
-    """Acquire one submission and score it through the shared candidate contract."""
+def grade_answer(specification: TaskSpec, convention: Convention, attempt: GradingAttempt) -> GradeResult:
+    """Extract one submission and score it through the shared candidate contract."""
     verifier = resolve_verifier(specification.verifier)
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
     try:
-        submission = await convention.extract(attempt)
+        submission = convention.extract(attempt)
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     try:

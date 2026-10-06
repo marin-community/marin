@@ -10,7 +10,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = ["marin-rigging", "pydantic>=2.0", "verifyit"]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+test = ["pytest>=8.3", "pytest-timeout"]
 
 [tool.uv.workspace]
 
@@ -22,7 +22,6 @@ verifyit = { path = "../verifyit", editable = true }
 packages = ["src/taskcompendium"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 timeout = 60
 addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
 markers = [

@@ -188,7 +188,7 @@ action_verifier = verifier_descriptor(
 
 ## Submission conventions and grading
 
-`convention.supports(spec.answer_type)` checks the result kind. `submission_compatibility(spec, convention)` also checks that the convention produces an evidence type accepted by the private verifier. `grade_answer` validates the private verifier and compatibility before calling the convention's asynchronous `extract` method once. A custom convention declares `submission_types` and implements asynchronous extraction. Override `supports` when its result kinds differ from the built-in conventions; the runtime owns its presentation.
+`convention.supports(spec.answer_type)` checks the result kind. `submission_compatibility(spec, convention)` also checks that the convention produces an evidence type accepted by the private verifier. `grade_answer` validates the private verifier and compatibility before calling the convention's synchronous `extract` method once. A custom convention declares `submission_types` and extracts already acquired evidence. Override `supports` when its result kinds differ from the built-in conventions; the runtime owns its presentation.
 
 Submission conventions preserve the task's advertised functions. `AnswerCall` adds `submit_answer` with an answer string; a task function with that name conflicts with the convention and is rejected. `FinalAction(require_call=True)` requires a call, and `FinalAction(max_calls=1)` limits the submission to one call. Missing required calls and excessive call counts are `submission_failure` with reward `0.0`.
 
@@ -219,21 +219,21 @@ spec = TaskSpec(
 convention = PlainText(id="plain")
 ```
 
-After execution, the caller supplies the complete conversation and the runtime-owned workspace to `GradingAttempt`. Built-in conventions extract only `conversation.events[-1]`, the final assistant message or call batch. Earlier events are validated history; historical calls must have their results before the final submission. For this pure numeric task, the workspace is unused:
+After execution, the caller supplies the complete conversation to `GradingAttempt`. Built-in conventions extract only `conversation.events[-1]`, the final assistant message or call batch. Earlier events are validated history; historical calls must have their results before the final submission:
 
 ```python
 from taskcompendium.grading import grade_answer
 from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import ConversationTrace
 
-async def score_final_response(content: str):
+def score_final_response(content: str):
     conversation = ConversationTrace(
         events=(*spec.context.events, TextMessage(role="assistant", content=content))
     )
-    return await grade_answer(spec, convention, GradingAttempt(conversation, workspace=object()))
+    return grade_answer(spec, convention, GradingAttempt(conversation))
 ```
 
-The caller must await grading. File or environment-state conventions may perform asynchronous acquisition; callers must not discard the coroutine or extract the same evidence again. Private expected values remain in `spec.verifier` and must not be included in the model request.
+Grading is synchronous. The execution runtime completes file or environment-state acquisition before grading; custom conventions extract that acquired evidence without accessing a live workspace. Private expected values remain in `spec.verifier` and must not be included in the model request.
 
 A valid correct answer produces `GradeResult(status=graded, reward=1.0)`; a valid wrong answer produces `graded` with reward `0.0`. Malformed text, JSON, numeric, or final-action evidence produces `submission_failure` with reward `0.0`. Invalid private configuration and infrastructure failures raise; the execution runtime must preserve those errors separately from wrong or invalid submissions.
 

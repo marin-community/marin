@@ -36,7 +36,7 @@ from taskcompendium.submission import (
 
 def _attempt(specification, response):
     trace = ConversationTrace(events=(*specification.context.events, response))
-    return GradingAttempt(ConversationTrace.model_validate_json(trace.model_dump_json()), object())
+    return GradingAttempt(ConversationTrace.model_validate_json(trace.model_dump_json()))
 
 
 def _answer_convention(answer_format: AnswerFormat) -> SubmissionConvention:
@@ -71,20 +71,19 @@ def specification() -> TaskSpec:
     "response,reward",
     [("12.05", 1.0), ("12.2", 0.0)],
 )
-async def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
+def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
     specification = specification.model_copy(
         update={"verifier": numeric_answer("12.0", tolerance_abs="0.1", tolerance_rel="0.0")}
     )
     convention = PlainText(id="plain")
 
-    result = await grade_answer(
+    result = grade_answer(
         specification,
         convention,
         GradingAttempt(
             conversation=ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content=response))
             ),
-            workspace=object(),
         ),
     )
 
@@ -104,31 +103,29 @@ async def test_numeric_answer_uses_explicit_tolerance(specification, response, r
         (AnswerFormat.JSON, '{"answer":"12"', Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
-async def test_chat_answer_distinguishes_wrong_and_malformed_submissions(
+def test_chat_answer_distinguishes_wrong_and_malformed_submissions(
     specification, answer_format, response, status, reward
 ):
     specification = TaskSpec.model_validate_json(specification.model_dump_json())
     convention = TypeAdapter(SubmissionConvention).validate_json(_answer_convention(answer_format).model_dump_json())
     assert "12" not in render_instruction(specification, convention)
-    result = await grade_answer(
+    result = grade_answer(
         specification, convention, _attempt(specification, TextMessage(role="assistant", content=response))
     )
     assert (result.status, result.reward) == (status, reward)
 
 
-async def test_chat_exact_comparison_uses_unicode_and_whitespace_normalization(specification):
+def test_chat_exact_comparison_uses_unicode_and_whitespace_normalization(specification):
     task = specification.model_copy(update={"verifier": exact_answer("Straße Park"), "answer_type": AnswerType.TEXT})
     convention = PlainText(id="plain")
-    result = await grade_answer(
-        task, convention, _attempt(task, TextMessage(role="assistant", content="STRASSE   PARK"))
-    )
+    result = grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content="STRASSE   PARK")))
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
-async def test_text_convention_retains_but_rejects_tool_call_evidence(specification):
+def test_text_convention_retains_but_rejects_tool_call_evidence(specification):
     convention = PlainText(id="plain")
     attempt = _attempt(specification, _answer_action("12"))
-    result = await grade_answer(specification, convention, attempt)
+    result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
     assert attempt.conversation.events[-1].calls[0].arguments == {"answer": "12"}
 
@@ -140,13 +137,13 @@ async def test_text_convention_retains_but_rejects_tool_call_evidence(specificat
         (AnswerType.NUMBER, numeric_answer("12", tolerance_abs="0", tolerance_rel="0"), "12.0"),
     ],
 )
-async def test_answer_call_grades_semantic_answers(specification, answer_type, verifier, response):
+def test_answer_call_grades_semantic_answers(specification, answer_type, verifier, response):
     task = specification.model_copy(update={"answer_type": answer_type, "verifier": verifier})
     convention = AnswerCall(id="answer-call")
-    correct = await grade_answer(task, convention, _attempt(task, _answer_action(response)))
-    wrong = await grade_answer(task, convention, _attempt(task, _answer_action("13")))
+    correct = grade_answer(task, convention, _attempt(task, _answer_action(response)))
+    wrong = grade_answer(task, convention, _attempt(task, _answer_action("13")))
     invalid = _answer_action(response, name="lookup")
-    rejected = await grade_answer(task, convention, _attempt(task, invalid))
+    rejected = grade_answer(task, convention, _attempt(task, invalid))
     assert (correct.status, correct.reward) == (Outcome.GRADED, 1.0)
     assert (wrong.status, wrong.reward) == (Outcome.GRADED, 0.0)
     assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
@@ -189,13 +186,13 @@ def test_answer_call_name_collision_cannot_change_source_tool(specification):
         ('{"value":', Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
-async def test_json_value_chat_grading_rejects_ambiguous_and_nonfinite_values(specification, content, status, reward):
+def test_json_value_chat_grading_rejects_ambiguous_and_nonfinite_values(specification, content, status, reward):
     task = specification.model_copy(
         update={"answer_type": AnswerType.JSON, "verifier": structured_exact({"value": 16, "nested": [True, None]})}
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
     convention = JsonValueAnswer(id="json-value")
-    result = await grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content=content)))
+    result = grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content=content)))
     assert (result.status, result.reward) == (status, reward)
 
 
@@ -215,7 +212,7 @@ def test_direct_chat_cannot_acquire_state_for_structured_verifier(specification)
         chat_request(task, JsonValueAnswer(id="json-value"))
 
 
-async def test_json_chat_strict_numeric_policy_survives_task_roundtrip(specification):
+def test_json_chat_strict_numeric_policy_survives_task_roundtrip(specification):
     task = specification.model_copy(
         update={
             "answer_type": AnswerType.JSON,
@@ -224,7 +221,5 @@ async def test_json_chat_strict_numeric_policy_survives_task_roundtrip(specifica
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
     convention = JsonValueAnswer(id="json-value")
-    result = await grade_answer(
-        task, convention, _attempt(task, TextMessage(role="assistant", content='{"value":16.0}'))
-    )
+    result = grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content='{"value":16.0}')))
     assert (result.status, result.reward) == (Outcome.GRADED, 0.0)

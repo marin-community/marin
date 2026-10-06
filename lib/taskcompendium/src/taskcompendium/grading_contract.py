@@ -26,7 +26,6 @@ class GradingAttempt:
     """Trial evidence available to submission conventions and verifiers."""
 
     conversation: ConversationTrace
-    workspace: object
 
 
 @dataclass(frozen=True)

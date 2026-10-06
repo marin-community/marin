@@ -56,7 +56,7 @@ def test_import_removes_source_submission_instructions():
     assert specification.answer_type is AnswerType.TEXT
 
 
-async def test_imported_mcqa_matches_source_grading(tmp_path):
+def test_imported_mcqa_matches_source_grading(tmp_path):
     specification = import_task(_archive())
     assert specification.verifier.kind == Mode.MCQ
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
@@ -68,40 +68,37 @@ async def test_imported_mcqa_matches_source_grading(tmp_path):
     ):
         (tmp_path / "source-answer.txt").write_text(source_response)
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
-        result = await grade_answer(
+        result = grade_answer(
             specification,
             convention,
             GradingAttempt(
                 ConversationTrace(
                     events=(*specification.context.events, TextMessage(role="assistant", content=response))
                 ),
-                object(),
             ),
         )
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-async def test_imported_mcqa_extracts_json_and_scores_unformatted_answers_zero():
+def test_imported_mcqa_extracts_json_and_scores_unformatted_answers_zero():
     specification = import_task(_archive())
     convention = PlainText(id="plain")
-    json_result = await grade_answer(
+    json_result = grade_answer(
         specification,
         JsonAnswer(id="json"),
         GradingAttempt(
             ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
             ),
-            object(),
         ),
     )
-    malformed = await grade_answer(
+    malformed = grade_answer(
         specification,
         convention,
         GradingAttempt(
             ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))
             ),
-            object(),
         ),
     )
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
@@ -160,15 +157,15 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     path = tmp_path / "specification.json"
     path.write_text(import_task(_archive()).model_dump_json())
     script = (
-        "import asyncio, json, sys; from pathlib import Path; "
+        "import json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.grading_contract import GradingAttempt; "
         "from taskcompendium.models import TaskSpec, ConversationTrace, TextMessage; "
         "from taskcompendium.submission import PlainText; "
         "specification = TaskSpec.model_validate_json(Path(sys.argv[1]).read_text()); "
-        "result = asyncio.run(grade_answer(specification, PlainText(id='plain'), "
+        "result = grade_answer(specification, PlainText(id='plain'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C'))), object()))); "
+        "TextMessage(role='assistant', content='C'))))); "
         "print(json.dumps({'status':result.status, 'reward':result.reward}))"
     )
     completed = subprocess.run([sys.executable, "-c", script, str(path)], capture_output=True, text=True, check=True)

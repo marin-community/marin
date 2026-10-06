@@ -178,7 +178,7 @@ def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path,
         TaskSpec.model_validate_json(path.read_text())
 
 
-async def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
+def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
     wire = specification.model_dump(mode="json")
     wire["verifier"]["environment_requirements"] = {"docker_image": "private/grader@sha256:" + "a" * 64}
     path = tmp_path / "specification.json"
@@ -187,11 +187,11 @@ async def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_pat
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     # This correct answer must not earn credit without the required private runtime.
     with pytest.raises(NotImplementedError):
-        await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation, object()))
+        grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation))
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "private_script"])
-async def test_schema_only_verifiers_cannot_grade(tmp_path, specification, kind):
+def test_schema_only_verifiers_cannot_grade(tmp_path, specification, kind):
     specification = specification.model_copy(update={"verifier": VerifierSpec(kind=kind, parameters_json="{}")})
     path = tmp_path / "specification.json"
     path.write_text(specification.model_dump_json())
@@ -199,7 +199,7 @@ async def test_schema_only_verifiers_cannot_grade(tmp_path, specification, kind)
     convention = PlainText(id="plain")
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     with pytest.raises(NotImplementedError):
-        await grade_answer(task, convention, GradingAttempt(conversation, object()))
+        grade_answer(task, convention, GradingAttempt(conversation))
 
 
 @pytest.mark.parametrize(
@@ -218,7 +218,7 @@ def test_resource_groups_reject_portable_path_aliases_before_mounts_can_overwrit
 
 
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])
-async def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
+def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"] = {"capabilities": ["shell", "filesystem"], "working_directory": "/app"}
     wire["resources"] = {
@@ -226,7 +226,7 @@ async def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_wor
     }
     task = TaskSpec.model_validate(wire)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
-    result = await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation, object()))
+    result = grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation))
     assert (result.status, result.reward) == ("graded", reward)
 
 

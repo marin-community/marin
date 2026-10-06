@@ -96,7 +96,7 @@ def test_serialized_nemo_verifier_grades_in_fresh_process(tmp_path):
     (tmp_path / "specification.json").write_text(specification.model_dump_json())
     (tmp_path / "convention.json").write_text(convention.model_dump_json())
     script = (
-        "import asyncio, json, sys; from pathlib import Path; "
+        "import json, sys; from pathlib import Path; "
         "from pydantic import TypeAdapter; "
         "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.grading_contract import GradingAttempt; "
@@ -106,7 +106,7 @@ def test_serialized_nemo_verifier_grades_in_fresh_process(tmp_path):
         "specification = TaskSpec.model_validate_json((root/'specification.json').read_text()); "
         "convention = TypeAdapter(SubmissionConvention).validate_json((root/'convention.json').read_text()); "
         "conversation = ConversationTrace.model_validate_json(sys.argv[2]); "
-        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation, object()))); "
+        "result = grade_answer(specification, convention, GradingAttempt(conversation)); "
         "print(json.dumps({'status':result.status, 'reward':result.reward}))"
     )
     response = _assistant_message(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -228,16 +228,16 @@ def test_predicted_action_task_roundtrip_preserves_source_context():
         ),
     ],
 )
-async def test_predicted_action_chat_evidence_distinguishes_wrong_and_invalid_submission(response, reward, status):
+def test_predicted_action_chat_evidence_distinguishes_wrong_and_invalid_submission(response, reward, status):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
     trace = _chat_conversation([*chat_request(specification, convention)["messages"], response])
     restored = ConversationTrace.model_validate_json(trace.model_dump_json())
-    result = await grade_answer(specification, convention, GradingAttempt(restored, object()))
+    result = grade_answer(specification, convention, GradingAttempt(restored))
     assert (result.status, result.reward) == (status, reward)
 
 
-async def test_predicted_action_chat_request_preserves_source_history_and_tools():
+def test_predicted_action_chat_request_preserves_source_history_and_tools():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["input"][-1:-1] = [
         {
@@ -289,11 +289,11 @@ async def test_predicted_action_chat_request_preserves_source_history_and_tools(
     trace = ConversationTrace.model_validate_json(trace.model_dump_json())
     assert trace.events[3].calls[0].arguments == {"user_id": "GROOM2024"}
     assert trace.events[4].content == '{"verified":false}'
-    result = await grade_answer(specification, convention, GradingAttempt(trace, object()))
+    result = grade_answer(specification, convention, GradingAttempt(trace))
     assert (result.status, result.reward) == ("graded", 1.0)
 
 
-async def test_predicted_action_grades_typed_evidence_from_any_harness():
+def test_predicted_action_grades_typed_evidence_from_any_harness():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
     final = AssistantToolCalls(
@@ -307,26 +307,26 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = await grade_answer(specification, convention, GradingAttempt(conversation, object()))
+    result = grade_answer(specification, convention, GradingAttempt(conversation))
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
 
 @pytest.mark.parametrize("require_call", [False, True])
-async def test_imported_final_call_constraints_distinguish_invalid_submission(require_call):
+def test_imported_final_call_constraints_distinguish_invalid_submission(require_call):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["tool_choice"] = "required" if require_call else "auto"
     specification, convention = import_row(row, canonical_sha256(row))
     final = _assistant_message({"role": "assistant", "content": "No action"})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
-    result = await grade_answer(specification, convention, attempt)
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("submission_failure" if require_call else "graded", 0.0)
     request = chat_request(specification, convention)
     assert request.get("tool_choice") == ("required" if require_call else None)
     assert request["parallel_tool_calls"] is False
 
 
-async def test_imported_parallel_actions_accept_multiple_final_calls():
+def test_imported_parallel_actions_accept_multiple_final_calls():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["parallel_tool_calls"] = True
     original_call = row["expected_action"]
@@ -334,14 +334,14 @@ async def test_imported_parallel_actions_accept_multiple_final_calls():
     specification, convention = import_row(row, canonical_sha256(row))
     single = _action(original_call["name"], original_call["arguments"])["tool_calls"][0]
     final = _assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
-    result = await grade_answer(specification, convention, attempt)
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("graded", 1.0)
     assert "parallel_tool_calls" not in chat_request(specification, convention)
 
 
 @pytest.mark.parametrize("call_count,status,reward", [(2, "graded", 1.0), (3, "submission_failure", 0.0)])
-async def test_final_action_max_two_preserves_the_submission_limit_before_scoring(call_count, status, reward):
+def test_final_action_max_two_preserves_the_submission_limit_before_scoring(call_count, status, reward):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["parallel_tool_calls"] = True
     expected = row["expected_action"]
@@ -355,6 +355,6 @@ async def test_final_action_max_two_preserves_the_submission_limit_before_scorin
             for index in range(call_count)
         )
     )
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
-    result = await grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), attempt)
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    result = grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), attempt)
     assert (result.status, result.reward) == (status, reward)

@@ -89,7 +89,7 @@ class Convention(BaseModel, ABC):
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
     @abstractmethod
-    async def extract(self, attempt: GradingAttempt) -> Submission:
+    def extract(self, attempt: GradingAttempt) -> Submission:
         """Read the agent's submission without access to expected values."""
 
 
@@ -97,7 +97,7 @@ class PlainText(Convention):
     submission_types = (TextSubmission,)
     answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
 
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt) -> TextSubmission:
         return TextSubmission(_text_answer(attempt.conversation.events[-1]))
 
 
@@ -105,7 +105,7 @@ class JsonAnswer(Convention):
     submission_types = (TextSubmission,)
     answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
 
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt) -> TextSubmission:
         try:
             value = _json_submission(_text_answer(attempt.conversation.events[-1]))
         except ValueError as error:
@@ -122,7 +122,7 @@ class JsonValueAnswer(Convention):
     submission_types = (JsonSubmission,)
     answer_format: Literal[AnswerFormat.JSON_VALUE] = AnswerFormat.JSON_VALUE
 
-    async def extract(self, attempt: GradingAttempt) -> JsonSubmission:
+    def extract(self, attempt: GradingAttempt) -> JsonSubmission:
         try:
             return JsonSubmission(_json_submission(_text_answer(attempt.conversation.events[-1])))
         except ValueError as error:
@@ -133,7 +133,7 @@ class AnswerCall(Convention):
     submission_types = (TextSubmission,)
     answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
 
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt) -> TextSubmission:
         response = attempt.conversation.events[-1]
         if (
             not isinstance(response, AssistantToolCalls)
@@ -174,7 +174,7 @@ class FinalAction(Convention):
             raise SubmissionFailure(f"Final action permits at most {self.max_calls} function calls")
         return response
 
-    async def extract(self, attempt: GradingAttempt) -> ActionSubmission:
+    def extract(self, attempt: GradingAttempt) -> ActionSubmission:
         return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
 
 
