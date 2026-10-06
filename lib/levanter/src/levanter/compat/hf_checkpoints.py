@@ -4,10 +4,12 @@
 import abc
 import contextlib
 import dataclasses
+import fnmatch
 import functools
 import json
 import logging
 import os
+import posixpath
 import random
 import shutil
 import tempfile
@@ -1356,12 +1358,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
         # need to also save the .gitattributes file itself
         # TODO: .gitignore too? it's not used a lot with the hub
-        if os.path.exists(repo):
-            # local path
+        remote_fs = None
+        remote_path = ""
+        if _is_url_like(repo) or os.path.exists(repo):
             if revision is not None:
+                if _is_url_like(repo):
+                    raise ValueError("Filesystem reference code does not support a separate revision")
                 warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
-            attributes_path = os.path.join(repo, ".gitattributes")
-            if not os.path.exists(attributes_path):
+            remote_fs, remote_path = url_to_fs(repo)
+            attributes_path = posixpath.join(remote_path.rstrip("/"), ".gitattributes")
+            if not remote_fs.exists(attributes_path):
                 attributes_path = None
         else:
             # check hub
@@ -1385,25 +1391,44 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "*.ot",
                 "*.onnx",
                 "*.msgpack",
-                "model.safetensors",
+                "*.safetensors",
+                "*.pt",
+                "*.pth",
+                "*.gguf",
             ]
         else:
-            # read the attributes file and get the globs
-            with open(attributes_path) as f:
-                attributes = f.read()
+            if remote_fs is not None:
+                with remote_fs.open(attributes_path, "r") as f:
+                    attributes = f.read()
+            else:
+                with open(attributes_path) as f:
+                    attributes = f.read()
             ignore_files = [".git"]
             for line in attributes.split("\n"):
                 line = line.strip()
                 if line.startswith("#") or line == "":
                     continue
-                # NB: this is not a full implementation of .gitattributes, but it's good enough for our purposes
+                # This supports LFS patterns, not all .gitattributes rules.
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
 
-        if os.path.exists(repo):
-            local_code_path = repo
-        else:
-            local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
+        if remote_fs is not None:
+            os.makedirs(path, exist_ok=True)
+            for remote_file in remote_fs.find(remote_path):
+                relative_path = posixpath.relpath(remote_file, remote_path.rstrip("/"))
+                if any(
+                    fnmatch.fnmatchcase(relative_path, pattern)
+                    or any(fnmatch.fnmatchcase(part, pattern) for part in relative_path.split("/"))
+                    for pattern in ignore_files
+                ):
+                    continue
+                local_file = os.path.join(path, *relative_path.split("/"))
+                os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                remote_fs.get_file(remote_file, local_file)
+            logger.debug("Saved code to %s", path)
+            return
+
+        local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
 
         # now we'll save the code
         os.makedirs(path, exist_ok=True)
