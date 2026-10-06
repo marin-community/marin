@@ -4,6 +4,7 @@
 """The seam rule: Taskforge's packages are totally ordered and a package imports only from its left.
 
 Every module under ``src/taskforge`` is parsed, and every ``taskforge.<package>`` import it makes,
+in any form (``import taskforge.x``, ``from taskforge.x import y``, ``from taskforge import x``) and
 including imports inside functions, is an edge that must point left in ``ORDER``.
 """
 
@@ -40,7 +41,9 @@ def imported_packages(module: Path) -> Iterator[tuple[int, str]]:
         if isinstance(node, ast.ImportFrom) and node.level:
             raise AssertionError(f"{module}:{node.lineno} uses a relative import; import taskforge.<package> by name")
         names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else []
-        if isinstance(node, ast.ImportFrom) and node.module:
+        if isinstance(node, ast.ImportFrom) and node.module == "taskforge":
+            names = [f"taskforge.{alias.name}" for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
             names = [node.module]
         for name in names:
             parts = name.split(".")
@@ -68,3 +71,11 @@ def test_imports_point_only_downstream_in_the_package_order():
     rank = {package: index for index, package in enumerate(ORDER)}
     wrong = [f"{at}: {src} imports {dst}" for at, src, dst in edges() if rank[dst] > rank[src]]
     assert not wrong, "\n".join(wrong)
+
+
+def test_every_import_form_counts_as_an_edge(tmp_path):
+    module = tmp_path / "decision.py"
+    module.write_text(
+        "from taskforge import loop, spec\nimport taskforge.queue\nfrom taskforge.ledger.jsonl import JsonlLedger\n"
+    )
+    assert sorted(imported_packages(module)) == [(1, "loop"), (1, "spec"), (2, "queue"), (3, "ledger")]
