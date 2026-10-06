@@ -532,6 +532,14 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     optimizer = _apply_settings(optimizer, optimizer_settings or {})
+    if model.expert_write_masked:
+        blocks = model.expert_write_blocks or model.tail_expert_write_blocks
+        paths = (
+            r"\.mlp\.expert_mlp\.w_down$" if model.expert_write_blocks else r"_tail\.stacked\.mlp\.expert_mlp\.w_down$"
+        )
+        optimizer = dataclasses.replace(
+            optimizer, write_mask_blocks=blocks, write_mask_keep=model.expert_write_keep, write_mask_paths=paths
+        )
     if optimizer.upper_qk_lr_mult != 1.0:
         optimizer = dataclasses.replace(optimizer, upper_qk_slice_mask=upper_softmax_slice_mask(model))
     grug_trainer = GrugTrainerConfig(

@@ -17,6 +17,7 @@ from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.fast_track.adamh import ScaleByAdamHState, scale_by_adamh
 from experiments.grug.fast_track.eig_muon import EIG_MODES, scale_by_eig_direction
+from experiments.grug.fast_track.expert_write_mask import expert_write_mask
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _target_named_sharding
 from experiments.grug.fast_track.okls import OKLS_MATMUL_DTYPES, scale_with_grug_okls
 from experiments.grug.fast_track.stiefel import scale_with_stiefel_muon
@@ -962,6 +963,7 @@ def scale_with_grug_muonh(
     bimaxwell_rails: BiMaxwellRails = DEFAULT_RAILS,
     magma_keep_prob: float | None = None,
     magma_seed: int = 0,
+    direction_mask=None,
     retraction: str = "frobenius",
     spectral_radius_c: float | None = 2.0,
     log_hyperball_decay: bool = False,
@@ -1083,16 +1085,27 @@ def scale_with_grug_muonh(
         muon_updates = jax.tree.map(normalize, muon_updates, second_moment, is_leaf=none_leaf)
         return muon_updates, (muon_state, second_moment)
 
+    def masked(directions, params):
+        """``direction_mask(params)``: a tree of 0/1 masks (None: unmasked) applied before the retraction."""
+        if direction_mask is None:
+            return directions
+        masks = direction_mask(params)
+        return jax.tree.map(
+            lambda d, m: d if m is None else (d * m).astype(d.dtype), directions, masks, is_leaf=lambda x: x is None
+        )
+
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
         if momentum_stage is None:
             core_state, sphere = state if spectral else (state, None)
             directions, core_state = core_direction(updates, core_state, params)
+            directions = masked(directions, params)
             muonh_updates, sphere = retract(params, directions, None, sphere)
             return muonh_updates, (core_state, sphere) if spectral else core_state
         mixed, momentum_state = momentum_stage.update(updates, state.momentum, params)
         directions, core_state = core_direction(mixed, state.core, params)
+        directions = masked(directions, params)
         lr_mults, magma_state = None, None
         if state.magma is not None:
             assert magma_keep_prob is not None
@@ -1545,6 +1558,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
+    write_mask_blocks: int = 0
+    """``expert_write_masked`` output-block pattern (filled by the launcher): MuonH masks the orthogonalized
+    direction of the expert ``w_down`` leaves matching ``write_mask_paths`` to it before the hyperball step."""
+    write_mask_keep: int = 0
+    write_mask_paths: str = ""
     latent_mix_bias_rate: float = 1e-3
     """Sign-SGD step of the ``LatentMixBalance.BIAS`` selection biases (``kv_mix_bias``), in logit units."""
     momentum: float = 0.95
@@ -1886,6 +1904,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         bimaxwell_rails=rails,
                         magma_keep_prob=self.magma_keep_prob if self.magma else None,
                         magma_seed=magma_seed,
+                        direction_mask=self._write_direction_mask(),
                         log_hyperball_decay=self.log_hyperball_decay,
                         step_mode=MuonHStep(self.muonh_step),
                         spectral_scale=self.muonh_spectral_scale,
@@ -2155,6 +2174,24 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         if path_lower.endswith(".weight") or not hasattr(param, "ndim") or param.ndim <= 1:
             return "norm"
         return None
+
+    def _write_direction_mask(self):
+        """The ``write_mask_*`` direction mask for MuonH, or None."""
+        if not self.write_mask_blocks:
+            return None
+        pattern = re.compile(self.write_mask_paths)
+        blocks, keep = self.write_mask_blocks, self.write_mask_keep
+
+        def masks(params):
+            def leaf(param, path):
+                if not hasattr(param, "ndim") or not pattern.search(path.lower()):
+                    return None
+                neurons, out = param.shape[-2:]
+                return expert_write_mask(neurons, out, blocks, keep).astype(param.dtype)
+
+            return jax.tree.map(leaf, params, leaf_key_paths(params))
+
+        return masks
 
     def _base_rails(self) -> BiMaxwellRails:
         return dataclasses.replace(DEFAULT_RAILS, slow_from_start=self.bimaxwell_slow_from_start)

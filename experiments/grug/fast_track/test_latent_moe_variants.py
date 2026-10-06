@@ -10,8 +10,9 @@ import numpy as np
 import pytest
 
 import experiments.grug.fast_track.test_ngram_stat as t
+from experiments.grug.fast_track.expert_write_mask import expert_write_mask
 from experiments.grug.fast_track.model import _expert_write_block_ids, _scatter_expert_writes
-from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight
+from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight, scale_with_grug_muonh
 
 
 def _loss_and_grads(model, mesh):
@@ -113,3 +114,26 @@ def test_scattered_writes_place_each_neuron_on_its_own_block_subset():
     assert len({tuple(r) for r in ids}) > 1  # neurons differ
     loss, grads = _loss_and_grads(model, mesh)
     assert np.isfinite(float(loss)) and _trains(_mlp(grads).expert_mlp.w_down)
+
+
+def test_masked_block_writes_store_full_width_and_match_the_shared_pattern():
+    _, model = t._model(
+        ngram_stat_rows=0, latent_out_dim=32, expert_write_blocks=8, expert_write_keep=4, expert_write_masked=True
+    )
+    w_down = np.asarray(_mlp(model).expert_mlp.w_down)  # [L, E, I, 32], full width
+    mask = np.asarray(expert_write_mask(w_down.shape[-2], 32, 8, 4))
+    assert w_down.shape[-1] == 32 and np.all(w_down[..., mask == 0] == 0)
+    assert np.abs(w_down[..., mask == 1]).min() > 0
+
+
+def test_muonh_direction_mask_keeps_masked_entries_at_zero():
+    mask = expert_write_mask(16, 32, 8, 4)
+    w = jax.random.normal(jax.random.PRNGKey(0), (16, 32)) * 0.05 * mask
+    g = jax.random.normal(jax.random.PRNGKey(1), (16, 32)) * mask
+    opt = scale_with_grug_muonh(
+        learning_rate=0.02, momentum_schedule=lambda _: 0.0, direction_mask=lambda p: {"w": mask}
+    )
+    updates, _ = opt.update({"w": g}, opt.init({"w": w}), {"w": w})
+    new = np.asarray(w + updates["w"])
+    assert np.all(new[np.asarray(mask) == 0] == 0)
+    np.testing.assert_allclose(np.linalg.norm(new), np.linalg.norm(np.asarray(w)), rtol=1e-4)
