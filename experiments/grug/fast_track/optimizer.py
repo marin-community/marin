@@ -337,7 +337,18 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
     ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
     """
     return path_lower.endswith(
-        (".attn_gate", ".attn_gate_up", ".router", ".router_down", ".router_up", ".switch_v_gate", ".switch_o_gate")
+        (
+            ".attn_gate",
+            ".attn_gate_up",
+            ".router",
+            ".router_down",
+            ".router_up",
+            ".switch_v_gate",
+            ".switch_o_gate",
+            ".mix_gate",
+            ".latent_mix_in_gate",
+            ".latent_mix_out_gate",
+        )
     )
 
 

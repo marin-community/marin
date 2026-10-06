@@ -410,6 +410,7 @@ class ValueEmbeds(StrEnum):
 
 
 _GATED_VALUE_EMBEDS = (ValueEmbeds.GATED, ValueEmbeds.GATED_LAMBDA)
+LATENT_MIX_SITES = ("q", "k", "v", "o", "moe_in", "moe_out")
 
 
 class SwitchHeadSites(StrEnum):
@@ -1420,6 +1421,18 @@ class GrugModelConfig:
     logits (non-competitive, no load balancing). Computed densely over all experts. 0: off."""
     switchhead_topk: int = 2
     switchhead_sites: SwitchHeadSites = SwitchHeadSites.VO
+    attn_latent_q: int = 0
+    """GQA layers: factor ``w_q`` through a learnable-RMSNormed latent of this width (``LatentProj``). 0: full rank."""
+    attn_latent_k: int = 0
+    attn_latent_v: int = 0
+    attn_latent_o: int = 0
+    latent_mix_sites: tuple[str, ...] = ()
+    """Mixture of latents at these sites (of ``LATENT_MIX_SITES``): the site's latent splits into
+    ``latent_mix_experts`` blocks, each RMS-normed on its own and weighted by SwitchHead's sigmoid top-k gate
+    (``latent_mix_topk`` blocks active per token). The attention sites need their ``attn_latent_*``; ``moe_in``
+    gates the MoE input latent (``latent_dim``), ``moe_out`` the experts' output before ``w_latent_up``."""
+    latent_mix_experts: int = 4
+    latent_mix_topk: int = 2
     qk_mult_per_head: bool = False
     """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
     softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
@@ -1556,6 +1569,26 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if unknown := set(self.latent_mix_sites) - set(LATENT_MIX_SITES):
+            raise ValueError(f"latent_mix_sites: unknown sites {sorted(unknown)}")
+        attn_latents = {
+            "q": self.attn_latent_q,
+            "k": self.attn_latent_k,
+            "v": self.attn_latent_v,
+            "o": self.attn_latent_o,
+        }
+        if any(attn_latents.values()) and (self.mla or self.switchhead_experts):
+            raise ValueError("attn_latent_* is implemented for plain GQA layers only")
+        for site in self.latent_mix_sites:
+            width = {**attn_latents, "moe_in": self.latent_dim or 0, "moe_out": self.expert_out_dim}[site]
+            if not width or width % self.latent_mix_experts:
+                raise ValueError(f"latent_mix site {site} needs a latent divisible by latent_mix_experts, got {width}")
+        if self.latent_mix_sites and not 1 <= self.latent_mix_topk <= self.latent_mix_experts:
+            raise ValueError("latent_mix_topk must be in [1, latent_mix_experts]")
+        if "moe_in" in self.latent_mix_sites and (self.router_on_latent or self.latent_select):
+            raise ValueError("latent_mix site moe_in needs a plain projected latent (no router_on_latent/latent_select)")
+        if "moe_out" in self.latent_mix_sites and not self.has_latent_up:
+            raise ValueError("latent_mix site moe_out needs w_latent_up")
         if self.switchhead_experts:
             if self.mla:
                 raise ValueError("switchhead_experts is implemented for the GQA layers only")
@@ -1978,14 +2011,59 @@ def _switchhead_stats(site: str, weights: Float[Array, "B S G E"]) -> dict[str, 
     }
 
 
+class LatentProj(eqx.Module):
+    """``x -> RMSNorm(x W_down) W_up`` with a learnable gain on the latent, so the factored map keeps a free
+    scale under the hyperball's fixed matrix norms. As a mixture of latents (``mix_gate`` set) the latent is
+    ``E`` blocks, each normed alone and weighted by SwitchHead's sigmoid top-k gate."""
+
+    down: Float[Array, "I R"]
+    up: Float[Array, "R O"]
+    norm: "LearnedRMSNorm"  # [E, R / E] gain
+    mix_gate: Float[Array, "I E"] | None
+    topk: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(
+        cfg: GrugModelConfig, key: PRNGKeyArray, in_dim: int, width: int, out_dim: int, mix: bool, out_std: float
+    ) -> "LatentProj":
+        k_down, k_up, k_gate = random.split(key, 3)
+        blocks = cfg.latent_mix_experts if mix else 1
+        return LatentProj(
+            down=reshard(_init_weight(k_down, (in_dim, width), cfg.initializer_std), P(None, None)),
+            up=reshard(_init_weight(k_up, (width, out_dim), out_std), P(None, None)),
+            norm=_grouped_rms_norm(cfg, blocks, width // blocks),
+            mix_gate=(
+                reshard(_init_weight(k_gate, (in_dim, blocks), cfg.initializer_std), P(None, None)) if mix else None
+            ),
+            topk=cfg.latent_mix_topk if mix else 1,
+        )
+
+    def __call__(self, cfg: GrugModelConfig, x: Float[Array, "... I"]) -> Float[Array, "... O"]:
+        blocks = self.norm.weight.shape[0]
+        x = reshard(x, P(_BATCH_AXES, *([None] * (x.ndim - 1))))
+        latent = rearrange(_proj(cfg, x, self.down), "... (e r) -> ... e r", e=blocks)
+        latent = self.norm(latent)
+        if self.mix_gate is not None:
+            latent = latent * mixture_weights(x, self.mix_gate, blocks, self.topk)[..., None].astype(latent.dtype)
+        return _proj(cfg, rearrange(latent, "... e r -> ... (e r)"), self.up)
+
+
+def mixture_weights(
+    x: Float[Array, "... D"], gate: Float[Array, "D E"], experts: int, topk: int
+) -> Float[Array, "... E"]:
+    """``_switchhead_weights`` for a single group over arbitrary leading axes."""
+    flat = x.reshape(1, -1, x.shape[-1])
+    return _switchhead_weights(flat, gate, experts, topk).reshape(*x.shape[:-1], experts)
+
+
 class CausalSelfAttention(eqx.Module):
     """Softmax attention: GQA (``w_q``/``w_k``/``w_v``), or MLA with a compressed KV latent
     (``w_q``/``w_dkv``/``w_uk``/``w_uv``); either with half-RoPE or the Inkling bias."""
 
-    w_q: Float[Array, "D NH"]
+    w_q: Float[Array, "D NH"] | None  # None: factored (latent_q)
     w_k: Float[Array, "D MH"] | None
     w_v: Float[Array, "D MH"] | None
-    w_o: Float[Array, "NH D"]
+    w_o: Float[Array, "NH D"] | None  # None: factored (latent_o)
     attn_gate: Float[Array, "D G"]  # G = N heads, N*H channels (attn_gate_elementwise) or the rank (attn_gate_rank)
     attn_gate_up: Float[Array, "R G"] | None  # attn_gate_rank's zero-init up-projection to N*H channels
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
@@ -2020,6 +2098,10 @@ class CausalSelfAttention(eqx.Module):
     forget_gate_b: Float[Array, " N"] | None  # FoX forget gate bias (cfg.mla_forget_gate)
     switch_v_gate: Float[Array, "W ME"] | None  # SwitchHead value-expert gate, from the source token
     switch_o_gate: Float[Array, "D NE"] | None  # SwitchHead output-expert gate, from the destination token
+    latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
+    latent_k: LatentProj | None
+    latent_v: LatentProj | None
+    latent_o: LatentProj | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2116,6 +2198,10 @@ class CausalSelfAttention(eqx.Module):
                 forget_gate_b=(
                     jnp.full((n,), cfg.mla_forget_gate_bias_init, jnp.float32) if cfg.mla_forget_gate else None
                 ),
+                latent_q=None,
+                latent_k=None,
+                latent_v=None,
+                latent_o=None,
                 switch_v_gate=None,
                 switch_o_gate=None,
                 cfg=cfg,
@@ -2130,16 +2216,34 @@ class CausalSelfAttention(eqx.Module):
             raise ValueError("mla_v_filter needs mla")
         if cfg.mla_forget_gate:
             raise ValueError("mla_forget_gate needs mla")
-        k_q, k_k, k_v, k_o, k_rel, k_sv, k_so = random.split(key, 7)
+        k_q, k_k, k_v, k_o, k_rel, k_sv, k_so, k_lat = random.split(key, 8)
+        lat_keys = dict(zip("qkvo", random.split(k_lat, 4), strict=True))
+        o_std = std * cfg.init_std_mult_attn_out
+
+        def _latent(site: str, width: int, in_dim: int, out_dim: int, out_std: float) -> LatentProj | None:
+            if not width:
+                return None
+            mix = site in cfg.latent_mix_sites
+            return LatentProj.init(cfg, lat_keys[site], in_dim, width, out_dim, mix, out_std)
+
         switch_v = cfg.switchhead_experts if cfg.switchhead_sites in (SwitchHeadSites.V, SwitchHeadSites.VO) else 0
         switch_o = cfg.switchhead_experts if cfg.switchhead_sites in (SwitchHeadSites.O, SwitchHeadSites.VO) else 0
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_k=reshard(_init_weight(k_k, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, m * max(switch_v, 1) * h), std), P(_FSDP_AXES, "model")),
-            w_o=reshard(
-                _init_weight(k_o, (n * max(switch_o, 1) * h, d), std * cfg.init_std_mult_attn_out),
-                P("model", _FSDP_AXES),
+            w_q=None if cfg.attn_latent_q else reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_k=(
+                None
+                if cfg.attn_latent_k
+                else reshard(_init_weight(k_k, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model"))
+            ),
+            w_v=(
+                None
+                if cfg.attn_latent_v
+                else reshard(_init_weight(k_v, (cfg.kv_in_dim, m * max(switch_v, 1) * h), std), P(_FSDP_AXES, "model"))
+            ),
+            w_o=(
+                None
+                if cfg.attn_latent_o
+                else reshard(_init_weight(k_o, (n * max(switch_o, 1) * h, d), o_std), P("model", _FSDP_AXES))
             ),
             attn_gate=attn_gate,
             attn_gate_up=attn_gate_up,
@@ -2182,6 +2286,10 @@ class CausalSelfAttention(eqx.Module):
                 reshard(_init_weight(k_sv, (cfg.kv_in_dim, m * switch_v), std), P(None, None)) if switch_v else None
             ),
             switch_o_gate=reshard(_init_weight(k_so, (d, n * switch_o), std), P(None, None)) if switch_o else None,
+            latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
+            latent_k=_latent("k", cfg.attn_latent_k, cfg.kv_in_dim, m * h, std),
+            latent_v=_latent("v", cfg.attn_latent_v, cfg.kv_in_dim, m * h, std),
+            latent_o=_latent("o", cfg.attn_latent_o, n * h, d, o_std),
             cfg=cfg,
         )
 
@@ -2213,6 +2321,7 @@ class CausalSelfAttention(eqx.Module):
                 q_flat = self.sconv_q(q_flat, sconv_segment_ids)
             return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
 
+        assert self.w_q is not None
         q = project_q(self.w_q)
         share_latent = kv_share is not None and self.cfg.mla_share_kv_latent
         if share_latent and "latent" in kv_share:
@@ -2267,12 +2376,18 @@ class CausalSelfAttention(eqx.Module):
         is_global: bool | jax.Array,
         kv_input: Float[Array, "B S W"] | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        assert self.w_k is not None and self.w_v is not None
         head_dim = self.cfg.inferred_head_dim
         kv_in = x if kv_input is None else kv_input
-        q_flat = _proj(self.cfg, x, self.w_q)
-        k_flat = _proj(self.cfg, kv_in, self.w_k)
-        v_flat = _proj(self.cfg, kv_in, self.w_v)
+
+        def _project(inp: jax.Array, w: jax.Array | None, latent: LatentProj | None) -> jax.Array:
+            if latent is not None:
+                return latent(self.cfg, inp)
+            assert w is not None
+            return _proj(self.cfg, inp, w)
+
+        q_flat = _project(x, self.w_q, self.latent_q)
+        k_flat = _project(kv_in, self.w_k, self.latent_k)
+        v_flat = _project(kv_in, self.w_v, self.latent_v)
         # SConv: depthwise causal conv after the K projection.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
@@ -2512,8 +2627,8 @@ class CausalSelfAttention(eqx.Module):
         gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if per_channel else gate[..., None]
         attn_out = gate * attn_out
         if head_probe_attn is not None:
-            if self.cfg.switchhead_experts:
-                raise ValueError("head_probe does not support switchhead_experts")
+            if self.cfg.switchhead_experts or self.w_o is None:
+                raise ValueError("head_probe does not support switchhead_experts or attn_latent_o")
             stats[HEAD_PROBE_STAT] = _head_output_stats(head_probe_attn, gate, attn_out, self.w_o)
         if self.switch_v_gate is not None:
             stats.update(
@@ -2538,6 +2653,9 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:2], math.prod(attn_out.shape[2:])),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
+        if self.latent_o is not None:
+            return reshard(self.latent_o(self.cfg, attn_out), batch_spec), stats
+        assert self.w_o is not None
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
 
 
@@ -3503,6 +3621,8 @@ class MoEMLP(eqx.Module):
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
     latent_out_norm: LearnedRMSNorm | None
+    latent_mix_in_gate: Float[Array, "D E"] | None  # mixture of latents on the input latent (latent_mix_sites)
+    latent_mix_out_gate: Float[Array, "D E"] | None  # mixture of latents on the experts' output latent
     expert_read_norm: LearnedRMSNorm | None
     """Per-group ``[G, W]`` learnable RMSNorm of the ``expert_read_groups`` input slices."""
     latent_select_mask: Float[Array, " D"] | None
@@ -3511,6 +3631,15 @@ class MoEMLP(eqx.Module):
     cfg: GrugModelConfig = eqx.field(static=True)
     latent_selects: bool = eqx.field(static=True, default=False)
     """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
+
+    def _mix_latent(
+        self, latent: Float[Array, "T R"], x_flat: Float[Array, "T D"], norm: LearnedRMSNorm, gate: jax.Array
+    ) -> Float[Array, "T R"]:
+        """Mixture of latents: norm each of the ``E`` latent blocks and weight it by its top-k gate from ``x``."""
+        blocks = self.cfg.latent_mix_experts
+        normed = norm(rearrange(latent, "t (e r) -> t e r", e=blocks))
+        weights = mixture_weights(x_flat, gate, blocks, self.cfg.latent_mix_topk)
+        return rearrange(normed * weights[..., None].astype(normed.dtype), "t e r -> t (e r)")
 
     @staticmethod
     def init(
@@ -3528,6 +3657,8 @@ class MoEMLP(eqx.Module):
         # own projection keeps `hidden_dim`.
         expert_width, out_width = cfg.expert_in_dim, cfg.expert_out_dim
         latent = cfg.latent_dim
+        mix_e = cfg.latent_mix_experts
+        mix_in, mix_out = "moe_in" in cfg.latent_mix_sites, "moe_out" in cfg.latent_mix_sites
         selects = cfg.latent_select and (
             cfg.latent_select_layers == "all" or (cfg.latent_select_layers == "kda") == use_kda
         )
@@ -3580,7 +3711,13 @@ class MoEMLP(eqx.Module):
                 else reshard(_latent_proj_init(cfg, k_down, (d, latent)), P(_FSDP_AXES, "model"))
             ),
             latent_norm=(
-                None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps, role="moe_latent")
+                None
+                if latent is None
+                else (
+                    _grouped_rms_norm(cfg, mix_e, latent // mix_e)
+                    if mix_in
+                    else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps, role="moe_latent")
+                )
             ),
             w_latent_up=(
                 reshard(_latent_proj_init(cfg, k_up, (out_width, d)), P("model", _FSDP_AXES))
@@ -3588,8 +3725,22 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             latent_out_norm=(
-                _learned_rms_norm(cfg, out_width, cfg.layer_norm_eps)
-                if cfg.latent_out_norm and (latent is not None or cfg.latent_out_dim is not None)
+                _grouped_rms_norm(cfg, mix_e, out_width // mix_e)
+                if mix_out
+                else (
+                    _learned_rms_norm(cfg, out_width, cfg.layer_norm_eps)
+                    if cfg.latent_out_norm and (latent is not None or cfg.latent_out_dim is not None)
+                    else None
+                )
+            ),
+            latent_mix_in_gate=(
+                reshard(_init_weight(random.fold_in(k_down, 1), (d, mix_e), cfg.initializer_std), P(None, None))
+                if mix_in
+                else None
+            ),
+            latent_mix_out_gate=(
+                reshard(_init_weight(random.fold_in(k_up, 1), (d, mix_e), cfg.initializer_std), P(None, None))
+                if mix_out
                 else None
             ),
             expert_read_norm=(
@@ -4039,7 +4190,11 @@ class MoEMLP(eqx.Module):
             routed_input = self.latent_norm(selected)
         elif self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
-            routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
+            routed_input = reshard(projected[1], _batch_spec())
+            if self.latent_mix_in_gate is None:
+                routed_input = self.latent_norm(routed_input)
+            else:
+                routed_input = self._mix_latent(routed_input, x_flat, self.latent_norm, self.latent_mix_in_gate)
         if self.cfg.newton_muon:
             router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
@@ -4115,7 +4270,10 @@ class MoEMLP(eqx.Module):
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
-        if self.latent_out_norm is not None:
+        if self.latent_mix_out_gate is not None:
+            assert self.latent_out_norm is not None
+            routed_flat = self._mix_latent(routed_flat, x_flat, self.latent_out_norm, self.latent_mix_out_gate)
+        elif self.latent_out_norm is not None:
             routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up is not None:
             routed_flat = _proj(

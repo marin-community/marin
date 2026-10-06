@@ -1,0 +1,66 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Factored (latent) attention projections and mixtures of latents on attention and the MoE latent."""
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+import experiments.grug.fast_track.test_ngram_stat as t
+from experiments.grug.fast_track.model import LatentProj, _switchhead_weights
+from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight
+
+
+def _loss_and_grads(model, mesh):
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        return eqx.filter_jit(eqx.filter_value_and_grad(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape))))(
+            model
+        )
+
+
+def test_mixture_latent_matches_block_gated_reference():
+    mesh, model = t._model(ngram_stat_rows=0, latent_mix_experts=4, latent_mix_topk=2)
+    cfg = model.config
+    x = jax.random.normal(jax.random.PRNGKey(1), (3, 8))
+    with jax.set_mesh(mesh):
+        proj = LatentProj.init(cfg, jax.random.PRNGKey(0), 8, 12, 6, True, 0.1)
+        out = np.asarray(proj(cfg, x))
+    latent = (x @ proj.down).reshape(3, 4, 3)
+    latent = latent / np.sqrt(np.mean(np.square(latent), -1, keepdims=True) + cfg.layer_norm_eps)
+    weights = np.asarray(_switchhead_weights(x[None], proj.mix_gate, 4, 2))[0, :, 0]
+    assert ((weights > 0).sum(-1) == 2).all()
+    expected = (latent * weights[..., None]).reshape(3, 12) @ proj.up
+    np.testing.assert_allclose(out, expected, rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.parametrize("site", ["q", "k", "v", "o"])
+@pytest.mark.parametrize("mix", [False, True])
+def test_attention_latent_replaces_the_projection_and_trains(site, mix):
+    settings = {f"attn_latent_{site}": 8, "latent_mix_sites": (site,) if mix else ()}
+    mesh, model = t._model(ngram_stat_rows=0, mla=False, **settings)
+    attn = model.stacked_blocks.stacked.attn
+    assert getattr(attn, f"w_{site}") is None
+    loss, grads = _loss_and_grads(model, mesh)
+    assert np.isfinite(float(loss))
+    latent = getattr(grads.stacked_blocks.stacked.attn, f"latent_{site}")
+    for leaf in (latent.down, latent.up, latent.norm.weight) + ((latent.mix_gate,) if mix else ()):
+        assert float(jnp.abs(leaf).max()) > 0
+
+
+@pytest.mark.parametrize("site", ["moe_in", "moe_out"])
+def test_moe_latent_mixture_trains_its_gate(site):
+    mesh, model = t._model(ngram_stat_rows=0, latent_mix_sites=(site,))
+    loss, grads = _loss_and_grads(model, mesh)
+    assert np.isfinite(float(loss))
+    mlp = grads.stacked_blocks.stacked.mlp
+    gate = mlp.latent_mix_in_gate if site == "moe_in" else mlp.latent_mix_out_gate
+    assert float(jnp.abs(gate).max()) > 0
+
+
+def test_mixture_gates_go_to_adam():
+    for path in ("blocks.attn.latent_q.mix_gate", "blocks.mlp.latent_mix_in_gate", "blocks.mlp.latent_mix_out_gate"):
+        assert _is_gate_or_router_weight(path)
