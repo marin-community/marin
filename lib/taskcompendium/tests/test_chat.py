@@ -1,22 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Chat wire normalization and pure grading preserve semantic result contracts."""
-
-import json
-from dataclasses import replace
-from typing import Any
+"""Chat request formatting and typed evidence preserve semantic grading contracts."""
 
 import pytest
 from pydantic import TypeAdapter
 from verifyit.json_comparison import NumericTypePolicy
 
-from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
-from taskcompendium.grading_contract import GradingAttempt, TextSubmission
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
     FunctionDefinition,
@@ -37,8 +34,8 @@ from taskcompendium.submission import (
 )
 
 
-def _attempt(specification, convention, response):
-    trace = chat_conversation([*chat_request(specification, convention)["messages"], response])
+def _attempt(specification, response):
+    trace = ConversationTrace(events=(*specification.context.events, response))
     return GradingAttempt(ConversationTrace.model_validate_json(trace.model_dump_json()), object())
 
 
@@ -52,18 +49,10 @@ def _answer_convention(answer_format: AnswerFormat) -> SubmissionConvention:
     raise ValueError(f"Unsupported test answer format: {answer_format}")
 
 
-def _answer_action(answer: str) -> dict:
-    return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": "call-answer",
-                "type": "function",
-                "function": {"name": "submit_answer", "arguments": json.dumps({"answer": answer})},
-            }
-        ],
-    }
+def _answer_action(answer: str, name: str = "submit_answer") -> AssistantToolCalls:
+    return AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="call-answer", name=name, arguments={"answer": answer}),)
+    )
 
 
 @pytest.fixture
@@ -122,7 +111,7 @@ async def test_chat_answer_distinguishes_wrong_and_malformed_submissions(
     convention = TypeAdapter(SubmissionConvention).validate_json(_answer_convention(answer_format).model_dump_json())
     assert "12" not in render_instruction(specification, convention)
     result = await grade_answer(
-        specification, convention, _attempt(specification, convention, {"role": "assistant", "content": response})
+        specification, convention, _attempt(specification, TextMessage(role="assistant", content=response))
     )
     assert (result.status, result.reward) == (status, reward)
 
@@ -131,14 +120,14 @@ async def test_chat_exact_comparison_uses_unicode_and_whitespace_normalization(s
     task = specification.model_copy(update={"verifier": exact_answer("Straße Park"), "answer_type": AnswerType.TEXT})
     convention = PlainText(id="plain")
     result = await grade_answer(
-        task, convention, _attempt(task, convention, {"role": "assistant", "content": "STRASSE   PARK"})
+        task, convention, _attempt(task, TextMessage(role="assistant", content="STRASSE   PARK"))
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_text_convention_retains_but_rejects_tool_call_evidence(specification):
     convention = PlainText(id="plain")
-    attempt = _attempt(specification, convention, _answer_action("12"))
+    attempt = _attempt(specification, _answer_action("12"))
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
     assert attempt.conversation.events[-1].calls[0].arguments == {"answer": "12"}
@@ -154,45 +143,13 @@ async def test_text_convention_retains_but_rejects_tool_call_evidence(specificat
 async def test_answer_call_grades_semantic_answers(specification, answer_type, verifier, response):
     task = specification.model_copy(update={"answer_type": answer_type, "verifier": verifier})
     convention = AnswerCall(id="answer-call")
-    correct = await grade_answer(task, convention, _attempt(task, convention, _answer_action(response)))
-    wrong = await grade_answer(task, convention, _attempt(task, convention, _answer_action("13")))
-    invalid = _answer_action(response)
-    invalid["tool_calls"][0]["function"]["name"] = "lookup"
-    rejected = await grade_answer(task, convention, _attempt(task, convention, invalid))
+    correct = await grade_answer(task, convention, _attempt(task, _answer_action(response)))
+    wrong = await grade_answer(task, convention, _attempt(task, _answer_action("13")))
+    invalid = _answer_action(response, name="lookup")
+    rejected = await grade_answer(task, convention, _attempt(task, invalid))
     assert (correct.status, correct.reward) == (Outcome.GRADED, 1.0)
     assert (wrong.status, wrong.reward) == (Outcome.GRADED, 0.0)
     assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
-
-
-class ChatAnswerCall(AnswerCall):
-    response: dict[str, Any]
-
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        conversation = ConversationTrace(events=(*attempt.conversation.events[:-1], assistant_message(self.response)))
-        return await super().extract(replace(attempt, conversation=conversation))
-
-
-@pytest.mark.parametrize(
-    "arguments,status,reward",
-    [
-        ('{"answer":"12"}', Outcome.GRADED, 1.0),
-        ('{"answer":"13"}', Outcome.GRADED, 0.0),
-        ('{"answer":', Outcome.SUBMISSION_FAILURE, 0.0),
-        ('{"answer":"12","answer":"13"}', Outcome.SUBMISSION_FAILURE, 0.0),
-    ],
-)
-async def test_chat_decoding_during_acquisition_exposes_structural_failure_as_zero(
-    specification, arguments, status, reward
-):
-    response = _answer_action("12")
-    response["tool_calls"][0]["function"]["arguments"] = arguments
-    convention = ChatAnswerCall(id="chat-answer", response=response)
-    attempt = GradingAttempt(
-        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="Done."))),
-        object(),
-    )
-    result = await grade_answer(specification, convention, attempt)
-    assert (result.status, result.reward) == (status, reward)
 
 
 @pytest.mark.parametrize("answer_format", [AnswerFormat.PLAIN, AnswerFormat.JSON, AnswerFormat.ANSWER_CALL])
@@ -238,7 +195,7 @@ async def test_json_value_chat_grading_rejects_ambiguous_and_nonfinite_values(sp
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
     convention = JsonValueAnswer(id="json-value")
-    result = await grade_answer(task, convention, _attempt(task, convention, {"role": "assistant", "content": content}))
+    result = await grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content=content)))
     assert (result.status, result.reward) == (status, reward)
 
 
@@ -268,6 +225,6 @@ async def test_json_chat_strict_numeric_policy_survives_task_roundtrip(specifica
     task = TaskSpec.model_validate_json(task.model_dump_json())
     convention = JsonValueAnswer(id="json-value")
     result = await grade_answer(
-        task, convention, _attempt(task, convention, {"role": "assistant", "content": '{"value":16.0}'})
+        task, convention, _attempt(task, TextMessage(role="assistant", content='{"value":16.0}'))
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 0.0)
