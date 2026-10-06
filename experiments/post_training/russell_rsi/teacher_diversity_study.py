@@ -265,30 +265,19 @@ def require_diversity_condition(config: dict) -> DiversityEvidence:
     return DiversityEvidence(original_study=original, lineage=lineage, bank=bank)
 
 
-def diversity_plan(config: dict, records: dict[str, str], tokenizer: MarinTokenizer) -> dict:
-    """Recompute the four retained rows before any new teacher request."""
-    bank = pinned_record(config, "bank_record")
-    if set(records) != {entry["task_id"] for entry in bank["tasks"]}:
-        raise ValueError("Diversity Parquet inventory differs from its complete admitted bank")
-    for entry in bank["tasks"]:
-        if digest(json.loads(records[entry["task_id"]])) != entry["task_sha256"]:
-            raise ValueError("Diversity raw task differs from its admission hash")
-    collection = PinnedFile(**config["retained_collection"]).read_json()
-    canonical = PinnedFile(**config["retained_canonical_proof"]).read_json()
-    entries = config["retained_rows"]
-    train = PinnedFile(**config["retained_train"]).read_bytes()
-    if (
-        collection["status"] != "passed"
-        or collection["protocol"] != RETAINED_PROTOCOL
-        or len(collection["accepted"]) != RETAINED_ROWS
-        or len(entries) != RETAINED_ROWS
-        or tuple(entry["slot"] for entry in entries) != RETAINED_SLOTS
-        or canonical["status"] != "canonical_runtime_rows_passed"
-        or canonical["train_sha256"] != config["retained_train"]["sha256"]
-    ):
-        raise ValueError("Diversity study requires all four qualified retained rows")
+def retained_chat_rows(
+    *,
+    entries: list[dict],
+    accepted_rows: list[dict],
+    canonical_rows: list[dict],
+    records: dict[str, str],
+    bank: dict,
+    tokenizer: MarinTokenizer,
+    train: bytes,
+) -> list[dict]:
+    """Check saved TRAIN rows against their original trajectories and token evidence."""
     retained = []
-    for entry, accepted, attested in zip(entries, collection["accepted"], canonical["rows"], strict=True):
+    for entry, accepted, attested in zip(entries, accepted_rows, canonical_rows, strict=True):
         task = accepted["task"]
         slot = accepted["slot"]
         raw = records[task["task_id"]]
@@ -319,7 +308,41 @@ def diversity_plan(config: dict, records: dict[str, str], tokenizer: MarinTokeni
             raise ValueError("Retained row differs from full trajectory, grade or canonical token witness")
         retained.append({**accepted, "witness": row})
     if "".join(json.dumps(row["row"], sort_keys=True) + "\n" for row in retained).encode() != train:
-        raise ValueError("Retained training bytes differ from the four accepted examples")
+        raise ValueError("Retained training bytes differ from the accepted examples")
+    return retained
+
+
+def diversity_plan(config: dict, records: dict[str, str], tokenizer: MarinTokenizer) -> dict:
+    """Recompute the four retained rows before any new teacher request."""
+    bank = pinned_record(config, "bank_record")
+    if set(records) != {entry["task_id"] for entry in bank["tasks"]}:
+        raise ValueError("Diversity Parquet inventory differs from its complete admitted bank")
+    for entry in bank["tasks"]:
+        if digest(json.loads(records[entry["task_id"]])) != entry["task_sha256"]:
+            raise ValueError("Diversity raw task differs from its admission hash")
+    collection = PinnedFile(**config["retained_collection"]).read_json()
+    canonical = PinnedFile(**config["retained_canonical_proof"]).read_json()
+    entries = config["retained_rows"]
+    train = PinnedFile(**config["retained_train"]).read_bytes()
+    if (
+        collection["status"] != "passed"
+        or collection["protocol"] != RETAINED_PROTOCOL
+        or len(collection["accepted"]) != RETAINED_ROWS
+        or len(entries) != RETAINED_ROWS
+        or tuple(entry["slot"] for entry in entries) != RETAINED_SLOTS
+        or canonical["status"] != "canonical_runtime_rows_passed"
+        or canonical["train_sha256"] != config["retained_train"]["sha256"]
+    ):
+        raise ValueError("Diversity study requires all four qualified retained rows")
+    retained = retained_chat_rows(
+        entries=entries,
+        accepted_rows=collection["accepted"],
+        canonical_rows=canonical["rows"],
+        records=records,
+        bank=bank,
+        tokenizer=tokenizer,
+        train=train,
+    )
     families = {row["task"]["family"] for row in retained}
     if (
         len(families) != RETAINED_ROWS

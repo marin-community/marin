@@ -466,6 +466,7 @@ def post_sft_evaluation_stages(
     study: StudyBaseline | None,
     coding_runner: Callable[[EvalStepConfig], EvaluationResult] | None = None,
     retention_runner: Callable[[DevelopmentEvaluationConfig], None] | None = None,
+    checkpoint_locations: dict[str, str] | None = None,
 ) -> dict[str, ArtifactStep]:
     """Build the unchanged coding, retention, and selection stages."""
     protocol = PROTOCOL if study is None else study.protocol
@@ -496,10 +497,20 @@ def post_sft_evaluation_stages(
             f"russell-rsi-{protocol}-{label}", export_uri if label == "sft" else SKYRL_POLICY_LOCATION, None
         )
 
-        def resolver(ctx: StepContext, item=checkpoint, selected=evaluation):
+        if checkpoint_locations is not None and label not in checkpoint_locations:
+            raise ValueError(f"Checkpoint location is missing for {label}")
+        location = None if checkpoint_locations is None else checkpoint_locations[label]
+        if location is not None and checkpoint.artifact_type is SkyRLRun:
+            raise ValueError("SkyRL checkpoint locations must come from their qualified policy export")
+
+        def resolver(ctx: StepContext, item=checkpoint, selected=evaluation, override=location):
             if item.artifact_type is SkyRLRun:
                 return resolve_skyrl_model(ctx, item, selected)
-            return replace(selected, location=ctx.artifact_path(item), identity=artifact_identity(item))
+            return replace(
+                selected,
+                location=ctx.artifact_path(item) if override is None else override,
+                identity=artifact_identity(item),
+            )
 
         coding = eval_step(
             evaluation,
@@ -540,6 +551,14 @@ def post_sft_evaluation_stages(
         retained = development_step(
             retention, checkpoint, version, runtime, f"{protocol}-{label}-retention", limit=RETENTION_TASKS
         )
+        if location is not None:
+            original_retention_config = retained.build_config
+            retained = replace(
+                retained,
+                build_config=lambda ctx, original=original_retention_config, override=location: replace(
+                    original(ctx), model_uri=override
+                ),
+            )
         if retention_runner is not None:
             retained = replace(retained, run=retention_runner)
         retained = replace(retained, deps=tuple(dict.fromkeys((*retained.deps, *barriers))))
