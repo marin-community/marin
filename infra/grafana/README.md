@@ -416,13 +416,11 @@ the existing shared Arrow-cache budget. Both the aggregate input rows and each
 upstream query retain the configured row limit. A moving window refreshes the
 current day instead of rescanning the full week.
 
-Regional metadata uses `GetGpuAllocationMetadata` through Marin's existing signed
-federation connections. The fixed read returns resource shapes, priority and
-attempt lifetimes for local jobs, including jobs absent from the hub's mirror.
-Verified peers receive this one read permission; SQL and transitive forwarding
-remain denied. The parent and regional controllers must include the RPC before
-Grafana can load historical metadata. No new credentials, Kubernetes proxy role,
-Finelog producer, persisted schema or retention policy is needed.
+Regional metadata read access is unresolved. The bridge returns HTTP 503 for
+allocation history when no metadata reader is configured; it does not call an
+Iris metadata RPC. The benchmark supplies captured request/attempt records to
+exercise the projection and caching with live Finelog. Existing Iris and Finelog
+server code, persisted schemas, retention and writes remain unchanged.
 
 `jobs.json` reads the `iris.task_state` finelog namespace on the marin hub — one
 row per active root job every 30s per cluster-view (CoreWeave) controller,

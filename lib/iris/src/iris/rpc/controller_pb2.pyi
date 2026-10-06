@@ -874,51 +874,6 @@ class Controller(_message.Message):
         PEERS_FIELD_NUMBER: _ClassVar[int]
         peers: _containers.RepeatedCompositeFieldContainer[Controller.PeerSummary]
         def __init__(self, peers: _Optional[_Iterable[_Union[Controller.PeerSummary, _Mapping]]] = ...) -> None: ...
-    class GetGpuAllocationMetadataRequest(_message.Message):
-        __slots__ = ("cluster", "from_ms", "to_ms", "root_job_ids", "max_rows")
-        CLUSTER_FIELD_NUMBER: _ClassVar[int]
-        FROM_MS_FIELD_NUMBER: _ClassVar[int]
-        TO_MS_FIELD_NUMBER: _ClassVar[int]
-        ROOT_JOB_IDS_FIELD_NUMBER: _ClassVar[int]
-        MAX_ROWS_FIELD_NUMBER: _ClassVar[int]
-        cluster: str
-        from_ms: int
-        to_ms: int
-        root_job_ids: _containers.RepeatedScalarFieldContainer[str]
-        max_rows: int
-        def __init__(self, cluster: _Optional[str] = ..., from_ms: _Optional[int] = ..., to_ms: _Optional[int] = ..., root_job_ids: _Optional[_Iterable[str]] = ..., max_rows: _Optional[int] = ...) -> None: ...
-    class GpuAllocationAttempt(_message.Message):
-        __slots__ = ("root_job_id", "task_id", "gpu_count", "gpu_variant", "requested_priority", "current_applied_priority", "current_attempt_id", "attempt_id", "created_at_ms", "started_at_ms", "finished_at_ms", "state")
-        ROOT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
-        GPU_VARIANT_FIELD_NUMBER: _ClassVar[int]
-        REQUESTED_PRIORITY_FIELD_NUMBER: _ClassVar[int]
-        CURRENT_APPLIED_PRIORITY_FIELD_NUMBER: _ClassVar[int]
-        CURRENT_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        CREATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-        STARTED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-        FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-        STATE_FIELD_NUMBER: _ClassVar[int]
-        root_job_id: str
-        task_id: str
-        gpu_count: int
-        gpu_variant: str
-        requested_priority: _job_pb2.PriorityBand
-        current_applied_priority: _job_pb2.PriorityBand
-        current_attempt_id: int
-        attempt_id: int
-        created_at_ms: int
-        started_at_ms: int
-        finished_at_ms: int
-        state: _job_pb2.TaskState
-        def __init__(self, root_job_id: _Optional[str] = ..., task_id: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_variant: _Optional[str] = ..., requested_priority: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., current_applied_priority: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., current_attempt_id: _Optional[int] = ..., attempt_id: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ...) -> None: ...
-    class GetGpuAllocationMetadataResponse(_message.Message):
-        __slots__ = ("attempts",)
-        ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
-        attempts: _containers.RepeatedCompositeFieldContainer[Controller.GpuAllocationAttempt]
-        def __init__(self, attempts: _Optional[_Iterable[_Union[Controller.GpuAllocationAttempt, _Mapping]]] = ...) -> None: ...
     class FederationSyncRequest(_message.Message):
         __slots__ = ("requester_id", "cursor")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]

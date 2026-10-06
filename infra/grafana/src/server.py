@@ -118,7 +118,7 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from gpu_allocation_history import CLUSTER_NAMES as GPU_CLUSTERS
 from gpu_allocation_history import MODELS as GPU_MODELS
-from gpu_allocation_history import allocation_history
+from gpu_allocation_history import AllocationMetadataSource, allocation_history
 from hero_health import (
     EVAL_HISTORY_LENGTH,
     EvalHistory,
@@ -594,6 +594,8 @@ def create_app(
     wandb_source: WandbSource,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    *,
+    allocation_metadata_source: AllocationMetadataSource | None = None,
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
@@ -692,8 +694,11 @@ def create_app(
     def gpu_allocation(request: Request) -> JSONResponse:
         try:
             target = _target_for(request.path_params["cluster"], finelog_sources)
-            if target.name not in iris_sources:
-                raise _BadRequest("GPU allocation metadata requires an Iris controller source")
+            metadata_source = allocation_metadata_source
+            if metadata_source is None:
+                return JSONResponse(
+                    {"error": "Regional GPU history metadata read access is not configured"}, status_code=503
+                )
             params = request.query_params
             start = _require_time(params, "from")
             end = _require_time(params, "to")
@@ -720,7 +725,7 @@ def create_app(
             def run() -> list[dict]:
                 rows = allocation_history(
                     finelog_sources[target.name],
-                    iris_sources[target.name],
+                    metadata_source,
                     dataset_source_cache,
                     round(start.timestamp() * 1000),
                     round(end.timestamp() * 1000),

@@ -88,10 +88,6 @@ class PeerConnection(Protocol):
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse: ...
 
-    def gpu_allocation_metadata(
-        self, request: controller_pb2.Controller.GetGpuAllocationMetadataRequest
-    ) -> controller_pb2.Controller.GetGpuAllocationMetadataResponse: ...
-
     def shutdown(self) -> None: ...
 
 
@@ -142,11 +138,6 @@ class _PeerRpcConnection:
             controller_pb2.Controller.ListBackendsRequest(), timeout_ms=_HEARTBEAT_TIMEOUT_MS
         )
         return list(response.backends)
-
-    def gpu_allocation_metadata(
-        self, request: controller_pb2.Controller.GetGpuAllocationMetadataRequest
-    ) -> controller_pb2.Controller.GetGpuAllocationMetadataResponse:
-        return self._client.get_gpu_allocation_metadata(request, timeout_ms=_HEARTBEAT_TIMEOUT_MS)
 
     def launch_job(
         self, request: controller_pb2.Controller.LaunchJobRequest
@@ -284,12 +275,6 @@ class FederationPeer:
     def close(self) -> None:
         """Release the peer connection."""
         self._connection.shutdown()
-
-    def gpu_allocation_metadata(
-        self, request: controller_pb2.Controller.GetGpuAllocationMetadataRequest
-    ) -> controller_pb2.Controller.GetGpuAllocationMetadataResponse:
-        """Read bounded allocation metadata from the owning regional registry."""
-        return self._connection.gpu_allocation_metadata(request)
 
 
 def build_peers(

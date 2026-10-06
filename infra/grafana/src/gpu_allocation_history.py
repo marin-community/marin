@@ -117,7 +117,7 @@ def _optional_time(row: dict, field: str) -> int | None:
 
 
 def metadata_table(rows: list[dict], start_ms: int, end_ms: int) -> pa.Table:
-    """Normalize the fixed protobuf JSON response into the shared Arrow cache."""
+    """Normalize GPU request and attempt records for the shared Arrow cache."""
     schema = pa.schema(
         [
             ("root", pa.string()),

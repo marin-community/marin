@@ -174,7 +174,21 @@ class Registry:
 
 
 def _client(source, registry):
-    return TestClient(create_app(bridge_config(), {"marin": source}, {"marin": registry}, None, None, None))
+    return TestClient(
+        create_app(bridge_config(), {"marin": source}, {}, None, None, None, allocation_metadata_source=registry)
+    )
+
+
+def test_bridge_reports_unconfigured_metadata_access_without_querying_history():
+    with duckdb.connect() as database:
+        source, queries = _database_source(database)
+        with TestClient(create_app(bridge_config(), {"marin": source}, {}, None, None, None)) as client:
+            response = client.get(
+                "/finelog/marin/v1/gpu/allocation", params={"from": 60_000, "to": 120_000, "clusters": CLUSTER}
+            )
+            assert response.status_code == 503
+            assert "metadata read access is not configured" in response.json()["error"]
+            assert queries == []
 
 
 def test_bridge_reads_whole_emissions_and_shares_inputs_between_both_models():

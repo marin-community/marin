@@ -36,12 +36,9 @@ DASHBOARD_ROLE = "dashboard"
 FEDERATION_PEER_ROLE = "federation-peer"
 
 # RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
-# cancel, delta-sync, capability heartbeat, and bounded nonsecret allocation
-# metadata. A default-deny allowlist, like
+# cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
 # DASHBOARD_READABLE_RPCS.
-FEDERATION_RPCS: frozenset[str] = frozenset(
-    {"LaunchJob", "TerminateJob", "FederationSync", "ListBackends", "GetGpuAllocationMetadata"}
-)
+FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "FederationSync", "ListBackends"})
 
 # Task operations a federation-peer identity may call, but only after the
 # handler confirms the target task belongs to a job that peer federated here (its

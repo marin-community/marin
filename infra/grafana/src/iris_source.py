@@ -183,16 +183,3 @@ class IrisSource:
         result = self._post_rpc("ExecuteRawQuery", {"sql": sql})
         names = [column["name"] for column in result.get("columns", [])]
         return [dict(zip(names, json.loads(raw), strict=False)) for raw in result.get("rows", [])]
-
-    def gpu_allocation_metadata(self, cluster: str, start_ms: int, end_ms: int, *, max_rows: int) -> list[dict]:
-        """Read nonsecret attempt/resource metadata from its regional owner."""
-        result = self._post_rpc(
-            "GetGpuAllocationMetadata",
-            {
-                "cluster": cluster,
-                "fromMs": start_ms,
-                "toMs": end_ms,
-                "maxRows": max_rows,
-            },
-        )
-        return result.get("attempts", [])

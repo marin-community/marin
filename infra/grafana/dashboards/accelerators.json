@@ -2918,7 +2918,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Historical values recover Running GPU requests. Unresolved setup, pod cleanup, missing metadata and historical capacity leave every historical point incomplete. Unknown priority applies to recovered requests with an unavailable applied band. Idle remains blank because historical capacity and full allocation are unavailable. Missing regional reads leave blank spans. The coverage table reports the selected range and resolution."
+        "content": "Historical values recover Running GPU requests. Unresolved setup, pod cleanup, missing metadata and historical capacity leave every historical point incomplete. Unknown priority applies to recovered requests with an unavailable applied band. Idle remains blank because historical capacity and full allocation are unavailable. Missing regional reads leave blank spans. The coverage table reports the selected range and resolution. Production regional metadata read access is pending; the bridge reports unavailable until a metadata reader is configured."
       },
       "fieldConfig": {
         "defaults": {},

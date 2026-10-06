@@ -4,8 +4,8 @@
 """Measure GPU history through the bridge using live Finelog and recorded metadata.
 
 Metadata replay measures projection and caching, not production RPC latency.
-The separately tested signed regional RPC must be deployed before a live
-end-to-end metadata benchmark can establish production loading cost.
+Regional runtime read access is unresolved. Recorded inputs cannot establish
+production metadata access or its loading cost.
 """
 
 import argparse
@@ -97,7 +97,7 @@ def main():
     with open_client(load_finelog_config("marin"), "marin", request_timeout=20) as client:
         source = RecordingSource(client)
         config = replace(BridgeConfig.from_environment(), cw_read_token=None, loom_alerts=None)
-        app = server.create_app(config, {"marin": source}, {"marin": registry}, None, None, None)
+        app = server.create_app(config, {"marin": source}, {}, None, None, None, allocation_metadata_source=registry)
         params = {"from": args.from_ms, "to": args.to_ms, "clusters": ",".join(CLUSTERS)}
         measurements = []
         with TestClient(app) as bridge:

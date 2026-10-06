@@ -22,7 +22,6 @@ from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName, WellKnownAttribute
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.testing.controller import MockController, make_controller_state, make_direct_job_request
 from iris.testing.controller_state import ControllerTestState
 
@@ -59,10 +58,6 @@ class InProcessPeerConnection:
     def terminate_job(self, job_id: JobName) -> None:
         with identity_scope(PEER_IDENTITY):
             self._service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
-
-    def gpu_allocation_metadata(self, request):
-        with identity_scope(VerifiedIdentity(user_id=PEER_IDENTITY.user_id, role=FEDERATION_PEER_ROLE)):
-            return self._service.get_gpu_allocation_metadata(request, None)
 
 
 class UnreachablePeerConnection(InProcessPeerConnection):
