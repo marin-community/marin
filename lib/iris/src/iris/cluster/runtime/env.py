@@ -75,11 +75,6 @@ STANDARD_MOUNTS: tuple[MountSpec, ...] = (
     MountSpec("scratch-cache", SCRATCH_CACHE_PATH, kind=MountKind.CACHE),
 )
 
-# CONTAINER_PROFILE_SANDBOX tasks get no node-shared cache: a writable cache
-# shared with other tasks would let a sandbox plant packages they later install.
-# The cache env still names these paths; they land in the container's own layer.
-SANDBOX_MOUNTS: tuple[MountSpec, ...] = tuple(m for m in STANDARD_MOUNTS if m.kind is not MountKind.CACHE)
-
 
 def cache_host_dirname(container_path: str) -> str:
     """Host directory name for a CACHE mount, relative to a runtime's cache_dir."""

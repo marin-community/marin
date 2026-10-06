@@ -100,8 +100,6 @@ from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     OUTPUT_MOUNT,
-    SANDBOX_MOUNTS,
-    STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
     WORKDIR_MOUNT,
@@ -122,6 +120,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
+from iris.cluster.runtime.sandbox import task_isolation
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
@@ -465,11 +464,13 @@ def _build_volumes_and_mounts(
     cache_dir: str,
     shm_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
-    """Build standard pod volumes and container volume mounts.
+    """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
-    they persist across pods on the same node. /dev/shm is memory-backed and
-    shares the task container's memory limit when one is set.
+    ``mount_specs`` comes from the task's ``TaskIsolation.mounts``; for a
+    sandbox task it has no CACHE entries, so no hostPath volume is created.
+    Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
+    cache_dir so they persist across pods on the same node. /dev/shm is
+    memory-backed and shares the task container's memory limit when one is set.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -837,12 +838,9 @@ def _build_pod_manifest(
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     managed_label = config.managed_label
-    # A sandbox pod carries nothing from the cluster: no task_env or env Secret,
-    # no controller address, no node cache, no service account token, and its
-    # own network namespace. The logship sidecar keeps its controller address.
-    sandboxed = run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
-    service_account = "" if sandboxed else config.service_account
-    host_network = config.host_network and not sandboxed
+    isolation = task_isolation(run_req.container_profile)
+    service_account = config.service_account if isolation.include_service_account else ""
+    host_network = config.host_network and isolation.allow_host_network
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -851,13 +849,13 @@ def _build_pod_manifest(
         attempt_uid=run_req.attempt_uid,
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
-        controller_address=None if sandboxed else config.controller_address,
+        controller_address=config.controller_address if isolation.include_controller_address else None,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
-    cluster_env = {} if sandboxed else config.task_env
+    cluster_env = config.task_env if isolation.include_cluster_env else {}
     combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
@@ -920,9 +918,7 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    volumes, vol_mounts = _build_volumes_and_mounts(
-        SANDBOX_MOUNTS if sandboxed else STANDARD_MOUNTS, cache_dir, shm_limit_bytes=shm_limit_bytes
-    )
+    volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     container: dict = {
         "name": "task",
@@ -941,7 +937,7 @@ def _build_pod_manifest(
     }
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
-    if config.env_secret_name and not sandboxed:
+    if config.env_secret_name and isolation.include_cluster_env:
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
@@ -1063,7 +1059,7 @@ def _build_pod_manifest(
     # securityContext stays at the DEFAULT posture (see _security_context).
     if resolve_container_profile(run_req.container_profile) in GVISOR_CONTAINER_PROFILES:
         spec["runtimeClassName"] = "gvisor"
-    if sandboxed:
+    if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
 
     if managed_label:
