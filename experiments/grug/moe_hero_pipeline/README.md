@@ -89,7 +89,8 @@ uv run --no-sync python -m iris.hooks.multigpu_main --nproc 1 --devices-per-proc
   python -u -m experiments.grug.moe_hero_pipeline.pipeline_smoke --full-hero \
     --schedule standard_1f1b --stages 24 --expert-axis-size 8 \
     --microbatches 48 --batch-size 384 --sequence-length 65536 --expert-waves 6 \
-    --optimizer muonh --offload-opt-state --offload-activations \
+    --optimizer muonh --expert-normalization per_expert \
+    --offload-opt-state --offload-activations \
     --park-state-during-warmup --synchronize-devices-after-step \
     --compilation-cache /tmp/hero-pp-jax-cache \
     --steps 10 --run-id <unique-run-id>
