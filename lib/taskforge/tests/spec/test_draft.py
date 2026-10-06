@@ -46,11 +46,12 @@ from taskforge.spec.draft import (
     shell_verifier,
     stage,
     staged,
+    task_execution,
 )
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
 PLAIN = PlainText(id="plain")
-NO_EXECUTION = TaskExecution()
+NO_EXECUTION = task_execution()
 GRADE_ANSWER = 'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi'
 
 
@@ -193,7 +194,7 @@ async def test_staged_task_runs_stages_on_one_machine_and_stops_below_minimum():
     def check(path: str, value: str):
         return shell_verifier(("sh", "-c", f'[ "$(cat {path})" = {value} ]'), ExitCodeReward(), timeout=5)
 
-    execution = TaskExecution(stages={"first": StageExecution(), "second": StageExecution()})
+    execution = task_execution(stages={"first": StageExecution(), "second": StageExecution()})
     task = assemble(
         "staged",
         "Write 12 to /workspace/a.",
@@ -258,7 +259,7 @@ def test_docker_task_with_separate_grading_machine_round_trips():
         ),
         verifier,
         SOURCE,
-        execution=TaskExecution(attempt_timeout=3600, agent_user="agent"),
+        execution=task_execution(attempt_timeout=3600, agent_user="agent"),
         metadata={"proposal": "abc"},
         tags=("taskforge",),
     )
@@ -298,7 +299,7 @@ def test_assemble_rejects_private_grader_content_shipped_to_the_agent():
             environment(EnvironmentKind.SHELLSIM),
             staged(StageRewardStrategy.FINAL),
             SOURCE,
-            execution=TaskExecution(stages={"only": StageExecution(workdir_files=(file("/notes.sh", GRADE_ANSWER),))}),
+            execution=task_execution(stages={"only": StageExecution(workdir_files=(file("/notes.sh", GRADE_ANSWER),))}),
             stages=(stage("only", grader),),
         )
 
@@ -313,7 +314,7 @@ def test_stage_minimum_rewards_must_name_components_the_grader_reports():
             environment(EnvironmentKind.SHELLSIM),
             staged(StageRewardStrategy.FINAL),
             SOURCE,
-            execution=TaskExecution(stages={"first": StageExecution()}),
+            execution=task_execution(stages={"first": StageExecution()}),
             stages=(gate,),
         )
 
@@ -359,6 +360,6 @@ def test_assemble_rejects_execution_settings_for_other_stages(stages):
             environment(EnvironmentKind.SHELLSIM),
             staged(StageRewardStrategy.FINAL),
             SOURCE,
-            execution=TaskExecution(stages=stages),
+            execution=task_execution(stages=stages),
             stages=(gate,),
         )

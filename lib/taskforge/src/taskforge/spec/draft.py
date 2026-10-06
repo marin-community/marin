@@ -13,6 +13,12 @@ A task's execution settings are not part of the ``TaskSpec`` (TaskCompendium
 healthcheck live in a ``TaskExecution`` that travels beside the task.
 ``assemble`` checks the ``TaskExecution`` against the task; the builder returns
 both (``BuildOutput.execution``), and validation passes both to RolloutEngine.
+
+#9623 proposes splitting the ``TaskSpec`` further: the environment and the
+presentation (system prompt, concrete tools) move to a ``TaskHarnessSpec`` and a
+``TaskSequence``, and ``TaskExecution`` becomes ``TaskExecutionSpec`` with
+``attempt_timeout`` on the sequence. Only ``_presentation`` builds the former and
+only ``task_execution`` builds the latter, so each move is a single-site change.
 """
 
 from collections.abc import Mapping, Sequence
@@ -35,7 +41,7 @@ from taskcompendium.environment import (
     StdoutReward,
     VerifierArtifact,
 )
-from taskcompendium.execution import TaskExecution
+from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading import validate_verifier, verifier_descriptor
 from taskcompendium.models import (
     FILESYSTEM_CAPABILITY,
@@ -82,6 +88,15 @@ class Resources:
     gpus: int = 0
 
 
+@dataclass(frozen=True)
+class _Presentation:
+    """The TaskSpec fields #9623 moves into ``TaskHarnessSpec`` and ``TaskSequence``."""
+
+    context: ConversationInput
+    final_tools: tuple[FunctionDefinition, ...]
+    environment: EnvironmentSpec
+
+
 def file(path: str, content: str, mode: int = 0o644) -> EnvironmentFile:
     """A UTF-8 text file at an absolute machine path."""
     return EnvironmentFile(path=path, content=content.encode(), mode=mode)
@@ -120,6 +135,26 @@ def environment(
         cpus=resources.cpus,
         storage_mb=resources.storage_mb,
         gpus=resources.gpus,
+    )
+
+
+def task_execution(
+    *,
+    attempt_timeout: float | None = None,
+    agent_timeout: float | None = None,
+    agent_user: str | None = None,
+    stages: Mapping[str, StageExecution] | None = None,
+) -> TaskExecution:
+    """The deadlines, agent user and stage preparation one execution of a task runs with.
+
+    Every Taskforge ``TaskExecution`` is built here; #9623 renames it to
+    ``TaskExecutionSpec`` and moves ``attempt_timeout`` to the task sequence.
+    """
+    return TaskExecution(
+        attempt_timeout=attempt_timeout,
+        agent_timeout=agent_timeout,
+        agent_user=agent_user,
+        stages=dict(stages or {}),
     )
 
 
@@ -206,7 +241,7 @@ def stage(
     """
     return TaskStage(
         name=name,
-        context=None if instruction is None else _user_context(instruction),
+        context=None if instruction is None else _conversation(instruction),
         verifier=verifier,
         minimum_rewards=dict(minimum_rewards or {}),
     )
@@ -240,20 +275,17 @@ def assemble(
             on a reward component its grader never reports.
     """
     executable = environment.kind != EnvironmentKind.NULL
-    events = (
-        *(() if system is None else (TextMessage(role="system", content=system),)),
-        TextMessage(role="user", content=instruction),
-    )
+    presentation = _presentation(instruction, system, environment, final_tools)
     spec = TaskSpec(
         id=task_id,
-        context=ConversationInput(events=events),
+        context=presentation.context,
         environment_requirements=EnvironmentRequirements(
             capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY) if executable else ()
         ),
-        final_tools=tuple(final_tools),
+        final_tools=presentation.final_tools,
         answer_type=answer_type,
         verifier=verifier,
-        environment=environment,
+        environment=presentation.environment,
         stages=tuple(stages),
         source=source,
         metadata=dict(metadata or {}),
@@ -282,8 +314,19 @@ def check_execution(task: TaskSpec, execution: TaskExecution) -> None:
         raise ValueError(f"Execution stages {sorted(execution.stages)} do not match the task's stages {sorted(names)}")
 
 
-def _user_context(instruction: str) -> ConversationInput:
-    return ConversationInput(events=(TextMessage(role="user", content=instruction),))
+def _presentation(
+    instruction: str, system: str | None, environment: EnvironmentSpec, final_tools: Sequence[FunctionDefinition]
+) -> _Presentation:
+    return _Presentation(
+        context=_conversation(instruction, system),
+        final_tools=tuple(final_tools),
+        environment=environment,
+    )
+
+
+def _conversation(instruction: str, system: str | None = None) -> ConversationInput:
+    system_events = () if system is None else (TextMessage(role="system", content=system),)
+    return ConversationInput(events=(*system_events, TextMessage(role="user", content=instruction)))
 
 
 def _agent_visible_files(spec: TaskSpec, execution: TaskExecution) -> tuple[EnvironmentFile, ...]:

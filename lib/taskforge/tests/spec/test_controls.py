@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 from taskcompendium.environment import EnvironmentKind, ExitCodeReward, RewardFileFormat
-from taskcompendium.execution import StageExecution, TaskExecution
+from taskcompendium.execution import StageExecution
 from taskcompendium.grading import verifier_descriptor
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, Source, StageRewardStrategy, TaskSpec
@@ -24,10 +24,19 @@ from taskforge.spec.controls import (
     shell_turn,
     validate_controls,
 )
-from taskforge.spec.draft import assemble, environment, file, reward_file, shell_verifier, stage, staged
+from taskforge.spec.draft import (
+    assemble,
+    environment,
+    file,
+    reward_file,
+    shell_verifier,
+    stage,
+    staged,
+    task_execution,
+)
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
-NO_EXECUTION = TaskExecution()
+NO_EXECUTION = task_execution()
 GRADED_ONE = Expectation(Outcome.GRADED, reward_min=1.0)
 GRADED_ZERO = Expectation(Outcome.GRADED, reward_max=0.0)
 
@@ -195,7 +204,7 @@ def test_every_stage_needs_its_own_controls():
         environment(EnvironmentKind.SHELLSIM),
         staged(StageRewardStrategy.FINAL),
         SOURCE,
-        execution=TaskExecution(stages={"one": StageExecution(), "two": StageExecution()}),
+        execution=task_execution(stages={"one": StageExecution(), "two": StageExecution()}),
         stages=(stage("one", file_check()), stage("two", file_check("/workspace/b"), instruction="Again.")),
     )
     with pytest.raises(ValueError, match="Stage 1 lacks"):

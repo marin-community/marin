@@ -53,6 +53,7 @@ from taskforge.sandbox.factories import (
     machine_factories,
     task_refusals,
 )
+from taskforge.spec.draft import task_execution
 
 IMAGE = RegistryImage(reference="registry.example/task@sha256:" + "0" * 64)
 BUILD = DockerBuild(files=(EnvironmentFile(path="/Dockerfile", content=b"FROM busybox\n"),))
@@ -70,7 +71,7 @@ def task(environment: EnvironmentSpec, **update) -> TaskSpec:
     ).model_copy(update=update)
 
 
-def reasons(spec: TaskSpec, capabilities, execution: TaskExecution = TaskExecution()) -> set[tuple[RefusalReason, str]]:
+def reasons(spec: TaskSpec, capabilities, execution: TaskExecution = task_execution()) -> set[tuple[RefusalReason, str]]:
     return {(refusal.reason, refusal.where) for refusal in task_refusals(spec, execution, capabilities)}
 
 
@@ -88,7 +89,7 @@ def test_docker_tasks_are_refused_on_iris_today():
 
 def test_docker_build_task_is_refused_on_iris_and_accepted_on_local_docker():
     spec = task(EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=BUILD))
-    agent = TaskExecution(agent_user="agent")
+    agent = task_execution(agent_user="agent")
     assert reasons(spec, IRIS_WORKING, agent) == {
         (RefusalReason.IMAGE_SOURCE, "task"),
         (RefusalReason.EXECUTION_USER, "task"),
@@ -109,7 +110,7 @@ def test_laptop_without_docker_names_the_missing_factory():
     )
     spec = task(EnvironmentSpec(kind=EnvironmentKind.DOCKER, image=IMAGE))
     [refusal] = task_refusals(
-        spec, TaskExecution(), {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: missing}
+        spec, task_execution(), {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: missing}
     )
     assert refusal.reason is RefusalReason.NO_FACTORY
     assert "docker CLI not found" in refusal.detail
@@ -175,7 +176,7 @@ def test_stage_grader_files_removed_as_root_need_execution_users():
         ),
         stages=(TaskStage(name="only", verifier=grader),),
     )
-    execution = TaskExecution(stages={"only": StageExecution()})
+    execution = task_execution(stages={"only": StageExecution()})
     assert reasons(spec, IRIS_WORKING, execution) == {(RefusalReason.EXECUTION_USER, "task")}
     assert reasons(spec, LAPTOP, execution) == set()
 
@@ -262,5 +263,5 @@ async def test_rollout_engine_refuses_the_file_timestamps_shellsim_lacks():
     assert not SHELLSIM.file_timestamps
     with pytest.raises(ValueError, match="timestamps"):
         await engine.run(
-            task(EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, files=(stamped,))), execution=TaskExecution()
+            task(EnvironmentSpec(kind=EnvironmentKind.SHELLSIM, files=(stamped,))), execution=task_execution()
         )
