@@ -12,7 +12,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import ClassVar, Protocol
 
 from finelog.client import FlushResult, LogClient, TableSpec
 from iris.runtime import telemetry as runtime_telemetry
@@ -78,7 +78,7 @@ def ledger_row(entry: LedgerEntry, run_id: str) -> LedgerRow:
 
 
 class LedgerTable(Protocol):
-    def write(self, rows: Iterable[Any]) -> None: ...
+    def write(self, rows: Iterable[LedgerRow]) -> None: ...
 
     def flush(self, timeout: float | None = None) -> FlushResult: ...
 

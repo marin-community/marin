@@ -21,6 +21,7 @@ import httpx
 from rigging.timing import ExponentialBackoff
 
 from taskforge.llm.agent import AgentTool
+from taskforge.llm.client import RETRYABLE_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ PARALLEL_API_URL = "https://api.parallel.ai/v1"
 REQUEST_TIMEOUT = 180.0
 MAX_ATTEMPTS = 6
 MODEL_ERROR_STATUSES = frozenset({400, 422})
-RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 def web_tools(
