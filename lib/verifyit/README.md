@@ -42,10 +42,12 @@ process exit after a verdict has been written.
 For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
 candidate when the output contains a box marker. Its braces must be balanced and its content must be
 nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
-expected answer. Without a box marker, both modes read the last nonempty line. Numeric answers
-require one integer, decimal, scientific-notation value or integer fraction, optionally preceded
-by `Answer:` or `The answer is`. Thousands separators require groups of three digits. Alternatives
-such as `12 or 13`, arithmetic expressions and nonfinite values are malformed submissions.
+expected answer. Without a box marker, both modes read the last nonempty line. Numeric mode
+extracts exactly one integer, decimal, scientific-notation value or integer fraction from that line.
+Surrounding prose is ignored, including negation: `Definitely not 42` extracts `42`.
+When a box is present, its entire content must be a numeric literal, optionally wrapped in math delimiters.
+Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
+`2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
 Numeric private `expected`, `tolerance_abs` and `tolerance_rel` are required literal strings.
 For example, `expected = "1/2"`, `tolerance_abs = "0"`, `tolerance_rel = "0"` accepts both `1/2`

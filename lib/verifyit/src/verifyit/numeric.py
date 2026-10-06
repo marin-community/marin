@@ -12,8 +12,9 @@ MAX_NUMERIC_DIGITS = 4096
 MAX_LITERAL_LENGTH = 2 * MAX_NUMERIC_DIGITS + 32
 INTEGER = r"[+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)"
 DECIMAL = rf"(?:{INTEGER}(?:\.[0-9]*)?|[+-]?\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
-LITERAL = re.compile(rf"(?:{DECIMAL}|{INTEGER}\s*/\s*{INTEGER})")
-ANSWER_PREFIX = re.compile(r"(?:the\s+)?(?:final\s+)?answer\s*(?:is\s+|:\s*|=\s*)(.*)", re.IGNORECASE)
+LITERAL = re.compile(rf"(?:{INTEGER}\s*/\s*{INTEGER}|{DECIMAL})")
+# Boundaries keep malformed numbers and numbers embedded in words from yielding partial literals.
+NUMERIC_TOKEN = re.compile(rf"(?<![\w.,/]){LITERAL.pattern}(?![\w/]|[.,][\w.,])")
 
 
 class NumericCandidateError(ValueError):
@@ -53,20 +54,17 @@ def numeric_literal(text: str) -> Fraction:
 
 
 def extract_numeric_candidate(text: str) -> Fraction:
-    """Read the last box or one explicit scalar on the final nonempty line."""
+    """Read the last box or the sole numeric literal on the final nonempty line."""
     if BOXED in text:
         candidate = extract_boxed(text)
         if not candidate:
             raise NumericCandidateError("final numeric box is empty or malformed")
     else:
-        candidate = last_line(text) or ""
+        matches = list(NUMERIC_TOKEN.finditer(last_line(text) or ""))
+        if len(matches) != 1:
+            raise NumericCandidateError("final numeric line requires exactly one literal")
+        candidate = matches[0].group()
     candidate = strip_math_delimiters(candidate)
-    prefix = ANSWER_PREFIX.fullmatch(candidate)
-    if prefix is not None:
-        candidate = strip_math_delimiters(prefix.group(1))
-        # Sentence punctuation is allowed after an explicit answer envelope.
-        if candidate.endswith(".") and LITERAL.fullmatch(candidate) is None:
-            candidate = candidate[:-1]
     try:
         return numeric_literal(candidate)
     except ValueError as error:
