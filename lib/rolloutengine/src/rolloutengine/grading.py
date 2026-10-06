@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private grader execution and reward collection."""
+"""Grader execution and reward collection."""
 
 import asyncio
 import json
@@ -36,8 +36,8 @@ from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardSt
 from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import SubmissionConvention
 
-from rolloutengine.cleanup import _Cleanup
-from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
+from rolloutengine.cleanup import Cleanup
+from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, task_machine
 
 MISSING_FILE_EXIT = 44
 
@@ -84,7 +84,7 @@ async def _grade_rollout(
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[EnvironmentKind, MachineFactory],
-    cleanup: _Cleanup,
+    cleanup: Cleanup,
 ) -> GradeResult:
     """Grade the final transcript and task filesystem without model access to private files."""
     if task.verifier.kind == VerifierKind.SKIPPED:
@@ -103,19 +103,19 @@ async def _grade_rollout(
                 Outcome.INFRA_ERROR, None, "Cannot collect grading inputs", failure=GradingFailure.EXECUTION
             )
     if task.verifier.environment is None:
-        return await _shell_grade(verifier, messages, machine, task.verifier.files)
-    async with _task_machine(task.verifier.environment, factories, cleanup) as grading_machine:
+        return await shell_grade(verifier, messages, machine, task.verifier.files)
+    async with task_machine(task.verifier.environment, factories, cleanup) as grading_machine:
         assert grading_machine is not None
         with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
             for index, artifact in enumerate(verifier.artifacts):
                 path = Path(directory) / str(index)
                 if await _download_artifact(machine, artifact, path, verifier.timeout, cleanup):
                     await grading_machine.upload(path, artifact.target)
-        return await _shell_grade(verifier, messages, grading_machine, task.verifier.files)
+        return await shell_grade(verifier, messages, grading_machine, task.verifier.files)
 
 
 async def _download_artifact(
-    machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float, cleanup: _Cleanup
+    machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float, cleanup: Cleanup
 ) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
     kind = artifact.kind
@@ -180,12 +180,18 @@ async def _download_artifact(
     return True
 
 
-async def _shell_grade(
+async def shell_grade(
     verifier: ShellVerifierSpec,
     messages: tuple[dict[str, Any], ...],
     machine: Machine,
     files: tuple[EnvironmentFile, ...],
 ) -> GradeResult:
+    """Run a shell verifier in ``machine`` and read its reward.
+
+    Installs the private verifier ``files``, passes ``messages`` as JSON on standard input, and
+    reads the reward from standard output, the exit code, or reward files. Collect commands and
+    grading artifacts are the caller's; this runs only the grader command.
+    """
     if isinstance(verifier.reward, FileReward):
         paths = tuple(file.path for file in verifier.reward.files)
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))

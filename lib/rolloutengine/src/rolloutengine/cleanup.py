@@ -25,17 +25,26 @@ def _background_done(task: asyncio.Task[None]) -> None:
 
 
 @dataclass(frozen=True)
-class _CleanupError:
+class CleanupError:
+    """A cleanup action that failed, by operation name and exception type."""
+
     operation: str
     exception_type: str
 
 
 @dataclass
-class _Cleanup:
+class Cleanup:
+    """Run cleanup actions, each within ``timeout`` seconds, and record their failures in ``errors``."""
+
     timeout: float
-    errors: list[_CleanupError] = field(default_factory=list)
+    errors: list[CleanupError] = field(default_factory=list)
 
     async def run(self, operation: str, action: Callable[[], Coroutine[Any, Any, None]]) -> Exception | None:
+        """Run ``action`` within the deadline and return its failure, if any.
+
+        Repeated cancellation cannot extend the deadline and is re-raised after the action ends.
+        An action that ignores cancellation at the deadline is retained until it completes.
+        """
         pending = asyncio.create_task(action())
         loop = asyncio.get_running_loop()
         end = loop.time() + self.timeout
@@ -62,7 +71,7 @@ class _Cleanup:
             except Exception as error:
                 failure = error
         if failure is not None:
-            self.errors.append(_CleanupError(operation, type(failure).__name__))
+            self.errors.append(CleanupError(operation, type(failure).__name__))
             logger.warning("Cleanup failed during %s", operation, exc_info=failure)
         if cancellation is not None:
             if failure is not None:
@@ -73,6 +82,6 @@ class _Cleanup:
 
 async def finish_cleanup(action: Callable[[], Coroutine[Any, Any, None]], *, timeout: float) -> None:
     """Finish resource cleanup within its deadline and propagate failures or repeated cancellation."""
-    failure = await _Cleanup(timeout).run("resource_close", action)
+    failure = await Cleanup(timeout).run("resource_close", action)
     if failure is not None:
         raise failure

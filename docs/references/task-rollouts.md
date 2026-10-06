@@ -149,6 +149,11 @@ and kind: file, directory, or automatic detection. Directory exclusions use
 an error or a skipped artifact. The engine installs private verifier files only
 in the grading machine. It closes the two machines after execution.
 
+The engine runs some grading commands as user `0` in the agent machine. It
+inspects an artifact of kind `auto` or with missing-file policy `skip`, archives
+a directory artifact with exclusions and removes that archive, and removes a
+stage's private verifier and reward files before the next stage.
+
 `ExternalVerifierSpec` stores private parameters for an application-supplied
 `TaskSession`. A session prepares the conversation, executes transitions, grades
 the result, and releases its resources. It does not call the model.
@@ -261,6 +266,37 @@ async def run_task(
 ```
 
 Application-supplied sessions require an additional `sessions` mapping.
+
+## Task machines and shell grading
+
+Applications that prepare a task machine or grade a shell verifier outside a
+rollout use the engine's own operations:
+
+- `rolloutengine.machines.task_machine(environment, factories, cleanup)` is an async
+  context manager. It creates a fresh machine for an `EnvironmentSpec`, installs
+  its files, and runs its setup commands and healthcheck within
+  `environment.startup_timeout`. It yields `None` for a null environment. On exit
+  it closes the machine through `cleanup`.
+- `rolloutengine.cleanup.Cleanup(timeout)` runs each cleanup action within
+  `timeout` seconds and records failures in `errors` as `CleanupError` values.
+- `rolloutengine.grading.shell_grade(verifier, messages, machine, files)` installs
+  the private verifier files in `machine`, runs the `ShellVerifierSpec` command
+  with `messages` as JSON on standard input, and returns its `GradeResult`. It
+  does not run `collect` commands or copy grading artifacts.
+
+```python
+from rolloutengine.cleanup import Cleanup
+from rolloutengine.grading import shell_grade
+from rolloutengine.machines import task_machine
+from taskcompendium.environment import ShellVerifierSpec
+
+
+async def grade_reply(task, factories, reply):
+    verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
+    messages = ({"role": "assistant", "content": reply},)
+    async with task_machine(task.environment, factories, Cleanup(30)) as machine:
+        return await shell_grade(verifier, messages, machine, task.verifier.files)
+```
 
 ## Integrations
 

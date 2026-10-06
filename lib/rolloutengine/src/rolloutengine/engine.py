@@ -17,7 +17,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import StageVerifierSpec, TaskSpec
 from taskcompendium.submission import SubmissionConvention, conversation_messages
 
-from rolloutengine.cleanup import _Cleanup
+from rolloutengine.cleanup import Cleanup
 from rolloutengine.contracts import (
     AGENT_TIMEOUT_STOP_REASON,
     LENGTH_STOP_REASON,
@@ -34,7 +34,7 @@ from rolloutengine.contracts import (
     Transition,
 )
 from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, _validate_task
-from rolloutengine.machines import _task_machine
+from rolloutengine.machines import task_machine
 from rolloutengine.task_session import _ShellboxTaskSession
 
 
@@ -79,7 +79,7 @@ class ShellboxRolloutEngine:
         """Run one task with bounded session and machine cleanup."""
         _validate_task(task, execution)
         deadline = asyncio.timeout(execution.attempt_timeout)
-        cleanup = _Cleanup(self.cleanup_timeout)
+        cleanup = Cleanup(self.cleanup_timeout)
         operation = None
         cause = None
         async with AsyncExitStack() as resources:
@@ -111,10 +111,10 @@ class ShellboxRolloutEngine:
         return record
 
     async def _run_task(
-        self, task: TaskSpec, execution: TaskExecution, resources: AsyncExitStack, cleanup: _Cleanup
+        self, task: TaskSpec, execution: TaskExecution, resources: AsyncExitStack, cleanup: Cleanup
     ) -> RolloutData:
         try:
-            machine = await resources.enter_async_context(_task_machine(task.environment, self.factories, cleanup))
+            machine = await resources.enter_async_context(task_machine(task.environment, self.factories, cleanup))
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         if task.stages:
@@ -141,7 +141,7 @@ class ShellboxRolloutEngine:
         execution: TaskExecution,
         machine: Machine,
         convention: SubmissionConvention,
-        cleanup: _Cleanup,
+        cleanup: Cleanup,
     ) -> RolloutData:
         specification = StageVerifierSpec.model_validate_json(task.verifier.parameters_json)
         record = None

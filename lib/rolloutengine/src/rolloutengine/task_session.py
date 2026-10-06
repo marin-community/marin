@@ -28,7 +28,7 @@ from taskcompendium.submission import (
     submission_request,
 )
 
-from rolloutengine.cleanup import _Cleanup
+from rolloutengine.cleanup import Cleanup
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
@@ -83,7 +83,7 @@ class _ShellboxTaskSession:
         convention: SubmissionConvention,
         command_timeout: float,
         factories: Mapping[EnvironmentKind, MachineFactory],
-        cleanup: _Cleanup,
+        cleanup: Cleanup,
         execution: StageExecution,
     ):
         self.task = task

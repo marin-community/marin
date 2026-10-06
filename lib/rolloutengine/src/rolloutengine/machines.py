@@ -5,7 +5,7 @@
 
 import asyncio
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -24,7 +24,7 @@ from taskcompendium.environment import (
     RegistryImage,
 )
 
-from rolloutengine.cleanup import _Cleanup, _retain_task
+from rolloutengine.cleanup import Cleanup, _retain_task
 
 
 async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
@@ -109,15 +109,21 @@ async def _create_machine(environment: EnvironmentSpec, factories: Mapping[Envir
 
 async def _discard_machine(creation: asyncio.Task[Machine], cleanup_timeout: float) -> None:
     machine = await creation
-    cleanup = _Cleanup(cleanup_timeout)
+    cleanup = Cleanup(cleanup_timeout)
     await cleanup.run("late_machine_close", machine.close)
 
 
 @asynccontextmanager
-async def _task_machine(
-    environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory], cleanup: _Cleanup
-):
-    """Prepare a machine. Close a machine created after cancellation in the background."""
+async def task_machine(
+    environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory], cleanup: Cleanup
+) -> AsyncIterator[Machine | None]:
+    """Yield a fresh machine for ``environment``, prepared as the engine prepares a task machine.
+
+    Creation, file installation, setup commands and the healthcheck share
+    ``environment.startup_timeout``. Leaving the context closes the machine through ``cleanup``.
+    A machine whose creation finishes after cancellation is closed in the background. A null
+    environment yields ``None``.
+    """
     if environment.kind == EnvironmentKind.NULL:
         yield None
         return
