@@ -925,6 +925,13 @@ class GrugModelConfig:
     matrices. Each (token, slot) assignment dispatches only its expert's slice, so the dispatch bytes shrink by
     G. The gather-based, per-slice-normed counterpart of ``expert_read_subset``; needs an explicit
     ``latent_out_dim``."""
+    expert_write_groups: int = 0
+    """G > 0: each routed expert's neurons split into G contiguous groups and group g writes only output block g
+    of the expert's output (a fixed 0/1 mask on ``w_down``, block-diagonal per expert, so MuonH keeps the masked
+    entries at zero). With ``latent_out_dim = hidden_dim`` the experts write the full stream with each neuron's
+    write at 1/G of the width."""
+    tail_expert_write_groups: int = 0
+    """``expert_write_groups`` for the ``latent_out_full_layers`` tail layers only."""
     expert_private_dim: int = 0
     """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
     input, ``g = expert mod expert_private_groups`` (one ``[D, r]`` projection per group), appended to the expert's
@@ -1825,6 +1832,10 @@ class GrugModelConfig:
             self.latent_dim is None or self.latent_dim % self.latent_matryoshka_blocks or self.latent_mix_sites
         ):
             raise ValueError("latent_matryoshka_blocks must divide latent_dim, without latent_mix_sites")
+        if self.expert_write_groups and (
+            self.intermediate_dim % self.expert_write_groups or self.expert_out_dim % self.expert_write_groups
+        ):
+            raise ValueError("expert_write_groups must divide intermediate_dim and the expert output width")
         if self.expert_private_dim and (self.moe_bank2_experts or self.num_null_experts or self.expert_read_subset):
             raise ValueError("expert_private_dim needs one expert bank and no null experts or expert_read_subset")
         if self.expert_read_groups and (
@@ -4541,6 +4552,8 @@ class MoEMLP(eqx.Module):
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
         if self.cfg.expert_read_subset:
             bank_mlps = [_mask_expert_reads(em, self.cfg) for em in bank_mlps]
+        if self.cfg.expert_write_groups:
+            bank_mlps = [_mask_expert_writes(em, self.cfg) for em in bank_mlps]
         if self.cfg.expert_router_orthogonal != "off":
             assert self.router is not None and self.w_latent_down is not None and len(bank_mlps) == 1
             bank_mlps = [
@@ -5741,7 +5754,19 @@ def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key:
     if cfg.moe_ungated_relu2:
         mlp = eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None)
     # Masked input rows start at zero, so they stay zero (no gradient) and take no share of the MuonH norm.
+    if cfg.expert_write_groups:
+        mlp = _mask_expert_writes(mlp, cfg)
     return _mask_expert_reads(mlp, cfg) if cfg.expert_read_subset else mlp
+
+
+def _mask_expert_writes(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
+    """Zero ``w_down`` outside the block-diagonal ``expert_write_groups`` pattern: neuron group g writes output
+    block g. Block-diagonal gradients orthogonalize block by block, so MuonH keeps the zeros."""
+    groups = cfg.expert_write_groups
+    neurons, out = em.w_down.shape[-2:]
+    mask = (jnp.arange(neurons)[:, None] * groups // neurons) == (jnp.arange(out)[None, :] * groups // out)
+    mask = reshard(mask.astype(em.w_down.dtype)[None], P(None, *_padded_spec(em.w_down)[1:]))
+    return eqx.tree_at(lambda m: m.w_down, em, em.w_down * mask)
 
 
 @contextmanager
@@ -8701,7 +8726,13 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         return dataclasses.replace(
             cfg, latent_dim=None, intermediate_dim=cfg.intermediate_dim // 2, latent_free_layers=()
         )
-    return dataclasses.replace(cfg, latent_out_dim=cfg.hidden_dim, latent_out_full_layers=())
+    return dataclasses.replace(
+        cfg,
+        latent_out_dim=cfg.hidden_dim,
+        latent_out_full_layers=(),
+        expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
+        tail_expert_write_groups=0,
+    )
 
 
 def _tail_stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:

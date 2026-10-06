@@ -85,3 +85,14 @@ def test_matryoshka_scale_is_finite_when_the_chosen_gate_saturates():
 
     value, grad = jax.value_and_grad(out)(mlp.latent_width_gate)
     assert np.isfinite(float(value)) and np.isfinite(np.asarray(grad)).all()
+
+
+def test_write_groups_mask_w_down_block_diagonally_and_keep_it_under_training():
+    mesh, model = t._model(ngram_stat_rows=0, latent_out_dim=32, expert_write_groups=2)
+    w_down = np.asarray(_mlp(model).expert_mlp.w_down)  # [L, E, I, O]
+    neurons, out = w_down.shape[-2:]
+    assert np.all(w_down[..., : neurons // 2, out // 2 :] == 0) and np.all(w_down[..., neurons // 2 :, : out // 2] == 0)
+    assert np.abs(w_down[..., : neurons // 2, : out // 2]).max() > 0
+    loss, grads = _loss_and_grads(model, mesh)
+    g = np.asarray(_mlp(grads).expert_mlp.w_down)
+    assert np.isfinite(float(loss)) and np.all(g[..., : neurons // 2, out // 2 :] == 0)
