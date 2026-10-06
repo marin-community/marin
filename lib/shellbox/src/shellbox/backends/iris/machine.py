@@ -239,7 +239,7 @@ class IrisMachineFactory:
                     disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
                 task_image=spec.source.reference,
-                container_profile=job_pb2.CONTAINER_PROFILE_GVISOR,
+                container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
                 timeout=Duration.from_seconds(self.job_ttl),
                 max_retries_failure=0,
