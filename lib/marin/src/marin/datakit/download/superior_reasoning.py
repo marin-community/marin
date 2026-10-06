@@ -14,10 +14,16 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
-from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
+from marin.datakit.chat_normalize import (
+    CHAT_NORMALIZE_VERSION,
+    CHAT_SCHEMA,
+    ConvertedChatData,
+    normalize_chat_source,
+)
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import checked_openai_chat_document, text_document
 from marin.datakit.normalize import normalize_step
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b"
@@ -51,6 +57,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     prompt = row.get("input") or ""
     response = row.get("output") or ""
     if not prompt or not response:
+        counters.pipeline.update_counter("superior_reasoning/chat/missing_text_filtered", 1)
         return []
     messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}]
     return checked_openai_chat_document(messages, HF_DATASET_ID, counter_prefix="superior_reasoning/chat")
@@ -68,17 +75,18 @@ def transform(input_path: str, output_path: str) -> None:
     ctx.execute(pipeline)
 
 
-def transform_chat(input_path: str, output_path: str) -> None:
+def transform_chat(input_path: str, output_path: str) -> ConvertedChatData:
     input_files = [f"{input_path}/{stage}" for stage in STAGES]
     pipeline = (
         Dataset.from_list(input_files)
         .flat_map(load_jsonl)
         .flat_map(row_to_chat_doc)
-        .write_parquet(
-            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
-        )
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA)
     )
-    ZephyrContext(name="superior-reasoning-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
+    outcome = ZephyrContext(name="superior-reasoning-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(
+        pipeline
+    )
+    return ConvertedChatData(output_dir=output_path, counters=dict(outcome.counters))
 
 
 def download_superior_reasoning_step() -> StepSpec:
@@ -118,8 +126,13 @@ def superior_reasoning_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/superior-reasoning-sft",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.2.harmony-arrow"},
+        hash_attrs={"version": "2026.09.30.1.counters"},
     )
-    return processed, normalize_chat_step(
-        output_schema=CHAT_SCHEMA, name="normalized-chat/superior-reasoning", download=processed
+    return processed, StepSpec(
+        name="normalized-chat/superior-reasoning",
+        deps=[processed],
+        fn=lambda output_path: normalize_chat_source(
+            source=read_artifact(processed.output_path, ConvertedChatData), output_path=output_path
+        ),
+        hash_attrs={"version": CHAT_NORMALIZE_VERSION, "output_schema": str(CHAT_SCHEMA)},
     )
