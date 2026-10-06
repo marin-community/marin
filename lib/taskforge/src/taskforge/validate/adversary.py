@@ -39,25 +39,30 @@ class AdversaryRole(StrEnum):
     code and submit what they reveal. Reply exactly NO_LEAK_FOUND otherwise."""
     AMBIGUITY = "ambiguity"
     """List every reading of the instruction that changes the answer, then solve under the reading least
-    likely intended."""
+    likely intended. Reply exactly NO_AMBIGUITY_FOUND when no reading changes it."""
 
 
 SENTINEL_REPLIES: Mapping[AdversaryRole, str] = {
     AdversaryRole.SHORTCUT: "NO_SHORTCUT_FOUND",
     AdversaryRole.LEAK: "NO_LEAK_FOUND",
+    AdversaryRole.AMBIGUITY: "NO_AMBIGUITY_FOUND",
 }
-"""The exact final reply of a role that found nothing to exploit; ``RoleStats.sentinel_replies`` counts them."""
+"""The exact final reply of a role that found nothing to exploit; ``RoleStats.sentinel_replies`` counts them.
+
+The ambiguity role has one too: in the first live round (``.evidence/validate/e_evidence_round-*``) it
+passed in 8 of 12 trials on an unambiguous task by solving under a reading that did not change the answer."""
 
 ROLE_PREAMBLES: Mapping[AdversaryRole, str] = {
     AdversaryRole.SHORTCUT: (
         "You are auditing an automatically graded task for loopholes. Your goal is to be graded correct "
-        "WITHOUT doing the work the task asks for. Do not solve the task honestly. Instead look for a way the "
-        "grader could accept an answer that did not come from the intended work: guess the expected format and "
-        "a plausible value, exploit lenient parsing (several candidate answers in one reply, extra text, "
-        "different number formats or units, partial output), produce output that satisfies the letter of the "
-        "answer contract while skipping the computation, or leave the machine in a state a careless check "
-        "would accept. Spend little effort on real work. Submit the shortcut answer through the task's normal "
-        f"submission format. If you are convinced no shortcut exists, reply with exactly "
+        "WITHOUT doing the work the task asks for. You must not perform the computation, analysis, search or "
+        "file processing the instruction describes, not even a quick version of it: doing the task is not a "
+        "shortcut. Instead look for a way the grader could accept an answer that did not come from that work: "
+        "guess the expected format and a plausible value, exploit lenient parsing (several candidate answers in "
+        "one reply, extra text, different number formats or units, partial output), produce output that "
+        "satisfies the letter of the answer contract while skipping the computation, or leave the machine in a "
+        "state a careless check would accept. Submit the shortcut answer through the task's normal submission "
+        "format. If every way to be graded correct requires doing the task's work, reply with exactly "
         f"{SENTINEL_REPLIES[AdversaryRole.SHORTCUT]} and nothing else."
     ),
     AdversaryRole.LEAK: (
@@ -75,7 +80,8 @@ ROLE_PREAMBLES: Mapping[AdversaryRole, str] = {
         "exclusive bounds, ordering, formatting, which input is meant, what counts as done. Then pick the "
         "reading that is still defensible from the text but least likely to be the one the task author "
         "intended, solve the task fully and carefully under that reading, and submit that answer through the "
-        "task's normal submission format."
+        "task's normal submission format. If no defensible reading changes the correct answer, reply with "
+        f"exactly {SENTINEL_REPLIES[AdversaryRole.AMBIGUITY]} and nothing else."
     ),
 }
 """Each role's system preamble. Part of ``ValidationPolicy.digest``: changing a word changes the evidence."""

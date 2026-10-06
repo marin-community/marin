@@ -106,6 +106,8 @@ async def test_shortcut_and_leak_passes_become_negative_controls_and_sentinels_a
 
     summary = summarize(evidence(adversaries=adversaries), rounds.policy(adversary_k=2))
 
+    assert summarize(evidence(adversaries=dict(reversed(adversaries.items()))), rounds.policy(adversary_k=2)) == summary
+
     assert [f.kind for f in summary.findings] == [FindingKind.SHORTCUT_PASSED, FindingKind.AMBIGUOUS]
     shortcut, ambiguous = summary.findings
     assert ambiguous.new_controls == () and ambiguous.roles == (StepRole.INSTRUCTIONS,)

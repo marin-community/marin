@@ -7,15 +7,17 @@ pass turned into a control that proves the grader fix."""
 import asyncio
 import json
 from dataclasses import dataclass, field, replace
+from typing import Any
 
+from rolloutengine.contracts import ModelRequest, ModelTurn
 from taskcompendium.environment import EnvironmentKind, StdoutReward
 from taskcompendium.submission import PlainText
 
 from taskforge.llm.client import GlmUnavailable
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.draft import file, shell_verifier
-from taskforge.validate.adversary import AdversaryRole, run_adversaries
-from taskforge.validate.calibration import FindingKind, summarize
+from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole, run_adversaries
+from taskforge.validate.calibration import FindingKind, RoleStats, summarize
 from taskforge.validate.controls import ControlVerdict
 from taskforge.validate.outcome import Cause, Ungraded
 from taskforge.validate.run import ValidationEvidence, controls_passed, load_validation, replay_controls
@@ -150,3 +152,31 @@ async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and
     )
     assert [c.verdict for c in still_leaky if c.control == new_control] == [ControlVerdict.VIOLATED]
     assert controls_passed(fixed)
+
+
+@dataclass
+class HonestAdversary:
+    """Does the task's work, then gives up with the sentinel reply of the role whose preamble it sees."""
+
+    work: dict[str, Any]
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        role = next(r for r in AdversaryRole if request.messages[0]["content"].startswith(ROLE_PREAMBLES[r]))
+        done = any(message["role"] == "assistant" for message in request.messages)
+        message = {"role": "assistant", "content": SENTINEL_REPLIES[role]} if done else self.work
+        prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
+        return ModelTurn(message, prompt, (21,), (-0.5,), "stop" if done else "tool_calls")
+
+
+async def test_a_pass_that_ends_on_the_roles_sentinel_reply_is_no_finding(tmp_path, file_task, rounds, fakes):
+    draft = rounds.draft(file_task, (), PLAIN)
+    policy = rounds.policy(adversary_k=2)
+    honest = HonestAdversary(fakes.shell("echo 60 > /workspace/sum.txt"))
+
+    adversaries = await run_adversaries(draft, policy, rounds.site(tmp_path), settings(fakes), honest)
+    summary = summarize(ValidationEvidence("ab" * 32, (), (), adversaries), policy)
+
+    assert summary.findings == ()
+    assert summary.roles == {
+        role: RoleStats(required=2, graded=2, passes=2, sentinel_replies=2) for role in AdversaryRole
+    }
