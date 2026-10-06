@@ -716,8 +716,27 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diver
             "provenance": {"base_commit": source["head"], "dirty": False},
         }
         if role == "reload":
-            result_pin = pinned(root, "smoke-result", {"score": 1.0})
-            record["result"] = {"results_paths": [result_pin["uri"]]}
+            reload_run_id = "reload-smoke"
+            (root / reload_run_id).mkdir()
+            canonical_record = {
+                "run_id": reload_run_id,
+                "status": "succeeded",
+                "error": None,
+                "model": {
+                    "location": bound["model"]["location"],
+                    "config": {"identity": bound["model"]["identity"]},
+                },
+                "eval": {"name": "mmlu-smoke", "evalchemy": {"max_eval_instances": 1}},
+            }
+            result_path = root / reload_run_id / "record.json"
+            raw = json.dumps(canonical_record, sort_keys=True).encode()
+            result_path.write_bytes(raw)
+            result_pin = {"uri": str(result_path), "sha256": hashlib.sha256(raw).hexdigest()}
+            record["result"] = {
+                "records_prefix": str(root),
+                "run_ids": [reload_run_id],
+                "results_paths": [str(root / reload_run_id / "results")],
+            }
         path = root / ".artifact.json"
         raw = json.dumps(record, sort_keys=True).encode()
         path.write_bytes(raw)
@@ -727,7 +746,9 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diver
     trainer = records["sft"]["config"]["train_config"]["trainer"]
     amendment["sft"].update(run_id=trainer["id"], metric_destination=trainer["tracker"][0]["metric_destination"])
     post["sft_telemetry_amendment"] = pinned(tmp_path, "telemetry-amendment", amendment)
-    qualification = test_teacher_four_pass.four_update_qualification(artifact_identity(stages["train"]), post["sft_uri"])
+    qualification: dict = test_teacher_four_pass.four_update_qualification(
+        artifact_identity(stages["train"]), post["sft_uri"]
+    )
     qualification["source_config_sha256"] = post["sft_config_sha256"]
     qualification["serving_reload"].update(evidence_uri=result_pin["uri"], evidence_sha256=result_pin["sha256"])
     destination = Path(amendment["sft"]["metric_destination"])
@@ -769,6 +790,20 @@ def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diver
     with pytest.raises(ValueError, match="cover all four"):
         durable_diversity_post_workflow(post, "calibrate")
     qualification["optimizer_telemetry"]["files"] = event_pins
+    canonical_raw = Path(result_pin["uri"]).read_bytes()
+    canonical_record = json.loads(canonical_raw)
+    for failed_record in (
+        {**canonical_record, "status": "failed", "error": {"message": "worker failed"}},
+        {**canonical_record, "model": {"location": "another-export", "config": {"identity": "another-model"}}},
+    ):
+        raw = json.dumps(failed_record, sort_keys=True).encode()
+        Path(result_pin["uri"]).write_bytes(raw)
+        qualification["serving_reload"]["evidence_sha256"] = hashlib.sha256(raw).hexdigest()
+        set_pin(post, "qualification", pinned(tmp_path, "failed-reload", qualification))
+        with pytest.raises(ValueError, match="reload record did not succeed"):
+            durable_diversity_post_workflow(post, "calibrate")
+    Path(result_pin["uri"]).write_bytes(canonical_raw)
+    qualification["serving_reload"]["evidence_sha256"] = result_pin["sha256"]
     conflict = json.loads(Path(event_pins[0]["uri"]).read_bytes())
     conflict["metrics"]["train/loss"] += 1
     raw = json.dumps(conflict, sort_keys=True).encode()

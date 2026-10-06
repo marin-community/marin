@@ -7,6 +7,7 @@ import json
 
 import click
 import numpy as np
+from marin.evaluation.records import RunStatus, record_path
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, artifact_identity
@@ -205,9 +206,22 @@ def durable_diversity_post_workflow(config: dict, stage: str) -> dict[str, Artif
     qualification = pinned_record(config, "qualification")
     qualified_optimizer_telemetry(qualification, amendment, trained)
     reload_evidence = qualification["serving_reload"]
-    if reload_evidence["evidence_uri"] not in reload["result"]["results_paths"]:
+    reload_result = reload["result"]
+    record_uris = {record_path(reload_result["records_prefix"], run_id) for run_id in reload_result["run_ids"]}
+    if reload_evidence["evidence_uri"] not in record_uris:
         raise ValueError("Diversity qualification cites a different serving reload")
-    pinned_bytes(reload_evidence["evidence_uri"], reload_evidence["evidence_sha256"])
+    record = json.loads(pinned_bytes(reload_evidence["evidence_uri"], reload_evidence["evidence_sha256"]))
+    if (
+        record["run_id"] not in reload_result["run_ids"]
+        or record_path(reload_result["records_prefix"], record["run_id"]) != reload_evidence["evidence_uri"]
+        or record["status"] != RunStatus.SUCCEEDED
+        or record["error"] is not None
+        or record["model"]["config"]["identity"] != reload["config"]["model"]["identity"]
+        or record["model"]["location"] != reload["config"]["model"]["location"]
+        or record["eval"]["name"] != reload["config"]["evals"]
+        or record["eval"]["evalchemy"]["max_eval_instances"] != reload["config"]["limit"]
+    ):
+        raise ValueError("Diversity serving reload record did not succeed")
     return validated_diversity_post_workflow(config, stage, trained=stages["train"])
 
 
