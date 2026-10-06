@@ -348,6 +348,7 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
             ".mix_gate",
             ".kv_mix_gate",
             ".latent_up_gate",
+            ".latent_width_gate",
             ".latent_mix_in_gate",
             ".latent_mix_out_gate",
         )
@@ -2272,7 +2273,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return self.kda_beta_mlp_group
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
-            if path_lower.endswith(".kv_mix_bias"):
+            if path_lower.endswith((".kv_mix_bias", ".latent_width_bias")):
                 return "mix_bias"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if path_lower.endswith("attn_res_query_token"):

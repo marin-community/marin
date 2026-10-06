@@ -918,12 +918,22 @@ class GrugModelConfig:
     random subset per expert; ``shared``: every expert reads channels ``[0, expert_read_subset)`` (the control that
     isolates the per-expert split from the masking itself)."""
     expert_read_groups: int = 0
-    """If > 0 (G), routed expert ``e`` reads only channel group ``e mod G`` of the MLP-pre-normed stream: the
-    stream is split into G contiguous slices of width ``hidden_dim / G``, each re-normalized by its own learnable
+    """If > 0 (G), routed expert ``e`` reads only channel group ``e mod G`` of its input (the MoE latent when
+    ``latent_dim`` is set, so the G slices are G separate latent down-projections, "multi-head LatentMoE"; else the
+    MLP-pre-normed stream): the input is split into G contiguous slices, each re-normalized by its own learnable
     RMSNorm (``expert_read_norm``, a stacked ``[G, W]`` gain), and the experts' ``w_up`` are real ``[E, W, I]``
     matrices. Each (token, slot) assignment dispatches only its expert's slice, so the dispatch bytes shrink by
-    G. The gather-based, per-slice-normed counterpart of ``expert_read_subset``; needs ``latent_dim=None``
-    and an explicit ``latent_out_dim``."""
+    G. The gather-based, per-slice-normed counterpart of ``expert_read_subset``; needs an explicit
+    ``latent_out_dim``."""
+    expert_private_dim: int = 0
+    """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
+    input, ``g = expert mod expert_private_groups`` (one ``[D, r]`` projection per group), appended to the expert's
+    shared input; costs ``K r`` extra dispatched dims per token."""
+    expert_private_groups: int = 64
+    latent_matryoshka_blocks: int = 0
+    """B > 0: Matryoshka MoE latent. A gate on the router input picks, per token, how many of the latent's B
+    equal leading blocks to keep (the rest are zeroed); a sign-SGD selection bias (``latent_width_bias``) keeps
+    the B widths equally used, so the mean kept width is (B + 1) / 2B of the latent."""
     latent_write_select: bool = False
     """With a MoE latent, drop ``w_latent_up``: the combined routed output is written into the first ``latent_dim``
     hidden channels (the rest get zero), scaled by ``initializer_std * sqrt(latent_dim)``, the gain of the
@@ -1477,6 +1487,9 @@ class GrugModelConfig:
     latent_mix_entropy_weight: float = 0.01
     latent_mix_renorm: bool = False
     latent_mix_kv_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
+    latent_mix_moe_in_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
+    """``moe_in`` mixture: ``concat`` gates blocks of the latent; ``sum`` makes ``W_down`` a token-conditioned mixture
+    of ``latent_mix_experts`` full-width basis projections, ``latent = norm(sum_j a_j(x) x W_j)``."""
     """How the MLA KV-latent mixture combines its chosen experts (see ``KvMixMode``)."""
     """MLA KV-latent mixture: divide the chosen blocks' sigmoid weights by their sum (each token's sum to 1)."""
     """``LatentMixBalance.ENTROPY``: weight of the regularizer ``-H(mean over tokens of softmax(gate logits))``."""
@@ -1638,7 +1651,10 @@ class GrugModelConfig:
                     if self.mla
                     else 0
                 ),
-                "moe_in": self.latent_dim or 0,
+                "moe_in": (
+                    (self.latent_dim or 0)
+                    * (self.latent_mix_experts if self.latent_mix_moe_in_mode == KvMixMode.SUM else 1)
+                ),
                 "moe_out": self.expert_out_dim,
             }[site]
             if not width or width % self.latent_mix_experts:
@@ -1790,11 +1806,16 @@ class GrugModelConfig:
             self.expert_in_dim % self.expert_read_subset or self.moe_bank2_experts or self.moe_const_experts
         ):
             raise ValueError("expert_read_subset must divide the expert input width, without moe_bank2 or const experts")
+        if self.latent_matryoshka_blocks and (
+            self.latent_dim is None or self.latent_dim % self.latent_matryoshka_blocks or self.latent_mix_sites
+        ):
+            raise ValueError("latent_matryoshka_blocks must divide latent_dim, without latent_mix_sites")
+        if self.expert_private_dim and (self.moe_bank2_experts or self.num_null_experts or self.expert_read_subset):
+            raise ValueError("expert_private_dim needs one expert bank and no null experts or expert_read_subset")
         if self.expert_read_groups and (
-            self.latent_dim is not None
+            (self.latent_dim or self.hidden_dim) % self.expert_read_groups
             or self.latent_select
             or self.latent_out_dim is None
-            or self.hidden_dim % self.expert_read_groups
             or self.expert_read_subset
             or self.moe_bank2_experts
             or self.moe_const_experts
@@ -1804,7 +1825,7 @@ class GrugModelConfig:
             or self.erc_loss_weight > 0
         ):
             raise ValueError(
-                "expert_read_groups must divide hidden_dim and needs latent_dim=None, an explicit latent_out_dim, one "
+                "expert_read_groups must divide the expert input and needs an explicit latent_out_dim, one "
                 "expert bank and no expert_read_subset, null/const experts, dense router grad, Newton-Muon or ERC"
             )
         if self.latent_select_layers not in ("all", "kda", "global"):
@@ -1930,15 +1951,16 @@ class GrugModelConfig:
 
     @property
     def expert_in_dim(self) -> int:
-        """Width the routed experts read (one ``expert_read_groups`` slice when set)."""
+        """Width the routed experts read (one ``expert_read_groups`` slice when set, plus ``expert_private_dim``)."""
+        shared = self.latent_dim if self.latent_dim is not None else self.hidden_dim
         if self.expert_read_groups:
-            return self.hidden_dim // self.expert_read_groups
-        return self.latent_dim if self.latent_dim is not None else self.hidden_dim
+            shared //= self.expert_read_groups
+        return shared + self.expert_private_dim
 
     @property
     def expert_out_dim(self) -> int:
         """Width the routed experts write (``latent_out_dim``)."""
-        return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim
+        return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim - self.expert_private_dim
 
     @property
     def has_latent_up(self) -> bool:
@@ -3834,6 +3856,10 @@ class MoEMLP(eqx.Module):
     latent_up_gate: Float[Array, "D C"] | None  # per-token sigmoid weights of the output projections
     latent_out_norm: LearnedRMSNorm | None
     latent_mix_in_gate: Float[Array, "D E"] | None  # mixture of latents on the input latent (latent_mix_sites)
+    expert_private_proj: Float[Array, "D GR"] | None  # cfg.expert_private_dim: one [D, r] projection per group
+    expert_private_norm: "LearnedRMSNorm | None"
+    latent_width_gate: Float[Array, "D B"] | None  # cfg.latent_matryoshka_blocks: per-token latent width gate
+    latent_width_bias: Float[Array, " B"] | None  # sign-SGD selection bias balancing the widths
     latent_mix_out_gate: Float[Array, "D E"] | None  # mixture of latents on the experts' output latent
     expert_read_norm: LearnedRMSNorm | None
     """Per-group ``[G, W]`` learnable RMSNorm of the ``expert_read_groups`` input slices."""
@@ -3849,9 +3875,40 @@ class MoEMLP(eqx.Module):
     ) -> Float[Array, "T R"]:
         """Mixture of latents: norm each of the ``E`` latent blocks and weight it by its top-k gate from ``x``."""
         blocks = self.cfg.latent_mix_experts
-        normed = norm(rearrange(latent, "t (e r) -> t e r", e=blocks))
         weights = mixture_weights(x_flat, gate, blocks, self.cfg.latent_mix_topk)
+        if gate is self.latent_mix_in_gate and self.cfg.latent_mix_moe_in_mode == KvMixMode.SUM:
+            # Token-conditioned W_down: the latent is a weighted sum of the basis projections, then one norm.
+            bases = rearrange(latent, "t (e r) -> t e r", e=blocks)
+            return norm(jnp.einsum("ter,te->tr", bases, weights.astype(bases.dtype)))
+        normed = norm(rearrange(latent, "t (e r) -> t e r", e=blocks))
         return rearrange(normed * weights[..., None].astype(normed.dtype), "t e r -> t (e r)")
+
+    def _private_rows(self, x_flat: Float[Array, "T D"], selected: Int[Array, "T K"]) -> jax.Array | None:
+        """Each assignment's private input slice ``RMSNorm(x P_g)``, ``g = expert mod expert_private_groups``."""
+        if self.expert_private_proj is None:
+            return None
+        assert self.expert_private_norm is not None
+        groups, r = self.cfg.expert_private_groups, self.cfg.expert_private_dim
+        proj = jnp.einsum("td,dr->tr", x_flat, self.expert_private_proj.astype(x_flat.dtype))
+        proj = jnp.reshape(proj, (proj.shape[0], groups, r), out_sharding=P(_BATCH_AXES, None, None))
+        rows = jnp.take_along_axis(proj, (selected % groups)[:, :, None], axis=1)
+        return self.expert_private_norm(rows)
+
+    def _matryoshka_latent(
+        self, latent: Float[Array, "T R"], x_flat: Float[Array, "T D"], stats: dict[str, jax.Array]
+    ) -> Float[Array, "T R"]:
+        """Keep each token's gate-chosen number of leading latent blocks; the chosen gate weight enters as
+        ``w / stop_gradient(w)`` (value 1), so the gate learns from the loss without rescaling the latent."""
+        assert self.latent_width_gate is not None and self.latent_width_bias is not None
+        blocks = self.cfg.latent_matryoshka_blocks
+        weights = mixture_weights(x_flat, self.latent_width_gate, blocks, 1, selection_bias=self.latent_width_bias)
+        width = jnp.argmax(weights > 0, axis=-1)  # 0-indexed: keep blocks 0..width
+        kept = (jnp.arange(blocks)[None, :] <= width[:, None]).astype(latent.dtype)
+        chosen = jnp.sum(weights, axis=-1, keepdims=True)
+        scale = (chosen / jax.lax.stop_gradient(chosen)).astype(latent.dtype)
+        mask = jnp.repeat(kept, latent.shape[-1] // blocks, axis=-1)
+        stats[f"{_LAYER_KNOB_PREFIX}latent_kept_frac"] = jax.lax.stop_gradient(jnp.mean(kept.astype(jnp.float32)))
+        return latent * mask * scale
 
     @staticmethod
     def init(
@@ -3872,6 +3929,9 @@ class MoEMLP(eqx.Module):
         mix_e = cfg.latent_mix_experts
         gate_in = out_width if cfg.latent_up_gate_on_latent else d
         mix_in, mix_out = "moe_in" in cfg.latent_mix_sites, "moe_out" in cfg.latent_mix_sites
+        mix_in_sum = mix_in and cfg.latent_mix_moe_in_mode == KvMixMode.SUM
+        k_priv, k_width = random.split(random.fold_in(key, 11))
+        r_priv, g_priv, b_width = cfg.expert_private_dim, cfg.expert_private_groups, cfg.latent_matryoshka_blocks
         selects = cfg.latent_select and (
             cfg.latent_select_layers == "all" or (cfg.latent_select_layers == "kda") == use_kda
         )
@@ -3921,14 +3981,16 @@ class MoEMLP(eqx.Module):
             w_latent_down=(
                 None
                 if latent is None or (selects and not cfg.latent_select_plus_proj)
-                else reshard(_latent_proj_init(cfg, k_down, (d, latent)), P(_FSDP_AXES, "model"))
+                else reshard(
+                    _latent_proj_init(cfg, k_down, (d, latent * (mix_e if mix_in_sum else 1))), P(_FSDP_AXES, "model")
+                )
             ),
             latent_norm=(
                 None
                 if latent is None
                 else (
                     _grouped_rms_norm(cfg, mix_e, latent // mix_e)
-                    if mix_in
+                    if mix_in and not mix_in_sum
                     else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps, role="moe_latent")
                 )
             ),
@@ -3966,6 +4028,16 @@ class MoEMLP(eqx.Module):
                     else None
                 )
             ),
+            expert_private_proj=(
+                reshard(_init_weight(k_priv, (d, g_priv * r_priv), 1.0 / math.sqrt(d)), P(None, None))
+                if r_priv
+                else None
+            ),
+            expert_private_norm=_learned_rms_norm(cfg, r_priv, cfg.layer_norm_eps) if r_priv else None,
+            latent_width_gate=(
+                reshard(_init_weight(k_width, (d, b_width), cfg.initializer_std), P(None, None)) if b_width else None
+            ),
+            latent_width_bias=jnp.zeros((b_width,), jnp.float32) if b_width else None,
             latent_mix_in_gate=(
                 reshard(_init_weight(random.fold_in(k_down, 1), (d, mix_e), cfg.initializer_std), P(None, None))
                 if mix_in
@@ -3977,7 +4049,9 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             expert_read_norm=(
-                _grouped_rms_norm(cfg, cfg.expert_read_groups, expert_width) if cfg.expert_read_groups else None
+                _grouped_rms_norm(cfg, cfg.expert_read_groups, expert_width - cfg.expert_private_dim)
+                if cfg.expert_read_groups
+                else None
             ),
             latent_select_mask=_latent_select_mask(cfg, layer_index) if selects else None,
             expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, out_width, k_expert),
@@ -4428,6 +4502,8 @@ class MoEMLP(eqx.Module):
                 routed_input = self.latent_norm(routed_input)
             else:
                 routed_input = self._mix_latent(routed_input, x_flat, self.latent_norm, self.latent_mix_in_gate)
+        if self.latent_width_gate is not None:
+            routed_input = self._matryoshka_latent(routed_input, x_flat, router_stats)
         if self.cfg.newton_muon:
             router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
@@ -4447,8 +4523,9 @@ class MoEMLP(eqx.Module):
         overlap_out = None
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
             bank_selected = (real_selected[:, col : col + bank_k] - start).astype(jnp.int32)
-            if self.expert_read_norm is not None:
-                router_stats.update(_expert_read_group_shares(bank_selected, self.cfg.expert_read_groups))
+            if self.expert_read_norm is not None or self.expert_private_proj is not None:
+                if self.expert_read_norm is not None:
+                    router_stats.update(_expert_read_group_shares(bank_selected, self.cfg.expert_read_groups))
                 out, overflow, *bank_overlap_out = _run_grouped_read_bank(
                     em,
                     _bank_config(self.cfg, bank_index),
@@ -4457,6 +4534,7 @@ class MoEMLP(eqx.Module):
                     bank_selected,
                     real_weights[:, col : col + bank_k],
                     overlap,
+                    self._private_rows(x_flat, bank_selected),
                 )
             else:
                 out, overflow, *bank_overlap_out = _run_expert_bank(
@@ -5853,13 +5931,15 @@ def _expert_read_group_shares(selected: Int[Array, "T K"], groups: int) -> dict[
 def _run_grouped_read_bank(
     em: MoEExpertMlp,
     cfg: "GrugModelConfig",
-    read_norm: LearnedRMSNorm,
+    read_norm: LearnedRMSNorm | None,
     x_flat: Float[Array, "T D"],
     selected: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
     overlap: MoeOverlapWork | None,
+    private_rows: Float[Array, "T K R"] | None = None,
 ):
-    """Run the routed experts on per-assignment ``expert_read_groups`` slices.
+    """Run the routed experts on per-assignment inputs: ``expert_read_groups`` slices (or the whole input when
+    ``read_norm`` is None), with each assignment's ``expert_private_dim`` slice appended when given.
 
     Splits ``x_flat`` into G normed ``[T, G, W]`` slices, gathers each (token, slot)'s slice ``g(expert) =
     expert mod G`` to ``[T, K, W]`` and dispatches the ``T*K`` slot rows as single-slot tokens (top-1 over the
@@ -5867,10 +5947,15 @@ def _run_grouped_read_bank(
     the K weighted slot outputs back per token.
     """
     t, k = selected.shape
-    groups = cfg.expert_read_groups
-    slices = jnp.reshape(x_flat, (t, groups, x_flat.shape[-1] // groups), out_sharding=P(_BATCH_AXES, None, None))
-    slices = read_norm(slices)
-    slot_rows = jnp.take_along_axis(slices, (selected % groups)[:, :, None], axis=1)
+    if read_norm is None:
+        slot_rows = jnp.broadcast_to(x_flat[:, None, :], (t, k, x_flat.shape[-1]))
+    else:
+        groups = cfg.expert_read_groups
+        slices = jnp.reshape(x_flat, (t, groups, x_flat.shape[-1] // groups), out_sharding=P(_BATCH_AXES, None, None))
+        slices = read_norm(slices)
+        slot_rows = jnp.take_along_axis(slices, (selected % groups)[:, :, None], axis=1)
+    if private_rows is not None:
+        slot_rows = jnp.concatenate([slot_rows, private_rows.astype(slot_rows.dtype)], axis=-1)
     flat_rows = jnp.reshape(slot_rows, (t * k, slot_rows.shape[-1]), out_sharding=P(_BATCH_AXES, None))
     flat_selected = jnp.reshape(selected, (t * k, 1), out_sharding=P(_BATCH_AXES, None))
     flat_weights = jnp.reshape(combine_weights, (t * k, 1), out_sharding=P(_BATCH_AXES, None))
