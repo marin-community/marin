@@ -4,6 +4,7 @@
 """Build a Snowball Harmony SFT corpus from completed native Qwen collections."""
 
 import hashlib
+import io
 import json
 from collections import Counter, defaultdict
 from collections.abc import Iterator
@@ -46,6 +47,8 @@ from experiments.post_training.bfcl_rl.retained_preferences import (
     retained_archive_records,
     retained_rollout,
 )
+
+LITERAL_READ_BUFFER_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -188,7 +191,7 @@ def collection_native_evidence(
     }
     spans: dict[str, list[LiteralSpan]] = defaultdict(list)
     for path in literal_paths:
-        with path.open("rb") as stream:
+        with path.open("rb") as raw, io.BufferedReader(raw, buffer_size=LITERAL_READ_BUFFER_BYTES) as stream:
             while True:
                 offset = stream.tell()
                 line = stream.readline()
