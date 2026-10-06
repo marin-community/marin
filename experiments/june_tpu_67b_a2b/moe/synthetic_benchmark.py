@@ -28,6 +28,7 @@ import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig, XprofUploadConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
@@ -39,7 +40,7 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
 from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
     GrugTrainerConfig,
@@ -106,6 +107,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-dir", type=Path, default=Path("logs/june-synthetic"))
     parser.add_argument("--run-id", help="Run id under --log-dir (default: size and timestamp).")
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
+    parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
+    parser.add_argument(
+        "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
+    )
     return parser.parse_args()
 
 
@@ -132,7 +137,9 @@ def report_memory() -> None:
 def main() -> None:
     args = parse_args()
     model, default_mp = preset(args.size, args.seq_len)
-    model = dataclasses.replace(model, attention_implementation=args.attention, moe_implementation=args.moe_impl)
+    model = dataclasses.replace(
+        model, attention_implementation=args.attention, moe_implementation=args.moe_impl, remat_mode=args.remat_mode
+    )
     if args.layers is not None:
         model = dataclasses.replace(model, num_layers=args.layers)
     batch_size = jax.device_count() if args.batch_size is None else args.batch_size
@@ -163,6 +170,7 @@ def main() -> None:
         jax_compilation_cache_dir=args.compilation_cache_dir,
         log_jaxprs=False,
         log_xla_hlo=False,
+        watch=WatchConfig(interval=args.watch_interval),
     )
     # One fresh example per sequence, and a mixture block exactly as long as the dataset so nothing repeats.
     examples = synthetic_examples(args.steps * batch_size, model.max_seq_len, model.vocab_size)
@@ -185,7 +193,7 @@ def main() -> None:
     flops_per_example, _ = _compute_flops(model_config=model)
     logger.info(
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
-        "expert_axis=%d attention=%s moe=%s flops_per_example=%.4e",
+        "expert_axis=%d attention=%s moe=%s remat=%s watch_interval=%d flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -200,6 +208,8 @@ def main() -> None:
         args.expert_axis,
         args.attention,
         args.moe_impl,
+        args.remat_mode,
+        args.watch_interval,
         flops_per_example,
     )
     _run_grug_local(config)
