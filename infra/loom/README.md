@@ -268,65 +268,12 @@ point has been verified.
 
 ## Scheduled watches
 
-The `watches` mapping declares cron or interval tasks. Choose an agent prompt
-for tasks that need judgment, or a mechanical script for deterministic checks.
-Agent occurrences launch an automation-safe ACP profile with the declared
-prompt. `promptFile` reads a file below `infra/loom`; Pulumi sends its contents, so Loom does not need the
-Marin checkout at runtime. Use either `prompt` or `promptFile`.
+Declare scheduled agent or script watches under `marin-loom:watches` in
+[Pulumi.marin-loom.yaml](Pulumi.marin-loom.yaml). The disabled
+`weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
+stored under `infra/loom`; Pulumi includes their contents in the manifest.
 
-```yaml
-marin-loom:watches:
-  weekday-job-check:
-    enabled: false
-    cron: "0 9 * * 1-5"
-    timezone: America/Los_Angeles
-    profile: ops
-    repo: marin-community/marin
-    promptFile: watches/weekday-job-check.md
-    slackChannels: []
-```
-
-For an interval, replace `cron` and `timezone` with `every: 30m`. Cron uses
-five fields and an IANA time zone. Loom validates the complete expression when
-applying the manifest.
-
-Loom coalesces recent missed runs and skips overlaps. Tasks have a five-minute
-timeout; set `runTimeoutSeconds` to override it. Completed agent sessions stay
-visible for about five minutes before automatic archival.
-
-Mechanical watches use `program` instead of agent fields:
-
-```yaml
-marin-loom:watches:
-  merge-check:
-    enabled: false
-    every: 30m
-    program: builtin:archive-merged
-    capabilities: [observe]
-    runTimeoutSeconds: 60
-```
-
-Scripts run directly, without an agent session. `program` names a Loom builtin
-or an absolute path on the Loom server; IaC does not upload script files. Use
-`params` and `scope` objects for script configuration. The built-in `watch`
-profile is the default; another profile must be declared and automation-safe.
-Timing, coalescing, overlap, timeout, and history use the same scheduler as
-agents. Interrupted scripts settle as errors without replaying their actions.
-
-The `scheduled-message` profile uses low effort and a one-turn budget. It selects
-`loom/messaging/post@v1` from the `messaging` MCP group for Slack posting and
-`loom/watches/state@v1` from the `watch` group for persistent memory. Profiles can
-select either capability independently. Use `ops` for job inspection that needs
-operator tools.
-
-Messages are agent actions. Add channel IDs to `slackChannels` and name the
-message and destination in the prompt. The agent uses `messaging_slack_post` with
-a stable action key; Loom keeps the bot token on the server and refuses other channels.
-An uncertain Slack response is recorded for inspection and is not reposted.
-
-Reconciliation keeps watch IDs, history, memory, and the next scheduled time
-when the cadence is unchanged. A watch paused in Loom stays paused through
-rollouts; enable it explicitly in Loom to resume. Pruning pauses omitted
-managed watches and preserves their history. Operator-created watches are
-outside deployment ownership. Deploy a Loom release with scheduled watch support
-before applying a manifest containing `watches`.
+Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
+before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
+for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
+the IaC fields. Custom script files must already exist on the Loom server.
