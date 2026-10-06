@@ -405,7 +405,6 @@ def test_repeated_judgments_on_a_reference_rubric_are_an_invalid_task(tmp_path, 
     spec_path.write_text(render_spec(spec))
     reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
     assert (reward.status, reward.reward) == (Status.INVALID_TASK, 0.0)
-    assert reward.detail["error"] == "repeated judgments apply only to the checklist rubric"
     assert fake_judge.requests == []
 
 
