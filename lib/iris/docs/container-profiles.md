@@ -203,8 +203,11 @@ on every controller RPC. Owner-gated calls (child jobs, endpoint registration,
 `ExecInContainer`) then behave as for the owner. The role carries no admin
 authority: a task may give a child job the elevated container profile or the
 `PRODUCTION`/`SYSTEM` priority band only when the child's parent already
-holds it. Each dispatch mints a fresh token, valid for 30 days and not
-revocable. Under null auth no token is minted.
+holds it, and the token's `job` claim names that parent, so a task of one job
+cannot borrow another job's privileges. Each dispatch mints a fresh token,
+valid for 30 days and not revocable. A running container's token is never
+refreshed: an attempt that outlives it loses controller access, the same
+limit the worker token has. Under null auth no token is minted.
 
 ## Cluster network trust
 

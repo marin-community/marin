@@ -207,13 +207,16 @@ class NativeProxyIdentityAuthenticator:
         user_id = payload.get("user_id")
         role = payload.get("role")
         audience = payload.get("audience")
+        job = payload.get("job")
         if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         if audience is not None and not isinstance(audience, str):
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if job is not None and not isinstance(job, str):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         return AuthOutcome(
             AuthDecision.AUTHENTICATED,
-            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience, job=job),
         )
 
 
@@ -288,11 +291,19 @@ class JwtTokenManager:
         )
 
     def create_task_token(self, job_id: JobName) -> str:
-        """Mint the control-plane token a task of ``job_id`` presents as its owner."""
-        return self.create_token(
-            job_id.user,
-            TASK_ROLE,
-            f"iris_task_{secrets.token_urlsafe(8)}",
+        """Mint the control-plane token a task of ``job_id`` presents as its owner.
+
+        The ``job`` claim binds the token to ``job_id``, so the controller lets
+        it pass the parent's elevated band or profile only to ``job_id``'s children.
+        """
+        return self._signer.mint(
+            {
+                "sub": job_id.user,
+                "role": TASK_ROLE,
+                "jti": f"iris_task_{secrets.token_urlsafe(8)}",
+                "job": job_id.to_wire(),
+            },
+            audience=CONTROL_PLANE_AUDIENCE,
             ttl_seconds=TASK_TOKEN_TTL_SECONDS,
         )
 
@@ -371,6 +382,7 @@ class JwtTokenManager:
             user_id=claims.sub,
             role=claims.claims.get("role", "user"),
             audience=endpoint,
+            job=None if is_proxy_scope else claims.claims.get("job"),
         )
 
 

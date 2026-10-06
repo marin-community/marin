@@ -889,6 +889,7 @@ fn anonymous_identity() -> auth::VerifiedIdentity {
         user_id: "anonymous".to_string(),
         role: auth::ADMIN_ROLE.to_string(),
         audience: None,
+        job: None,
         endpoint: None,
         federation_peer: None,
         expires_at: u64::MAX,

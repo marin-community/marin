@@ -22,6 +22,7 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.endpoints import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
+from iris.cluster.types import JobName
 from iris.managed_thread import ThreadContainer
 from rigging import telemetry
 from rigging.testing import RecordingTelemetryTransport
@@ -565,13 +566,28 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
     assert spoofed.status_code == 401
 
 
-def test_native_listener_stamps_controller_identity_and_strips_caller_credentials() -> None:
+@pytest.mark.parametrize(
+    ("mint", "expected_identity"),
+    [
+        pytest.param(
+            lambda jwt: jwt.create_token("alice", "user", "controller-handoff", ttl_seconds=60),
+            {"user_id": "alice", "role": "user", "audience": None},
+            id="user",
+        ),
+        pytest.param(
+            lambda jwt: jwt.create_task_token(JobName.from_wire("/alice/train")),
+            {"user_id": "alice", "role": "task", "audience": None, "job": "/alice/train"},
+            id="task",
+        ),
+    ],
+)
+def test_native_listener_stamps_controller_identity_and_strips_caller_credentials(mint, expected_identity) -> None:
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
         auth = create_controller_auth(None, cluster_name="native-controller-handoff")
         assert auth.jwt_manager is not None
-        token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
+        token = mint(auth.jwt_manager)
         issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
         proxy = NativeProxy(
             "127.0.0.1",
@@ -611,11 +627,7 @@ def test_native_listener_stamps_controller_identity_and_strips_caller_credential
         assert payload["cookie"] is None
         assert payload["iap_assertion"] is None
         assert payload["decision_secret"] == "controller-handoff-secret"
-        assert json.loads(unquote(payload["verified_identity"])) == {
-            "user_id": "alice",
-            "role": "user",
-            "audience": None,
-        }
+        assert json.loads(unquote(payload["verified_identity"])) == expected_identity
         proxy.stop()
     finally:
         threads.stop()

@@ -317,13 +317,17 @@ def _get_autoscaler_pending_hints(dependencies: JobDependencies) -> dict[str, Pe
 
 
 def _task_caller_parent(dependencies: JobDependencies, job_id: JobName) -> Row | None:
-    """The parent's job row when a task token launches a child job, else None.
+    """The parent's job row when a task of that parent launches ``job_id``, else None.
 
     A task may give its child the admin-gated band or profile its parent already
-    holds: inheriting it grants nothing the parent's submitter did not.
+    holds: inheriting it grants nothing the parent's submitter did not. The
+    token's ``job`` claim must name the parent, so a task cannot borrow the
+    privileges of another job with the same owner.
     """
     identity = get_verified_identity()
     if identity is None or identity.role != TASK_ROLE or job_id.parent is None:
+        return None
+    if identity.job != job_id.parent.to_wire():
         return None
     with dependencies.db.read_snapshot() as snapshot:
         return reads.get_job_detail(snapshot, job_id.parent)
