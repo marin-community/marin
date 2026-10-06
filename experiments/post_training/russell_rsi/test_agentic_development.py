@@ -14,6 +14,10 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("harbor")
+pytest.importorskip("minisweagent")
+
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle

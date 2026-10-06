@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
+from marin.external_dependencies import MARIN_SKYRL
 
 from experiments.post_training.russell_rsi import (
     coding_eval_feedback,
@@ -32,6 +33,17 @@ from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.test_coding_eval_feedback import partition_response_fixture
 
 completed_evidence = test_completed_coding_analysis.completed_evidence
+
+
+@pytest.fixture
+def regional_runtime_metadata(tmp_path, monkeypatch):
+    metadata = tmp_path / "marinskyrl-0.1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: marinskyrl\nVersion: 0.1.0\n")
+    (metadata / "direct_url.json").write_text(
+        json.dumps({"url": MARIN_SKYRL.repository, "vcs_info": {"commit_id": MARIN_SKYRL.commit}})
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
 
 
 @pytest.fixture
@@ -177,7 +189,7 @@ def partitioned_completed(completed_evidence, tmp_path):
 
 
 def test_partition_graph_and_regional_worker_issue_only_two_then_resume_without_http(
-    partitioned_completed, tmp_path, monkeypatch
+    partitioned_completed, tmp_path, monkeypatch, regional_runtime_metadata
 ):
     config, evidence_step, pin, prefix = partitioned_completed
     original_stages = completed_coding_analysis.completed_evidence_analysis_stages

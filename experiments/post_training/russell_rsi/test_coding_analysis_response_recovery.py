@@ -39,6 +39,8 @@ from experiments.post_training.russell_rsi.feedback import FeedbackAnalysis
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.test_coding_eval_feedback import partitioned_analysis_fixture
 
+regional_runtime_metadata = test_completed_partitioned_coding_analysis.regional_runtime_metadata
+
 
 @pytest.fixture
 def saved_long_partition(tmp_path):
@@ -111,7 +113,7 @@ def saved_long_partition(tmp_path):
 
 
 def test_saved_long_response_recovery_preserves_request_and_issues_only_part2(
-    saved_long_partition, tmp_path, monkeypatch
+    saved_long_partition, tmp_path, monkeypatch, regional_runtime_metadata
 ):
     config, _first, second, _values, pins = saved_long_partition
     assert (
@@ -201,7 +203,7 @@ def test_saved_response_keeps_all_other_schema_guards_before_any_http(saved_long
     assert calls == []
 
 
-def test_issued_part2_without_response_blocks_all_http(saved_long_partition):
+def test_issued_part2_without_response_blocks_all_http(saved_long_partition, regional_runtime_metadata):
     config, _first, second, _values, _pins = saved_long_partition
     directory = Path(config.worker.analysis.output_path) / "part-2"
     directory.mkdir(parents=True)
