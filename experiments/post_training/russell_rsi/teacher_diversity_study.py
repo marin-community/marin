@@ -394,6 +394,12 @@ def run_diversity_calibration(config: DevelopmentEvaluationConfig) -> None:
 
 
 def diversity_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
+    trained = diversity_workflow(pinned_record(config, "sft_config"))["train"]
+    return validated_diversity_post_workflow(config, stage, trained=trained)
+
+
+def validated_diversity_post_workflow(config: dict, stage: str, *, trained: ArtifactStep) -> dict[str, ArtifactStep]:
+    """Apply the original study gates to an explicitly bound training producer."""
     if config["protocol"] != PROTOCOL or config["runtime_commit"] != MARIN_SKYRL.commit:
         raise ValueError("Diversity post-SFT protocol or runtime differs")
     study = pinned_record(config, "sft_config")
@@ -417,7 +423,6 @@ def diversity_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
         task_bank=tuple(QualifiedTask(**item) for item in bank_record["tasks"]),
         bank_identity=artifact_identity(bank),
     )
-    trained = diversity_workflow(study)["train"]
     qualification = pinned_record(config, "qualification")
     if qualification["source_config_sha256"] != config["sft_config_sha256"]:
         raise ValueError("Diversity qualification identifies different SFT inputs")

@@ -10,11 +10,13 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import jax.random as jrandom
+import numpy as np
 import pytest
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.tracker.json_logger import JsonLoggerConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
 from marin.external_dependencies import MARIN_SKYRL
@@ -31,6 +33,12 @@ from experiments.post_training.russell_rsi import (
 from experiments.post_training.russell_rsi.bootstrap_loop import QualifiedTask
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import seal_study_calibration
+from experiments.post_training.russell_rsi.launch_teacher_diversity_post_sft import (
+    AMENDMENT_PROTOCOL,
+    LAUNCH_PROTOCOL,
+    PERMITTED_CHANGES,
+    durable_diversity_post_workflow,
+)
 from experiments.post_training.russell_rsi.launch_teacher_diversity_sft import SFT_VERSION, durable_sft_stages
 from experiments.post_training.russell_rsi.launch_teacher_sft import StudentTrainingTemplate, TeacherCollectionConfig
 from experiments.post_training.russell_rsi.rollout_eval import calibration_evaluation_journal
@@ -53,6 +61,7 @@ from experiments.post_training.russell_rsi.teacher_diversity_study import (
     diversity_post_workflow,
     diversity_workflow,
     require_diversity_condition,
+    validated_diversity_post_workflow,
 )
 from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_INSTRUCTION, preflight_task
 
@@ -595,3 +604,193 @@ def test_durable_sft_preserves_collection_and_science(diversity_inputs, tmp_path
     assert trainer.tracker == (JsonLoggerConfig(metric_destination="<output_path>/optimizer-telemetry"),)
     restored = replace(trainer, id=before.train_config.trainer.id, tracker=before.train_config.trainer.tracker)
     assert replace(after, train_config=replace(after.train_config, trainer=restored)) == before
+
+
+def test_post_workflow_binds_durable_training_and_keeps_qualification_gate(diversity_inputs, tmp_path):
+    stages = durable_sft_stages(diversity_workflow(diversity_inputs))
+    trained = stages["train"]
+    post = {**diversity_inputs, "sft_uri": trained.path(str(tmp_path / "artifacts"))}
+    set_pin(post, "sft_config", pinned(tmp_path, "durable-science", diversity_inputs))
+    qualification = test_teacher_four_pass.four_update_qualification(artifact_identity(trained), post["sft_uri"])
+    qualification["source_config_sha256"] = post["sft_config_sha256"]
+    set_pin(post, "qualification", pinned(tmp_path, "durable-qualified", qualification))
+    outputs = validated_diversity_post_workflow(post, "calibrate", trained=trained)
+    identities = {artifact_identity(handle) for handle in graph_handles([outputs["terminal"]])}
+    assert artifact_identity(trained) not in identities
+    assert artifact_identity(stages["reload"]) not in identities
+    qualified_model = outputs["calibration"].deps[1]
+    assert qualified_model.adopt_config is not None
+    assert qualified_model.adopt_config["sft"] == artifact_identity(trained)
+    assert qualified_model.adopt_source == qualification["hf_export_uri"]
+    qualification["sft_identity"] = artifact_identity(diversity_workflow(diversity_inputs)["train"])
+    set_pin(post, "qualification", pinned(tmp_path, "wrong-producer", qualification))
+    with pytest.raises(ValueError, match="pinned 4-update export"):
+        validated_diversity_post_workflow(post, "calibrate", trained=trained)
+
+
+def test_public_durable_post_factory_requires_raw_metrics_and_exact_reload(diversity_inputs, tmp_path):
+    study = deepcopy(diversity_inputs)
+    study["version"] = study["collection_version"] = "2026.10.06.15"
+    study["prospective_decision"] = pinned(tmp_path, "v15-decision", decision(study))
+    stages = durable_sft_stages(diversity_workflow(study))
+    artifact_prefix = str(tmp_path / "artifacts")
+    post: dict = {**study, "version": "2026.10.06.18", "sft_uri": stages["train"].path(artifact_prefix)}
+    set_pin(post, "sft_config", pinned(tmp_path, "v15-study", study))
+    config_pin = {"uri": post["sft_config_uri"], "sha256": post["sft_config_sha256"]}
+    source = {"head": "f" * 40, "runtime_commit": MARIN_SKYRL.commit, "files": {"worker.py": "a" * 64}}
+    post["sft_source_review"] = pinned(
+        tmp_path,
+        "source-review",
+        {
+            "status": "approved",
+            "source_head": source["head"],
+            "runtime_commit": MARIN_SKYRL.commit,
+        },
+    )
+    amendment: dict = {
+        "protocol": AMENDMENT_PROTOCOL,
+        "config": config_pin,
+        "source": source,
+        "collection_identity": artifact_identity(stages["collect"]),
+        "changes": PERMITTED_CHANGES,
+        "source_only_changes": ["exclude_stale_parent_weight_manifest"],
+        "science": {
+            "rows": 8,
+            "passes": 4,
+            "batch_size": 8,
+            "updates": 4,
+            "context_tokens": 16384,
+            "learning_rate": 1e-6,
+        },
+    }
+    records = {}
+    launches = {}
+    for role, handle in (("sft", stages["train"]), ("reload", stages["reload"])):
+        root = Path(handle.path(artifact_prefix))
+        root.mkdir(parents=True)
+        (root / ".executor_status").write_text("SUCCESS")
+        ctx = StepContext.for_run(str(root), artifact_prefix, deps=handle.deps, runtime_args=handle.runtime_args)
+        bound = json.loads(canonical_json(handle.build_config(ctx)))
+        amendment[role] = {"version": SFT_VERSION, "identity": artifact_identity(handle), "output_path": str(root)}
+        request = pinned(
+            tmp_path,
+            f"{role}-request",
+            {
+                "stage": role,
+                "version": SFT_VERSION,
+                "source_head": source["head"],
+                "runtime_commit": MARIN_SKYRL.commit,
+                "config_uri": config_pin["uri"],
+                "config_sha256": config_pin["sha256"],
+            },
+        )
+        preflight = pinned(
+            tmp_path,
+            f"{role}-preflight",
+            {
+                "exit_code": 0,
+                "identity": {"source_head": source["head"], "request_sha256": request["sha256"]},
+            },
+        )
+        launch = {
+            "protocol": LAUNCH_PROTOCOL,
+            "source_head": source["head"],
+            "runtime_commit": MARIN_SKYRL.commit,
+            "source_files": source["files"],
+            "config": config_pin,
+            "source_review": post["sft_source_review"],
+            "producer_identity": artifact_identity(handle),
+            "output_path": str(root),
+            "request": request,
+            "preflight": preflight,
+            "bound_config": bound,
+            "rl_authorized": False,
+            "signal_gate_passed": None,
+        }
+        record = {
+            "name": handle.name,
+            "version": handle.version,
+            "fingerprint": handle.fingerprint(),
+            "output_path": str(root),
+            "config": bound,
+            "provenance": {"base_commit": source["head"], "dirty": False},
+        }
+        if role == "reload":
+            result_pin = pinned(root, "smoke-result", {"score": 1.0})
+            record["result"] = {"results_paths": [result_pin["uri"]]}
+        path = root / ".artifact.json"
+        raw = json.dumps(record, sort_keys=True).encode()
+        path.write_bytes(raw)
+        post[f"{role}_producer"] = {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+        post[f"{role}_launch_proof"] = pinned(tmp_path, f"{role}-launch", launch)
+        records[role], launches[role] = record, launch
+    trainer = records["sft"]["config"]["train_config"]["trainer"]
+    amendment["sft"].update(run_id=trainer["id"], metric_destination=trainer["tracker"][0]["metric_destination"])
+    post["sft_telemetry_amendment"] = pinned(tmp_path, "telemetry-amendment", amendment)
+    qualification = test_teacher_four_pass.four_update_qualification(artifact_identity(stages["train"]), post["sft_uri"])
+    qualification["source_config_sha256"] = post["sft_config_sha256"]
+    qualification["serving_reload"].update(evidence_uri=result_pin["uri"], evidence_sha256=result_pin["sha256"])
+    destination = Path(amendment["sft"]["metric_destination"])
+    destination.mkdir()
+    event_pins = []
+    for step in qualification["optimizer_steps"]:
+        event = {
+            "tracker": "json_logger",
+            "event": "log",
+            "run_id": trainer["id"],
+            "step": step["step"],
+            "metrics": {
+                "train/loss": step["loss"],
+                "optim/learning_rate": float(np.float32(step["learning_rate"])),
+                "grad/norm/total": step["gradient_norm"],
+                "updates/norm/total": step["update_norm"],
+            },
+        }
+        raw = json.dumps(event, sort_keys=True).encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        path = destination / f"step-{step['step']}-{digest}.json"
+        path.write_bytes(raw)
+        event_pins.append({"uri": str(path), "sha256": digest})
+    qualification["optimizer_telemetry"] = {
+        "files": event_pins,
+        "skip_bad_steps": False,
+        "crash_on_nan": True,
+        "crash_on_inf": True,
+        "learning_rate_dtype": "float32",
+    }
+    set_pin(post, "qualification", pinned(tmp_path, "qualified-v17", qualification))
+    outputs = durable_diversity_post_workflow(post, "calibrate")
+    identities = {artifact_identity(handle) for handle in graph_handles([outputs["terminal"]])}
+    assert artifact_identity(stages["train"]) not in identities
+    assert artifact_identity(stages["reload"]) not in identities
+
+    qualification["optimizer_telemetry"]["files"] = event_pins[:-1]
+    set_pin(post, "qualification", pinned(tmp_path, "missing-metric-step", qualification))
+    with pytest.raises(ValueError, match="cover all four"):
+        durable_diversity_post_workflow(post, "calibrate")
+    qualification["optimizer_telemetry"]["files"] = event_pins
+    conflict = json.loads(Path(event_pins[0]["uri"]).read_bytes())
+    conflict["metrics"]["train/loss"] += 1
+    raw = json.dumps(conflict, sort_keys=True).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    conflict_path = destination / f"step-0-{digest}.json"
+    conflict_path.write_bytes(raw)
+    qualification["optimizer_telemetry"]["files"] = [*event_pins, {"uri": str(conflict_path), "sha256": digest}]
+    set_pin(post, "qualification", pinned(tmp_path, "conflicting-metrics", qualification))
+    with pytest.raises(ValueError, match="conflicting values"):
+        durable_diversity_post_workflow(post, "calibrate")
+    qualification["optimizer_telemetry"]["files"] = event_pins
+    qualification["serving_reload"]["evidence_uri"] = str(tmp_path / "another-reload")
+    set_pin(post, "qualification", pinned(tmp_path, "wrong-reload-evidence", qualification))
+    with pytest.raises(ValueError, match="different serving reload"):
+        durable_diversity_post_workflow(post, "calibrate")
+    qualification["serving_reload"]["evidence_uri"] = result_pin["uri"]
+    set_pin(post, "qualification", pinned(tmp_path, "qualified-again", qualification))
+    records["reload"]["config"]["model"]["location"] = str(tmp_path / "different-export")
+    raw = json.dumps(records["reload"], sort_keys=True).encode()
+    path = Path(post["reload_producer"]["uri"])
+    path.write_bytes(raw)
+    post["reload_producer"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    post["reload_launch_proof"] = pinned(tmp_path, "wrong-export-launch", launches["reload"])
+    with pytest.raises(ValueError, match="different telemetry or reload"):
+        durable_diversity_post_workflow(post, "calibrate")
