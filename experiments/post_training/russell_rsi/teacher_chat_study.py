@@ -302,7 +302,7 @@ async def collect_remaining_rows(
     if len(selected) != SOURCE_FAMILIES or len({entry["family"] for entry in selected}) != SOURCE_FAMILIES:
         raise ValueError("Chat study requires the exact ten-family source selection")
     for entry in selected:
-        if digest(tasks[entry["task_id"]].model_dump(mode="json")) != entry["task_sha256"]:
+        if digest(tasks[entry["task_id"]].model_dump(mode="json", exclude_unset=True)) != entry["task_sha256"]:
             raise ValueError("Chat task differs from frozen admission")
     plan = {
         "protocol": PROTOCOL,

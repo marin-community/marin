@@ -15,6 +15,7 @@ from marin.execution.lazy import StepContext, artifact_identity
 from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.contracts import RolloutContractError
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.russell_rsi import teacher_chat_study as study
 from experiments.post_training.russell_rsi import test_teacher_collection, test_teacher_four_pass
@@ -34,7 +35,9 @@ study_inputs = test_teacher_four_pass.study_inputs
 def inputs(tokenizer):
     selected, tasks = [], {}
     for index in range(10):
-        task = preflight_task(index + 20, PREFLIGHT_INSTRUCTION, 90000 + index)
+        task = TaskSpec.model_validate_json(
+            preflight_task(index + 20, PREFLIGHT_INSTRUCTION, 90000 + index).model_dump_json()
+        )
         tasks[task.id] = task
         selected.append(
             asdict(TeacherTask(f"family-{index}", "boundaries", task.id, digest(task.model_dump(mode="json"))))
@@ -140,6 +143,38 @@ def test_changed_task_and_fatal_resume_fail_before_provider(tmp_path, student_to
     assert calls == ["05-1"]
     marker = json.loads((tmp_path / "contract-failure.json").read_text())
     assert marker["slot"] == "05-1" and marker["exception_type"] == "RolloutContractError"
+
+
+def test_admitted_serialized_task_survives_new_schema_defaults(tmp_path, student_tokenizer):
+    original, tasks, retained = inputs(student_tokenizer)
+    for entry in original["selection"]["selected"]:
+        serialized = tasks[entry["task_id"]].model_dump(mode="json")
+        del serialized["interaction_tools"]
+        del serialized["output_paths"]
+        entry["task_sha256"] = digest(serialized)
+        tasks[entry["task_id"]] = TaskSpec.model_validate_json(json.dumps(serialized))
+    calls = []
+
+    async def run(task, slot, model):
+        calls.append(slot.name)
+        return rollout("not accepted", reward=0)
+
+    result = asyncio.run(
+        collect_remaining_rows(original, tasks, retained, student_tokenizer, StoragePath(str(tmp_path / "valid")), run)
+    )
+    assert result["new_trajectories"] == 9 and calls[0] == "05-1"
+    calls.clear()
+    changed = tasks[original["selection"]["selected"][0]["task_id"]]
+    changed_payload = changed.model_dump(mode="json", exclude_unset=True)
+    changed_payload["context"]["events"][0]["content"] = "Changed admitted public task"
+    tasks[changed.id] = TaskSpec.model_validate_json(json.dumps(changed_payload))
+    with pytest.raises(ValueError, match="frozen admission"):
+        asyncio.run(
+            collect_remaining_rows(
+                original, tasks, retained, student_tokenizer, StoragePath(str(tmp_path / "changed")), run
+            )
+        )
+    assert calls == [] and not (tmp_path / "changed" / "plan.json").exists()
 
 
 def test_actual_mixture_repeats_four_rows_eight_times_in_built_four_batches(study_inputs, tmp_path, monkeypatch):
