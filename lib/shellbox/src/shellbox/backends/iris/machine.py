@@ -44,8 +44,19 @@ DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
-# Iris copies these from the submitting process into every job unless the job overrides them.
-SUBMITTER_TOKEN_ENV = {"HF_TOKEN": "", "WANDB_API_KEY": ""}
+# Credentials Iris places in every job: the submitter's HF_TOKEN and WANDB_API_KEY, a parent job's
+# environment in each child job, and on CoreWeave the cluster's object-store keys. A job's own
+# env_vars take precedence over all of them, so the factory sets these names to empty strings.
+DEFAULT_BLANKED_ENV = (
+    "HF_TOKEN",
+    "WANDB_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "CW_KEY_ID",
+    "CW_KEY_SECRET",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+)
 
 
 class IrisMachine:
@@ -221,6 +232,9 @@ class IrisMachineFactory:
     Iris cannot set a job's network, so ``cluster_network`` is the caller's assertion of the network
     the target cluster's gVisor profile gives every sandbox. ``create`` refuses any spec that asks
     for a different policy; the factory does not check the assertion.
+
+    The sandbox job sets each name in ``DEFAULT_BLANKED_ENV`` and ``extra_blanked_env`` to an empty
+    string, which hides the credentials Iris would otherwise copy into it.
     """
 
     def __init__(
@@ -232,6 +246,7 @@ class IrisMachineFactory:
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
         job_ttl: int = DEFAULT_JOB_TTL,
         disk_mb: int = DEFAULT_DISK_MB,
+        extra_blanked_env: tuple[str, ...] = (),
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
@@ -241,6 +256,7 @@ class IrisMachineFactory:
         self.scheduling_timeout = scheduling_timeout
         self.job_ttl = job_ttl
         self.disk_mb = disk_mb
+        self.blanked_env = dict.fromkeys((*DEFAULT_BLANKED_ENV, *extra_blanked_env), "")
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
         if spec.gpus:
@@ -271,7 +287,7 @@ class IrisMachineFactory:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("sleep", "infinity"),
                 name=f"shellbox-{uuid.uuid4().hex}",
-                environment=EnvironmentSpec(setup_scripts=[], env_vars=SUBMITTER_TOKEN_ENV),
+                environment=EnvironmentSpec(setup_scripts=[], env_vars=self.blanked_env),
                 resources=ResourceSpec(
                     cpu=spec.cpus or 1,
                     memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,

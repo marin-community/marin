@@ -154,15 +154,17 @@ def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_create_keeps_the_submitters_tokens_out_of_the_sandbox(monkeypatch) -> None:
+def test_create_blanks_inherited_credentials_in_the_sandbox_job(monkeypatch) -> None:
     monkeypatch.setenv("HF_TOKEN", "submitter-hf-token")
     monkeypatch.setenv("WANDB_API_KEY", "submitter-wandb-key")
-    factory = IrisMachineFactory(controller_url="http://controller", cluster_network=NetworkPolicy.DENY)
+    factory = IrisMachineFactory(
+        controller_url="http://controller", cluster_network=NetworkPolicy.DENY, extra_blanked_env=("GLM_API_TOKEN",)
+    )
 
     env_vars = submitted_job(monkeypatch, factory)["environment"].to_proto().env_vars
 
-    assert env_vars["HF_TOKEN"] == ""
-    assert env_vars["WANDB_API_KEY"] == ""
+    for name in (*iris_backend.DEFAULT_BLANKED_ENV, "GLM_API_TOKEN"):
+        assert env_vars[name] == ""
 
 
 def test_create_refuses_a_network_policy_the_cluster_does_not_provide() -> None:
