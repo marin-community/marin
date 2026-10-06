@@ -10,7 +10,6 @@ ROCM_VERSION=10.0.0
 JAX_VERSION=0.11.0
 # PyTorch build against the same ROCm release as the JAX plugin, so both use the same hipBLASLt.
 TORCH_VERSION=2.13.0
-AMD_SMI_DIR=/opt/rocm-7.2.0/share/amd_smi
 MAMF_SHA=0359db89793c313e90e4f8a8bc8a2b1514ba00ae
 MAMF_URL=https://raw.githubusercontent.com/stas00/ml-engineering/$MAMF_SHA/compute/accelerator/benchmarks/mamf-finder.py
 
@@ -31,10 +30,14 @@ uv pip install --no-config --python "$agent_work/venv-torch/bin/python" --index-
   "amd-torch-device-gfx942==$TORCH_VERSION+rocm$ROCM_VERSION" \
   "amd-torch-device-gfx950==$TORCH_VERSION+rocm$ROCM_VERSION" \
   numpy
-# amdsmi (MAMF-finder's power and clock telemetry) builds in its source tree, which is read-only under /opt.
-rm -rf "$agent_work/amd_smi_src"
-cp -r "$AMD_SMI_DIR" "$agent_work/amd_smi_src"
-uv pip install --no-config --python "$agent_work/venv-torch/bin/python" packaging "$agent_work/amd_smi_src"
+uv pip install --no-config --python "$agent_work/venv-torch/bin/python" packaging
+# MAMF-finder reads power and clocks through amdsmi. Torch loads the ROCm SDK's own libamd_smi, and a second copy
+# from /opt/rocm makes amdsmi report no GPUs, so use the SDK's binding in place: it finds the SDK library relative
+# to its own file. A .pth file still applies under `python -I`, which MAMF runs with.
+uv pip uninstall --no-config --python "$agent_work/venv-torch/bin/python" amdsmi 2>/dev/null || true
+"$agent_work/venv-torch/bin/python" -I -c "import _rocm_sdk_core, pathlib, sysconfig
+sdk_smi = pathlib.Path(_rocm_sdk_core.__file__).parent / 'share' / 'amd_smi'
+pathlib.Path(sysconfig.get_path('purelib'), 'rocm_sdk_amdsmi.pth').write_text(f'{sdk_smi}\n')"
 
 curl -fsSL -o "$agent_work/mamf/mamf-finder.py" "$MAMF_URL"
 echo "$MAMF_SHA" >"$agent_work/mamf/SOURCE_SHA"
