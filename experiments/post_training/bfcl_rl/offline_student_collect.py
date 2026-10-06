@@ -18,6 +18,7 @@ from experiments.post_training.bfcl_rl.collect import (
     NATIVE_AGENT_PROFILES,
     SMOKE_TASKS,
     collection_spec,
+    native_agent_profiles,
 )
 from experiments.post_training.bfcl_rl.launch import recovered_model
 
@@ -29,12 +30,13 @@ def native_student_collection_step(
     seed: int,
     task: str | None,
     images: tuple[str, str, str],
+    harnesses: tuple[str, ...],
 ) -> ArtifactStep:
     """Bind the recovered student to the teacher's task and native harness schedule."""
     spec = collection_spec("student", task, images)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
-    harbor.update(name="opencode", version="1.18.2", agent_profiles=list(NATIVE_AGENT_PROFILES))
+    harbor.update(name="opencode", version="1.18.2", agent_profiles=native_agent_profiles(harnesses))
     harbor.pop("thinking_format")
     generator = recipe["generator"]
     generator["model_loading"] = "stage_local"
@@ -67,12 +69,21 @@ def native_student_collection_step(
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
 @click.option("--javascript-image", required=True)
+@click.option(
+    "--harness",
+    "harnesses",
+    type=click.Choice([p["name"] for p in NATIVE_AGENT_PROFILES]),
+    multiple=True,
+    required=True,
+    help="Ordered schedule; repeat a harness to increase its collection share.",
+)
 @rl_build_options
 def main(
     recovery_version: str,
     policy_export_version: str,
     policy_checkpoint_step: int,
     seed: int,
+    harnesses: tuple[str, ...],
     task: str | None,
     python_image: str,
     java_image: str,
@@ -85,6 +96,7 @@ def main(
         seed,
         task,
         (python_image, java_image, javascript_image),
+        harnesses,
     )
 
 

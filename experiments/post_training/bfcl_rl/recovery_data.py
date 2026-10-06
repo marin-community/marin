@@ -98,6 +98,18 @@ def generation_collection_receipt(
         raise ValueError("recovery requires a successful collection with matching terminal identity")
     if result["attempt_id"] != config["run"]["attempt_id"] or not result["iris_job_id"]:
         raise ValueError("collection attempt or Iris job identity is missing or inconsistent")
+    return generation_collection_config_receipt(config, resolved, model=model, harness=harness, partition=partition)
+
+
+def generation_collection_config_receipt(
+    config: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    *,
+    model: ModelSource,
+    harness: str,
+    partition: BFCLPartition,
+) -> CollectionReceipt:
+    """Validate actual generation inputs independently of whether the producer has finished."""
     if config["runtime"]["entrypoint"] != "skyrl_train.entrypoints.terminal_bench_generate":
         raise ValueError("recovery collection must be generation-only")
     expected = model
@@ -150,8 +162,12 @@ def generation_collection_receipt(
     model_info = skyrl["terminal_bench_config"]["model_info"]
     if (model_info["max_input_tokens"], model_info["max_output_tokens"]) != (32768, 8192):
         raise ValueError("recovery collection context differs from the fixed Pi policy")
+    conditions_harbor = dict(harbor)
+    if harness == "native":
+        for key in ("name", "version", "agent_profiles"):
+            conditions_harbor.pop(key, None)
     conditions = {
-        "harbor": harbor,
+        "harbor": conditions_harbor,
         "model_info": model_info,
         "sampling_params": skyrl["generator"]["sampling_params"],
         "max_input_length": skyrl["generator"]["max_input_length"],

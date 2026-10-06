@@ -14,6 +14,7 @@ from marin.rl.cli import _coordinator_request
 
 from experiments.post_training.bfcl_rl import launch
 from experiments.post_training.bfcl_rl.launch import recovered_model
+from experiments.post_training.bfcl_rl.offline_curate import NativeCollectionScope
 from experiments.post_training.bfcl_rl.offline_preferences import native_preference_step
 
 
@@ -21,7 +22,14 @@ def test_native_preference_graph_submits_cpu_coordinator_to_coreweave(tmp_path):
     teachers = (("s3://bucket/teacher/2026.10.04.34", 7), ("s3://bucket/teacher/2026.10.05.52", 11))
     with build_context(BuildContext(VersionCodex("2026.10.05.55"))):
         step = native_preference_step(
-            teachers, "s3://bucket/student/2026.10.05.49", "pinned-teacher", 7, "2026.10.04.21", "2026.10.04.26", 57
+            teachers,
+            "s3://bucket/student/2026.10.05.49",
+            "pinned-teacher",
+            7,
+            "2026.10.04.21",
+            "2026.10.04.26",
+            57,
+            NativeCollectionScope.COMPLETE_RUN,
         )
     module = "experiments.post_training.bfcl_rl.offline_preferences"
     cluster, request = _coordinator_request([step], module, ("--version", "2026.10.05.55", "--run"), 1, tmp_path, {})

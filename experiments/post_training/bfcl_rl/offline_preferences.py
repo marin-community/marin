@@ -18,6 +18,7 @@ from marin.datakit.chat_normalize import InvalidToolCallPolicy, RepeatedToolCall
 from marin.datakit.chat_render import chat_training_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DedupMode
+from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -31,7 +32,11 @@ from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODE
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
 from experiments.post_training.bfcl_rl.launch import recovered_model
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
-from experiments.post_training.bfcl_rl.offline_curate import NativeCollectionInput, collection_native_evidence
+from experiments.post_training.bfcl_rl.offline_curate import (
+    NativeCollectionInput,
+    NativeCollectionScope,
+    collection_native_evidence,
+)
 from experiments.post_training.bfcl_rl.offline_data import native_chat_document, native_model_trace, native_prompt_sha256
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome, VerifiedRollout, select_training_pairs
 from experiments.post_training.bfcl_rl.recovery_data import (
@@ -88,7 +93,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
     """Retokenize both audited native branches and publish only sole-correct preference pairs."""
     if not config.teachers:
         raise ValueError("Native preferences require at least one teacher collection")
-    if len({source.terminal_uri for source in config.teachers}) != len(config.teachers):
+    if len({source.manifest_uri for source in config.teachers}) != len(config.teachers):
         raise ValueError("Native preferences require distinct teacher collections")
     root = StoragePath(config.output_path)
     raw = root / "native-chat"
@@ -147,16 +152,33 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
             reports.append(json.loads(StoragePath(audit_path).read_text()))
     if any(report["conditions_digest"] != reports[-1]["conditions_digest"] for report in reports[:-1]):
         raise ValueError("Native preference collections used different harness or sampling conditions")
-    selections = [
-        selection
-        for teacher_branches in branches[:-1]
-        for selection in select_training_pairs(
-            [branch.rollout for branch in teacher_branches],
-            [branch.rollout for branch in branches[-1]],
-            complement_source_ids=frozenset(task.source_id for task in partition.complement),
-            parity_source_ids=frozenset(task.source_id for task in partition.parity),
+    selections = []
+    unmatched = []
+    students = {
+        (branch.rollout.task_source_id, branch.rollout.harness, branch.rollout.repetition): branch
+        for branch in branches[-1]
+    }
+    for source, teacher_branches in zip(config.teachers, branches[:-1], strict=True):
+        teachers = {
+            (branch.rollout.task_source_id, branch.rollout.harness, branch.rollout.repetition): branch
+            for branch in teacher_branches
+        }
+        shared = teachers.keys() & students.keys()
+        unmatched.append(
+            {
+                "teacher_manifest_uri": source.manifest_uri,
+                "teacher_without_student": sorted(teachers.keys() - shared),
+                "student_without_teacher": sorted(students.keys() - shared),
+            }
         )
-    ]
+        selections.extend(
+            select_training_pairs(
+                [teachers[key].rollout for key in sorted(shared)],
+                [students[key].rollout for key in sorted(shared)],
+                complement_source_ids=frozenset(task.source_id for task in partition.complement),
+                parity_source_ids=frozenset(task.source_id for task in partition.parity),
+            )
+        )
     normalized = normalize_chat_to_parquet(
         input_path=str(raw),
         output_path=str(root / "harmony"),
@@ -244,6 +266,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
         "dispositions": dict(Counter(selection.disposition.value for selection in selections)),
         "preferences": accepted,
         "excluded_preferences": excluded,
+        "unmatched_branches": unmatched,
         "overlength_branches": overlength,
         "normalized_branch_ids": normalized_ids,
         "model_identity_adaptations": identity_adaptations,
@@ -275,13 +298,15 @@ def native_preference_step(
     recovery_version: str,
     policy_export_version: str,
     policy_checkpoint_step: int,
+    collection_scope: NativeCollectionScope,
 ) -> ArtifactStep[RecoveryPreferenceCache]:
+    collection_kind = SkyRLRun if collection_scope is NativeCollectionScope.COMPLETE_RUN else Artifact
     teachers = tuple(
         ArtifactStep.adopt(
             user_owned_name(f"inputs/bfcl-rl-native-teacher-{teacher_seed}"),
             collection_root.rsplit("/", 1)[-1],
             collection_root,
-            kind=SkyRLRun,
+            kind=collection_kind,
         )
         for collection_root, teacher_seed in teacher_collections
     )
@@ -289,7 +314,7 @@ def native_preference_step(
         user_owned_name(f"inputs/bfcl-rl-native-student-{seed}"),
         student_collection_root.rsplit("/", 1)[-1],
         student_collection_root,
-        kind=SkyRLRun,
+        kind=collection_kind,
     )
     policy = replace(
         recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
@@ -298,21 +323,24 @@ def native_preference_step(
     name = user_owned_name(f"data/bfcl-rl-native-preferences-seed-{seed}")
 
     def build_config(ctx: StepContext) -> NativePreferenceConfig:
+        filename = "terminal.json" if collection_scope is NativeCollectionScope.COMPLETE_RUN else "snapshot.json"
         original = MODELS["student"]
         student_source = policy.resolve(ctx).uri
         return NativePreferenceConfig(
             tuple(
                 NativeCollectionInput(
-                    str(StoragePath(ctx.artifact_path(teacher)) / "terminal.json"),
+                    str(StoragePath(ctx.artifact_path(teacher)) / filename),
                     ModelSource(TEACHER_MODEL, TEACHER_REVISION, teacher_source, "pinned"),
                     teacher_seed,
+                    collection_scope,
                 )
                 for teacher, (_, teacher_seed) in zip(teachers, teacher_collections, strict=True)
             ),
             NativeCollectionInput(
-                str(StoragePath(ctx.artifact_path(student)) / "terminal.json"),
+                str(StoragePath(ctx.artifact_path(student)) / filename),
                 ModelSource(original.model, original.revision, student_source, policy_export_version),
                 seed,
+                collection_scope,
             ),
             ctx.artifact_path(data),
             f"{original.model}@{original.revision}",
@@ -347,6 +375,7 @@ def native_preference_step(
 @click.option("--recovery-version", required=True)
 @click.option("--policy-export-version", required=True)
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
+@click.option("--collection-scope", type=click.Choice(list(NativeCollectionScope)), required=True)
 @rl_build_options
 def main(
     teacher_collections: tuple[tuple[str, int], ...],
@@ -356,6 +385,7 @@ def main(
     recovery_version: str,
     policy_export_version: str,
     policy_checkpoint_step: int,
+    collection_scope: str,
 ) -> ArtifactStep:
     return native_preference_step(
         teacher_collections,
@@ -365,6 +395,7 @@ def main(
         recovery_version,
         policy_export_version,
         policy_checkpoint_step,
+        NativeCollectionScope(collection_scope),
     )
 
 

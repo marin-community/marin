@@ -45,6 +45,14 @@ NATIVE_AGENT_PROFILES = (
 )
 
 
+def native_agent_profiles(harnesses: tuple[str, ...]) -> list[dict]:
+    """Resolve a weighted collection schedule to the registered harness versions."""
+    profiles = {profile["name"]: profile for profile in NATIVE_AGENT_PROFILES}
+    if not harnesses:
+        raise ValueError("Native collection requires an explicit harness schedule")
+    return [dict(profiles[name]) for name in harnesses]
+
+
 @dataclass(frozen=True)
 class ModelSource:
     model: str

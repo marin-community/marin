@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import hashlib
 import json
 import zipfile
 from dataclasses import replace
@@ -24,10 +25,11 @@ from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS, NATIVE_AGENT_PROFILES, ModelSource
-from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition, TaskIdentity
+from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, PARTITION_MANIFEST_SHA256, BFCLPartition, TaskIdentity
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
 from experiments.post_training.bfcl_rl.offline_curate import (
     NativeCollectionInput,
+    NativeCollectionScope,
     OfflineCollectionInput,
     collection_teacher_traces,
 )
@@ -763,7 +765,7 @@ def _native_pair_collection(
     literal = root / "literal/logs/native_literal.jsonl"
     literal.parent.mkdir(parents=True)
     literal.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
-    return NativeCollectionInput(str(root / "terminal.json"), locator, seed)
+    return NativeCollectionInput(str(root / "terminal.json"), locator, seed, NativeCollectionScope.COMPLETE_RUN)
 
 
 def _native_pair_tokenizer(path: Path) -> None:
@@ -856,6 +858,77 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text
             assert "The exact model ID is hosted_vllm/teacher-alias" in text
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named teacher-alias." not in text
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_native_dpo_sealed_batches_from_unfinished_producers_preserve_verified_pairs(tmp_path: Path, corrupt: bool):
+    tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
+    partition = replace(PARTITION, complement=tasks)
+    sources = [
+        _native_pair_collection(tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, "none"),
+        _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, "none"),
+    ]
+    snapshots = []
+    for source, state in zip(sources, ("failed", "running"), strict=True):
+        root = Path(source.manifest_uri).parent
+        terminal = json.loads(Path(source.manifest_uri).read_text())
+        terminal["result"]["state"] = state
+        Path(source.manifest_uri).write_text(json.dumps(terminal))
+        resolved = json.loads((root / "resolved.json").read_text())
+        count = 3 if state == "failed" else 2
+        paths = sorted(root.glob("attempts/trace_jobs/eval_sessions/*/*/result.json"))[:count]
+        groups = {
+            "canonical_results": paths,
+            "literal_logs": list(root.glob("literal/logs/*_literal.jsonl")),
+            "archives": list(root.glob("trajectories/schema_v6/archives/**/*.zip")),
+        }
+        manifest = {
+            "schema_version": 1,
+            "state": "sealed",
+            "partition_manifest_sha256": PARTITION_MANIFEST_SHA256,
+            "config": terminal["config"],
+            "resolved": resolved,
+            "producer": {"job_id": "real-producer", "state": state},
+            "task_names": [task.name for task in tasks[:count]],
+            **{
+                group: [
+                    {
+                        "uri": str(path),
+                        "bytes": path.stat().st_size,
+                        "fingerprint_type": "sha256",
+                        "fingerprint": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                    for path in files
+                ]
+                for group, files in groups.items()
+            },
+        }
+        snapshot_path = root / "snapshot.json"
+        snapshot_path.write_text(json.dumps(manifest))
+        snapshots.append(replace(source, manifest_uri=str(snapshot_path), scope=NativeCollectionScope.SEALED_BATCHES))
+    if corrupt:
+        paths[0].write_text("{}")
+    tokenizer_path = tmp_path / "student-tokenizer"
+    _native_pair_tokenizer(tokenizer_path)
+    config = NativePreferenceConfig(
+        (snapshots[0],), snapshots[1], "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
+    )
+    if corrupt:
+        with pytest.raises(ValueError, match="Snapshot object size changed"):
+            build_native_preference_cache(config, partition)
+        assert not (tmp_path / "cache/train").exists()
+        return
+    with set_current_client(LocalClient()):
+        value = build_native_preference_cache(config, partition)
+    assert value.num_preferences == 2
+    report = json.loads((tmp_path / "cache/selection.json").read_text())
+    assert {pair["chosen"]["task_source_id"] for pair in report["preferences"]} == {
+        tasks[0].source_id,
+        tasks[1].source_id,
+    }
+    assert [collection["producer"]["state"] for collection in report["collections"]] == ["failed", "running"]
+    assert [collection["retained_tasks"] for collection in report["collections"]] == [3, 2]
+    assert report["unmatched_branches"][0]["teacher_without_student"] == [[tasks[2].source_id, "codex@0.118.0", 0]]
 
 
 def test_native_teacher_pool_matches_context_without_reweighting_student_trajectories(tmp_path: Path):

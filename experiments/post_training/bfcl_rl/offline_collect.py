@@ -19,6 +19,7 @@ from experiments.post_training.bfcl_rl.collect import (
     NATIVE_AGENT_PROFILES,
     SMOKE_TASKS,
     collection_spec,
+    native_agent_profiles,
 )
 
 TEACHER_MODEL = "Qwen/Qwen3.6-35B-A3B"
@@ -40,13 +41,18 @@ ROLE_PLAN = SkyRLRolePlan(
 
 
 def offline_collection_step(
-    teacher_source: str, seed: int, task: str | None, images: tuple[str, str, str], generation_batch_size: int
+    teacher_source: str,
+    seed: int,
+    task: str | None,
+    images: tuple[str, str, str],
+    generation_batch_size: int,
+    harnesses: tuple[str, ...],
 ) -> ArtifactStep:
     """Bind the pinned Qwen teacher and unchanged complement to a generation-only run."""
     spec = collection_spec("teacher", task, images)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
-    harbor.update(name="opencode", version="1.18.2", agent_profiles=list(NATIVE_AGENT_PROFILES))
+    harbor.update(name="opencode", version="1.18.2", agent_profiles=native_agent_profiles(harnesses))
     harbor.pop("thinking_format")
     generator = recipe["generator"]
     generator["model_loading"] = "stage_local"
@@ -89,18 +95,27 @@ def offline_collection_step(
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
 @click.option("--javascript-image", required=True)
+@click.option(
+    "--harness",
+    "harnesses",
+    type=click.Choice([p["name"] for p in NATIVE_AGENT_PROFILES]),
+    multiple=True,
+    required=True,
+    help="Ordered schedule; repeat a harness to increase its collection share.",
+)
 @rl_build_options
 def main(
     teacher_source: str,
     seed: int,
     generation_batch_size: int,
+    harnesses: tuple[str, ...],
     task: str | None,
     python_image: str,
     java_image: str,
     javascript_image: str,
 ) -> ArtifactStep:
     return offline_collection_step(
-        teacher_source, seed, task, (python_image, java_image, javascript_image), generation_batch_size
+        teacher_source, seed, task, (python_image, java_image, javascript_image), generation_batch_size, harnesses
     )
 
 
