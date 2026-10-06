@@ -71,3 +71,17 @@ def test_token_conditioned_w_down_mixes_full_width_bases():
     assert _mlp(model).latent_norm.weight.shape[-1] == 16
     loss, grads = _loss_and_grads(model, mesh)
     assert np.isfinite(float(loss)) and _trains(_mlp(grads).latent_mix_in_gate)
+
+
+def test_matryoshka_scale_is_finite_when_the_chosen_gate_saturates():
+    _, model = t._model(ngram_stat_rows=0, latent_matryoshka_blocks=4)
+    mlp = jax.tree.map(lambda a: a[0] if eqx.is_array(a) else a, _mlp(model))
+    mlp = eqx.tree_at(lambda m: m.latent_width_gate, mlp, -1e4 * jnp.ones_like(mlp.latent_width_gate))
+    x = jnp.abs(jax.random.normal(jax.random.PRNGKey(0), (8, model.config.hidden_dim)))
+    latent = jnp.ones((8, 16))
+
+    def out(gate):
+        return jnp.sum(eqx.tree_at(lambda m: m.latent_width_gate, mlp, gate)._matryoshka_latent(latent, x, {}))
+
+    value, grad = jax.value_and_grad(out)(mlp.latent_width_gate)
+    assert np.isfinite(float(value)) and np.isfinite(np.asarray(grad)).all()

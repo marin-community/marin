@@ -3897,15 +3897,18 @@ class MoEMLP(eqx.Module):
     def _matryoshka_latent(
         self, latent: Float[Array, "T R"], x_flat: Float[Array, "T D"], stats: dict[str, jax.Array]
     ) -> Float[Array, "T R"]:
-        """Keep each token's gate-chosen number of leading latent blocks; the chosen gate weight enters as
-        ``w / stop_gradient(w)`` (value 1), so the gate learns from the loss without rescaling the latent."""
+        """Keep each token's gate-chosen number of leading latent blocks. The chosen gate enters as
+        ``exp(log_sigmoid(l) - stop_gradient(log_sigmoid(l)))`` (value 1), so the gate learns from the loss without
+        rescaling the latent and without the 0/0 a saturated sigmoid would give."""
         assert self.latent_width_gate is not None and self.latent_width_bias is not None
         blocks = self.cfg.latent_matryoshka_blocks
-        weights = mixture_weights(x_flat, self.latent_width_gate, blocks, 1, selection_bias=self.latent_width_bias)
-        width = jnp.argmax(weights > 0, axis=-1)  # 0-indexed: keep blocks 0..width
+        logits = jnp.einsum("td,db->tb", x_flat, self.latent_width_gate).astype(jnp.float32)
+        width = jnp.argmax(logits + jax.lax.stop_gradient(self.latent_width_bias), axis=-1)  # keep blocks 0..width
+        chosen = jax.nn.one_hot(width, blocks, dtype=jnp.float32)
+        bias = _load_error_grad(self.latent_width_bias, jax.lax.stop_gradient(jnp.mean(chosen, axis=0)))
+        log_w = jnp.sum(jax.nn.log_sigmoid(logits) * chosen, axis=-1, keepdims=True) + 0.0 * jnp.sum(bias)
+        scale = jnp.exp(log_w - jax.lax.stop_gradient(log_w)).astype(latent.dtype)
         kept = (jnp.arange(blocks)[None, :] <= width[:, None]).astype(latent.dtype)
-        chosen = jnp.sum(weights, axis=-1, keepdims=True)
-        scale = (chosen / jax.lax.stop_gradient(chosen)).astype(latent.dtype)
         mask = jnp.repeat(kept, latent.shape[-1] // blocks, axis=-1)
         stats[f"{_LAYER_KNOB_PREFIX}latent_kept_frac"] = jax.lax.stop_gradient(jnp.mean(kept.astype(jnp.float32)))
         return latent * mask * scale
