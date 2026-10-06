@@ -16,8 +16,8 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, artifact_identity
 from marin.execution.remote import remote
 from marin.external_dependencies import MARIN_SKYRL
-from marin.rl.cli import rl_build_options
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 from taskcompendium.parquet import read_task_records
@@ -32,6 +32,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
 from experiments.post_training.russell_rsi.calibrated_trial import calibrated_schedule, four_update_trial
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel
 from experiments.post_training.russell_rsi.launch import CALIBRATION_TEMPERATURE, adopted, development_step
+from experiments.post_training.russell_rsi.launch_interrupted_calibration_sft import foreground_build_options
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import evaluated_score
 from experiments.post_training.russell_rsi.launch_rsi_continuation import (
     BASELINE_RETENTION,
@@ -365,8 +366,9 @@ def incumbent_bank_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
 @click.option("--config-uri", required=True)
 @click.option("--config-sha256", required=True)
 @click.option("--stage", type=click.Choice(["calibrate", "train", "evaluate"]), required=True)
-@rl_build_options
+@foreground_build_options
 def main(config_uri: str, config_sha256: str, stage: str) -> list[ArtifactStep]:
+    configure_coreweave_s3()
     config = json.loads(pinned_bytes(config_uri, config_sha256))
     if resolve_version(PROTOCOL, None) != config["version"] or config["runtime_commit"] != MARIN_SKYRL.commit:
         raise click.UsageError("Incumbent config version or installed runtime pin differs")

@@ -20,7 +20,7 @@ from taskcompendium.environment import (
 )
 from taskcompendium.parquet import read_task_records, write_task_records
 
-from experiments.post_training.russell_rsi import test_rsi_continuation
+from experiments.post_training.russell_rsi import launch_interrupted_calibration_sft, test_rsi_continuation
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     CheckpointScore,
     IncompleteCalibrationError,
@@ -230,6 +230,41 @@ def test_incumbent_cli_preflight_accepts_matching_runtime_and_version(incumbent_
     )
     assert result.exit_code == 0, str(result.exception) + result.output
     assert f"documents/russell-rsi-{PROTOCOL}-calibration-decision@{config['version']}" in result.output
+
+
+class CapturedForegroundConnection(Exception):
+    pass
+
+
+def test_calibration_cli_run_reaches_foreground_iris_connection(incumbent_inputs, tmp_path, monkeypatch):
+    config, _, _ = incumbent_inputs
+    path = tmp_path / "run-config.json"
+    path.write_text(json.dumps(config))
+    connections = []
+
+    def capture_connection(**kwargs):
+        connections.append(kwargs)
+        raise CapturedForegroundConnection
+
+    monkeypatch.setattr(launch_interrupted_calibration_sft, "open_iris_client", capture_connection)
+    result = CliRunner().invoke(
+        main,
+        [
+            "--config-uri",
+            str(path),
+            "--config-sha256",
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            "--stage",
+            "calibrate",
+            "--version",
+            config["version"],
+            "--run",
+        ],
+    )
+    assert isinstance(result.exception, CapturedForegroundConnection), str(result.exception) + result.output
+    assert connections == [
+        {"cluster_name": launch_interrupted_calibration_sft.CLUSTER, "workspace": Path(__file__).resolve().parents[3]}
+    ]
 
 
 def test_current_bank_rejects_changed_retained_records_and_positional_targets(incumbent_inputs):
