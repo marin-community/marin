@@ -7,6 +7,7 @@ import json
 
 import click
 from marin.execution.lazy import ArtifactStep
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.russell_rsi.launch_interrupted_calibration_sft import (
     foreground_build_options,
@@ -31,6 +32,7 @@ from experiments.post_training.russell_rsi.teacher_study_cli import TEACHER_STAG
 def main(
     config_uri: str, config_sha256: str, source_review_uri: str, source_review_sha256: str, stage: str
 ) -> list[ArtifactStep]:
+    configure_coreweave_s3()
     require_reviewed_source(source_review_uri, source_review_sha256)
     config = json.loads(pinned_bytes(config_uri, config_sha256))
     return teacher_study_stage(
