@@ -5,7 +5,7 @@
 
 import asyncio
 import math
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
 from functools import partial
@@ -14,7 +14,7 @@ from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import StageVerifierSpec, TaskSpec
+from taskcompendium.models import StageVerifierSpec, TaskSpec, TaskStage
 from taskcompendium.submission import SubmissionConvention, conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
@@ -30,11 +30,12 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     RolloutStep,
+    SuppliedState,
     TaskSession,
     Transition,
 )
 from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, _validate_task
-from rolloutengine.machines import _task_machine
+from rolloutengine.machines import _install_files, _run_setup_commands, _task_machine
 from rolloutengine.task_session import _ShellboxTaskSession
 
 
@@ -49,6 +50,21 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
         GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
         "error",
     )
+
+
+def _phase(task: TaskSpec, execution: TaskExecution, stage: TaskStage | None) -> tuple[TaskSpec, StageExecution]:
+    """The task view and preparation settings for one stage, or for an unstaged task."""
+    if stage is None:
+        return task, StageExecution(agent_user=execution.agent_user)
+    phase = task.model_copy(update={"context": stage.context or task.context, "verifier": stage.verifier, "stages": ()})
+    stage_execution = execution.stages[stage.name]
+    stage_execution = stage_execution.model_copy(
+        update={
+            "agent_timeout": stage_execution.agent_timeout or execution.agent_timeout,
+            "agent_user": execution.agent_user if stage_execution.agent_user is None else stage_execution.agent_user,
+        }
+    )
+    return phase, stage_execution
 
 
 class ShellboxRolloutEngine:
@@ -78,6 +94,43 @@ class ShellboxRolloutEngine:
     async def run(self, task: TaskSpec, *, execution: TaskExecution) -> RolloutData:
         """Run one task with bounded session and machine cleanup."""
         _validate_task(task, execution)
+        return await self._attempt(task, execution, partial(self._run_task, task, execution))
+
+    async def grade_state(
+        self, task: TaskSpec, state: SuppliedState, *, execution: TaskExecution, stage: str | None = None
+    ) -> GradeResult:
+        """Grade a supplied final state with the task's verifier, without model inference.
+
+        The engine creates and prepares the task machine as `run` does, installs `state.files`,
+        runs `state.commands`, then grades `state.messages` through the rollout's grading path.
+        For a staged task, `stage` names the graded stage: the preparation of that stage and of
+        every earlier stage runs first, and the result is that stage's grade, not the aggregate.
+
+        Raises:
+            ValueError: The task needs an interaction session, `stage` does not name one of the
+                task's stages, or a null environment receives files or commands.
+            RolloutInterrupted: Execution failed, as in `run`, with an empty rollout record. The
+                `state` operation means a supplied file or command failed.
+        """
+        _validate_task(task, execution)
+        if task.environment.interaction is not None:
+            raise ValueError("Supplied-state grading requires the Shellbox task session")
+        names = [candidate.name for candidate in task.stages]
+        if (stage is None) != (not names) or (stage is not None and stage not in names):
+            raise ValueError(f"Stage {stage!r} does not select one of the task stages {names}")
+        if task.environment.kind == EnvironmentKind.NULL and (state.files or state.commands):
+            raise ValueError("A null environment cannot receive state files or commands")
+        stages = () if stage is None else task.stages[: names.index(stage) + 1]
+        record = await self._attempt(task, execution, partial(self._grade_state, task, execution, state, stages))
+        return record.grade
+
+    async def _attempt(
+        self,
+        task: TaskSpec,
+        execution: TaskExecution,
+        body: Callable[[AsyncExitStack, _Cleanup], Coroutine[None, None, RolloutData]],
+    ) -> RolloutData:
+        """Run `body` under the attempt deadline, release its resources, and report cleanup errors."""
         deadline = asyncio.timeout(execution.attempt_timeout)
         cleanup = _Cleanup(self.cleanup_timeout)
         operation = None
@@ -85,7 +138,7 @@ class ShellboxRolloutEngine:
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    record = await self._run_task(task, execution, resources, cleanup)
+                    record = await body(resources, cleanup)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
@@ -110,26 +163,60 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(record, operation) from cause
         return record
 
+    async def _start_machine(self, task: TaskSpec, resources: AsyncExitStack, cleanup: _Cleanup) -> Machine | None:
+        try:
+            return await resources.enter_async_context(_task_machine(task.environment, self.factories, cleanup))
+        except Exception as error:
+            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+
+    def _shellbox_session(
+        self, phase: TaskSpec, execution: StageExecution, machine: Machine | None, cleanup: _Cleanup
+    ) -> _ShellboxTaskSession:
+        return _ShellboxTaskSession(
+            phase, machine, self.convention, self.command_timeout, self.factories, cleanup, execution
+        )
+
+    async def _grade_state(
+        self,
+        task: TaskSpec,
+        execution: TaskExecution,
+        state: SuppliedState,
+        stages: tuple[TaskStage, ...],
+        resources: AsyncExitStack,
+        cleanup: _Cleanup,
+    ) -> RolloutData:
+        empty = _empty_rollout(task)
+        machine = await self._start_machine(task, resources, cleanup)
+        phases = [_phase(task, execution, stage) for stage in stages] or [_phase(task, execution, None)]
+        for phase, stage_execution in phases:
+            session = self._shellbox_session(phase, stage_execution, machine, cleanup)
+            resources.push_async_callback(cleanup.run, "session_close", session.close)
+            try:
+                await session.prepare()
+            except Exception as error:
+                raise RolloutInterrupted(empty, RolloutOperation.PREPARE) from error
+        if machine is not None:
+            try:
+                await _install_files(machine, state.files)
+                await _run_setup_commands(machine, state.commands, "Supplied state command")
+            except Exception as error:
+                raise RolloutInterrupted(empty, RolloutOperation.STATE) from error
+        try:
+            grade = await session.grade(state.messages)
+        except Exception as error:
+            raise RolloutInterrupted(empty, RolloutOperation.GRADE) from error
+        return replace(empty, messages=state.messages, grade=grade)
+
     async def _run_task(
         self, task: TaskSpec, execution: TaskExecution, resources: AsyncExitStack, cleanup: _Cleanup
     ) -> RolloutData:
-        try:
-            machine = await resources.enter_async_context(_task_machine(task.environment, self.factories, cleanup))
-        except Exception as error:
-            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+        machine = await self._start_machine(task, resources, cleanup)
         if task.stages:
             assert machine is not None
-            return await self._run_stages(task, execution, machine, self.convention, cleanup)
+            return await self._run_stages(task, execution, machine, cleanup)
         if task.environment.interaction is None:
-            session = _ShellboxTaskSession(
-                task,
-                machine,
-                self.convention,
-                self.command_timeout,
-                self.factories,
-                cleanup,
-                StageExecution(agent_user=execution.agent_user),
-            )
+            phase, stage_execution = _phase(task, execution, None)
+            session = self._shellbox_session(phase, stage_execution, machine, cleanup)
         else:
             session = self.sessions[task.environment.interaction](task, machine)
         resources.push_async_callback(cleanup.run, "session_close", session.close)
@@ -140,38 +227,20 @@ class ShellboxRolloutEngine:
         task: TaskSpec,
         execution: TaskExecution,
         machine: Machine,
-        convention: SubmissionConvention,
         cleanup: _Cleanup,
     ) -> RolloutData:
         specification = StageVerifierSpec.model_validate_json(task.verifier.parameters_json)
-        record = None
+        record: RolloutData | None = None
         grades = []
         stage_names = []
         last_graded_step = None
         operation = None
         cause = None
         for stage_index, stage in enumerate(task.stages):
-            phase = task.model_copy(
-                update={
-                    "context": stage.context or task.context,
-                    "verifier": stage.verifier,
-                    "stages": (),
-                }
-            )
+            phase, stage_execution = _phase(task, execution, stage)
             initial_steps = 0 if record is None else len(record.steps)
             initial_tokens = 0 if record is None else len(record.response_token_ids)
-            stage_execution = execution.stages[stage.name]
-            stage_execution = stage_execution.model_copy(
-                update={
-                    "agent_timeout": stage_execution.agent_timeout or execution.agent_timeout,
-                    "agent_user": (
-                        execution.agent_user if stage_execution.agent_user is None else stage_execution.agent_user
-                    ),
-                }
-            )
-            session = _ShellboxTaskSession(
-                phase, machine, convention, self.command_timeout, self.factories, cleanup, stage_execution
-            )
+            session = self._shellbox_session(phase, stage_execution, machine, cleanup)
             try:
                 record = await self._run_session(phase, session, record, agent_timeout=stage_execution.agent_timeout)
             except RolloutInterrupted as error:

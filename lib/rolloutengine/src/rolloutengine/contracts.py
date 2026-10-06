@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from taskcompendium.environment import EnvironmentCommand, EnvironmentFile
 from taskcompendium.grading_result import GradeResult
 
 LENGTH_STOP_REASON = "length"
@@ -80,8 +81,25 @@ class RolloutOperation(StrEnum):
     PREPARE = "prepare"
     MODEL = "model"
     ADVANCE = "advance"
+    STATE = "state"
     GRADE = "grade"
     CLEANUP = "cleanup"
+
+
+@dataclass(frozen=True)
+class SuppliedState:
+    """A final task state that `ShellboxRolloutEngine.grade_state` grades without model inference.
+
+    Attributes:
+        messages: The exact conversation the verifier receives, ending with the submission when
+            the verifier reads one. A shell verifier that reads only files may receive none.
+        files: Files installed at absolute machine paths after environment and stage setup.
+        commands: Commands run in order after the files, for state that is not a file.
+    """
+
+    messages: tuple[dict[str, Any], ...] = ()
+    files: tuple[EnvironmentFile, ...] = ()
+    commands: tuple[EnvironmentCommand, ...] = ()
 
 
 class RolloutInterrupted(RuntimeError):

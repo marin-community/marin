@@ -192,6 +192,42 @@ A model failure after a completed turn triggers grading of the completed state.
 Stage setup failures also retain earlier completed stages. The caller's error
 policy determines whether the interrupted record enters training.
 
+## Supplied-state grading
+
+`ShellboxRolloutEngine.grade_state(task, state, execution=..., stage=None)` grades
+a known final state without model calls. Task authors use it to check a verifier
+against a reference solution, a wrong solution, or a partly correct solution.
+`SuppliedState` holds the verifier conversation (`messages`), files to install
+(`files`), and commands to run (`commands`).
+
+The engine validates the task, creates the machine, and prepares the session as
+`run` does. It then installs the files at their absolute paths and runs the
+commands in order. Files can replace files from environment or stage setup.
+Grading uses the same code path as a rollout, including `collect`, artifacts,
+and a separate grading machine. The engine does not prepend the prepared task
+messages. An answer verifier needs a conversation that ends with the submission.
+A shell verifier that reads only files can receive an empty conversation.
+
+A staged task requires `stage`. The engine prepares that stage and every earlier
+stage, installs the state, and returns that stage's grade. It does not compute
+the staged aggregate. An unstaged task requires `stage=None`.
+Tasks with an interaction session, and files or commands for a null environment,
+raise `ValueError`.
+
+Failures raise `RolloutInterrupted` with an empty rollout record and the same
+operations as `run`: `start`, `prepare`, `grade`, and `attempt`. A failed or
+timed-out supplied file or command uses the `state` operation. The attempt
+deadline, cleanup deadline, and cleanup-error diagnostics also match `run`.
+
+```python
+grade = await engine.grade_state(
+    task,
+    SuppliedState(files=(EnvironmentFile(path="/workspace/answer", content=b"12"),)),
+    execution=TaskExecution(),
+)
+assert (grade.status, grade.reward) == (Outcome.GRADED, 1.0)
+```
+
 ## Model and token contract
 
 The model callable accepts `ModelRequest` and asynchronously returns `ModelTurn` with the parsed
