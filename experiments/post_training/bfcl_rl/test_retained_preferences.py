@@ -15,7 +15,10 @@ from fray.local_backend import LocalClient
 from levanter.data.text.preference import PreferencePairDataset
 from levanter.store.cache import TreeCache
 from levanter.tokenizers import load_tokenizer
+from marin.datakit.chat_normalize import InvalidToolCallPolicy, _normalize_chat_record
+from marin.datakit.chat_render import render_chat_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from marin.datakit.download.rollout_transforms import LiteralToolCallFormat
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
@@ -161,6 +164,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         partition=PARTITION,
         assistant_prefill="<think>\n",
         model_tokenizer="unused-model",
+        tool_call_format=LiteralToolCallFormat.HERMES,
     )
     assert trace.messages == messages
     assert trace.initial_messages == messages[:2]
@@ -185,6 +189,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         partition=PARTITION,
         assistant_prefill="<think>\n",
         model_tokenizer="unused-model",
+        tool_call_format=LiteralToolCallFormat.HERMES,
     )
     assert continuation.messages == messages
     assert continuation.initial_prompt_sha256 == trace.initial_prompt_sha256
@@ -204,6 +209,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
             partition=PARTITION,
             assistant_prefill="<think>\n",
             model_tokenizer="unused-model",
+            tool_call_format=LiteralToolCallFormat.HERMES,
         )
     with pytest.raises(ValueError, match="differ from retained trainable"):
         native_model_trace(
@@ -217,6 +223,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
             partition=PARTITION,
             assistant_prefill="<think>\n",
             model_tokenizer="unused-model",
+            tool_call_format=LiteralToolCallFormat.HERMES,
         )
     duplicate = replace(
         trace,
@@ -238,6 +245,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     hf_tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=tokenizer, bos_token="<bos>", eos_token="<eos>", pad_token="<pad>"
     )
+    hf_tokenizer.add_special_tokens({"additional_special_tokens": ["<|eot_id|>"]})
     hf_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
     hf_tokenizer.save_pretrained(tokenizer_path)
     trace = replace(
@@ -263,6 +271,24 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     literal_document = native_chat_document(unparsed)
     assert literal_document["assistant_literals"][-1] == raw_loop
+    turn_end = hf_tokenizer.convert_tokens_to_ids("<|eot_id|>")
+    terminated = replace(
+        unparsed,
+        assistant_completion_token_ids=(
+            *unparsed.assistant_completion_token_ids[:-1],
+            (*hf_tokenizer.encode(raw_loop, add_special_tokens=False), turn_end, hf_tokenizer.eos_token_id),
+        ),
+    )
+    terminated_document = native_chat_document(terminated)
+    assert terminated_document["assistant_literals"][-1] == raw_loop
+    normalized_terminated = _normalize_chat_record(
+        terminated_document,
+        "messages",
+        "id",
+        invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+    )
+    terminated_render = render_chat_record(normalized_terminated)["text"]
+    assert "<|eot_id|><|eot_id|>" not in terminated_render
     with set_current_client(LocalClient()):
         store = build_verified_sft_store(
             [trace, duplicate, incorrect],
@@ -309,6 +335,7 @@ def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
         [],
         "initial-prompt",
         "unused-model",
+        LiteralToolCallFormat.HERMES,
         (),
     )
     with pytest.raises(ValueError, match="outside the BFCL training complement"):
@@ -463,6 +490,7 @@ def _receipts(model: str) -> tuple[dict, dict]:
                 "algorithm": {"tito_full": True},
             },
             "generator": {
+                "engine_init_kwargs": {"tool_call_parser": "hermes"},
                 "n_samples_per_prompt": 1,
                 "max_input_length": 32768,
                 "sampling_params": {"temperature": 1.0},

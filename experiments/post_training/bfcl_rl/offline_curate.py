@@ -12,6 +12,7 @@ from pathlib import Path
 
 import click
 from fray.types import ResourceConfig
+from marin.datakit.download.rollout_transforms import LiteralToolCallFormat
 from marin.datakit.sft import SftTokenStore
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.build_context import resolve_version
@@ -64,6 +65,7 @@ class NativeCollectionEvidence:
     native_uri: str
     literal_entries: list[dict]
     served_model_alias: str
+    tool_call_format: LiteralToolCallFormat
 
 
 @dataclass(frozen=True)
@@ -163,7 +165,15 @@ def collection_native_evidence(
                     stream.seek(span.offset)
                     entries.append(json.loads(stream.read(span.length)))
             yield NativeCollectionEvidence(
-                identity, retained, record, uri, trial, native_uri, entries, served_model_alias
+                identity,
+                retained,
+                record,
+                uri,
+                trial,
+                native_uri,
+                entries,
+                served_model_alias,
+                LiteralToolCallFormat(skyrl["generator"]["engine_init_kwargs"]["tool_call_parser"]),
             )
     if seen != receipt.task_names:
         raise ValueError("Retained native evidence does not cover the complement")
@@ -212,6 +222,7 @@ def collection_teacher_traces(
             partition=partition,
             assistant_prefill="<think>\n",
             model_tokenizer=f"{collection.model.model}@{collection.model.revision}",
+            tool_call_format=evidence.tool_call_format,
         )
 
 

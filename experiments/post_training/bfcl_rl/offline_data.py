@@ -9,14 +9,16 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
-from itertools import pairwise
+from itertools import groupby, pairwise
 from typing import Any
 
 from levanter.tokenizers import load_tokenizer
 from marin.datakit.chat_normalize import InvalidToolCallPolicy, normalize_chat_to_parquet
 from marin.datakit.chat_render import render_marin_chat
 from marin.datakit.download.rollout_transforms import (
+    LiteralToolCallFormat,
     normalize_reasoning_delimiters,
+    normalize_tool_call_literals,
     openai_chat_document,
     openai_chat_messages,
 )
@@ -50,6 +52,7 @@ class NativeModelTrace:
     initial_tools: list[dict]
     initial_prompt_sha256: str
     model_tokenizer: str
+    tool_call_format: LiteralToolCallFormat
     assistant_completion_token_ids: tuple[tuple[int, ...], ...]
 
 
@@ -77,6 +80,7 @@ def native_model_trace(
     partition: BFCLPartition,
     assistant_prefill: str,
     model_tokenizer: str,
+    tool_call_format: LiteralToolCallFormat,
 ) -> NativeModelTrace:
     """Join a scored native branch's parsed messages to its exact model-token evidence."""
     retained = retained_rollout(retained_record, identity=identity, partition=partition, trajectory_uri=retained_uri)
@@ -176,6 +180,7 @@ def native_model_trace(
         initial.get("tools") or [],
         native_prompt_sha256(initial["messages"], initial.get("tools") or [], assistant_prefill),
         model_tokenizer,
+        tool_call_format,
         tuple(completions),
     )
 
@@ -185,10 +190,19 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
     final = trace.messages[-1]
     messages = trace.messages
     tokenizer = load_tokenizer(trace.model_tokenizer)
+    turn_end_id = tokenizer.get_vocab().get("<|eot_id|>")
+    terminal_ids = {tokenizer.eos_token_id}
+    if turn_end_id is not None:
+        terminal_ids.add(turn_end_id)
     literals = []
-    for completion in trace.assistant_completion_token_ids:
+    assistant_groups = [
+        list(group)
+        for role, group in groupby(trace.messages, key=lambda message: message["role"])
+        if role == "assistant"
+    ]
+    for completion, group in zip(trace.assistant_completion_token_ids, assistant_groups, strict=True):
         tokens = list(completion)
-        while tokens and tokens[-1] == tokenizer.eos_token_id:
+        while tokens and tokens[-1] in terminal_ids:
             tokens.pop()
         text = tokenizer.decode(tokens)
         if (
@@ -197,7 +211,12 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
             and not re.search(r"<think>|<\|start_think\|>", text)
         ):
             text = trace.assistant_prefill + text
-        literals.append(normalize_reasoning_delimiters(text))
+        calls = [call for message in group for call in message.get("tool_calls") or []]
+        literals.append(
+            normalize_tool_call_literals(
+                normalize_reasoning_delimiters(text), calls, source_format=trace.tool_call_format
+            )
+        )
     if not any(final.get(field) for field in ("content", "reasoning_content", "tool_calls", "function_call")):
         # The structural placeholder supplies a final Harmony turn; its text is
         # replaced by the captured literal during shared rendering/tokenization.

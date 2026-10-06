@@ -7,12 +7,50 @@ import pytest
 from marin.datakit.chat_normalize import InvalidToolCallPolicy, _normalize_chat_record
 from marin.datakit.chat_render import chat_training_record, render_chat_record
 from marin.datakit.download.rollout_transforms import (
+    LiteralToolCallFormat,
+    ToolCallLiteralFormatError,
+    normalize_tool_call_literals,
     openai_chat_document,
     openai_chat_messages,
     render_tool_call,
     render_tool_message,
 )
 from openai_harmony import Role
+
+
+def test_qwen_literal_calls_use_shared_marin_serialization_and_retain_other_text():
+    quoted = "<tool_call><function=example></function></tool_call>"
+    reasoning = f"<|start_think|>Quoted example: {quoted}<|end_think|>\n"
+    first = "<tool_call><function=lookup><parameter=query>first</parameter></function></tool_call>"
+    parallel = (
+        "<tool_call><function=lookup><parameter=query>second</parameter></function>"
+        "<function=finish><parameter=value>done</parameter></function></tool_call>"
+    )
+    calls = [
+        {"id": "a", "function": {"name": "lookup", "arguments": {"query": "first"}}},
+        {"id": "b", "function": {"name": "lookup", "arguments": {"query": "second"}}},
+        {"id": "c", "function": {"name": "finish", "arguments": {"value": "done"}}},
+    ]
+    source = reasoning + first + "\nBETWEEN_CALLS\n" + parallel + "\nFINAL_TEXT"
+    normalized = normalize_tool_call_literals(source, calls, source_format=LiteralToolCallFormat.QWEN3_CODER)
+    assert normalized.startswith(reasoning)
+    assert "\nBETWEEN_CALLS\n" in normalized and normalized.endswith("\nFINAL_TEXT")
+    bodies = normalized.removeprefix(reasoning).split("<tool_call>")[1:]
+    parsed = [json.loads(body.split("</tool_call>", 1)[0]) for body in bodies]
+    assert parsed == [{"name": call["function"]["name"], "arguments": call["function"]["arguments"]} for call in calls]
+
+
+def test_hermes_negative_literal_is_not_rewritten_as_a_valid_tool_call():
+    malformed = "<tool_call><function=wrong>RAW_LOOP RAW_LOOP</tool_call>"
+    calls = [{"id": "a", "function": {"name": "wrong", "arguments": "UNFINISHED_JSON"}}]
+    assert normalize_tool_call_literals(malformed, calls, source_format=LiteralToolCallFormat.HERMES) == malformed
+
+
+def test_qwen_literal_mapping_rejects_an_unmatched_function_before_serialization():
+    source = "<tool_call><function=lookup><parameter=query>raw</parameter></function></tool_call>"
+    calls = [{"id": "a", "function": {"name": "different", "arguments": {"query": "raw"}}}]
+    with pytest.raises(ToolCallLiteralFormatError, match="names differ"):
+        normalize_tool_call_literals(source, calls, source_format=LiteralToolCallFormat.QWEN3_CODER)
 
 
 @pytest.mark.parametrize("name", ["apply_patch", "cat /app/result.json"])

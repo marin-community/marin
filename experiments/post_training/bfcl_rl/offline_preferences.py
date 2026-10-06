@@ -118,6 +118,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                         partition=partition,
                         assistant_prefill="<think>\n",
                         model_tokenizer=f"{source.model.model}@{source.model.revision}",
+                        tool_call_format=evidence.tool_call_format,
                     )
                     initial_prompt = trace.initial_prompt_sha256
                     if evidence.identity.harness.startswith("opencode@"):

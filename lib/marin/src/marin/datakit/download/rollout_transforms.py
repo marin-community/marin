@@ -7,7 +7,8 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from enum import StrEnum
 from types import MappingProxyType
 
 import pyarrow.parquet as pq
@@ -16,6 +17,7 @@ from rigging.filesystem.factory import open_url
 from zephyr import counters
 
 from marin.datakit.chat_normalize import ChatChannel, InvalidToolCallPolicy, message_text
+from marin.datakit.chat_render import render_marin_chat
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +26,14 @@ CHAT_CONTROL_TOKEN = re.compile(
     r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
 )
 TOOL_WRAPPER = re.compile(r"</?tool_(?:call|response)(?:[: >])", re.IGNORECASE)
+INLINE_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+QWEN_FUNCTION_CALL = re.compile(r"<function=([^>]+)>.*?</function>", re.DOTALL)
 REASONING_START = "<|start_think|>"
 REASONING_END = "<|end_think|>"
 REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
+REASONING_SPAN = re.compile(r"<\|start_think\|>.*?<\|end_think\|>", re.DOTALL)
+ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>\n"
+TURN_END_TOKEN = "<|eot_id|>"
 CHAT_ROLE_ALIASES = MappingProxyType(
     {
         "bot": Role.ASSISTANT,
@@ -40,6 +47,53 @@ CHAT_ROLE_ALIASES = MappingProxyType(
 
 class ReasoningFormatError(ValueError):
     """Raised when an assistant reasoning span cannot be normalized safely."""
+
+
+class LiteralToolCallFormat(StrEnum):
+    HERMES = "hermes"
+    QWEN3_CODER = "qwen3_coder"
+
+
+class ToolCallLiteralFormatError(ValueError):
+    """Captured tool-call syntax cannot be matched to the calls actually executed."""
+
+
+def normalize_tool_call_literals(text: str, tool_calls: Sequence[dict], *, source_format: LiteralToolCallFormat) -> str:
+    """Translate executed Qwen calls through Harmony while retaining surrounding assistant text."""
+    if source_format is LiteralToolCallFormat.HERMES or not tool_calls:
+        return text
+    reasoning = list(REASONING_SPAN.finditer(text))
+    blocks = [
+        block
+        for block in INLINE_TOOL_CALL.finditer(text)
+        if not any(span.start() <= block.start() < span.end() for span in reasoning)
+    ]
+    functions = [list(QWEN_FUNCTION_CALL.finditer(block.group(1))) for block in blocks]
+    if sum(len(group) for group in functions) != len(tool_calls):
+        raise ToolCallLiteralFormatError("Qwen literal function spans differ from executed tool calls")
+    output = []
+    start = 0
+    call_index = 0
+    for block, group in zip(blocks, functions, strict=True):
+        if not group:
+            continue
+        calls = list(tool_calls[call_index : call_index + len(group)])
+        if [match.group(1).strip() for match in group] != [call["function"]["name"] for call in calls]:
+            raise ToolCallLiteralFormatError("Qwen literal function names differ from executed tool calls")
+        rendered = render_marin_chat(
+            openai_chat_messages(
+                [{"role": "assistant", "tool_calls": calls}],
+                invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+            ),
+            bos_token="",
+        )
+        if not rendered.startswith(ASSISTANT_HEADER) or not rendered.endswith(TURN_END_TOKEN):
+            raise ToolCallLiteralFormatError("Shared Marin template did not render one assistant tool-call turn")
+        output.extend((text[start : block.start()], rendered[len(ASSISTANT_HEADER) : -len(TURN_END_TOKEN)]))
+        start = block.end()
+        call_index += len(group)
+    output.append(text[start:])
+    return "".join(output)
 
 
 def load_parquet_batched(path: str) -> Iterator[dict]:
