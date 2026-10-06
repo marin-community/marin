@@ -20,16 +20,30 @@ src/taskforge/
   sandbox/    MachineFactory selection per EnvironmentKind, up-front task refusals, image builds
   proposal/   the TaskProposal document (model.py), the ProposalSource protocol (source.py), sources/
   triage/     structural checks, the GLM rubric, verdicts
-  validate/   trials, the failure classifier, control replay, evidence aggregation
   build/      builder programs: memoized steps, the Build SDK, program authoring, the standard template
-  review/  loop/  queue/   empty; reserved for review decisions, the item loop and the work queue
+  validate/   trials, the failure classifier, control replay, evidence aggregation, solver and
+              adversary trials, calibration, attempt files as resumable evidence
+  review/     the Decision contract and the rules that derive it from validation evidence
+  loop/       the per-item program, its policy, and the event log that item status is derived from
+  queue/      the unattended run: GLM endpoint configuration, hundreds-wide scheduling, the Iris job
 scripts/      Iris image builder, cluster probes, ledger summary
 ```
 
-Imports point down: `build`, `validate`, `triage` and `proposal` use `llm`, `sandbox`, `spec` and
-`ledger`, which use only `canonical` and external packages. Stage packages do not import each
-other, with one exception: `proposal.model` defines the seam type `TaskProposal`, and `triage` and
-`build` import it.
+Packages are totally ordered. A package imports only from packages to its left and from external
+packages, so no import cycle can form:
+
+```
+canonical -> ledger -> spec -> sandbox -> llm -> proposal -> triage -> build -> validate -> review -> loop -> queue
+```
+
+The foundation packages (`canonical`, `ledger`, `spec`, `sandbox`, `llm`) import only each other
+and external packages. A later stage reaches an earlier one through its seam modules, each of which
+keeps its types beside the code that checks their invariants: `proposal.model` (`TaskProposal`),
+`proposal.source` (`ProposalBatch`, `SlotFailure`, `ProposalSource`), `triage.verdict` (`Verdict`,
+`TriageDecision`), `build.run` (`TaskDraft`, `load_draft`, `item_id_for`), `build.author`
+(`BuildProgram`, `Revision`), `validate.outcome`, `validate.evidence`, `validate.calibration`
+(`CalibrationSummary`, `Finding`), `review.decision` (`Decision`), `loop.events` (`EventKind`,
+`ItemState`) and `loop.policy` (`LoopPolicy`).
 
 ## Seams
 

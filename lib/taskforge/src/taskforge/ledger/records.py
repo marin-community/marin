@@ -26,6 +26,7 @@ class EntryKind(StrEnum):
     STEP = "step"
     TRIAL = "trial"
     STAGE = "stage"
+    EVENT = "event"
 
 
 @dataclass(frozen=True)
