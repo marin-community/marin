@@ -5,24 +5,22 @@
 
 ``POLICY`` reads and writes a ``LoopPolicy`` as JSON. Every field of ``LoopPolicy``, of its
 ``ValidationPolicy`` and of that policy's ``band``, ``sampling`` and ``deadlines`` is required and an
-unknown key is an error, so a run config states each bound.
-An ``ExponentialBackoff`` is written as its four constructor arguments (``initial``, ``maximum``,
-``factor``, ``jitter``), all required.
+unknown key is an error, so a run config states each bound. A ``RetryBackoff`` is written as its
+four fields (``initial``, ``maximum``, ``factor``, ``jitter``), all required.
 """
 
 import dataclasses
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, TypedDict, get_type_hints
+from typing import Annotated, Any, get_type_hints
 
-from pydantic import ConfigDict, PlainSerializer, PlainValidator, TypeAdapter, with_config
-from rigging.timing import ExponentialBackoff
+from pydantic import PlainSerializer, PlainValidator, TypeAdapter
 
 from taskforge.canonical import digest
 from taskforge.llm.policy import LLMPolicy
 from taskforge.validate.calibration import CalibrationBand
-from taskforge.validate.run import ValidationPolicy, backoff_config
-from taskforge.validate.trials import Deadlines
+from taskforge.validate.run import ValidationPolicy
+from taskforge.validate.trials import Deadlines, RetryBackoff
 
 
 @dataclass(frozen=True)
@@ -48,7 +46,7 @@ class LoopPolicy:
     max_build_revisions: int
     max_repairs: int
     max_validation_retries: int
-    retry_backoff: ExponentialBackoff
+    retry_backoff: RetryBackoff
     output_token_budget: int
     validation: ValidationPolicy
 
@@ -72,31 +70,11 @@ class LoopPolicy:
         return digest({"policy": POLICY.dump_python(self, mode="json"), "validation": self.validation.digest})
 
 
-@with_config(ConfigDict(extra="forbid"))
-class BackoffConfig(TypedDict):
-    initial: float
-    maximum: float
-    factor: float
-    jitter: float
-
-
-_BACKOFF_CONFIG = TypeAdapter(BackoffConfig)
-
-
-def _backoff(value: object) -> ExponentialBackoff:
-    if isinstance(value, ExponentialBackoff):
-        return value
-    return ExponentialBackoff(**_BACKOFF_CONFIG.validate_python(value))
-
-
-Backoff = Annotated[ExponentialBackoff, PlainValidator(_backoff), PlainSerializer(backoff_config)]
-
-
 def _strict_dataclass(cls: type, substitutes: Mapping[Any, Any]) -> Any:
     """``cls`` as a pydantic type whose JSON object must hold exactly its fields.
 
-    Field types are taken from ``cls``'s annotations, with ``substitutes`` replacing the types pydantic
-    cannot read itself (``ExponentialBackoff``) or that need this same strictness.
+    Field types are taken from ``cls``'s annotations, with ``substitutes`` replacing the nested
+    dataclasses that need this same strictness.
     """
     hints: dict[str, Any] = get_type_hints(cls)
     adapters: dict[str, TypeAdapter] = {
@@ -125,13 +103,15 @@ def _strict_dataclass(cls: type, substitutes: Mapping[Any, Any]) -> Any:
 _VALIDATION_JSON = _strict_dataclass(
     ValidationPolicy,
     {
-        ExponentialBackoff: Backoff,
+        RetryBackoff: _strict_dataclass(RetryBackoff, {}),
         CalibrationBand: _strict_dataclass(CalibrationBand, {}),
         LLMPolicy: _strict_dataclass(LLMPolicy, {}),
         Deadlines: _strict_dataclass(Deadlines, {}),
     },
 )
-_LOOP_JSON = _strict_dataclass(LoopPolicy, {ExponentialBackoff: Backoff, ValidationPolicy: _VALIDATION_JSON})
+_LOOP_JSON = _strict_dataclass(
+    LoopPolicy, {RetryBackoff: _strict_dataclass(RetryBackoff, {}), ValidationPolicy: _VALIDATION_JSON}
+)
 
 POLICY: TypeAdapter[LoopPolicy] = TypeAdapter(_LOOP_JSON)
 """Reads and writes the run's ``policy.json``: every field required, unknown keys rejected."""
