@@ -18,7 +18,6 @@ from verifyit.modes.grade_structured_exact import grade_structured_exact_candida
 from verifyit.numeric import NumericCandidateError
 from verifyit.spec import (
     ExactSpec,
-    McqSpec,
     NumericSpec,
     PredictedActionSpec,
     Spec,
@@ -84,10 +83,6 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
         return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
     if not isinstance(submission, TextSubmission):
         raise TypeError("Text candidate verifier requires a text submission")
-    if isinstance(verifier, McqSpec):
-        letter = submission.value.strip()
-        if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "MCQA response requires one option letter")
     return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
 
 

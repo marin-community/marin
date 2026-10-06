@@ -81,7 +81,7 @@ async def test_imported_mcqa_matches_source_grading(tmp_path):
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-async def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
+async def test_imported_mcqa_extracts_json_and_scores_unformatted_answers_zero():
     specification = import_task(_archive())
     convention = PlainText(id="plain")
     json_result = await grade_answer(
@@ -105,7 +105,7 @@ async def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
         ),
     )
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
-    assert (malformed.status, malformed.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert (malformed.status, malformed.reward) == (Outcome.GRADED, 0.0)
 
 
 def test_import_rejects_non_mcqa_source_before_lowering():

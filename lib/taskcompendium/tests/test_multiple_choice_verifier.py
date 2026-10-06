@@ -22,7 +22,7 @@ from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 @pytest.mark.parametrize(
     "response,reward",
-    [("B", 1.0), ("C", 0.0), ("E", 0.0)],
+    [("B", 1.0), (" b ", 1.0), ("C", 0.0), ("E", 0.0), ("AB", 0.0), ("Answer: B", 0.0)],
 )
 async def test_hand_authored_multiple_choice_answer(response, reward):
     specification = TaskSpec(

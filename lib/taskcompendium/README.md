@@ -50,7 +50,7 @@ For example, a task asking “What is 7 + 5?” can have `answer_type=number` an
 
 ### Text answers
 
-A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` string, and `submit_answer(answer: string)` can carry its answer. The `exact` verifier compares normalized text; `mcq` grades a single option letter. The same verifier grades the extracted answer across these conventions.
+A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` string, and `submit_answer(answer: string)` can carry its answer. The `exact` verifier compares normalized text; `mcq` grades a single option letter. Invalid MCQ option text scores zero through verifyit. Both verifiers grade the extracted answer across these conventions.
 
 ### Numeric answers
 
