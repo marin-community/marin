@@ -208,8 +208,11 @@ turn, so the served token prefix holds. Adversary rollouts are evidence, never t
 engine installs verifier files only after the final response, so the leak role looks for answer
 keys in the instruction, the environment files and the build context rather than reading the
 grader. A shortcut or leak pass becomes a negative control (`reward_max = REJECTION_CEILING`) that
-the revised program must ship, so the next round's control replay proves the fix. Review consumes
-findings through rules; no model judges legitimacy.
+the revised program must ship, so the next round's control replay proves the fix. Every role has
+a sentinel reply for finding nothing, and a pass that ends on it is no finding: on a task graded by
+machine state, the adversary's honest work before it gave up is what passed. `RoleStats` counts
+passes and sentinel replies per role, which measures each role's false-positive rate. Review
+consumes findings through rules; no model judges legitimacy.
 
 The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `validate.run` type
 those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
