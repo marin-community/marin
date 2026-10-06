@@ -252,8 +252,9 @@ def verifier_selected_chat(trace: NativeModelTrace, partition: BFCLPartition) ->
     """Validate complement provenance and hand correct native messages to the shared adapter.
 
     The collection reader joins messages and tool definitions from the native
-    trace to its retained record. Teacher token IDs remain evidence only;
-    Datakit subsequently renders and tokenizes Harmony for the student.
+    trace to its retained record. Captured teacher token IDs prove the source
+    text against the retained stream. Datakit renders that text through Harmony
+    and retokenizes it for the student.
     """
     retained = retained_rollout(
         trace.retained_record,

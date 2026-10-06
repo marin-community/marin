@@ -34,6 +34,7 @@ from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BF
 from experiments.post_training.bfcl_rl.launch import recovered_model
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
 from experiments.post_training.bfcl_rl.offline_curate import (
+    NativeCollectionEvidence,
     NativeCollectionInput,
     NativeCollectionScope,
     collection_native_evidence,
@@ -70,6 +71,33 @@ class NativePreferenceBranch:
     rollout: VerifiedRollout
     source_id: str
     initial_prompt_sha256: str
+
+
+def mark_conversion_failure(
+    failures: list[dict],
+    branches: list[NativePreferenceBranch],
+    evidence: NativeCollectionEvidence,
+    source_id: str,
+    initial_prompt_sha256: str,
+    error: ValueError,
+) -> None:
+    failures.append(
+        {
+            "source_id": source_id,
+            "verifier_outcome": evidence.retained.rollout.outcome.value,
+            "retained_uri": evidence.retained_uri,
+            "native_trace_uri": evidence.native_uri,
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+    )
+    branches.append(
+        NativePreferenceBranch(
+            replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED),
+            source_id,
+            initial_prompt_sha256,
+        )
+    )
 
 
 def opencode_student_identity(messages: list[dict], source_alias: str, student_alias: str) -> list[dict]:
@@ -152,21 +180,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                         )
                         continue
                     except ValueError as error:
-                        conversion_failures.append(
-                            {
-                                "source_id": source_id,
-                                "verifier_outcome": evidence.retained.rollout.outcome.value,
-                                "retained_uri": evidence.retained_uri,
-                                "native_trace_uri": evidence.native_uri,
-                                "error_type": type(error).__name__,
-                                "error": str(error),
-                            }
-                        )
-                        selected.append(
-                            NativePreferenceBranch(
-                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
-                            )
-                        )
+                        mark_conversion_failure(conversion_failures, selected, evidence, source_id, "", error)
                         continue
                     if not trace.tools and not evidence.identity.harness.startswith("mini-swe-agent@"):
                         excluded_branches.append(
@@ -225,22 +239,8 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                         )
                         continue
                     except ValueError as error:
-                        conversion_failures.append(
-                            {
-                                "source_id": source_id,
-                                "verifier_outcome": evidence.retained.rollout.outcome.value,
-                                "retained_uri": evidence.retained_uri,
-                                "native_trace_uri": evidence.native_uri,
-                                "error_type": type(error).__name__,
-                                "error": str(error),
-                            }
-                        )
-                        selected.append(
-                            NativePreferenceBranch(
-                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED),
-                                source_id,
-                                initial_prompt,
-                            )
+                        mark_conversion_failure(
+                            conversion_failures, selected, evidence, source_id, initial_prompt, error
                         )
                         continue
                     destination.write(json.dumps(document, ensure_ascii=False) + "\n")
