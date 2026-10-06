@@ -27,9 +27,9 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 from upath import UPath
 
+from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.harbor.protocol import chat_conversation
 from taskcompendium.lowering import (
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,

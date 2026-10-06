@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import json
+import logging
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import equinox as eqx
@@ -13,8 +16,11 @@ import optax
 import pytest
 
 import levanter.tracker as tracker_mod
+import levanter.tracker.tracker_fns as tracker_fns
 from levanter.callbacks import eval_loss_loop
 from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
+from levanter.callbacks.watch import WatchConfig
+from levanter.checkpoint import CheckpointerConfig, save_checkpoint
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -24,10 +30,17 @@ from levanter.metrics import (
 )
 from levanter.schedule import BatchSchedule, ScheduleStep
 from levanter.tracker import NoopConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
 
 # Use a batch size that remains divisible by the data-parallel axis on multi-device setups.
 Embed = hax.Axis("embed", size=8)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tracker(monkeypatch):
+    # Trainer uses the global tracker before it reads the test configuration.
+    monkeypatch.setattr(tracker_fns, "_global_tracker", None)
 
 
 @pytest.mark.parametrize(
@@ -469,3 +482,75 @@ def test_log_step_info_falls_back_to_step_progress_without_schedule():
         cb(_make_step_info(25))
 
     assert abs(logged["run_progress"] - 0.25) < 1e-9
+
+
+@pytest.mark.parametrize(
+    "start_step,expected_steps,export_failure",
+    [(None, [2, 3], False), (0, [0, 1, 2, 3], False), (0, [0, 1, 2, 3], True)],
+)
+def test_metrics_start_step_logs_real_updates(start_step, expected_steps, export_failure, tmp_path, caplog):
+    Batch = hax.Axis("batch", size=max(1, jax.device_count()))
+    config = TrainerConfig(
+        tracker=JsonLoggerConfig(metric_destination=str(tmp_path / "metrics") if start_step == 0 else None),
+        watch=WatchConfig(watch_targets=["grads", "updates"], include_per_parameter_norms=False, interval=1),
+        num_train_steps=4,
+        train_batch_size=Batch.size,
+        per_device_parallelism=1,
+        id="first-update-metrics",
+        log_dir=tmp_path / "logs",
+        checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints"), save_interval=None),
+    )
+    if start_step is not None:
+        config = replace(config, metrics_start_step=start_step)
+    optimizer = optax.inject_hyperparams(optax.sgd)(learning_rate=0.01)
+    trainer = Trainer(config, optimizer, simple_loss_fn)
+    other_hook_steps = []
+    trainer.add_hook(lambda info: other_hook_steps.append(info.step))
+    batch = hax.ones((Batch, Embed))
+    export_boundary = pytest.raises(OSError) if export_failure else contextlib.nullcontext()
+    with export_boundary:
+        with caplog.at_level(logging.INFO, logger="levanter.json_logger"), trainer:
+            state = trainer.initial_state(jax.random.PRNGKey(0), model=SimpleModel.init(jax.random.PRNGKey(0)))
+            for _ in range(4):
+                info = trainer.train_step(state, batch)
+                state = info.state
+        if export_failure:
+            blocked = tmp_path / "blocked-export"
+            blocked.write_text("not a directory")
+            save_checkpoint(state.model, step=4, checkpoint_path=str(blocked / "step-4"))
+
+    records = [json.loads(record.message) for record in caplog.records if record.name == "levanter.json_logger"]
+    metrics_by_step = {}
+    for record in records:
+        if record["event"] == "log":
+            metrics_by_step.setdefault(record["step"], {}).update(record["metrics"])
+    for prefix in ["train/loss", "optim/learning_rate", "grad/norm/total", "updates/norm/total"]:
+        assert [step for step, metrics in metrics_by_step.items() if prefix in metrics] == expected_steps
+    for step in expected_steps:
+        assert metrics_by_step[step]["grad/norm/total"] > 0
+        assert metrics_by_step[step]["updates/norm/total"] > 0
+    assert other_hook_steps == [2, 3]
+
+    durable = [json.loads(path.read_bytes()) for path in sorted((tmp_path / "metrics").glob("*.json"))]
+    if start_step == 0:
+        merged = {}
+        for record in durable:
+            assert record["run_id"] == "first-update-metrics"
+            step_metrics = merged.setdefault(record["step"], {})
+            for key, value in record["metrics"].items():
+                if key in step_metrics:
+                    assert step_metrics[key] == value
+                step_metrics[key] = value
+        for step in range(4):
+            for key in ("train/loss", "optim/learning_rate", "grad/norm/total", "updates/norm/total"):
+                assert merged[step][key] == metrics_by_step[step][key]
+    else:
+        assert durable == []
+
+    observed_weights = state.model.weight.array.tolist()
+    unobserved_config = replace(config, tracker=NoopConfig(), watch=WatchConfig(watch_targets=[]), id="without-watch")
+    with Trainer(unobserved_config, optimizer, simple_loss_fn) as unobserved:
+        state = unobserved.initial_state(jax.random.PRNGKey(0), model=SimpleModel.init(jax.random.PRNGKey(0)))
+        for _ in range(4):
+            state = unobserved.train_step(state, batch).state
+        assert observed_weights == pytest.approx(state.model.weight.array.tolist(), rel=1e-6, abs=1e-6)

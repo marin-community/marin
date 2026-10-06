@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
@@ -32,7 +32,7 @@ def row(name, instruction, data):
 
 
 def grade(task, answer):
-    return grade_answer(
+    return grade_task(
         task,
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),

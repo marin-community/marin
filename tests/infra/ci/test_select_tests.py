@@ -261,14 +261,27 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_taskcompendium_change_selects_dedicated_suite(tmp_path: Path) -> None:
-    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
+@pytest.mark.parametrize(
+    "changed_path,suites",
+    [
+        ("lib/taskcompendium/src/taskcompendium/lowering.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
+        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit"]),
+        (
+            "lib/verifyit/src/verifyit/grading.py",
+            ["rolloutengine-unit", "taskcompendium-unit"],
+        ),
+        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+    ],
+)
+def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
+    selection = select_changed_tests([changed_path], tmp_path)
 
     assert selection.matrix == []
-    assert selection.suites == ["taskcompendium-unit"]
+    assert selection.suites == suites
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
-    assert "taskcompendium-unit" in full_selection.suites
+    assert set(suites) <= set(full_selection.suites)
 
 
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])

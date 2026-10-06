@@ -1,7 +1,7 @@
 tasks: [MBPPPlus]
 task_options:
   MBPPPlus:
-    num_fewshot: 0
+    num_fewshot: 3
     task_alias: mbppplus
     generation: true
     unsafe_code: true

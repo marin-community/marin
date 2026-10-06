@@ -9,7 +9,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from taskcompendium.grading import exact_answer, grade_answer
+from taskcompendium.grading import exact_answer, grade_task
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import (
@@ -186,7 +186,7 @@ def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, spe
     task = read_specification(path)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     # This correct answer must not earn credit without the required private runtime.
-    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+    result = grade_task(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
     assert (result.status, result.reward) == ("invalid_task", None)
 
 
@@ -203,7 +203,7 @@ def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specification, k
     assert not (tmp_path / "export").exists()
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     with pytest.raises(ValueError):
-        grade_answer(task, convention, conversation)
+        grade_task(task, convention, conversation)
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
@@ -247,7 +247,7 @@ def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace
     }
     task = TaskSpec.model_validate(wire)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
-    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+    result = grade_task(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
     assert (result.status, result.reward) == ("graded", reward)
 
 

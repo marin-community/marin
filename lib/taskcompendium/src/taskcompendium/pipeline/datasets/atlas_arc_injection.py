@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from taskcompendium.grader import grader_config, script_package
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
@@ -164,7 +164,7 @@ def verification_report(task: TaskSpec) -> VerificationReport:
         ("empty_object", "{}"),
         ("unadvertised_tool", json.dumps({"name": "__unadvertised_tool__", "arguments": {}})),
     ):
-        grade = grade_answer(
+        grade = grade_task(
             task, PLAIN, ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
         )
         checks.append(

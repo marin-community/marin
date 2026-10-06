@@ -1,0 +1,423 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Private grader execution and reward collection."""
+
+import asyncio
+import json
+import math
+import tarfile
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
+from typing import Any
+from uuid import uuid4
+
+from harbor_config.env import resolve_env_vars
+from shellbox.machine import Command, ExitReason, Machine, MachineFactory
+from taskcompendium.chat import chat_conversation
+from taskcompendium.environment import (
+    ArtifactKind,
+    EnvironmentKind,
+    ExitCodeReward,
+    FileReward,
+    MissingArtifactPolicy,
+    RewardFileFormat,
+    ShellVerifierSpec,
+    VerifierArtifact,
+)
+from taskcompendium.grading import grade_task, validate_verifier
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    SkippedVerifierSpec,
+    StageRewardStrategy,
+    TaskSpec,
+    TaskStage,
+    VerifierKind,
+)
+from taskcompendium.submission import Submission
+
+from rolloutengine.machines import _install_files, _machine_command, _task_machine
+
+MISSING_FILE_EXIT = 44
+SubmissionSink = Callable[[VerifierArtifact, Path], Awaitable[None]]
+
+
+def _validate_task(task: TaskSpec) -> None:
+    """Reject task features that this engine cannot execute."""
+    requirements = task.environment_requirements
+    if (
+        requirements.docker_image is not None
+        or requirements.working_directory is not None
+        or requirements.setup_commands
+        or requirements.environment_variables
+        or requirements.tool_providers
+        or task.interaction_tools
+        or task.output_paths
+        or any((task.resources.all, task.resources.worker, task.resources.oracle, task.resources.verifier))
+    ):
+        raise ValueError("The rollout engine requires machine inputs in environment")
+    if task.verifier.kind == VerifierKind.EXTERNAL and task.environment.interaction is None:
+        raise ValueError("External verifiers require an interaction session")
+    for specification in (task.verifier, *(stage.verifier for stage in task.stages)):
+        if (
+            specification.kind
+            not in {VerifierKind.SHELL, VerifierKind.EXTERNAL, VerifierKind.STAGED, VerifierKind.SKIPPED}
+            and specification.environment_requirements != EnvironmentRequirements()
+        ):
+            raise ValueError("The rollout engine requires private machine inputs in shell verifiers")
+        validate_verifier(specification)
+
+
+async def _grade_rollout(
+    task: TaskSpec,
+    convention: Submission,
+    messages: tuple[dict[str, Any], ...],
+    machine: Machine | None,
+    factories: Mapping[EnvironmentKind, MachineFactory],
+    submission_sink: SubmissionSink | None = None,
+) -> GradeResult:
+    """Grade the final transcript and task filesystem without model access to private files."""
+    if task.verifier.kind == VerifierKind.SKIPPED:
+        parameters = SkippedVerifierSpec.model_validate_json(task.verifier.parameters_json)
+        return GradeResult(Outcome.SKIPPED, None, parameters.reason)
+    if task.verifier.kind != VerifierKind.SHELL:
+        conversation = chat_conversation(list(messages))
+        return await asyncio.to_thread(grade_task, task, convention, conversation)
+    if machine is None:
+        raise ValueError("Shell grading requires a task machine")
+    verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
+    for command_index, command in enumerate(verifier.collect):
+        result = await machine.run(_machine_command(command))
+        if result.exit_code != 0:
+            diagnostics: dict[str, Any] = {
+                "command_index": command_index,
+                "exit_code": result.exit_code,
+                "reason": result.reason.value,
+                "stdout": result.stdout.decode(errors="replace"),
+                "stderr": result.stderr.decode(errors="replace"),
+                "stdout_truncated": result.stdout_truncated,
+                "stderr_truncated": result.stderr_truncated,
+            }
+            if submission_sink is not None:
+                preservation_errors = []
+                preserved_artifacts = []
+                try:
+                    async with asyncio.timeout(verifier.timeout):
+                        with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
+                            for index, artifact in enumerate(verifier.artifacts):
+                                path = Path(directory) / str(index)
+                                operation = "download"
+                                try:
+                                    if not await _download_artifact(machine, artifact, path, verifier.timeout):
+                                        continue
+                                    operation = "submission_sink"
+                                    await submission_sink(artifact, path)
+                                    preserved_artifacts.append(artifact.source)
+                                except Exception as error:
+                                    # Preserve the collection failure and record secondary preservation errors.
+                                    preservation_errors.append(
+                                        {
+                                            "artifact_source": artifact.source,
+                                            "operation": operation,
+                                            "type": type(error).__name__,
+                                            "error": str(error),
+                                        }
+                                    )
+                except TimeoutError:
+                    preservation_errors.append(
+                        {
+                            "operation": "preservation",
+                            "type": "TimeoutError",
+                            "error": "Artifact preservation timed out",
+                        }
+                    )
+                diagnostics["preserved_artifacts"] = preserved_artifacts
+                diagnostics["preservation_errors"] = preservation_errors
+            return GradeResult(
+                Outcome.INFRA_ERROR,
+                None,
+                "Cannot collect grading inputs",
+                diagnostics=diagnostics,
+                failure=GradingFailure.EXECUTION,
+            )
+    if verifier.environment is None:
+        return await _shell_grade(verifier, messages, machine)
+    if submission_sink is not None:
+        with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
+            collected = []
+            for index, artifact in enumerate(verifier.artifacts):
+                path = Path(directory) / str(index)
+                if await _download_artifact(machine, artifact, path, verifier.timeout):
+                    await submission_sink(artifact, path)
+                    collected.append((artifact, path))
+            async with _task_machine(verifier.environment, factories) as grading_machine:
+                assert grading_machine is not None
+                for artifact, path in collected:
+                    await grading_machine.upload(path, artifact.target)
+                return await _shell_grade(verifier, messages, grading_machine)
+    async with _task_machine(verifier.environment, factories) as grading_machine:
+        assert grading_machine is not None
+        with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
+            for index, artifact in enumerate(verifier.artifacts):
+                path = Path(directory) / str(index)
+                if await _download_artifact(machine, artifact, path, verifier.timeout):
+                    await grading_machine.upload(path, artifact.target)
+        return await _shell_grade(verifier, messages, grading_machine)
+
+
+async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
+    """Download an artifact. Return false only when its missing-file policy permits omission."""
+    kind = artifact.kind
+    if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
+        result = await machine.run(
+            Command(
+                argv=(
+                    "sh",
+                    "-c",
+                    'if [ -d "$1" ]; then printf directory; elif [ -f "$1" ]; then printf file; '
+                    f"else exit {MISSING_FILE_EXIT}; fi",
+                    "artifact-kind",
+                    artifact.source,
+                ),
+                timeout=timeout,
+                user="0",
+            )
+        )
+        if result.exit_code == MISSING_FILE_EXIT and artifact.missing == MissingArtifactPolicy.SKIP:
+            return False
+        if result.exit_code != 0:
+            raise RuntimeError(f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}")
+        kind = ArtifactKind(result.stdout.decode())
+    if kind == ArtifactKind.DIRECTORY:
+        target.mkdir()
+    if not artifact.exclude or kind != ArtifactKind.DIRECTORY:
+        await machine.download(artifact.source, target)
+        return True
+    remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
+    primary_error: BaseException | None = None
+    try:
+        result = await machine.run(
+            Command(
+                argv=(
+                    "tar",
+                    "-cf",
+                    remote_archive,
+                    *(f"--exclude={pattern}" for pattern in artifact.exclude),
+                    "-C",
+                    artifact.source,
+                    ".",
+                ),
+                timeout=timeout,
+                user="0",
+            )
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
+        archive_path = target.with_suffix(".tar")
+        await machine.download(remote_archive, archive_path)
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(target, filter="data")
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            removed = await machine.run(Command(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"))
+            if removed.exit_code != 0:
+                raise RuntimeError(
+                    f"Cannot remove grading artifact archive: exit={removed.exit_code}: "
+                    f"{removed.stderr.decode(errors='replace')}"
+                )
+        except Exception as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(
+                f"Grading archive cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
+    return True
+
+
+async def _shell_grade(
+    verifier: ShellVerifierSpec, messages: tuple[dict[str, Any], ...], machine: Machine
+) -> GradeResult:
+    if isinstance(verifier.reward, FileReward):
+        paths = tuple(file.path for file in verifier.reward.files)
+        directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
+        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
+            prepared = await machine.run(Command(argv=argv, timeout=verifier.timeout, user=verifier.user))
+            if prepared.exit_code != 0:
+                return GradeResult(
+                    Outcome.INFRA_ERROR, None, "Cannot prepare private reward files", failure=GradingFailure.EXECUTION
+                )
+    await _install_files(machine, verifier.files)
+    result = await machine.run(
+        Command(
+            argv=verifier.argv,
+            env=resolve_env_vars(verifier.env),
+            stdin=json.dumps(messages).encode(),
+            timeout=verifier.timeout,
+            user=verifier.user,
+        )
+    )
+    diagnostics = {
+        "stdout": result.stdout.decode(errors="replace"),
+        "stderr": result.stderr.decode(errors="replace"),
+        "exit_code": result.exit_code,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr_truncated": result.stderr_truncated,
+    }
+    if result.reason == ExitReason.TIMED_OUT:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            "Grader command timed out",
+            diagnostics=diagnostics,
+            failure=GradingFailure.TIMEOUT,
+        )
+    if isinstance(verifier.reward, ExitCodeReward):
+        passed = result.exit_code == 0
+        return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
+    if isinstance(verifier.reward, FileReward):
+        return await _file_grade(machine, verifier.reward, verifier.timeout, diagnostics, verifier.user)
+    if result.exit_code != 0 or result.stdout_truncated:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Grader command failed: {result.reason}, exit={result.exit_code}",
+            diagnostics=diagnostics,
+            failure=GradingFailure.EXECUTION,
+        )
+    try:
+        reward = float(result.stdout.decode().strip())
+    except (UnicodeError, ValueError):
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            "Grader stdout must contain one finite numeric reward",
+            diagnostics=diagnostics,
+            failure=GradingFailure.INVALID_REWARD,
+        )
+    if not math.isfinite(reward):
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            "Grader returned a nonfinite reward",
+            diagnostics=diagnostics,
+            failure=GradingFailure.INVALID_REWARD,
+        )
+    return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
+
+
+async def _file_grade(
+    machine: Machine, specification: FileReward, timeout: float, diagnostics: dict[str, Any], user: str | None
+) -> GradeResult:
+    for file in specification.files:
+        result = await machine.run(
+            Command(
+                argv=(
+                    "sh",
+                    "-c",
+                    f'if [ -f "$1" ]; then cat "$1"; else exit {MISSING_FILE_EXIT}; fi',
+                    "reward-file",
+                    file.path,
+                ),
+                timeout=timeout,
+                user=user,
+            )
+        )
+        if result.exit_code == MISSING_FILE_EXIT:
+            continue
+        if result.exit_code != 0 or result.stdout_truncated:
+            return GradeResult(
+                Outcome.INFRA_ERROR,
+                None,
+                f"Cannot read reward file: {file.path}",
+                diagnostics=diagnostics,
+                failure=GradingFailure.EXECUTION,
+            )
+        if not result.stdout.strip():
+            return GradeResult(
+                Outcome.INFRA_ERROR,
+                None,
+                f"Empty reward file: {file.path}",
+                diagnostics=diagnostics,
+                failure=GradingFailure.EMPTY_REWARD,
+            )
+        try:
+            values = json.loads(result.stdout) if file.format == RewardFileFormat.JSON else None
+            value = (
+                values[file.key]
+                if isinstance(values, dict)
+                else values if values is not None else result.stdout.decode()
+            )
+            if isinstance(value, bool):
+                raise ValueError("A boolean is not a numeric reward")
+            reward = float(value)
+            if not math.isfinite(reward):
+                raise ValueError("Nonfinite reward")
+        except (UnicodeError, ValueError, TypeError, KeyError) as error:
+            return GradeResult(
+                Outcome.INFRA_ERROR,
+                None,
+                f"Invalid reward file {file.path}: {error}",
+                diagnostics=diagnostics,
+                failure=GradingFailure.INVALID_REWARD,
+            )
+        return GradeResult(
+            Outcome.GRADED,
+            reward,
+            passed=None if specification.pass_above is None else reward > specification.pass_above,
+            diagnostics={
+                **diagnostics,
+                "rewards": (
+                    {
+                        key: float(value)
+                        for key, value in values.items()
+                        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                    }
+                    | {file.key: reward}
+                    if isinstance(values, dict)
+                    else {"reward": reward}
+                ),
+            },
+        )
+    return GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        "Grader did not write a reward file",
+        diagnostics=diagnostics,
+        failure=GradingFailure.MISSING_REWARD,
+    )
+
+
+async def _remove_stage_grader(stage: TaskStage, machine: Machine) -> None:
+    if stage.verifier.kind != VerifierKind.SHELL:
+        return
+    verifier = ShellVerifierSpec.model_validate_json(stage.verifier.parameters_json)
+    if verifier.environment is not None:
+        return
+    paths = [file.path for file in verifier.files]
+    if isinstance(verifier.reward, FileReward):
+        paths.extend(file.path for file in verifier.reward.files)
+    if not paths:
+        return
+    result = await machine.run(Command(("rm", "-f", *paths), user="0", timeout=verifier.timeout))
+    if result.exit_code != 0:
+        raise RuntimeError("Cannot remove private stage verifier files")
+
+
+def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrategy) -> GradeResult:
+    final = grades[-1]
+    if strategy == StageRewardStrategy.FINAL:
+        return final
+    valid = [(grade, grade.reward) for grade in grades if grade.status == Outcome.GRADED and grade.reward is not None]
+    if not valid:
+        return final
+    reward = sum(value for _, value in valid) / len(valid)
+    components = [grade.diagnostics.get("rewards", {"reward": value}) for grade, value in valid]
+    rewards = {key: sum(values.get(key, 0.0) for values in components) / len(valid) for key in set().union(*components)}
+    pass_results = [grade.passed for grade, _ in valid]
+    passed = all(pass_results) if all(result is not None for result in pass_results) else None
+    return GradeResult(Outcome.GRADED, reward, passed=passed, diagnostics={"rewards": rewards})

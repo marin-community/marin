@@ -15,7 +15,7 @@ import pytest
 from harbor.models.task.task import Task
 from verifyit.spec import Mode
 
-from taskcompendium.grading import exact_answer, grade_answer, numeric_answer
+from taskcompendium.grading import exact_answer, grade_task, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -166,7 +166,7 @@ def test_numeric_answer_uses_explicit_tolerance(specification, response, reward)
     )
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
-    result = grade_answer(
+    result = grade_task(
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
@@ -394,12 +394,12 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.grading import grade_task; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
-        "result = grade_answer(specification, "
+        "result = grade_task(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "ConversationTrace(events=(*specification.context.events, "
         "TextMessage(role='assistant', content='12')))); "

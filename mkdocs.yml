@@ -81,6 +81,7 @@ nav:
       - Guidelines: explanations/guidelines.md
   - Experiments:
       - Daily Ferry Log: experiments/daily-ferry-log.md
+      - Russell Native Development: experiments/russell-native-development.md
       - Report Index: reports/index.md
       - Agent MoE Experiment Digest: reports/agent-moe-experiments.md
       - Marin 8B Retro: reports/marin-8b-retro.md
@@ -101,7 +102,9 @@ nav:
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
+      - SFT after interrupted calibration: references/russell-interrupted-calibration.md
       - RL Data Atlas: references/rl-data-atlas.md
+      - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md

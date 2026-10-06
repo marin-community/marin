@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.grader import grader_config
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import nemo_actions, qa_tasks
@@ -31,7 +31,7 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
 def grade(task, answer):
-    return grade_answer(
+    return grade_task(
         task,
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),

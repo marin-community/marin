@@ -236,7 +236,7 @@ jobs:
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [tpu-ci]
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -262,6 +262,7 @@ jobs:
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
+          # Keep the shell limit 10 seconds below the job timeout above.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -286,7 +287,7 @@ jobs:
             bash -c "\
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               ( status=0; \
-                timeout --kill-after=5 --signal=TERM 1490 \
+                timeout --kill-after=5 --signal=TERM 1790 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
@@ -311,6 +312,26 @@ jobs:
 
       - name: Type-check TaskCompendium
         working-directory: lib/taskcompendium
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
+  rolloutengine:
+    name: rolloutengine-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'rolloutengine-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "lib/rolloutengine/uv.lock"
+      - name: Test rollout execution and private grading
+        run: uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+
+      - name: Type-check RolloutEngine
+        working-directory: lib/rolloutengine
         run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 
   iris_e2e_smoke:
@@ -368,7 +389,7 @@ jobs:
 
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, rolloutengine, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -379,6 +400,7 @@ jobs:
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
             "${{ needs.taskcompendium.result }}" \
+            "${{ needs.rolloutengine.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

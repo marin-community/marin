@@ -4,10 +4,12 @@
 import abc
 import contextlib
 import dataclasses
+import fnmatch
 import functools
 import json
 import logging
 import os
+import posixpath
 import random
 import shutil
 import tempfile
@@ -56,6 +58,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
+from levanter.compat import MODEL_MANIFEST_FILENAME
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
@@ -1356,12 +1359,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
         # need to also save the .gitattributes file itself
         # TODO: .gitignore too? it's not used a lot with the hub
-        if os.path.exists(repo):
-            # local path
+        reference_fs = None
+        reference_path = ""
+        if _is_url_like(repo) or os.path.exists(repo):
             if revision is not None:
+                if _is_url_like(repo):
+                    raise ValueError("Filesystem reference code does not support a separate revision")
                 warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
-            attributes_path = os.path.join(repo, ".gitattributes")
-            if not os.path.exists(attributes_path):
+            reference_fs, reference_path = url_to_fs(repo)
+            attributes_path = posixpath.join(reference_path.rstrip("/"), ".gitattributes")
+            if not reference_fs.exists(attributes_path):
                 attributes_path = None
         else:
             # check hub
@@ -1385,25 +1392,45 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "*.ot",
                 "*.onnx",
                 "*.msgpack",
-                "model.safetensors",
+                "*.safetensors",
+                "*.pt",
+                "*.pth",
+                "*.gguf",
             ]
         else:
-            # read the attributes file and get the globs
-            with open(attributes_path) as f:
-                attributes = f.read()
+            if reference_fs is not None:
+                with reference_fs.open(attributes_path, "r") as f:
+                    attributes = f.read()
+            else:
+                with open(attributes_path) as f:
+                    attributes = f.read()
             ignore_files = [".git"]
             for line in attributes.split("\n"):
                 line = line.strip()
                 if line.startswith("#") or line == "":
                     continue
-                # NB: this is not a full implementation of .gitattributes, but it's good enough for our purposes
+                # This supports LFS patterns, not all .gitattributes rules.
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
+        ignore_files.append(MODEL_MANIFEST_FILENAME)
 
-        if os.path.exists(repo):
-            local_code_path = repo
-        else:
-            local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
+        if reference_fs is not None:
+            os.makedirs(path, exist_ok=True)
+            for reference_file in reference_fs.find(reference_path):
+                relative_path = posixpath.relpath(reference_file, reference_path.rstrip("/"))
+                if any(
+                    fnmatch.fnmatchcase(relative_path, pattern)
+                    or any(fnmatch.fnmatchcase(part, pattern) for part in relative_path.split("/"))
+                    for pattern in ignore_files
+                ):
+                    continue
+                local_file = os.path.join(path, *relative_path.split("/"))
+                os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                reference_fs.get_file(reference_file, local_file)
+            logger.debug("Saved code to %s", path)
+            return
+
+        local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
 
         # now we'll save the code
         os.makedirs(path, exist_ok=True)
@@ -1442,7 +1469,7 @@ def save_hf_checkpoint_callback(
 
     def cb(step: StepInfo):
         nonlocal hf_upload_kwargs
-        if step.step == 0:
+        if step.next_step == 0:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()

@@ -15,7 +15,10 @@ from typing import cast
 import httpx
 import marin.inference.iris as iris_module
 import pytest
+from fray.client import Client
+from fray.current_client import set_current_client
 from fray.types import JobStatus, ResourceConfig, create_environment
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
 from marin.execution.lazy import lower
@@ -1004,3 +1007,77 @@ def _serve_text_upstream(*, status_code: int, body: str) -> Iterator[RunningMode
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+@pytest.mark.parametrize("broker", [None, BrokerConfig()])
+def test_foreground_direct_inference_uses_proxy_and_refuses_broker(broker):
+    class Job:
+        job_id = "/test/foreground-serve"
+        terminated = False
+
+        def status(self):
+            return JobStatus.RUNNING
+
+        def terminate(self):
+            self.terminated = True
+
+    job = Job()
+    submitted = []
+
+    class FrayClient:
+        def submit(self, request):
+            submitted.append(request)
+            return job
+
+    with serve_deterministic_openai_stub(model="public-model") as stub:
+        metadata = {
+            "tensor_parallel_size": "8",
+            "backend": "vllm",
+            "data_parallel_size": "1",
+            "pipeline_parallel_size": "1",
+            "task_count": "1",
+            "max_model_len": "4096",
+        }
+        endpoint = SimpleNamespace(address="http://10.255.255.1:8000", metadata=metadata)
+        client = SimpleNamespace(
+            list_endpoint_instances=lambda name: [endpoint],
+            mint_endpoint_token=lambda name, ttl: SimpleNamespace(token="unused", capability_url=stub.base_url[:-3]),
+            job_status=lambda name: SimpleNamespace(state=JobState.RUNNING),
+            list_tasks=lambda name: [SimpleNamespace(state=TaskState.RUNNING)],
+        )
+        with iris_ctx_scope(IrisContext(job_id=None, client=cast(IrisClient, client))):
+            with set_current_client(cast(Client, FrayClient())):
+                if broker is not None:
+                    with pytest.raises(RuntimeError, match="Brokered remote inference requires an Iris job"):
+                        with remote_inference(
+                            RemoteInferenceConfig(
+                                model=ServedModelConfig(
+                                    weights="unused", tensor_parallel_size=8, api_model="public-model"
+                                ),
+                                engine=VllmEngineConfig(),
+                                iris=IrisConfig(
+                                    worker_resources=ResourceConfig.with_gpu("H100", count=8),
+                                    worker_environment=create_environment(docker_image="test"),
+                                ),
+                                broker=broker,
+                            )
+                        ):
+                            raise AssertionError("Foreground broker must refuse before worker startup")
+                    assert not submitted
+                    return
+                with remote_inference(
+                    RemoteInferenceConfig(
+                        model=ServedModelConfig(weights="unused", tensor_parallel_size=8, api_model="public-model"),
+                        engine=VllmEngineConfig(),
+                        iris=IrisConfig(
+                            worker_resources=ResourceConfig.with_gpu("H100", count=8),
+                            worker_environment=create_environment(docker_image="test"),
+                        ),
+                        capability_origin=stub.base_url[:-3],
+                    )
+                ) as session:
+                    session.wait_until_ready()
+                    assert session.model.endpoint.base_url == stub.base_url
+                    assert session.metrics_url == stub.base_url[:-3] + "/metrics"
+    assert len(submitted) == 1
+    assert job.terminated

@@ -152,6 +152,7 @@ def _oci_disk(
         _rootfs_tar(root, owners, rootfs_tar)
         subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(rootfs_tar), str(disk)], check=True, capture_output=True)
         metadata = {
+            "guest_code_id": guest_code_id(),
             "env": process.get("env", []),
             "cwd": process.get("cwd", "/"),
             "oci_tag": oci_tag,

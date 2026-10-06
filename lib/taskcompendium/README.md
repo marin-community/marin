@@ -10,7 +10,7 @@ The sections below describe the task model and its presentation and grading cont
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through the shared verifier library after extracting the submission. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Their execution requires additional runtimes; direct chat rejects their requirements before export or launch.
+TaskCompendium exports direct-chat Harbor tasks for text, number, and native-action results. The separate [rolloutengine library](../rolloutengine/README.md) executes tasks through Shellbox. See the [task rollout reference](../../docs/references/task-rollouts.md) for the Parquet format, engine interfaces, and SkyRL integration.
 
 ## What does it contain?
 
@@ -47,11 +47,15 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.21`. Readers reject other versions. |
+| `environment` | Executable environment, public files, resource limits, and optional task session. |
+| `attempt_timeout` | Optional time limit for the full attempt, including setup and grading. |
+| `agent_timeout` | Optional time limit for model requests and task actions after setup. |
+| `agent_user` | Optional operating system user for agent commands. |
+| `stages` | Ordered stages with contexts, setup, and private verifiers on a shared machine. |
+| `metadata` | Application metadata, including an optional teacher route. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
-| `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
-
-A task has one final result. Ordered steps and reward aggregation are deferred.
+| `tags` | Ordered descriptive strings. |
+| `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; the adapter sends them as OpenAI-compatible chat messages without executing them again. `answer_type` does not prescribe a wrapper such as JSON.
 
@@ -77,84 +81,9 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The schema names `structured_exact` for a future JSON-value scorer; this package does not implement that scorer or state acquisition.
+`answer_type=file` names a file result. `answer_type=state` names the resulting environment state. The Shellbox engine executes these tasks with the environment and private shell verifier in the task spec. Direct-chat Harbor export does not accept executable environments. `environment_requirements` declares capabilities and tool-provider contracts. `environment` supplies the executable resources.
 
-Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The private verifier checks those expectations. A submission convention chooses how the result is delivered and extracted. `answer_type` identifies its semantic kind. TaskSpec has no extra intrinsic encoding or answer-format field.
-
-## Environment requirements
-
-`environment_requirements` declares the initial state and operations needed to solve a task.
-
-| Field | Meaning |
-| --- | --- |
-| `capabilities` | Unique operation names, such as `shell`, `network`, `filesystem`, `process`, or `browser`. Names are open so future capabilities can be represented. |
-| `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
-| `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
-| `setup_commands` | Ordered commands required to establish the initial workspace. |
-| `environment_variables` | String values required in the worker or private verifier environment during task execution. |
-| `tool_providers` | Mapping from a task-local provider instance name to a required action interface and initial state. |
-
-Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
-
-The task's `docker_image` and worker file mounts describe worker initial state. A verifier declares its own capabilities, image, and workspace requirements in private `VerifierSpec.environment_requirements`. A future runtime must keep those requirements and private resources separate from the worker environment.
-
-## Resource mounts
-
-`resources` is a `ResourceGroups` object. Each group contains an ordered list of `TaskResource` mounts.
-
-| Group | Visibility |
-| --- | --- |
-| `all` | Shared inputs visible to the worker, oracle, and verifier. |
-| `worker` | Model-visible inputs. |
-| `oracle` | Private reference material. |
-| `verifier` | Private evaluation inputs. The verifier is the task's evaluator. |
-
-Private gold and hidden tests belong in `oracle` or `verifier`. An `all` resource is model-visible. A role receives `all` followed by its own mounts in its runtime-owned workspace root. Destinations must be distinct in that combined sequence, including case-folded collisions and file/directory ancestor collisions. Separate role-specific groups can reuse a relative path without sharing their content.
-
-Oracle resources are reserved for trusted reference-solution generation. Verifier resources are used when evaluating a candidate result. These groups declare access; they do not require an oracle or evaluator process to run.
-
-The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project/input.txt` with a working directory of `/app` appears at `/app/project/input.txt`. Worker mounts are established before setup commands run in that working directory. Oracle and verifier mounts use separate private roots supplied by their runtimes.
-
-Each `TaskResource` contains one inline file, with these fields:
-
-| Field | Meaning |
-| --- | --- |
-| `path` | Normalized relative destination under each receiving role's runtime-owned workspace root. |
-| `source` | An `InlineFile` containing the exact file bytes, encoded as canonical base64. |
-| `mode` | Optional Unix permission mode as a three- or four-digit octal string, such as `0644` or `0755`. An explicit mode applies to the mounted file. Files default to `0644` when the mode is omitted. |
-| `mtime_ns` | Optional integer Unix modification timestamp in nanoseconds for the mounted file. Omission leaves the timestamp unspecified. |
-
-`InlineFile` has `kind="inline_file"` and `content_base64`. UTF-8 text uses the same byte representation as binary files. Resource contents are stored in the task spec; no dataset root, process working directory, or exported package location is used to locate them. Shared external files are deferred until a `TaskSet` contract defines their location and loading.
-
-An archive can be included as ordinary file bytes, but resource mounting does not extract it. Paths may contain directories to locate the file within the workspace. Directory resources and recursive copies are unsupported. Schema decoding performs no filesystem inspection or I/O.
-
-Grouped inline resources can contain:
-
-```json
-{
-  "resources": {
-    "all": [
-      {
-        "path": "README.txt",
-        "source": {"kind": "inline_file", "content_base64": "VXNlIHRoZSBzdXBwbGllZCBwcm9qZWN0Lg=="},
-        "mode": "0444",
-        "mtime_ns": 1725555600000000000
-      }
-    ],
-    "worker": [
-      {"path": "project/input.txt", "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"}}
-    ],
-    "oracle": [
-      {"path": "answer.txt", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSByZWZlcmVuY2U="}}
-    ],
-    "verifier": [
-      {"path": "checks/grade.py", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="}}
-    ]
-  }
-}
-```
-
-File materializers must reject unsafe destinations and collisions, and enforce byte limits. No resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
+`resources` keeps inline files in `all`, `worker`, `oracle`, and `verifier` groups. Worker files are model-visible. Oracle and verifier files are private. Each `TaskResource` has a relative destination, base64 file content, and optional mode and modification time. Runtimes must reject unsafe paths and collisions. The Shellbox rollout engine does not implement this legacy mount contract; use `environment.files` and private verifier files for executable tasks.
 
 ## What can we import?
 
@@ -227,11 +156,10 @@ lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/a
 
 ## Dataset conversion
 
-TaskSpec defines the serialized task contract. Dataset conversion pipelines own
-storage layout and streaming I/O, using Zephyr for Parquet processing. The
-TaskCompendium package has no Parquet reader or writer. JSON decoding preserves
-valid unsupported requirements; export and launch validate runtime support
-separately.
+TaskSpec defines the serialized task contract. `taskcompendium.parquet` reads
+and writes bounded batches with one serialized task per row. Dataset conversion
+pipelines own higher-level storage layout and streaming. JSON decoding preserves
+valid unsupported requirements; export and launch validate runtime support separately.
 
 ## How does Harbor run it?
 
@@ -257,7 +185,7 @@ result = asyncio.run(
 
 Each direct-chat Harbor trial runs one `ChatAgent` using the exported submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in both source context and grading evidence. The raw provider response is retained separately in `chat-response.json` for diagnostics.
 
-The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and calls the synchronous `grade_answer` submission adapter. TaskCompendium extracts text or numeric candidates according to the convention and passes final function calls directly to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
+The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and calls the synchronous `grade_task` adapter. TaskCompendium extracts text or numeric candidates according to the convention and passes final function calls directly to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
 
 A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `extraction_error` with no reward. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --package taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 

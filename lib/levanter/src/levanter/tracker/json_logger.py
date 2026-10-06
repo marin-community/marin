@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, fields, is_dataclass
@@ -8,9 +9,10 @@ from typing import Any, Mapping, Optional
 
 import jax
 import numpy as np
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tracker import Tracker
-from levanter.tracker.tracker import TrackerConfig
+from levanter.tracker.tracker import FatalTrackerError, TrackerConfig
 from levanter.utils.jax_utils import jnp_to_python
 
 
@@ -50,11 +52,22 @@ def _flatten(metrics: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
 
 
 class JsonLoggerTracker(Tracker):
-    """Tracker that logs metrics to a Python logger as JSON lines."""
+    """Log JSON records to a Python logger and optionally store metric events."""
 
     name: str = "json_logger"
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        logger: Optional[logging.Logger] = None,
+        *,
+        metric_destination: str | None = None,
+        run_id: str | None = None,
+    ):
+        if metric_destination is not None and run_id is None:
+            raise ValueError("Durable JSON metrics require a run ID")
+        self.metric_destination = metric_destination
+        self.run_id = run_id
+        self._destination_prepared = False
         self.logger = logger or logging.getLogger("levanter.json_logger")
         self._last_metrics: dict[str, Any] = {}
         self._summary_metrics: dict[str, Any] = {}
@@ -79,6 +92,17 @@ class JsonLoggerTracker(Tracker):
                 "metrics": metrics,
             }
         )
+        if self.metric_destination is not None and jax.process_index() == 0:
+            record["run_id"] = self.run_id
+            payload = json.dumps(record, sort_keys=True).encode()
+            destination = StoragePath(self.metric_destination)
+            try:
+                if not self._destination_prepared:
+                    destination.mkdirs()
+                    self._destination_prepared = True
+                (destination / f"step-{step}-{hashlib.sha256(payload).hexdigest()}.json").write_bytes(payload)
+            except Exception as error:
+                raise FatalTrackerError(f"Could not persist metric event at {destination}") from error
         self.logger.info(json.dumps(record))
         if step is not None:
             self._last_metrics.update(_flatten(metrics))
@@ -125,9 +149,9 @@ class JsonLoggerConfig(TrackerConfig):
 
     logger_name: str = "levanter.json_logger"
     level: int = logging.INFO
+    metric_destination: str | None = None
 
     def init(self, run_id: Optional[str]) -> JsonLoggerTracker:
-        del run_id
         log = logging.getLogger(self.logger_name)
         log.setLevel(self.level)
-        return JsonLoggerTracker(log)
+        return JsonLoggerTracker(log, metric_destination=self.metric_destination, run_id=run_id)

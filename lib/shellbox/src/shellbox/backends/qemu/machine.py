@@ -5,25 +5,27 @@
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
 import re
 import shlex
-import shutil
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 
-from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
+from shellbox.backends.qemu.image import QemuAssets, guest_code_id, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,
     MachineSpec,
+    MachineStartupError,
     NetworkPolicy,
     QemuBundle,
     Result,
@@ -33,8 +35,26 @@ from shellbox.machine import (
 )
 
 REQUEST_CHUNK_BYTES = 2048
+UPLOAD_CHUNK_BYTES = 256 * 1024
+UPLOAD_PORT = "/dev/vport0p2"
 TRANSFER_LIMIT_BYTES = 128 * 1024 * 1024
+BOOT_DIAGNOSTIC_BYTES = 8192
+PROCESS_STOP_TIMEOUT = 5
+GUEST_RESPONSE_TIMEOUT = 10
+DEFAULT_COMMAND_TIMEOUT = 120
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+async def _stopped_process_output(process: asyncio.subprocess.Process) -> tuple[bytes, bytes]:
+    if process.returncode is None:
+        process.terminate()
+    output = asyncio.create_task(process.communicate())
+    try:
+        return await asyncio.wait_for(asyncio.shield(output), timeout=PROCESS_STOP_TIMEOUT)
+    except TimeoutError:
+        if process.returncode is None:
+            process.kill()
+        return await output
 
 
 class Acceleration(StrEnum):
@@ -156,6 +176,8 @@ class QemuMachine:
         self.process: asyncio.subprocess.Process | None = None
         self._runtime_dir: tempfile.TemporaryDirectory[str] | None = None
         self._pty_socket: Path | None = None
+        self._upload_writer: asyncio.StreamWriter | None = None
+        self._upload_lock = asyncio.Lock()
         self._shell: QemuShellSession | None = None
         self._lock = asyncio.Lock()
         metadata_path = self.bundle / "image.json"
@@ -175,6 +197,8 @@ class QemuMachine:
         assert self._runtime_dir is not None
         runtime_path = Path(self._runtime_dir.name)
         runtime_env = os.environ.copy()
+        # QEMU stores its temporary disk overlay inside this machine's private directory.
+        runtime_env["TMPDIR"] = str(runtime_path)
         lib = self.bundle / "lib"
         if lib.is_dir():
             runtime_env["LD_LIBRARY_PATH"] = str(lib)
@@ -182,12 +206,11 @@ class QemuMachine:
             if modules.is_dir():
                 runtime_env["QEMU_MODULE_DIR"] = str(modules)
         disk_args: list[str] = []
-        if (self.bundle / "rootfs.ext4").is_file():
-            trial_disk = runtime_path / "rootfs.ext4"
-            await asyncio.to_thread(shutil.copyfile, self.bundle / "rootfs.ext4", trial_disk)
+        base_disk = self.bundle / "rootfs.ext4"
+        if base_disk.is_file():
             disk_args = [
                 "-drive",
-                f"file={trial_disk},if=none,format=raw,id=rootdisk",
+                f"file={base_disk},if=none,format=raw,id=rootdisk,snapshot=on",
                 "-device",
                 "virtio-blk-device,drive=rootdisk",
             ]
@@ -198,13 +221,15 @@ class QemuMachine:
         accelerator_args = [value for name in accelerators for value in ("-accel", name)]
         qmp_socket = runtime_path / "qmp.sock"
         pty_socket = runtime_path / "pty.sock"
+        upload_socket = runtime_path / "upload.sock"
         self._pty_socket = pty_socket
         self.process = await asyncio.create_subprocess_exec(
             str(self.bundle / "qemu-system-x86_64"),
             "-L",
             str(self.bundle / "firmware"),
             "-machine",
-            "microvm",
+            # Keep the PIT; Firecracker 5.10 and 6.1 kernels panic before IRQ setup with the legacy PIC.
+            "microvm,pic=off",
             *accelerator_args,
             "-m",
             f"{self.spec.memory_mb or 512}M",
@@ -224,14 +249,19 @@ class QemuMachine:
             f"socket,id=harbor-shell,path={pty_socket},server=on,wait=off",
             "-device",
             "virtio-serial-device",
+            # Guest port numbers are an ABI: PTY is vport0p1, upload is vport0p2.
             "-device",
             "virtserialport,chardev=harbor-shell,name=harbor.shell",
+            "-chardev",
+            f"socket,id=harbor-upload,path={upload_socket},server=on,wait=off",
+            "-device",
+            "virtserialport,chardev=harbor-upload,name=harbor.upload",
             "-kernel",
             str(self.bundle / "vmlinuz"),
             "-initrd",
             str(self.bundle / "initramfs.cpio.gz"),
             "-append",
-            "console=ttyS0 quiet rdinit=/init",
+            "console=ttyS0 rdinit=/init",
             *disk_args,
             "-nic",
             "none",
@@ -241,14 +271,30 @@ class QemuMachine:
             env=runtime_env,
         )
         assert self.process.stdout is not None
+        boot_output = bytearray()
         while True:
-            line = await asyncio.wait_for(self.process.stdout.readline(), timeout=60)
+            try:
+                line = await asyncio.wait_for(self.process.stdout.readline(), timeout=60)
+            except TimeoutError as error:
+                stdout, stderr = await _stopped_process_output(self.process)
+                raise MachineStartupError(
+                    f"QEMU guest startup timed out: "
+                    f"stdout={(bytes(boot_output) + stdout)[-BOOT_DIAGNOSTIC_BYTES:]!r}; "
+                    f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"
+                ) from error
+            boot_output.extend(line)
+            del boot_output[:-BOOT_DIAGNOSTIC_BYTES]
             if b"READY" in line:
                 break
             if not line:
-                assert self.process.stderr is not None
-                raise RuntimeError(f"QEMU exited before guest startup: {await self.process.stderr.read()!r}")
+                stdout, stderr = await _stopped_process_output(self.process)
+                raise MachineStartupError(
+                    f"QEMU exited before guest startup: "
+                    f"stdout={(bytes(boot_output) + stdout)[-BOOT_DIAGNOSTIC_BYTES:]!r}; "
+                    f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"
+                )
         self.active_acceleration = await query_acceleration(qmp_socket)
+        _, self._upload_writer = await asyncio.open_unix_connection(upload_socket)
 
     async def open_shell(self) -> QemuShellSession:
         if self._shell is not None:
@@ -285,8 +331,8 @@ class QemuMachine:
             raise ValueError("Command argv is empty")
         if command.user not in (None, "0", "root"):
             raise UnsupportedMachineSpec("QEMU does not provide separate execution users")
-        if command.stdin:
-            raise ValueError("QEMU serial protocol does not support command stdin")
+        if command.stdin is not None and len(command.stdin) > TRANSFER_LIMIT_BYTES:
+            raise ValueError("QEMU command stdin exceeds the transfer limit")
         process = self.process
         if process is None or process.stdin is None or process.stdout is None or process.returncode is not None:
             raise RuntimeError("QEMU machine is not running")
@@ -302,8 +348,13 @@ class QemuMachine:
         async with self._lock:
             encoded = base64.b64encode(script.encode())
             process.stdin.write(b"BEGIN\n")
+            timeout = command.timeout or DEFAULT_COMMAND_TIMEOUT
+            process.stdin.write(f"TIMEOUT|{timeout}\n".encode())
             for offset in range(0, len(encoded), REQUEST_CHUNK_BYTES):
                 process.stdin.write(b"DATA|" + encoded[offset : offset + REQUEST_CHUNK_BYTES] + b"\n")
+            encoded_stdin = base64.b64encode(command.stdin or b"")
+            for offset in range(0, len(encoded_stdin), REQUEST_CHUNK_BYTES):
+                process.stdin.write(b"INPUT|" + encoded_stdin[offset : offset + REQUEST_CHUNK_BYTES] + b"\n")
             process.stdin.write(b"END\n")
             await process.stdin.drain()
             try:
@@ -312,7 +363,8 @@ class QemuMachine:
                 stderr = bytearray()
                 stdout_truncated = False
                 stderr_truncated = False
-                deadline = asyncio.get_running_loop().time() + (command.timeout or 120)
+                reason = ExitReason.EXITED
+                deadline = asyncio.get_running_loop().time() + timeout + GUEST_RESPONSE_TIMEOUT
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     line = await asyncio.wait_for(process.stdout.readline(), timeout=max(remaining, 0.001))
@@ -320,7 +372,12 @@ class QemuMachine:
                         raise RuntimeError("QEMU guest stopped during command")
                     if line.startswith(b"RESULT|"):
                         exit_code = int(line.strip().split(b"|", 1)[1])
+                        deadline = asyncio.get_running_loop().time() + GUEST_RESPONSE_TIMEOUT
+                    elif line.strip() == b"TIMED_OUT":
+                        reason = ExitReason.TIMED_OUT
                     elif line.startswith((b"OUT|", b"ERR|")):
+                        if exit_code is not None:
+                            deadline = asyncio.get_running_loop().time() + GUEST_RESPONSE_TIMEOUT
                         chunk = base64.b64decode(line[4:].strip())
                         output = stdout if line.startswith(b"OUT|") else stderr
                         available = max(0, command.output_limit_bytes - len(output))
@@ -333,39 +390,122 @@ class QemuMachine:
                         if exit_code is None:
                             raise RuntimeError("QEMU guest ended result without exit code")
                         return Result(
-                            exit_code,
+                            None if reason == ExitReason.TIMED_OUT else exit_code,
                             bytes(stdout),
                             bytes(stderr),
                             stdout_truncated,
                             stderr_truncated,
-                            ExitReason.EXITED,
+                            reason,
                         )
-            except TimeoutError:
+            except TimeoutError as error:
                 await self.close()
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                raise TimeoutError("QEMU guest did not return a command result after its deadline") from error
             except asyncio.CancelledError:
                 await self.close()
                 raise
+
+    async def _upload_bytes(self, payload: bytes, target: str) -> None:
+        if len(payload) > TRANSFER_LIMIT_BYTES:
+            raise ValueError("QEMU upload exceeds the transfer limit")
+        writer = self._upload_writer
+        if writer is None:
+            raise RuntimeError("QEMU machine is not running")
+        parent = shlex.quote(str(Path(target).parent))
+        template = shlex.quote(f"{target}.harbor-upload-XXXXXX")
+        digest = hashlib.sha256(payload).hexdigest()
+
+        async def send() -> None:
+            for offset in range(0, len(payload), UPLOAD_CHUNK_BYTES):
+                writer.write(payload[offset : offset + UPLOAD_CHUNK_BYTES])
+                await writer.drain()
+
+        async with self._upload_lock:
+            preflight = (
+                f"/harbor/busybox mkdir -p {parent} && "
+                f"temporary=$(/harbor/busybox mktemp {template}) && "
+                "printf '%s\n' \"$temporary\""
+            )
+            result = await self.run(Command(("/bin/sh", "-c", preflight)))
+            if result.exit_code != 0:
+                raise RuntimeError(f"QEMU upload preparation failed: {result.stderr.decode(errors='replace')}")
+            temporary = shlex.quote(result.stdout.decode().removesuffix("\n"))
+            script = (
+                f"trap {shlex.quote(f'/harbor/busybox rm -f -- {temporary}')} EXIT && "
+                f"/harbor/busybox head -c {len(payload)} {UPLOAD_PORT} > {temporary} && "
+                f'test "$(/harbor/busybox wc -c < {temporary})" -eq {len(payload)} && '
+                f"actual=$(/harbor/busybox sha256sum {temporary}) && "
+                f'test "${{actual%% *}}" = {digest} && '
+                f"/harbor/busybox mv -f -- {temporary} {shlex.quote(target)}"
+            )
+            command = asyncio.create_task(self.run(Command(("/bin/sh", "-c", script))))
+            sender = asyncio.create_task(send())
+            try:
+                async with asyncio.timeout(DEFAULT_COMMAND_TIMEOUT + GUEST_RESPONSE_TIMEOUT):
+                    completed, _ = await asyncio.wait((command, sender), return_when=asyncio.FIRST_COMPLETED)
+                    if sender in completed:
+                        sender.result()
+                    result = await command
+                    if result.exit_code != 0:
+                        raise RuntimeError(f"QEMU upload failed validation: {result.stderr.decode(errors='replace')}")
+                    await sender
+            except BaseException:
+                # A failed transfer leaves unknown bytes in the port. Discard the VM.
+                command.cancel()
+                sender.cancel()
+                await asyncio.gather(command, sender, return_exceptions=True)
+                await self.close()
+                raise
+
+    async def _remove_upload_temporary(self, path: str) -> None:
+        if self.process is None:
+            return
+        result = await self.run(Command(("/harbor/busybox", "rm", "-f", path)))
+        if result.exit_code != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():
             stream = io.BytesIO()
             with tarfile.open(fileobj=stream, mode="w:gz") as archive:
                 archive.add(source, arcname=".")
-            encoded = base64.b64encode(stream.getvalue()).decode()
-            script = (
-                f"/harbor/busybox mkdir -p {shlex.quote(target)} && printf '%s' '{encoded}' | "
-                "/harbor/busybox base64 -d | /harbor/busybox gzip -d | "
-                f"/harbor/busybox tar xf - -C {shlex.quote(target)}"
+            temporary = f"/tmp/harbor-upload-{os.urandom(16).hex()}.tar.gz"
+            try:
+                await self._upload_bytes(stream.getvalue(), temporary)
+                script = (
+                    f"/harbor/busybox mkdir -p {shlex.quote(target)} && "
+                    f"/harbor/busybox gzip -dc {temporary} | "
+                    f"/harbor/busybox tar xf - -C {shlex.quote(target)}"
+                )
+                result = await self.run(Command(("/bin/sh", "-c", script)))
+                if result.exit_code != 0:
+                    raise RuntimeError(result.stderr.decode(errors="replace"))
+            finally:
+                await self._remove_upload_temporary(temporary)
+            return
+        payload = source.read_bytes()
+        if len(payload) > TRANSFER_LIMIT_BYTES:
+            raise ValueError("QEMU upload exceeds the transfer limit")
+        mode = source.stat().st_mode & 0o7777
+        quoted = shlex.quote(target)
+        check = await self.run(
+            Command(
+                (
+                    "/bin/sh",
+                    "-c",
+                    f"test -f {quoted} && test ! -L {quoted} && /harbor/busybox stat -c %a {quoted} && "
+                    f"/harbor/busybox sha256sum {quoted}",
+                )
             )
-        else:
-            encoded = base64.b64encode(source.read_bytes()).decode()
-            script = (
-                f"/harbor/busybox mkdir -p {shlex.quote(str(Path(target).parent))} && "
-                f"printf '%s' '{encoded}' | /harbor/busybox base64 -d > {shlex.quote(target)}"
-            )
-        result = await self.run(Command(("/bin/sh", "-c", script), output_limit_bytes=TRANSFER_LIMIT_BYTES))
-        if result.exit_code:
+        )
+        lines = check.stdout.splitlines()
+        if check.exit_code == 0 and len(lines) == 2:
+            digest = hashlib.sha256(payload).hexdigest().encode()
+            if lines[0] == f"{mode:o}".encode() and lines[1].split(maxsplit=1)[0] == digest:
+                return
+        await self._upload_bytes(payload, target)
+        script = f"/harbor/busybox chmod {mode:o} {shlex.quote(target)}"
+        result = await self.run(Command(("/bin/sh", "-c", script)))
+        if result.exit_code != 0:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
@@ -394,18 +534,22 @@ class QemuMachine:
         target.write_bytes(base64.b64decode(result.stdout))
 
     async def close(self) -> None:
+        upload_writer = self._upload_writer
+        self._upload_writer = None
+        if upload_writer is not None:
+            upload_writer.close()
         if self._shell is not None:
             await self._shell.close()
             self._shell = None
         if self.process is not None:
-            if self.process.returncode is None:
-                self.process.terminate()
-            await self.process.wait()
+            await _stopped_process_output(self.process)
         self.process = None
         self.active_acceleration = None
         if self._runtime_dir is not None:
             self._runtime_dir.cleanup()
             self._runtime_dir = None
+        if upload_writer is not None:
+            await upload_writer.wait_closed()
 
 
 class QemuMachineFactory:
@@ -421,6 +565,7 @@ class QemuMachineFactory:
         skopeo: Path | None = None,
         authfile: Path | None = None,
         policy: Path | None = None,
+        prepared_registry_bundles: Mapping[str, Path] | None = None,
     ):
         self.acceleration = Acceleration(acceleration)
         self.assets = assets
@@ -429,6 +574,16 @@ class QemuMachineFactory:
         self.skopeo = skopeo
         self.authfile = authfile
         self.policy = policy
+        self.prepared_registry_bundles = dict(prepared_registry_bundles or {})
+
+        for reference, bundle in self.prepared_registry_bundles.items():
+            metadata = json.loads((bundle / "image.json").read_text())
+            if "@sha256:" not in reference or metadata.get("image_reference") != reference:
+                raise ValueError(f"Prepared registry bundle {bundle} must match pinned source {reference}")
+            if metadata.get("manifest_digest") != reference.rsplit("@", 1)[1]:
+                raise ValueError(f"Prepared registry bundle {bundle} image digest differs from source {reference}")
+            if metadata.get("guest_code_id") != guest_code_id():
+                raise ValueError(f"Prepared registry bundle {bundle} guest protocol differs from current guest code")
 
     async def create(self, spec: MachineSpec) -> QemuMachine:
         if spec.storage_mb is not None or spec.gpus:
@@ -437,6 +592,10 @@ class QemuMachineFactory:
             raise UnsupportedMachineSpec("QEMU guest networking is unsupported")
         if spec.memory_mb is not None and spec.memory_mb <= 0:
             raise ValueError("memory_mb must be positive")
+        if isinstance(spec.source, RegistryImage) and spec.source.reference in self.prepared_registry_bundles:
+            reference = spec.source.reference
+            bundle = self.prepared_registry_bundles[reference]
+            spec = replace(spec, source=QemuBundle(bundle))
         if isinstance(spec.source, (RegistryImage, DockerfileSource)):
             if self.image_cache is None or self.skopeo is None:
                 raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache and Skopeo")

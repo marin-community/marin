@@ -4,22 +4,25 @@
 """Tests for generation config validation and normalization."""
 
 import json
-from types import SimpleNamespace
 from typing import Any, cast
 
+import fsspec
 import pytest
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.normalizers import Lowercase
 from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.processors import TemplateProcessing
-from transformers import AutoTokenizer, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, GPT2Config, PreTrainedTokenizerFast
 
 from levanter.compat.hf_checkpoints import (
+    HFCheckpointConverter,
+    RepoRef,
     _save_tokenizer_pretrained,
     build_generation_config,
-    save_hf_checkpoint_callback,
 )
+
+from levanter.models.gpt2 import Gpt2Config
 
 
 class _FakeTokenizer:
@@ -120,29 +123,6 @@ class TestBuildGenerationConfig:
             build_generation_config(tok, [-1])
 
 
-class _CapturingConverter:
-    def __init__(self):
-        self.calls = []
-
-    def save_pretrained(self, model, path, **kwargs):
-        self.calls.append((model, path, kwargs))
-
-
-def test_save_hf_checkpoint_callback_passes_generation_config():
-    converter = _CapturingConverter()
-    generation_config = {"eos_token_id": [2, 50]}
-    callback = save_hf_checkpoint_callback("/tmp/export", converter, generation_config=generation_config)
-
-    model = object()
-    callback(SimpleNamespace(step=1, eval_model=model))
-
-    assert len(converter.calls) == 1
-    saved_model, saved_path, saved_kwargs = converter.calls[0]
-    assert saved_model is model
-    assert saved_path == "/tmp/export/step-1"
-    assert saved_kwargs["generation_config"] == generation_config
-
-
 class _FakeChatTemplateTokenizer:
     def __init__(self, chat_template: str):
         self.chat_template = chat_template
@@ -217,3 +197,62 @@ def test_save_tokenizer_pretrained_preserves_specialized_tokenizer_class(local_g
     assert tokenizer_config["tokenizer_class"] == "GPT2Tokenizer"
     reloaded = AutoTokenizer.from_pretrained(tmp_path, local_files_only=True)
     assert reloaded(text, return_offsets_mapping=True, return_special_tokens_mask=True) == encoding
+
+
+@pytest.mark.parametrize("with_attributes", [True, False])
+@pytest.mark.parametrize("reference_kind", ["local", "memory"])
+def test_reference_code_copy_preserves_nested_code_without_weight_shards(tmp_path, with_attributes, reference_kind):
+    source = tmp_path / "source"
+    source.mkdir()
+    files = {
+        ".marinskyrl-model-manifest.json": b'{"weights": "parent hashes"}',
+        "configuration_model.py": b"reference code",
+        "nested/modeling_model.py": b"nested reference code",
+        "model.safetensors": b"weights",
+        "model-00001-of-00039.safetensors": b"first shard",
+        "nested/model-00039-of-00039.safetensors": b"last shard",
+        "nested/pytorch_model-00001-of-00039.bin": b"torch shard",
+        "consolidated.00.pth": b"original weights",
+        "weights.pt": b"torch weights",
+        "weights.gguf": b"gguf weights",
+    }
+    if with_attributes:
+        files[".gitattributes"] = (
+            b"*.safetensors filter=lfs\nnested/*.bin filter=lfs\n*.pth filter=lfs\n*.pt filter=lfs\n*.gguf filter=lfs\n"
+        )
+    if reference_kind == "memory":
+        fs = fsspec.filesystem("memory")
+        root = f"/{tmp_path.name}/reference"
+        for name, content in files.items():
+            fs.pipe(f"{root}/{name}", content)
+        reference = f"memory://{root}"
+    else:
+        for name, content in files.items():
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        reference = str(source)
+    converter = HFCheckpointConverter(
+        Gpt2Config, reference_checkpoint=RepoRef(reference), HfConfigClass=GPT2Config, tokenizer=_FakeTokenizer()
+    )
+    destination = tmp_path / "export"
+    converter._save_code_local(str(destination))
+    expected = {"configuration_model.py", "nested/modeling_model.py"}
+    if with_attributes:
+        expected.add(".gitattributes")
+    actual = {str(path.relative_to(destination)) for path in destination.rglob("*") if path.is_file()}
+    assert actual == expected
+    for name in expected:
+        assert (destination / name).read_bytes() == files[name]
+
+
+def test_filesystem_reference_revision_rejects_before_code_copy(tmp_path):
+    converter = HFCheckpointConverter(
+        Gpt2Config,
+        reference_checkpoint=RepoRef("memory://reference", revision="unavailable-revision"),
+        HfConfigClass=GPT2Config,
+        tokenizer=_FakeTokenizer(),
+    )
+    with pytest.raises(ValueError, match="separate revision"):
+        converter._save_code_local(str(tmp_path / "export"))
+    assert not (tmp_path / "export").exists()

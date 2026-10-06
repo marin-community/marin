@@ -12,16 +12,49 @@ while IFS= read -r request < /dev/ttyS0; do
   case "$request" in
     BEGIN)
       : > /tmp/harbor-request.b64
+      : > /tmp/harbor-input.b64
+      $busybox chmod 600 /tmp/harbor-request.b64 /tmp/harbor-input.b64
       ;;
     DATA\|*)
       printf '%s' "${request#DATA|}" >> /tmp/harbor-request.b64
       ;;
+    INPUT\|*)
+      printf '%s' "${request#INPUT|}" >> /tmp/harbor-input.b64
+      ;;
+    TIMEOUT\|*)
+      timeout=${request#TIMEOUT|}
+      ;;
     END)
       $busybox base64 -d /tmp/harbor-request.b64 > /tmp/harbor-command.sh
+      $busybox base64 -d /tmp/harbor-input.b64 > /tmp/harbor-input
+      $busybox chmod 600 /tmp/harbor-input
       if [ -x /bin/bash ]; then shell=/bin/bash; else shell=/bin/sh; fi
-      (cd /workspace; "$shell" /tmp/harbor-command.sh) > /tmp/harbor-out 2> /tmp/harbor-err
+      $busybox rm -f /tmp/harbor-timed-out
+      # Separate process groups let the watchdog stop command descendants.
+      # The noninteractive init shell has no job control, so setsid does not fork.
+      $busybox setsid "$shell" /tmp/harbor-command.sh < /tmp/harbor-input > /tmp/harbor-out 2> /tmp/harbor-err &
+      command_pid=$!
+      $busybox setsid "$busybox" sh -c '
+        /harbor/busybox sleep "$1"
+        : > /tmp/harbor-timed-out
+        /harbor/busybox kill -KILL "-$2" || /harbor/busybox rm -f /tmp/harbor-timed-out
+      ' watchdog "$timeout" "$command_pid" < /dev/null > /dev/null 2>&1 &
+      watchdog_pid=$!
+      wait "$command_pid"
       code=$?
+      timed_out=0
+      if [ -e /tmp/harbor-timed-out ]; then
+        # Let the watchdog complete its kill before the timeout decision.
+        wait "$watchdog_pid" 2>/dev/null
+        if [ "$code" -eq 137 ] && [ -e /tmp/harbor-timed-out ]; then timed_out=1; fi
+      else
+        $busybox kill -KILL "-$watchdog_pid" 2>/dev/null
+        # A fast command can finish before the watchdog creates its process group.
+        $busybox kill -KILL "$watchdog_pid" 2>/dev/null
+        wait "$watchdog_pid" 2>/dev/null
+      fi
       printf 'RESULT|%s\n' "$code" > /dev/ttyS0
+      if [ "$timed_out" -eq 1 ]; then printf 'TIMED_OUT\n' > /dev/ttyS0; fi
       $busybox base64 -w 4096 /tmp/harbor-out | $busybox sed 's/^/OUT|/' > /dev/ttyS0
       $busybox base64 -w 4096 /tmp/harbor-err | $busybox sed 's/^/ERR|/' > /dev/ttyS0
       printf 'ENDRESULT\n' > /dev/ttyS0

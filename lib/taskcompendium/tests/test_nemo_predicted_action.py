@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from taskcompendium.grading import grade_answer, validate_verifier
-from taskcompendium.harbor.protocol import assistant_message
+from taskcompendium.chat import assistant_message
+from taskcompendium.grading import grade_task, validate_verifier
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import (
@@ -80,8 +80,8 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.harbor.protocol import chat_conversation; "
+        "from taskcompendium.grading import grade_task; "
+        "from taskcompendium.chat import chat_conversation; "
         "from taskcompendium.submission import chat_request; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
@@ -89,7 +89,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "convention = read_submission_convention(root / 'submission_convention.json'); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = grade_answer(specification, convention, conversation); "
+        "result = grade_task(specification, convention, conversation); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -317,7 +317,7 @@ def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = grade_answer(specification, convention, conversation)
+    result = grade_task(specification, convention, conversation)
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
@@ -380,7 +380,7 @@ def test_final_action_call_limit_applies_before_matching_expected_calls(call_cou
         )
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
-    result = grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), conversation)
+    result = grade_task(specification, FinalAction(id="max-two", require_call=True, max_calls=2), conversation)
     assert (result.status, result.reward) == (status, reward)
 
 
@@ -390,7 +390,7 @@ def test_final_action_required_call_rejects_text_before_scoring(require_call, st
     specification, _ = import_row(row, canonical_sha256(row))
     final = assistant_message({"role": "assistant", "content": "No action"})
     conversation = ConversationTrace(events=(*specification.context.events, final))
-    result = grade_answer(specification, FinalAction(id="call-policy", require_call=require_call), conversation)
+    result = grade_task(specification, FinalAction(id="call-policy", require_call=require_call), conversation)
     assert (result.status, result.reward) == (status, reward)
 
 
@@ -413,7 +413,5 @@ def test_final_action_cannot_bypass_call_policy_through_a_text_convention(tmp_pa
                 ConversationToolCall(call_id="second", name="lookup", arguments={}),
             )
         )
-        result = grade_answer(
-            specification, current, ConversationTrace(events=(*specification.context.events, response))
-        )
+        result = grade_task(specification, current, ConversationTrace(events=(*specification.context.events, response)))
         assert (result.status, result.reward) == ("extraction_error", None)

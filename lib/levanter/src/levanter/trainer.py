@@ -100,6 +100,8 @@ X = TypeVar("X")  # Input
 M = TypeVar("M")  # Model
 S = TypeVar("S", bound=TrainerState)  # State
 
+DEFAULT_HOOK_START_STEP = 2
+
 DEFAULT_JAX_CONFIG: Dict[str, JsonAtom] = {
     "jax_threefry_partitionable": True,
     "jax_softmax_custom_jvp": True,
@@ -115,12 +117,14 @@ DEFAULT_JAX_CONFIG: Dict[str, JsonAtom] = {
 class _Hook:
     fn: Callback
     every: int
+    start_step: int = DEFAULT_HOOK_START_STEP
 
 
 @dataclass
 class _JitHook:
     fn: JitCallback
     every: int
+    start_step: int = DEFAULT_HOOK_START_STEP
 
 
 @dataclass
@@ -146,7 +150,7 @@ class TrainerHooks:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
-            if force or (info.step > 1 and info.step % hook.every == 0):
+            if force or (info.step >= hook.start_step and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
 
     def emit_event(self, event: ProgressEvent) -> None:
@@ -155,7 +159,7 @@ class TrainerHooks:
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if force or (info.step > 1 and info.step % s_hook.every == 0):
+            if force or (info.step >= s_hook.start_step and info.step % s_hook.every == 0):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -163,7 +167,7 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
-            fires = (state.step > 1) & (state.step % hook.every == 0)
+            fires = (state.step >= hook.start_step) & (state.step % hook.every == 0)
             new_s = jax.lax.cond(
                 force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
@@ -173,22 +177,28 @@ class TrainerHooks:
 
         return tuple(hook_infos)
 
-    def add_hook(self, fn: Optional[Callable[[StepInfo], Any] | JitCallback | Callback] = None, *, every: int = 1):
+    def add_hook(
+        self,
+        fn: Optional[Callable[[StepInfo], Any] | JitCallback | Callback] = None,
+        *,
+        every: int = 1,
+        start_step: int = DEFAULT_HOOK_START_STEP,
+    ):
         def decorator(fn):
             is_something = False
 
             if isinstance(fn, Callback):
-                self.hooks.append(_Hook(fn, every))
+                self.hooks.append(_Hook(fn, every, start_step))
                 is_something = True
 
             if isinstance(fn, JitCallback):
-                self.jit_hooks.append(_JitHook(fn, every))
+                self.jit_hooks.append(_JitHook(fn, every, start_step))
                 is_something = True
 
             if not is_something:
                 if not callable(fn):
                     raise ValueError(f"fn must be callable, got {fn}")
-                self.hooks.append(_Hook(LambdaCallback(fn), every))
+                self.hooks.append(_Hook(LambdaCallback(fn), every, start_step))
 
         if fn is None:
             return decorator
@@ -349,19 +359,27 @@ class Trainer:
         return self.config.num_train_steps
 
     @typing.overload
-    def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1): ...
+    def add_hook(
+        self, fn: Callable[[StepInfo], Any], *, every: int = 1, start_step: int = DEFAULT_HOOK_START_STEP
+    ): ...
 
     @typing.overload
-    def add_hook(self, fn: JitCallback, *, every: int = 1): ...
+    def add_hook(self, fn: JitCallback, *, every: int = 1, start_step: int = DEFAULT_HOOK_START_STEP): ...
 
     @typing.overload
-    def add_hook(self, fn: Callback, *, every: int = 1): ...
+    def add_hook(self, fn: Callback, *, every: int = 1, start_step: int = DEFAULT_HOOK_START_STEP): ...
 
     @typing.overload
-    def add_hook(self, *, every: int = 1): ...
+    def add_hook(self, *, every: int = 1, start_step: int = DEFAULT_HOOK_START_STEP): ...
 
-    def add_hook(self, fn: Optional[Callable[[StepInfo], Any] | Callback | JitCallback] = None, *, every: int = 1):
-        return self.hooks.add_hook(fn, every=every)
+    def add_hook(
+        self,
+        fn: Optional[Callable[[StepInfo], Any] | Callback | JitCallback] = None,
+        *,
+        every: int = 1,
+        start_step: int = DEFAULT_HOOK_START_STEP,
+    ):
+        return self.hooks.add_hook(fn, every=every, start_step=start_step)
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
@@ -642,7 +660,9 @@ class Trainer:
 
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
         self.add_hook(
-            levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
+            levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule),
+            every=1,
+            start_step=self.config.metrics_start_step,
         )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
@@ -660,7 +680,9 @@ class Trainer:
 
         # Add watch callback if configured
         if self.config.watch.is_enabled:
-            self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
+            self.add_hook(
+                self.config.watch.build(), every=self.config.watch.interval, start_step=self.config.metrics_start_step
+            )
 
         profiler = self.config.profiler
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
@@ -878,6 +900,8 @@ class TrainerConfig:
     id: Optional[str] = None  # run id. if None, will be set to a random string
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
+    metrics_start_step: int = DEFAULT_HOOK_START_STEP
+    """First step for log_step_info and watch hooks."""
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
     xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()

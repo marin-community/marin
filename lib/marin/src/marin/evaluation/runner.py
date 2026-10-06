@@ -566,12 +566,14 @@ def _evaluate_with_hosted_judge(
         raise RuntimeError(f"evaluation batch judge inference failed: {exc}") from exc
 
 
-def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
+def run_evaluation_batch(batch: EvaluationBatch, *, coordinator_identity: str | None = None) -> list[str]:
     """Serve once, run every evaluation, and write each record as it finishes."""
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
-    orchestrator_job_id = str(iris_ctx().job_id)
+    if coordinator_identity is None and iris_ctx().job_id is None:
+        raise ValueError("Foreground evaluation requires an explicit coordinator identity")
+    orchestrator_job_id = coordinator_identity if coordinator_identity is not None else str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
     evaluation_env = {
         **runtime_env,

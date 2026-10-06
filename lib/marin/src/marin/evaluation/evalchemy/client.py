@@ -105,23 +105,18 @@ def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[
     return [f"max_gen_toks={native_budget}"], []
 
 
-def served_max_length(base_url: str) -> int | None:
-    """The served model's context length, from the OpenAI ``/models`` card (vLLM reports ``max_model_len``).
+def served_max_length(base_url: str, model_id: str) -> int | None:
+    """Check the required model and return its context length from the endpoint card.
 
-    lm-eval's API model cannot see the server's context window and assumes 2048 tokens by default,
-    left-truncating longer prompts -- which silently drops few-shot examples on tasks like 25-shot
-    arc_challenge. Returns None when the server does not report a length (the lm-eval default stands).
+    A valid card without ``max_model_len`` retains the lm-eval context default.
+    Network failures and a missing model stop the child before generation.
     """
-    try:
-        with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
-            payload = json.load(resp)
-    except Exception as exc:
-        print(f"could not read {base_url}/models for max_model_len: {exc}", flush=True)
-        return None
+    with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
+        payload = json.load(resp)
     for entry in payload.get("data", []):
-        if entry.get("max_model_len"):
-            return int(entry["max_model_len"])
-    return None
+        if entry.get("id") == model_id:
+            return int(entry["max_model_len"]) if entry.get("max_model_len") else None
+    raise ValueError("The evaluation endpoint does not serve the required model")
 
 
 def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
@@ -247,7 +242,7 @@ def main() -> None:
         raise SystemExit("run_evalchemy_client requires at least one task")
 
     out_path = config["out_path"].rstrip("/")
-    served = served_max_length(config["base_url"])
+    served = served_max_length(config["base_url"], config["model_id"])
     available_context = served - _CONTEXT_MARGIN if served is not None else None
     configured_context = config.get("max_length")
     configured_lengths = [value for value in (available_context, configured_context) if value is not None]

@@ -40,6 +40,7 @@ from verifyit.spec import (
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
+from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
@@ -48,9 +49,12 @@ from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
     FunctionCall,
+    SkippedVerifierSpec,
+    StageVerifierSpec,
     TaskResource,
     TaskSpec,
     TextMessage,
+    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.runtime.grading import grade_submission
@@ -73,7 +77,17 @@ def resolve_verifier(specification: VerifierSpec) -> Spec:
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
-    resolve_verifier(specification)
+    """Validate the payload for each supported verifier kind."""
+    if specification.kind == VerifierKind.SHELL:
+        ShellVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.EXTERNAL:
+        ExternalVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.STAGED:
+        StageVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.SKIPPED:
+        SkippedVerifierSpec.model_validate_json(specification.parameters_json)
+    else:
+        resolve_verifier(specification)
 
 
 def supports_verifier(specification: VerifierSpec) -> bool:
@@ -167,11 +181,6 @@ def grade_task(
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         candidate = None
     return _grade_files(specification, verifier, candidate, evidence)
-
-
-def grade_answer(specification: TaskSpec, convention: Submission, conversation: ConversationTrace) -> GradeResult:
-    """Grade a final direct-chat answer."""
-    return grade_task(specification, convention, conversation)
 
 
 def _grade_result(verdict: Reward) -> GradeResult:

@@ -13,9 +13,13 @@ serving, the eval itself) is exercised by the cluster smoke.
 import base64
 import json
 import os
+import threading
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
+from marin.evaluation.evalchemy import client as evalchemy_client
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
 from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
@@ -34,6 +38,69 @@ _MODEL = RunningModel(
     ),
     tokenizer="Qwen/Qwen3-0.6B",
 )
+
+
+@pytest.mark.parametrize("model_card", ["required", "no_context", "other", "refused"])
+def test_remote_client_checks_model_before_generation(tmp_path, monkeypatch, model_card):
+    requests = []
+    generations = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            card = {
+                "id": "required" if model_card == "no_context" else model_card,
+                "max_model_len": None if model_card == "no_context" else 32768,
+            }
+            self.wfile.write(json.dumps({"data": [card]}).encode())
+
+        def log_message(self, format, *args):  # noqa: A002 - Preserve the HTTP handler override signature.
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    capability_path = "/proxy/t/cluster=cw-us-east-02a/token/endpoint/v1"
+    address = f"http://127.0.0.1:{server.server_port}{capability_path}"
+    thread = threading.Thread(target=server.serve_forever)
+    if model_card == "refused":
+        server.server_close()
+    else:
+        thread.start()
+
+    config = json.loads(_run_config_json(_MODEL, _config(), str(tmp_path)))
+    config.update(base_url=address, model_id="required")
+    monkeypatch.setenv(evalchemy_client.CONFIG_ENV_KEY, json.dumps(config))
+
+    def run_command(command):
+        generations.append(command)
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(evalchemy_client.subprocess, "run", run_command)
+    try:
+        if model_card in {"required", "no_context"}:
+            with pytest.raises(SystemExit, match="evalchemy exited 1"):
+                evalchemy_client.main()
+            assert len(generations) == len(config["tasks"])
+            assert requests == [f"{capability_path}/models"]
+            if model_card == "required":
+                assert "max_length=32704" in generations[0][generations[0].index("--model_args") + 1]
+            else:
+                assert "max_length=" not in generations[0][generations[0].index("--model_args") + 1]
+        elif model_card == "other":
+            with pytest.raises(ValueError, match="required model"):
+                evalchemy_client.main()
+            assert generations == []
+            assert requests == [f"{capability_path}/models"]
+        else:
+            with pytest.raises(urllib.error.URLError):
+                evalchemy_client.main()
+            assert generations == []
+    finally:
+        if thread.is_alive():
+            server.shutdown()
+            thread.join()
+            server.server_close()
 
 
 def _config(**overrides) -> EvalchemyRunConfig:
