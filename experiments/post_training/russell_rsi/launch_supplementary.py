@@ -7,13 +7,11 @@ import json
 from dataclasses import asdict, dataclass, replace
 
 import click
-from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
-from marin.execution.remote import remote
+from marin.execution.remote import RemoteCallable
 from marin.experiment.cli import build_options
-from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
@@ -153,6 +151,8 @@ def supplementary_workflow(config: dict, selected: SelectedCheckpoint) -> Artifa
             startup_attempts=3,
         )
         original_config = evaluation.build_config
+        if not isinstance(evaluation.run, RemoteCallable):
+            raise TypeError("Supplementary evaluation requires the development remote worker")
 
         def build_config(ctx: StepContext, original=original_config, role=index) -> SupplementaryEvaluationConfig:
             return SupplementaryEvaluationConfig(
@@ -169,12 +169,7 @@ def supplementary_workflow(config: dict, selected: SelectedCheckpoint) -> Artifa
                 evaluation,
                 name=f"evals/russell-rsi-{label}-acceptance",
                 build_config=build_config,
-                run=remote(
-                    run_supplementary_evaluation,
-                    resources=ResourceConfig.with_gpu("H100", 8, cpu=32, ram="512GB", disk="2TB"),
-                    pip_packages=[MARIN_SKYRL.requirement()],
-                    env_vars={"UV_PRERELEASE": "allow"},
-                ),
+                run=replace(evaluation.run, fn=run_supplementary_evaluation),
             )
         )
     return ArtifactStep(
