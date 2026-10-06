@@ -32,7 +32,6 @@ Staged tasks are not replayed yet: a control for stage ``n`` needs the earlier s
 import asyncio
 import base64
 import json
-import math
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -44,15 +43,13 @@ from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
 from taskcompendium.environment import EnvironmentFile
 from taskcompendium.execution import TaskExecution
-from taskcompendium.grading_result import GradeResult
-from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.ledger.records import Ledger
 from taskforge.llm.client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import TOKEN_FIELDS, served_tokens
-from taskforge.spec.controls import Control, Expectation, Workspace, reply, shell_turn, validate_controls
+from taskforge.spec.controls import Control, Workspace, reply, shell_turn, validate_controls
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.trials import EngineSettings, TrialPlan, run_trial
 
@@ -183,21 +180,6 @@ class ControlPlan:
         )
 
 
-def expectation_met(expect: Expectation, grade: GradeResult) -> bool:
-    if grade.status != expect.status:
-        return False
-    if expect.status != GradeStatus.GRADED:
-        return True
-    assert grade.reward is not None
-    if expect.reward_min is not None and grade.reward < expect.reward_min:
-        return False
-    if expect.reward_max is not None and grade.reward > expect.reward_max:
-        return False
-    return all(
-        name in grade.rewards and math.isclose(grade.rewards[name], value) for name, value in expect.components.items()
-    )
-
-
 def workspace_turn(index: int, file: EnvironmentFile) -> AssistantToolCalls:
     """One shell call that writes ``file`` as the agent would: its parent made, its bytes, its mode."""
     path = shlex.quote(file.path)
@@ -261,5 +243,5 @@ async def replay(
 def _control_outcome(control: Control, outcome: Outcome) -> ControlOutcome:
     if not isinstance(outcome, Graded):
         return ControlOutcome(control, outcome, ControlVerdict.UNGRADED)
-    met = expectation_met(control.expect, outcome.grade)
+    met = control.expect.met_by(outcome.grade)
     return ControlOutcome(control, outcome, ControlVerdict.MET if met else ControlVerdict.VIOLATED)

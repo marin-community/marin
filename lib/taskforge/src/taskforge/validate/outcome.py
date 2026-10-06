@@ -39,6 +39,9 @@ class Cause(StrEnum):
     SESSION_PREPARE = "session_prepare"
     ATTEMPT_TIMEOUT = "attempt_timeout"
     """``TaskExecution.attempt_timeout`` expired."""
+    AGENT_TIMEOUT = "agent_timeout"
+    """``TaskExecution.agent_timeout`` expired. The rollout keeps the grade RolloutEngine gave the
+    state the agent left, but the trial is not counted as graded."""
     CLEANUP = "cleanup"
     """Removing a stage's private grader files failed before the next stage could run."""
     MODEL_UNAVAILABLE = "model_unavailable"

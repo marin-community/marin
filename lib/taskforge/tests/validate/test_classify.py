@@ -4,7 +4,7 @@
 """Failures produced by a real ShellboxRolloutEngine run map to the right Cause."""
 
 import pytest
-from rolloutengine.contracts import GenerationLimitReached, ModelRequest, ModelTurn
+from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, GenerationLimitReached, ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.environment import EnvironmentKind, HealthcheckSpec, StdoutReward
@@ -115,24 +115,26 @@ async def test_failing_task_setup_is_a_non_retryable_task_defect(file_task, fake
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.TASK_SETUP, False)
 
 
-async def test_agent_timeout_before_any_grade_scores_a_failed_attempt(math_task, fakes):
+async def test_agent_timeout_before_any_response_is_an_ungraded_agent_timeout(math_task, fakes):
     outcome = await outcome_of(
         math_task, fakes.script_model([fakes.text("395")], hang_from=0), execution=TaskExecution(agent_timeout=0.01)
     )
 
-    assert isinstance(outcome, Graded)
-    assert (outcome.reward, outcome.grade.passed, outcome.rollout.stop_reason) == (0.0, False, "agent_timeout")
+    assert isinstance(outcome, Ungraded)
+    assert (outcome.cause, outcome.retryable) == (Cause.AGENT_TIMEOUT, False)
+    assert outcome.rollout is not None and outcome.rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON
 
 
-async def test_agent_timeout_after_work_keeps_the_engine_grade(file_task, fakes):
+async def test_agent_timeout_after_work_is_ungraded_even_though_the_engine_graded(file_task, fakes):
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
 
     outcome = await outcome_of(
         file_task, model, fakes.flaky_factory(0, RuntimeError), execution=TaskExecution(agent_timeout=1)
     )
 
-    assert isinstance(outcome, Graded)
-    assert (outcome.reward, outcome.rollout.stop_reason) == (1.0, "agent_timeout")
+    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.AGENT_TIMEOUT
+    assert outcome.rollout is not None and outcome.rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON
+    assert (outcome.rollout.grade.status, outcome.rollout.grade.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_attempt_timeout(math_task, fakes):

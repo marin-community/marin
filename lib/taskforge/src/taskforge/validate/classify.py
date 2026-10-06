@@ -15,7 +15,6 @@ Task setup failures are told apart from machine failures only by their message t
 """
 
 import traceback
-from dataclasses import replace
 
 from rolloutengine.contracts import (
     AGENT_TIMEOUT_STOP_REASON,
@@ -27,7 +26,7 @@ from rolloutengine.contracts import (
     RolloutOperation,
 )
 from shellbox.machine import UnsupportedMachineSpec
-from taskcompendium.grading_result import GradeResult, GradingFailure
+from taskcompendium.grading_result import GradingFailure
 from taskcompendium.grading_result import Outcome as GradeStatus
 
 from taskforge.llm.client import GlmContextExhausted, GlmRequestRejected, GlmUnavailable
@@ -42,16 +41,19 @@ GRADING_FAILURES = {
 }
 ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ", "Environment healthcheck failed", "Task stage ")
 """Message prefixes of the setup, healthcheck and stage-setup errors RolloutEngine raises."""
-UNGRADED_AGENT_TIMEOUT = "TaskExecution.agent_timeout expired before the first response; scored as a failed attempt"
 
 
 def classify(failure: BaseException | RolloutData) -> Cause:
     """Map an exception, or a rollout returned without a usable grade, to its ``Cause``.
 
+    A rollout that stopped at the agent deadline is ``AGENT_TIMEOUT`` whatever its grade.
+
     Raises:
-        ValueError: ``failure`` is a rollout with a usable grade.
+        ValueError: ``failure`` is a rollout with a usable grade that did not time out.
     """
     if isinstance(failure, RolloutData):
+        if failure.stop_reason == AGENT_TIMEOUT_STOP_REASON:
+            return Cause.AGENT_TIMEOUT
         return _grade_cause(failure)
     return _exception_cause(failure)
 
@@ -59,15 +61,18 @@ def classify(failure: BaseException | RolloutData) -> Cause:
 def trial_outcome(result: RolloutData | Exception) -> Outcome:
     """The outcome of one engine run: what ``ShellboxRolloutEngine.run`` returned or raised.
 
-    An agent timeout is a budget stop: RolloutEngine grades the state the agent left and returns
-    the rollout with stop reason ``agent_timeout``. When the deadline expired before the first
-    response there is nothing to grade, and the trial scores zero as a failed attempt.
+    A rollout that stopped at the agent deadline (stop reason ``agent_timeout``) is
+    ``Ungraded(AGENT_TIMEOUT)``. RolloutEngine still grades the state the agent left; that grade stays
+    on ``Ungraded.rollout`` and in the detail, but the trial is never counted as graded.
     """
     if isinstance(result, RolloutData):
+        if result.stop_reason == AGENT_TIMEOUT_STOP_REASON:
+            grade = result.grade
+            return Ungraded(
+                Cause.AGENT_TIMEOUT, f"agent deadline expired; engine grade {grade.status} {grade.reward}", result
+            )
         if result.grade.status in GRADED_STATUSES:
             return Graded(result)
-        if result.stop_reason == AGENT_TIMEOUT_STOP_REASON and result.grade.status is GradeStatus.UNAVAILABLE:
-            return Graded(replace(result, grade=GradeResult(GradeStatus.GRADED, 0.0, UNGRADED_AGENT_TIMEOUT, False)))
         return Ungraded(classify(result), result.grade.error or str(result.grade.status), result)
     cause = classify(result)
     detail = "".join(traceback.format_exception(result))
