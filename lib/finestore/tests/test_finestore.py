@@ -47,7 +47,7 @@ def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
 def test_s3_shard_write_succeeds_without_bucket_creation(monkeypatch):
     filesystem = MemoryFileSystem()
 
-    def reject_makedirs(path, exist_ok=True):
+    def reject_makedirs(_path, **_kwargs):
         raise OSError("InvalidRegion: Region does not match")
 
     monkeypatch.setattr(filesystem, "makedirs", reject_makedirs)
