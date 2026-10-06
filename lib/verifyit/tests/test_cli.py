@@ -112,28 +112,6 @@ def test_pytest_setup_failure_opt_in_clears_previous_reward(tmp_path):
     assert not (logs / "reward.txt").exists()
 
 
-@pytest.mark.parametrize(
-    "candidate,reward",
-    [
-        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"value"}]}}]', 1.0),
-        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"wrong"}]}}]', 0.0),
-        ("not json", 0.0),
-    ],
-)
-def test_predicted_action_file_grading_preserves_nested_json_from_toml(tmp_path, candidate, reward):
-    spec = PredictedActionSpec(
-        expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
-        output=str(tmp_path / "answer.json"),
-    )
-    config = tmp_path / "verifier.toml"
-    config.write_text(render_spec(spec))
-    (tmp_path / "answer.json").write_text(candidate)
-    logs = tmp_path / "logs"
-    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
-    assert _verdict(logs)["status"] == Status.SCORED
-    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
-
-
 def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_path):
     specification = PredictedActionSpec(
         expected_calls=(FunctionCall("lookup", {"id": 1}),),
@@ -158,6 +136,30 @@ def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_
 @pytest.mark.parametrize(
     "spec,candidate,reward",
     [
+        pytest.param(
+            PredictedActionSpec(
+                expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),)
+            ),
+            '[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"value"}]}}]',
+            1.0,
+            id="action-nested-json-roundtrip",
+        ),
+        pytest.param(
+            PredictedActionSpec(
+                expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),)
+            ),
+            '[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"wrong"}]}}]',
+            0.0,
+            id="action-wrong-nested-value",
+        ),
+        pytest.param(
+            PredictedActionSpec(
+                expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),)
+            ),
+            "not json",
+            0.0,
+            id="action-malformed-candidate",
+        ),
         pytest.param(
             StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
             '{"values":[null,true,1,1.0]}',
