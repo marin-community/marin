@@ -60,7 +60,7 @@ def specification():
     ]
     + [
         {"resources": {role: [{"path": "input.txt", "source": {"kind": "inline_file", "content_base64": "eA=="}}]}}
-        for role in ("all", "worker", "oracle", "verifier")
+        for role in ("all", "worker", "oracle")
     ]
     + [
         {
@@ -83,17 +83,6 @@ def specification():
                 parameters_json='{"expected":"done"}',
                 environment_requirements=EnvironmentRequirements(capabilities=("process",)),
             ),
-        },
-        {
-            "resources": {
-                "verifier": [
-                    {
-                        "path": "checks/grade.py",
-                        "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="},
-                        "mode": "0755",
-                    }
-                ]
-            }
         },
     ],
 )
@@ -197,8 +186,8 @@ def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, spe
     task = read_specification(path)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     # This correct answer must not earn credit without the required private runtime.
-    with pytest.raises(NotImplementedError):
-        grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+    assert (result.status, result.reward) == ("invalid_task", None)
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
@@ -213,7 +202,7 @@ def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specification, k
         lower_to_harbor(task, convention, HarborEnvironmentConfig(), tmp_path / "export")
     assert not (tmp_path / "export").exists()
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         grade_answer(task, convention, conversation)
 
 

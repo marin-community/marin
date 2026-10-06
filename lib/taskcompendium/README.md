@@ -1,5 +1,11 @@
 # TaskCompendium
 
+The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every selected input, source locator, edit and rejection reason. Library families define normalization, checks and rubrics; the experiment binds pinned inputs, intended use, download artifacts and inference clients.
+
+For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
+and the [experiment flow](../../experiments/post_training/task_curation/README.md).
+The sections below describe the task model and its presentation and grading contracts.
+
 ## What problem does it solve?
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
@@ -36,10 +42,12 @@ flowchart LR
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
+| `interaction_tools` | Executable function declarations used by the optional episode runtime. |
+| `output_paths` | Absolute output paths captured by the optional episode runtime. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.20`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.21`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -168,11 +176,12 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 `verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
-Schema loading accepts descriptors without a grader implementation. Shared verifier validation, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
+Schema loading accepts descriptors independently of execution. Grading parses standard VerifyIT specifications; no TaskCompendium verifier registry exists. Direct chat supports answer-file graders and trusted recipe-owned scripts with private fixtures. Candidate-executing graders require a pinned isolated grading image. Unsupported environment requirements remain explicit errors.
 
-Standard verifier contracts and pure candidate scoring live in `verifyit`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. TaskCompendium extracts submission evidence and translates shared rewards into Harbor outcomes; it has no verifier registry or separate standard verifier schema.
+Conversion pipelines use `grader_package(spec, resources)` for standard graders or `script_package(script, config)` for task-specific policy. The returned descriptor goes in `task.verifier`; files go in `task.resources.verifier` relative to the private tests root. Scripts use VerifyIT's structured verdict contract and need no central registration. Exact, numeric, MCQ and final-action grading retain their pure candidate path; other supported modes consume file evidence.
 
-The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` is a schema descriptor without an implementation in this package. The expected answer and grading settings stay out of the model-visible instruction.
+VerifyIT owns reusable comparison, validation and execution components. Recipe families own special parsing, source-specific reward rules and private evaluator data. Grader scripts are embedded in emitted tasks and can run independently of the converter. `grade_task` extracts submissions and captured runtime evidence, runs the package and preserves scored, invalid-task and infrastructure outcomes.
+
 
 ## What is a lowering?
 

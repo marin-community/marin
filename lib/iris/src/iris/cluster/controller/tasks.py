@@ -13,6 +13,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.server_auth import get_verified_identity
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, tuple_
 
@@ -30,10 +31,12 @@ from iris.cluster.controller.task_state import (
     attempt_is_worker_failure,
     task_row_can_be_scheduled,
 )
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, WorkerId, is_federated
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.rpc.proto_display import task_state_friendly
 from iris.time_proto import timestamp_to_proto
 
@@ -60,6 +63,9 @@ class PendingKick:
 class TaskRuntime(Protocol):
     @property
     def backend(self) -> TaskBackend: ...
+
+    @property
+    def federation(self) -> FederationManager: ...
 
     def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
@@ -212,10 +218,30 @@ def kick_tasks(
     reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
     results: list[controller_pb2.Controller.KickResult] = []
     kicks: list[PendingKick] = []
+    forwarded: dict[str, list[str]] = {}
     with dependencies.db.read_snapshot() as tx:
         for target in request.targets:
-            _resolve_kick_target(dependencies, tx, target, kind, reason, kicks, results)
+            _resolve_kick_target(dependencies, tx, target, kind, reason, kicks, results, forwarded)
     dependencies.runtime.request_task_kicks(kicks)
+    for peer_id, targets in forwarded.items():
+        peer_request = controller_pb2.Controller.KickTasksRequest(
+            targets=targets, desired_state=request.desired_state, reason=reason
+        )
+        try:
+            response = dependencies.runtime.federation.proxy_to_peer(
+                peer_id, lambda peer, forwarded_request=peer_request: peer.kick_tasks(forwarded_request)
+            )
+        except (ConnectError, ConnectionError, OSError) as error:
+            # A retry of the entire batch could kick an already accepted target's
+            # next attempt. Preserve partial success without a retryable RPC error.
+            results.extend(
+                controller_pb2.Controller.KickResult(
+                    target=target, queued=False, detail=f"Peer {peer_id} did not confirm the action: {error}"
+                )
+                for target in targets
+            )
+        else:
+            results.extend(response.results)
     return controller_pb2.Controller.KickTasksResponse(results=results)
 
 
@@ -385,6 +411,7 @@ def _resolve_kick_target(
     reason: str,
     kicks: list[PendingKick],
     results: list[controller_pb2.Controller.KickResult],
+    forwarded: dict[str, list[str]],
 ) -> None:
     def reject(detail: str, *, task_id: str = "") -> None:
         results.append(
@@ -403,7 +430,22 @@ def _resolve_kick_target(
         return
 
     name = task_attempt.task_id
-    authorize_owner_if_configured(dependencies.auth, name.user)
+    identity = get_verified_identity()
+    if dependencies.auth.provider and identity is not None and identity.role == FEDERATION_PEER_ROLE:
+        handoff = reads.received_handoff(tx, name.root_job)
+        if handoff is None or handoff.requester_id != identity.user_id:
+            raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {name.root_job}")
+    else:
+        authorize_owner_if_configured(dependencies.auth, name.user)
+    if not name.is_task and task_attempt.attempt_id is not None:
+        reject("a job target cannot carry an ':attempt' suffix")
+        return
+    # Resolve and validate against the executing peer, whose attempt may be newer
+    # than the parent's mirrored task state (or may not have been mirrored yet).
+    handle = reads.federated_handle(tx, name.root_job)
+    if handle is not None:
+        forwarded.setdefault(handle.peer_id, []).append(target)
+        return
     if name.is_task:
         detail = reads.get_task_detail(tx, name)
         if detail is None:
@@ -425,9 +467,6 @@ def _resolve_kick_target(
         results.append(controller_pb2.Controller.KickResult(target=target, task_id=name.to_wire(), queued=True))
         return
 
-    if task_attempt.attempt_id is not None:
-        reject("a job target cannot carry an ':attempt' suffix")
-        return
     if reads.get_job_state(tx, name) is None:
         reject("job not found")
         return

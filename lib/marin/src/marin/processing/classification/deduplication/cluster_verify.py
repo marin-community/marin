@@ -25,6 +25,7 @@ from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.copartitioned import write_copartitioned_source_manifest
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_dedup import (
@@ -38,10 +39,6 @@ from marin.processing.classification.deduplication.cluster_text import (
     ClusterTextData,
     ClusterTextShard,
     read_cluster_text_manifest,
-)
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    VerifiedFuzzyDupsArtifact,
-    VerifiedFuzzyDupsPerSource,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +70,30 @@ CLUSTER_DUPLICATE_SCHEMA = pa.schema(
         pa.field("dup_comparisons", pa.int32(), nullable=False),
     ]
 )
+
+
+class VerifiedFuzzyDupsPerSource(BaseModel):
+    """Attribute output for one normalized source."""
+
+    attr_dir: DatakitArtifactPath
+    source_tag: str
+
+
+class VerifiedFuzzyDupsArtifact(BaseModel):
+    """Source mapping and counters shared by verified-marker producers."""
+
+    producer: Literal["pipeline", "cluster"] = "pipeline"
+    version: str
+    sources: dict[str, VerifiedFuzzyDupsPerSource]
+    counters: dict[str, int | float]
+
+    def attr_dir_for_source(self, source_path: str) -> str:
+        """Return the attribute directory for a materialized source path."""
+        source_key = datakit_source_key(source_path)
+        entry = self.sources.get(source_key)
+        if entry is None:
+            raise KeyError(f"Verified fuzzy duplicate attributes have no entry for source_key={source_key!r}")
+        return entry.attr_dir
 
 
 class ClusterVerificationLimits(BaseModel):
@@ -353,10 +374,12 @@ def cluster_verify_step(
     files_per_task: int = DEFAULT_FILES_PER_TASK,
     reduce_shards: int = DEFAULT_REDUCE_SHARDS,
     max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
+    output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Create verification with the duplicate rule and text limits in its identity."""
     return StepSpec(
         name=name,
+        output_path_prefix=output_path_prefix,
         deps=[cluster_text],
         hash_attrs={
             "version": 1,

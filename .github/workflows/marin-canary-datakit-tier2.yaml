@@ -78,8 +78,10 @@ jobs:
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --timeout 21600 \
-            --memory=2G \
+            --region=us-west4 \
+            --memory=8G --enable-extra-resources \
             --extra=cpu \
+            --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
             -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \

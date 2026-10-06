@@ -17,6 +17,7 @@ from infra.loom.infrastructure import (
     GitHubFederationConfig,
     ProfileConfig,
     RemoteMcpConfig,
+    WatchConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -472,3 +473,51 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         assert mapping["profiles"] == ["ops"]
 
     return infrastructure.instance.id.apply(check)
+
+
+def test_agent_watch_manifest_and_profile_reference() -> None:
+    watch = WatchConfig.parse(
+        "daily",
+        {
+            "cron": "0 9 * * 1-5",
+            "timezone": "America/Los_Angeles",
+            "profile": "ops",
+            "repo": "marin-community/marin",
+            "promptFile": "watches/weekday-job-check.md",
+            "slackChannels": ["C12345"],
+        },
+    )
+    config = replace(deployment_config(), watches=(watch,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    assert manifest["watches"][0]["agent"]["slack_channels"] == ["C12345"]
+    assert manifest["watches"][0]["agent"]["prompt"] == (ROOT / "watches/weekday-job-check.md").read_text().strip()
+    assert manifest["watches"][0]["enabled"] is False
+    with pytest.raises(ValueError, match="unknown profile"):
+        replace(config, profiles=(), workloads=())
+
+
+def test_agent_watch_prompt_file_cannot_escape_configuration_root() -> None:
+    value = {
+        "cron": "0 9 * * *",
+        "profile": "ops",
+        "repo": "marin-community/marin",
+        "promptFile": "../pulumi.md",
+    }
+    with pytest.raises(ValueError):
+        WatchConfig.parse("daily", value)
+
+
+def test_script_watch_manifest_uses_program_without_an_agent() -> None:
+    watch = WatchConfig.parse(
+        "merge-check",
+        {"every": "30m", "program": "builtin:archive-merged", "params": {"archive": False}, "runTimeoutSeconds": 60},
+    )
+    config = replace(deployment_config(), watches=(watch,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    declared = manifest["watches"][0]
+    assert "agent" not in declared
+    assert declared["program"] == "builtin:archive-merged"
+    assert declared["params"] == {"archive": False}
+    assert declared["run_timeout_secs"] == 60
+    with pytest.raises(ValueError, match="agent fields"):
+        WatchConfig.parse("merge-check", {"every": "30m", "program": "builtin:archive-merged", "prompt": "Check merges"})

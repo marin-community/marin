@@ -120,27 +120,30 @@ def test_retries_recover_service_errors_without_overlapping_jobs(tmp_path, sampl
     older = request.model_copy(
         update={"checkpoint": request.checkpoint.model_copy(update={"step": 3000, "uri": "s3://checkpoints/step-3000"})}
     )
+    newest = request.model_copy(
+        update={"checkpoint": request.checkpoint.model_copy(update={"step": 9000, "uri": "s3://checkpoints/step-9000"})}
+    )
     jobs.lose_submit_response = False
     submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
-    assert len(jobs.jobs) == 1
-    name = next(iter(jobs.jobs))
+    assert sorted(row.checkpoint.step for row in jobs.requests.values()) == [3000, 6000]
+    name = next(name for name, row in jobs.requests.items() if row.sample_id == request.sample_id)
     assert jobs.requests[name].source_revision == request.source_revision
     jobs.unavailable = True
     with pytest.raises(ConnectionError):
         submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
-    assert len(jobs.jobs) == 1
+    assert len(jobs.jobs) == 2
     jobs.unavailable = False
     jobs.jobs[name] = JobState.FAILED
     submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
-    assert len(jobs.jobs) == 2
+    assert len(jobs.jobs) == 3
     retry = list(jobs.jobs)[-1]
     assert jobs.requests[retry] == request
     store.save_result(completed(request))
-    submit_pending(store, jobs, [], spec=sample_request.spec)
-    assert len(jobs.jobs) == 2  # A saved result does not mean GPU teardown finished.
+    submit_pending(store, jobs, [newest], spec=sample_request.spec)
+    assert len(jobs.jobs) == 3  # A saved result does not mean GPU teardown finished.
     jobs.jobs[retry] = JobState.SUCCEEDED
     submit_pending(store, jobs, [], spec=sample_request.spec)
-    assert list(jobs.requests.values())[-1] == older
+    assert list(jobs.requests.values())[-1] == newest
 
 
 def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, sample_request):
@@ -157,9 +160,13 @@ def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, 
     newest = request.model_copy(update={"checkpoint": request.checkpoint.model_copy(update={"step": 24000})})
     submit_pending(store, jobs, requests, spec=sample_request.spec)
     assert {row.sample_id for row in store.requests(sample_request.spec)} == {row.sample_id for row in requests}
+    assert [row.checkpoint.step for row in jobs.requests.values()] == [18000, 12000]  # Two active jobs at most.
     for state in [JobState.FAILED, JobState.UNSCHEDULABLE, JobState.SUCCEEDED]:
-        active = next(name for name, job_state in jobs.jobs.items() if job_state == JobState.RUNNING)
-        assert jobs.requests[active] == requests[-1]
+        active = next(
+            name
+            for name, job_state in jobs.jobs.items()
+            if job_state == JobState.RUNNING and jobs.requests[name] == requests[-1]
+        )
         jobs.jobs[active] = state
         if state == JobState.UNSCHEDULABLE:
             jobs.jobs.clear()  # History deletion between attempts must not reset the budget.

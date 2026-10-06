@@ -65,6 +65,14 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
+For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
+budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
+request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with
+each request. Reference verdicts record `attempt_count` and `attempts` in `detail`; checklist
+verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
+and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
+`infra_error`, with the available attempt diagnostics in `detail`.
+
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
 invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes
@@ -115,3 +123,9 @@ Run the package tests from the repository root:
 ```bash
 uv run --group test pytest lib/verifyit/tests
 ```
+
+## Candidate scoring
+
+Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset policy belongs to the converter that emits a grader: source parsing conventions, calendar postconditions and abstention rules should be packaged as task-owned scripts.
+
+A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
