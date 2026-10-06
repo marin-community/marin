@@ -304,7 +304,8 @@ def _task_with_attempts(
     wire_name: str,
 ) -> tasks.TaskWithAttempts:
     _authorize_federated_debug_target(dependencies, task_id.root_job)
-    task = tasks.read_task_with_attempts(dependencies.db, task_id)
+    with dependencies.db.read_snapshot() as tx:
+        task = tasks.read_task_with_attempts(tx, task_id)
     if task is None:
         raise ConnectError(Code.NOT_FOUND, f"Task {wire_name} not found")
     return task
