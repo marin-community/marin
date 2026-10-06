@@ -103,6 +103,7 @@ _AUX_HIDDEN = "aux_lm_hidden"
 # Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
 _ERC_KEY_SALT = 0xE2C
 _NITP_TARGET = "nitp_target"
+_LM_HEAD_EXTRA = "lm_head_extra"
 # Metrics-dict key that carries the raw (pre-norm) token embeddings from the forward to the MTP loss.
 _MTP_EMBED = "mtp_embed"
 # Folded into the per-step route key for the MTP position subsample (``mtp_position_frac``).
@@ -162,6 +163,7 @@ ROUTING_SELECTED_KEY = "routing_selected_per_layer"
 _ROUTED_INPUT = "routed_input"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
+_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
 _COMPRESS_PREFIX = "compress/"
 # Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
@@ -944,6 +946,13 @@ class GrugModelConfig:
     step; the launcher passes it the pattern)."""
     tail_expert_write_blocks: int = 0
     """``expert_write_blocks`` for the ``latent_out_full_layers`` tail layers only (same ``expert_write_keep``)."""
+    lm_head_extra_dim: int = 0
+    """W > 0: the lm_head reads a ``hidden_dim + W`` space. The final layer's routed experts (it must be the only
+    layer of the softmax tail stack, ``latent_out_full_layers``) write ``hidden_dim + W``: the first ``hidden_dim``
+    go to the residual stream as usual, the last W skip it and, RMS-normed (``lm_head_extra_norm``), are
+    concatenated to the final-normed stream before the lm_head (``output_proj`` is ``[hidden_dim + W, V]``)."""
+    final_write_extra: int = 0
+    """Internal: set on the final layer's config by ``lm_head_extra_dim``."""
     expert_private_dim: int = 0
     """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
     input, ``g = expert mod expert_private_groups`` (one ``[D, r]`` projection per group), appended to the expert's
@@ -1844,6 +1853,18 @@ class GrugModelConfig:
             self.latent_dim is None or self.latent_dim % self.latent_matryoshka_blocks or self.latent_mix_sites
         ):
             raise ValueError("latent_matryoshka_blocks must divide latent_dim, without latent_mix_sites")
+        if self.lm_head_extra_dim and (
+            not self.attn_res
+            or self.num_layers - 1 not in self.latent_out_full_layers
+            or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
+            or self.mtp_mode != MtpMode.OFF
+            or self.aux_lm_layer is not None
+            or self.loop_passes != 1
+        ):
+            raise ValueError(
+                "lm_head_extra_dim needs attn_res, the final layer alone in the softmax tail stack "
+                "(latent_out_full_layers), and no MTP, aux LM layer or loop passes"
+            )
         if self.expert_write_masked and not (self.expert_write_blocks or self.tail_expert_write_blocks):
             raise ValueError("expert_write_masked needs expert_write_blocks or tail_expert_write_blocks")
         if self.expert_write_blocks and (
@@ -2010,7 +2031,7 @@ class GrugModelConfig:
     def has_latent_up(self) -> bool:
         """The MoE maps the experts' output to ``hidden_dim`` with ``w_latent_up``."""
         if self.latent_out_dim is not None:
-            return self.latent_out_dim != self.hidden_dim
+            return self.latent_out_dim != self.hidden_dim + self.final_write_extra
         return self.latent_dim is not None and not self.latent_write_select
 
     @property
@@ -4656,6 +4677,11 @@ class MoEMLP(eqx.Module):
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
+        if self.cfg.final_write_extra:
+            # The lm_head-only slice: it never enters the residual stream.
+            hidden_dim = self.cfg.hidden_dim
+            router_stats[_LM_HEAD_EXTRA] = rearrange(routed_flat[:, hidden_dim:], "(b s) d -> b s d", b=b, s=s)
+            routed_flat = routed_flat[:, :hidden_dim]
         if self.latent_mix_out_gate is not None:
             assert self.latent_out_norm is not None
             routed_flat = self._mix_latent(routed_flat, x_flat, self.latent_out_norm, self.latent_mix_out_gate)
@@ -6801,9 +6827,10 @@ def _attn_res_layer_remat_bwd(
     residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps, noise_key
 ):
     del residuals, perturbed
-    # Router stats are logging-only and carry no cotangent, except the moe_compress / shadow loss.
+    # Router stats are logging-only and carry no cotangent, except the moe_compress / shadow loss and the
+    # lm_head-only slice (lm_head_extra_dim).
     d_partial, d_blocks, d_block_logits, d_stats = grad_out
-    d_compress = d_stats.get(_COMPRESS_LOSS) if isinstance(d_stats, dict) else None
+    diff_keys = [k for k in _DIFFERENTIABLE_STATS if isinstance(d_stats, dict) and d_stats.get(k) is not None]
     _, blocks, block_logits, _, _, _ = diff_args
     d_blocks = jax.tree.map(lambda d, x: jnp.zeros_like(x) if d is None else d, d_blocks, blocks, is_leaf=_is_none)
     d_block_logits = jax.tree.map(
@@ -6813,19 +6840,19 @@ def _attn_res_layer_remat_bwd(
         diff_args, d_partial, d_blocks, d_block_logits = jax.lax.optimization_barrier(
             (diff_args, d_partial, d_blocks, d_block_logits)
         )
-        if d_compress is None:
+        if not diff_keys:
             _, vjp_fn = jax.vjp(
                 lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps, noise_key)[0], diff_args
             )
             cotangent = d_partial
         else:
 
-            def with_compress(args):
+            def with_stats(args):
                 partial, stats = _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps, noise_key)
-                return partial, stats[_COMPRESS_LOSS]
+                return partial, tuple(stats[k] for k in diff_keys)
 
-            _, vjp_fn = jax.vjp(with_compress, diff_args)
-            cotangent = (d_partial, d_compress)
+            _, vjp_fn = jax.vjp(with_stats, diff_args)
+            cotangent = (d_partial, tuple(d_stats[k] for k in diff_keys))
         ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias),) = vjp_fn(cotangent)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
         d_block_logits = jax.tree.map(jnp.add, d_block_logits, d_block_logits_own)
@@ -6987,6 +7014,7 @@ class Transformer(eqx.Module):
     kda_blocks_tail: ArrayStacked[Block] | None
     """KDA layers of ``latent_out_full_layers``."""
     final_norm: LearnedRMSNorm
+    lm_head_extra_norm: LearnedRMSNorm | None
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
@@ -7106,7 +7134,8 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
         )
         output_proj = reshard(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
+            _init_weight(out_key, (cfg.hidden_dim + cfg.lm_head_extra_dim, cfg.vocab_size), cfg.initializer_std),
+            _LM_HEAD_PARTITION_SPEC,
         )
 
         def stack(layers: tuple[int, ...], use_kda: bool, layer_cfg: GrugModelConfig = cfg) -> ArrayStacked[Block]:
@@ -7128,9 +7157,20 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             stacked_blocks=stack(softmax_layers, False),
             kda_blocks=stack(kda_layers, True) if kda_layers else None,
-            stacked_blocks_tail=stack(softmax_tail, False, tail_cfg) if softmax_tail else None,
+            stacked_blocks_tail=(
+                stack(
+                    softmax_tail,
+                    False,
+                    _final_extra_config(tail_cfg, cfg.lm_head_extra_dim) if cfg.lm_head_extra_dim else tail_cfg,
+                )
+                if softmax_tail
+                else None
+            ),
             kda_blocks_tail=stack(kda_tail, True, tail_cfg) if kda_tail else None,
             final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="final"),
+            lm_head_extra_norm=(
+                _learned_rms_norm(cfg, cfg.lm_head_extra_dim, cfg.layer_norm_eps) if cfg.lm_head_extra_dim else None
+            ),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
             ),
@@ -7804,9 +7844,14 @@ class Transformer(eqx.Module):
                 router_metrics[NEWTON_GRAM_KEY] = reshard(gram_sum / (batch_size * seq_len), P(None, None, None))
         router_metrics.update(final_gate_stats)
         router_metrics.update(bigram_gate_stats)
+        lm_head_extra = router_metrics.pop(_LM_HEAD_EXTRA, None)
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
+        if self.lm_head_extra_norm is not None:
+            assert lm_head_extra is not None
+            extra = reshard(self.lm_head_extra_norm(lm_head_extra).astype(hidden.dtype), _batch_spec())
+            hidden = jnp.concatenate([hidden, extra], axis=-1)
         if self.mtp is not None:
             router_metrics[_MTP_EMBED] = raw_embed
         return hidden, router_metrics
@@ -8010,6 +8055,8 @@ class Transformer(eqx.Module):
                 if cfg.nitp_weight > 0 and pass_index == 0 and i == cfg.nitp_layer:
                     # The plain residual stream after this layer: embedding plus every sublayer output so far.
                     nitp_logs[_NITP_TARGET] = _stream_sum((*blocks[len(extra_sources) :], partial))
+                if _LM_HEAD_EXTRA in stats:
+                    nitp_logs[_LM_HEAD_EXTRA] = stats.pop(_LM_HEAD_EXTRA)
                 for name in [k for k in stats if k.startswith(_LAYER_KNOB_PREFIX)]:
                     layer_logs[f"{name}_L{eff}"] = stats.pop(name)
                 has_partial_attn = partial_before is not None
@@ -8768,6 +8815,11 @@ def _tail_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
     return cfg.latent_out_full_layers or cfg.latent_free_layers or cfg.wide_expert_layers or cfg.topk_layers
 
 
+def _final_extra_config(tail_cfg: GrugModelConfig, extra: int) -> GrugModelConfig:
+    """The final layer's config under ``lm_head_extra_dim``: its experts also write the lm_head-only slice."""
+    return dataclasses.replace(tail_cfg, latent_out_dim=tail_cfg.hidden_dim + extra, final_write_extra=extra)
+
+
 def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
     """The tail stacks' layer config: a full-width expert write, or no latent at half the expert width."""
     if cfg.topk_layers:
@@ -8789,6 +8841,7 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         cfg,
         latent_out_dim=cfg.hidden_dim,
         latent_out_full_layers=(),
+        lm_head_extra_dim=0,  # model-level: only the final layer's config writes the slice (final_write_extra)
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
