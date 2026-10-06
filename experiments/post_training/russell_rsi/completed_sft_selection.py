@@ -23,16 +23,11 @@ from experiments.evaluation.pipeline import EvalStepConfig
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
-    CODING_ANALYSIS_CONTEXT_PROTOCOL,
-    CODING_SUITES,
     CodingEvidenceConfig,
     CodingPanel,
     PanelItem,
-    coding_evaluation_context,
-    coding_evidence_rows,
-    coding_static_test_evidence,
+    coding_evidence_payload,
     collect_coding_eval_evidence,
-    load_coding_archives,
 )
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.interrupted_calibration import (
@@ -433,19 +428,7 @@ def completed_coding_evidence(config: dict, original: dict[str, ArtifactStep]) -
     )
     if "evidence" in coding.pins:
         evidence = pinned_json(coding.pins["evidence"])
-        records, archives = load_coding_archives(evidence_config)
-        rows = coding_evidence_rows(records, archives, artifact_identity(model), panel)
-        context = coding_evaluation_context(records, rows)
-        expected_evidence = {
-            "model_identity": artifact_identity(model),
-            "panel_sha256": baseline.record.panel_sha256,
-            "records_sha256": [compact_json_sha256(record) for record in records],
-            "context_protocol": CODING_ANALYSIS_CONTEXT_PROTOCOL,
-            "evaluation_context": context,
-            "static_test_evidence": coding_static_test_evidence(archives, rows),
-            "rows": [asdict(row) for row in rows],
-            "scores": {suite: context["suites"][suite]["row_score"] for suite in CODING_SUITES},
-        }
+        expected_evidence = coding_evidence_payload(evidence_config)
         if evidence != expected_evidence:
             raise ValueError("Completed coding evidence differs from its canonical archives")
         coding_evidence = ArtifactStep.adopt(

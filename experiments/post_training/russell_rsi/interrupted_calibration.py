@@ -215,7 +215,10 @@ class BoundedIrisClient:
             max_retries_preemption=0,
             max_task_failures=0,
             priority_band=job_pb2.PRIORITY_BAND_BATCH,
-            timeout=Duration.from_hours(WORKER_TIMEOUT_HOURS),
+            timeout=min(
+                kwargs.get("timeout") or Duration.from_hours(WORKER_TIMEOUT_HOURS),
+                Duration.from_hours(WORKER_TIMEOUT_HOURS),
+            ),
         )
         return self.client.submit(**kwargs)
 

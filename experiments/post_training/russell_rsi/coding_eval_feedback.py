@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
@@ -162,13 +163,13 @@ def load_coding_archives(config: CodingEvidenceConfig) -> tuple[tuple[dict, ...]
     return records, archives
 
 
-def collect_coding_eval_evidence(config: CodingEvidenceConfig) -> None:
-    """Read the actual EvalStep result archives and write validated private evidence."""
+def coding_evidence_payload(config: CodingEvidenceConfig) -> dict:
+    """Validate the saved archives and return their canonical private evidence."""
     records, archives = load_coding_archives(config)
     rows = coding_evidence_rows(records, archives, config.model_identity, config.panel)
     evaluation_context = coding_evaluation_context(records, rows)
     static_test_evidence = coding_static_test_evidence(archives, rows)
-    payload = {
+    return {
         "model_identity": config.model_identity,
         "panel_sha256": compact_json_sha256(asdict(config.panel)),
         "records_sha256": [compact_json_sha256(record) for record in records],
@@ -178,6 +179,11 @@ def collect_coding_eval_evidence(config: CodingEvidenceConfig) -> None:
         "rows": [asdict(row) for row in rows],
         "scores": {suite: evaluation_context["suites"][suite]["row_score"] for suite in CODING_SUITES},
     }
+
+
+def collect_coding_eval_evidence(config: CodingEvidenceConfig) -> None:
+    """Read the actual EvalStep result archives and write validated private evidence."""
+    payload = coding_evidence_payload(config)
     StoragePath(prefix_join(config.output_path, "coding-evidence.json")).write_text(json.dumps(payload) + "\n")
 
 
@@ -363,7 +369,9 @@ def coding_analysis_request(
     }
 
 
-async def analyze_coding_failures(config: CodingAnalysisConfig) -> None:
+async def analyze_coding_failures(
+    config: CodingAnalysisConfig, *, before_issue: Callable[[str, dict], Awaitable[None]] | None = None
+) -> None:
     evidence = json.loads(StoragePath(prefix_join(config.evidence_path, "coding-evidence.json")).read_text())
     request = coding_analysis_request(evidence, config.maximum_failed_rows, config.maximum_evidence_bytes)
     directory = StoragePath(config.output_path)
@@ -385,6 +393,8 @@ async def analyze_coding_failures(config: CodingAnalysisConfig) -> None:
         response = None
         if failures:
             base_url = resolve_glm_base_url(config.relay_job)
+            if before_issue is not None:
+                await before_issue(base_url, request)
             async with AsyncOpenAI(base_url=base_url, api_key=os.environ[GLM_TOKEN_ENV], max_retries=0) as client:
                 issued_path.write_text(
                     json.dumps({"request_sha256": request_hash, "evidence_identity": config.evidence_identity}) + "\n"
