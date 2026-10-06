@@ -45,23 +45,29 @@ other, with one exception: `proposal.model` defines the seam type `TaskProposal`
 - `build.run.run_build(program, proposal, ...)`: runs a builder program of memoized async steps.
   A step's memo key covers its code, arguments, the data globals it reads, `SDK_VERSION`, the
   proposal and the model policy. The verifier must come from a GRADER step and the controls from
-  a CONTROLS step, and the controls must pass `spec.controls.validate_controls`.
-- `validate.trials.run_trials(task, plan, settings, model)`: runs k trials through
+  a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The draft holds
+  the task, its `TaskExecution` and its controls.
+- `validate.trials.run_trials(task, execution, plan, settings, model)`: runs k trials through
   `ShellboxRolloutEngine`. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
   `validate.classify.classify` is the only failure classifier.
 
 ## Decisions
 
-Task specs are upstream's. A built task is a TaskCompendium `TaskSpec`. Task-specific grading is
-the task's own scripts, run as a `ShellVerifierSpec` (private files; reward on stdout, by exit
-code, or in reward files; optionally in a separate grading environment). Generic verifier types
+Task specs are upstream's. A built task is a TaskCompendium `TaskSpec` plus the `TaskExecution` it
+runs with. TaskCompendium keeps execution settings out of the spec: deadlines, the agent user, and
+each stage's working files, setup and healthcheck are a `TaskExecution`. `spec.draft.assemble`
+checks the two together, a builder returns both, and validation passes both to RolloutEngine.
+Task-specific grading is the task's own scripts, run as a `ShellVerifierSpec` (private files on its
+`VerifierSpec`; reward on stdout, by exit code, or in reward files; optionally in a separate
+grading environment). Generic verifier types
 (math, mcq, judge, pytest, aggregation) belong to `lib/verifyit`, which `TaskSpec` reaches
 through its verifier registry. A gap in either is fixed upstream. Interim code for one gap goes
 in `taskforge/spec/extensions/<issue>.py`.
 
 Execution is RolloutEngine's. `ShellboxRolloutEngine` creates one shellbox `Machine` per attempt
 from the caller's `MachineFactory` for the task's `EnvironmentKind`, installs files, runs setup
-and healthchecks, drives the shell tool, grades and closes. Taskforge supplies the model callable
+and healthchecks, drives the shell tool, grades and closes. It grades the state an agent left when
+the agent deadline expires, and bounds every cleanup action by its `cleanup_timeout`. Taskforge supplies the model callable
 (`llm.rollout_model.GlmRolloutModel`) and the factories (`sandbox.factories.machine_factories`).
 Taskforge reaches a sandbox only through a `Machine` that the engine or a builder step created.
 
