@@ -154,6 +154,13 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
+When Iris restarts an orchestrator, the runner reads its existing records before serving. It skips
+evaluations with a `succeeded` record and returns immediately when the whole batch has succeeded.
+Record publication uses a conditional object write: a later attempt can replace a failed record, but
+cannot replace a successful one. This also protects a success that appears after the restarted
+orchestrator begins serving. An evaluator already launched before the first success may still share
+the same results directory, so inspect active child jobs before treating its archive as settled.
+
 For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
 on the shared server. It includes prompt tokens, generation tokens, elapsed time, and generation
 tokens per second. A speculative run also includes draft count, proposed and accepted token counts,

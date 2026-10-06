@@ -366,6 +366,66 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge.hardware.accelerator == "H100x1"
 
 
+def test_run_evaluation_batch_restart_keeps_completed_record_without_serving(tmp_path, monkeypatch):
+    evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
+    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
+    original = Path(path).read_bytes()
+
+    _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("completed eval started serving again"))
+
+    assert run_evaluation_batch(batch) == [path]
+    assert Path(path).read_bytes() == original
+
+
+def test_run_evaluation_batch_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
+    executed: list[str] = []
+
+    def executor(_session, output_dir, _env_vars, *, judge=None):
+        executed.append(output_dir)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
+
+    finished = _evaluation(tmp_path, "finished", executor)
+    pending = _evaluation(tmp_path, "pending", executor)
+    batch = replace(_hosted_judge_batch(tmp_path, (finished, pending)), judge=None)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    evaluate_batch(replace(batch, evaluations=(finished,)), _remote_session(), orchestrator_job_id="/first", env_vars={})
+    executed.clear()
+    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+
+    paths = run_evaluation_batch(batch)
+
+    assert executed == [pending.identity.output_dir]
+    assert paths == [
+        str(tmp_path / "records" / "run-finished" / "record.json"),
+        str(tmp_path / "records" / "run-pending" / "record.json"),
+    ]
+    assert read_record(paths[0]).jobs["orchestrator"] == "/first"
+    assert read_record(paths[1]).jobs["orchestrator"] == "/orchestrator"
+
+
+def test_run_evaluation_batch_startup_failure_preserves_success_from_other_attempt(tmp_path, monkeypatch):
+    evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
+    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+
+    def remote(_config):
+        path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
+        original.append(Path(path).read_bytes())
+        raise RemoteInferenceStartupError("duplicate inference did not become ready", jobs=())
+
+    original: list[bytes] = []
+    _patch_inference_runtime(monkeypatch, remote)
+
+    with pytest.raises(RuntimeError, match="inference failed"):
+        run_evaluation_batch(batch)
+
+    path = tmp_path / "records" / "run-finished" / "record.json"
+    assert path.read_bytes() == original[0]
+    assert read_record(str(path)).status is RunStatus.SUCCEEDED
+
+
 def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_path, monkeypatch):
     observed_urls: list[str] = []
     addresses = iter(("http://10.0.0.1:8000", "http://10.0.0.2:8000"))
