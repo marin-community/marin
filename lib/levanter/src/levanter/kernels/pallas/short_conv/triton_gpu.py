@@ -16,10 +16,9 @@ backward reads ``x`` and ``dy`` and writes ``dx`` and one fp32 ``dw`` partial pe
 loads ``rows_per_step`` rows of every input before it stores any, so those loads are in flight
 together.
 
-With every tap masked, the backward ran close to the instruction-issue limit. A step whose rows,
-halo included, all lie in one document now skips the segment masks: every mask is true there, so
-the result is the same, and the step issues about 40% fewer instructions. ``dw`` accumulates with
-explicit fused multiply-adds.
+The backward runs close to the instruction-issue limit, so a step whose rows, halo included, all lie
+in one document skips the segment masks: every mask is true there, so the result is the same, and
+the step issues about 40% fewer instructions. ``dw`` accumulates with explicit fused multiply-adds.
 
 Numerics match the Pallas kernels. With ``exact`` set (bfloat16 only), every multiply and add
 rounds to bfloat16 in the reference's order: ascending lags forward, descending lags then tap 0
