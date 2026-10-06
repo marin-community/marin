@@ -147,11 +147,10 @@ selector for the others.
 
 ## Records and the dashboard index
 
-Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
-records the evaluator's result: normalized model configuration, hardware, status (`succeeded` / `failed` /
+Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). It contains
+the evaluator's result: normalized model configuration, hardware, status (`succeeded` / `failed` /
 `artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
-the `group_id`
-shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
+the `group_id` shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
 orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
 and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
