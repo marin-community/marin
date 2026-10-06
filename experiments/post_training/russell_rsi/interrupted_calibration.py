@@ -122,7 +122,9 @@ def require_interruption(config: dict) -> dict:
     return {"amendment": amendment, "source_config": original}
 
 
-def retention_journal(config: DevelopmentEvaluationConfig) -> EvaluationJournal:
+def retention_journal(
+    config: DevelopmentEvaluationConfig, *, continuation_binding: dict | None = None
+) -> EvaluationJournal:
     """Reserve the same three retention tasks before any model startup."""
     tasks = list(read_tasks(config.tasks_path))
     if (
@@ -140,21 +142,21 @@ def retention_journal(config: DevelopmentEvaluationConfig) -> EvaluationJournal:
         preflight_task(index, instruction, value) for index, (instruction, value) in enumerate(PREFLIGHT_PROBES, 1)
     ]
     provenance = development_worker_provenance()
-    journal = EvaluationJournal(
-        StoragePath(config.output_path) / "journal",
-        {
-            "protocol": OUTPUT_PROTOCOL,
-            "config": json.loads(json.dumps(asdict(config))),
-            "parquet_sha256": hashlib.sha256(StoragePath(config.tasks_path).read_bytes()).hexdigest(),
-            "worker_provenance": provenance,
-            "worker_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            "job_policy": {"failure_retries": 0, "preemption_retries": 0, "timeout_hours": WORKER_TIMEOUT_HOURS},
-            "attempts": {
-                "task": {f"{task.id}/0": digest(task.model_dump(mode="json")) for task in tasks},
-                "preflight": {str(index): digest(task.model_dump(mode="json")) for index, task in enumerate(probes, 1)},
-            },
+    binding = {
+        "protocol": OUTPUT_PROTOCOL,
+        "config": json.loads(json.dumps(asdict(config))),
+        "parquet_sha256": hashlib.sha256(StoragePath(config.tasks_path).read_bytes()).hexdigest(),
+        "worker_provenance": provenance,
+        "worker_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "job_policy": {"failure_retries": 0, "preemption_retries": 0, "timeout_hours": WORKER_TIMEOUT_HOURS},
+        "attempts": {
+            "task": {f"{task.id}/0": digest(task.model_dump(mode="json")) for task in tasks},
+            "preflight": {str(index): digest(task.model_dump(mode="json")) for index, task in enumerate(probes, 1)},
         },
-    )
+    }
+    if continuation_binding is not None:
+        binding["continuation"] = continuation_binding
+    journal = EvaluationJournal(StoragePath(config.output_path) / "journal", binding)
     journal.seal()
     return journal
 

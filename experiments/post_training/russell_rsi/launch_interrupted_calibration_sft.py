@@ -22,6 +22,7 @@ from marin.experiment.cli import BuildResult, build_options_with_runner
 from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     BRANCH_PACKAGES,
     OUTPUT_PROTOCOL,
@@ -29,6 +30,14 @@ from experiments.post_training.russell_rsi.interrupted_calibration import (
 )
 from experiments.post_training.russell_rsi.launch import CLUSTER
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
+from experiments.post_training.russell_rsi.retention_continuation import (
+    PROTOCOL as RETENTION_CONTINUATION_PROTOCOL,
+)
+from experiments.post_training.russell_rsi.retention_continuation import (
+    prepare_retention_continuation,
+    retention_continuation_stages,
+)
+from experiments.post_training.russell_rsi.settings import IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.teacher_chat_study import chat_study_post_workflow
 
 
@@ -53,7 +62,7 @@ def require_reviewed_source(uri: str, sha256: str) -> dict:
 
 
 def foreground_runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-    if os.environ.get("IRIS_TASK_ID"):
+    if os.environ.get(IRIS_TASK_ID_ENV):
         raise ValueError("Interrupted SFT evaluation requires a local foreground coordinator")
     root = Path(__file__).resolve().parents[3]
     with open_iris_client(cluster_name=CLUSTER, workspace=root) as raw_client:
@@ -72,7 +81,7 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
 @click.option("--config-sha256", required=True)
 @click.option("--source-review-uri", required=True)
 @click.option("--source-review-sha256", required=True)
-@click.option("--stage", type=click.Choice(["evaluate-interrupted"]), required=True)
+@click.option("--stage", type=click.Choice(["evaluate-interrupted", "retain", "select"]), required=True)
 @foreground_build_options
 def main(
     config_uri: str, config_sha256: str, source_review_uri: str, source_review_sha256: str, stage: str
@@ -80,6 +89,23 @@ def main(
     configure_coreweave_s3()
     require_reviewed_source(source_review_uri, source_review_sha256)
     config = json.loads(pinned_bytes(config_uri, config_sha256))
+    if stage in {"retain", "select"}:
+        if resolve_version(RETENTION_CONTINUATION_PROTOCOL, None) != config["version"]:
+            raise click.UsageError("Retention continuation version differs from its frozen amendment")
+        retention_pin = (
+            PinnedFile(config_uri, config_sha256)
+            if stage == "retain"
+            else PinnedFile(config["retention_config_uri"], config["retention_config_sha256"])
+        )
+        retention_config = retention_pin.read_json()
+        source = PinnedFile(retention_config["source_config_uri"], retention_config["source_config_sha256"]).read_json()
+        if source["runtime_commit"] != MARIN_SKYRL.commit:
+            raise click.UsageError("Retention continuation changed the original science runtime")
+        original = chat_study_post_workflow(source, "evaluate-interrupted")
+        prepared = prepare_retention_continuation(retention_config, source, original, retention_pin)
+        if stage == "retain":
+            return [prepared.step]
+        return [retention_continuation_stages(config, prepared)["terminal"]]
     if resolve_version(OUTPUT_PROTOCOL, None) != config["version"] or config["runtime_commit"] != MARIN_SKYRL.commit:
         raise click.UsageError("Interrupted evaluation version or runtime differs from the frozen study")
     return [chat_study_post_workflow(config, stage)["terminal"]]

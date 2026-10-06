@@ -18,7 +18,15 @@ The coordinator needs an approved source review with `status`, `source_path`, an
 python -m experiments.post_training.russell_rsi.launch_interrupted_calibration_sft \
   --config-uri PINNED_CONFIG_URI --config-sha256 CONFIG_SHA256 \
   --source-review-uri SOURCE_REVIEW_URI --source-review-sha256 SOURCE_REVIEW_SHA256 \
-  --stage evaluate-interrupted --version 2026.10.06.7 --max-concurrent 1
+  --stage evaluate-interrupted --version 2026.10.06.7 --max-concurrent 2
 ```
 
 This prints the plan. Add `--run` only to execute the reviewed request in the foreground. Do not detach the process. The coordinator uses Iris controller proxy routes for readiness, metrics, and evaluator endpoints; it needs no direct access to a private CW02 serving address.
+
+The direct CW02 client translates a matching CW02 federation pin to local placement. It preserves other scheduling constraints and rejects other cluster directives before RPC. Serving and Evalchemy requests without a cluster directive retain their existing route.
+
+Use `--stage retain --version 2026.10.06.8` after a reviewed launch-failure amendment proves that retention had no reservation, submission, or model request. Its separate configuration pins the unchanged v7 configuration and failure amendment. It runs only the three never-issued retention samples and the unchanged preflights. The retention journal binds both pins before model startup. Coding can continue independently.
+
+Use `--stage select --version 2026.10.06.8` after original coding and v8 retention complete. The selection configuration pins the frozen retention configuration, completed coding producer record, and coding journal result. It can also pin completed coding evidence. The validator checks the original producer identity, model, panel, and saved result before adoption. Both stages reconstruct the same retention artifact; coding pins cannot change its fingerprint.
+
+Selection uses the unchanged promotion rule and issues no coding requests. If coding evidence is absent, only the existing extractor reads the saved result archives. It does not restart v7 coding or change the calibration signal. Selection retains both amendment pins in its separate output directory.

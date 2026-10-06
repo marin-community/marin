@@ -546,6 +546,31 @@ def post_sft_evaluation_stages(
             retained = replace(retained, run=retention_runner)
         retained = replace(retained, deps=tuple(dict.fromkeys((*retained.deps, *barriers))))
         outputs.update({f"coding-{label}": evidence, f"retention-{label}": retained})
+    return post_sft_selection_stages(
+        version=version,
+        checkpoints=checkpoints,
+        outputs=outputs,
+        panel_sha256=panel_digest,
+        retention=retention,
+        retention_task_ids=retention_task_ids,
+        parent_score=parent_score,
+        study=study,
+    )
+
+
+def post_sft_selection_stages(
+    *,
+    version: str,
+    checkpoints: list[tuple[str, ArtifactStep]],
+    outputs: dict[str, ArtifactStep],
+    panel_sha256: str,
+    retention: ArtifactStep,
+    retention_task_ids: tuple[str, ...],
+    parent_score: CheckpointScore,
+    study: StudyBaseline | None,
+) -> dict[str, ArtifactStep]:
+    """Build the existing selection rule from coding and retention evidence."""
+    protocol = PROTOCOL if study is None else study.protocol
     labels = tuple(label for label, _ in checkpoints)
 
     def selection_config(ctx: StepContext):
@@ -553,7 +578,7 @@ def post_sft_evaluation_stages(
             tuple(ctx.artifact_path(outputs[f"coding-{label}"]) for label in labels),
             tuple(ctx.artifact_path(outputs[f"retention-{label}"]) for label in labels),
             tuple(artifact_identity(item) for _, item in checkpoints),
-            panel_digest,
+            panel_sha256,
             artifact_identity(retention),
             retention_task_ids,
             parent_score,
