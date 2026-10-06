@@ -12,7 +12,8 @@ from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
-from taskcompendium.pipeline.models import ImportRejection, RawRow
+from taskcompendium.pipeline.models import CheckStatus, ImportRejection, RawRow
+from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
@@ -87,6 +88,45 @@ def test_numeric_scope_and_tolerance_survive_delivery_normalization():
     assert "Find cos(8) and cos(1)." in task.context.events[0].content
     assert grade(task, "0.54035").reward == 1.0
     assert grade(task, "0.541").reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "expected,correct,wrong",
+    [
+        (0.1, "0.1", "0.10000000000000001"),
+        (9007199254740993, "9007199254740993", "9007199254740992"),
+        ("9007199254740993", "9007199254740993", "9007199254740992"),
+        ("1/3", "1/3", "0.3333333333333333"),
+    ],
+)
+def test_numeric_source_literals_preserve_scoring_precision(expected, correct, wrong):
+    task = atlas_math_qa.normalize(
+        row(
+            "advanced_calculations",
+            "Return the final numeric answer.",
+            {"expected_value": expected, "tolerance_abs": 0, "tolerance_rel": 0},
+        ),
+        "advanced_calculations",
+    )
+    assert isinstance(task, TaskSpec)
+    assert grade(task, correct).reward == 1.0
+    assert grade(task, wrong).reward == 0.0
+
+
+@pytest.mark.parametrize("expected,absolute", [("9" * 4096, 0.0), ("-" + "9" * 4096, 0.0), ("1/" + "9" * 4096, 1e308)])
+def test_numeric_boundary_references_complete_pipeline_grading_controls(expected, absolute):
+    task = atlas_math_qa.normalize(
+        row(
+            "advanced_calculations",
+            "Return the final numeric answer.",
+            {"expected_value": expected, "tolerance_abs": absolute, "tolerance_rel": 0.0},
+        ),
+        "advanced_calculations",
+    )
+    assert isinstance(task, TaskSpec)
+    controls = verify_task(task)
+    assert {control.check for control in controls} == {"empty", "reference", "perturbed"}
+    assert all(control.status is CheckStatus.PASS for control in controls)
 
 
 @pytest.mark.parametrize("name", ["knowledge_mcqa", "web_search_mcqa"])

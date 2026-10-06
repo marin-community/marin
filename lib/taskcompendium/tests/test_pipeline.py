@@ -17,10 +17,11 @@ from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import MathSpec
 
 from taskcompendium.grader import grader_config, grader_package
-from taskcompendium.grading import multiple_choice_answer
+from taskcompendium.grading import grade_answer, multiple_choice_answer
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     ResourceGroups,
     Source,
@@ -65,6 +66,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from .pipeline_stages import fixture_recipe, run_stages, stage_table
 
@@ -398,13 +400,24 @@ def test_review_faults_never_admit_tasks(apple_row, fault):
         (
             normalize_svamp,
             {"Body": "Aya has 2 apples.", "Question": "How many apples?", "Answer": "2", "Equation": "private"},
-            2.0,
+            "2",
+            "Equation",
+        ),
+        (
+            normalize_svamp,
+            {
+                "Body": "Aya has 9007199254740993 apples.",
+                "Question": "How many apples?",
+                "Answer": "9007199254740993",
+                "Equation": "private",
+            },
+            "9007199254740993",
             "Equation",
         ),
         (
             normalize_aime24,
             {"problem": "Find 7 + 5.", "answer": "012", "solution": "private"},
-            12.0,
+            "012",
             "solution",
         ),
         (
@@ -434,6 +447,12 @@ def test_recipes_normalize_source_contract_and_keep_supervision_private(normaliz
     parameters = json.loads(task.verifier.parameters_json)
     if expected is not None:
         assert parameters["expected"] == expected
+        convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+        for answer, reward in ((expected, 1.0), (str(int(expected) - 1), 0.0)):
+            conversation = ConversationTrace(
+                events=(*task.context.events, TextMessage(role="assistant", content=answer))
+            )
+            assert grade_answer(task, convention, conversation).reward == reward
     else:
         option = f"{parameters['expected']}. right"
         assert option in prompt

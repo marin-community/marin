@@ -54,7 +54,7 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
         perturbed = negative_candidate(verifier)
         assert perturbed is not None
         negative = extract_boxed(perturbed) or perturbed
-        positive = repr(verifier.expected)
+        positive = verifier.expected
     elif isinstance(verifier, McqSpec):
         positive = verifier.expected
         negative = "B" if positive != "B" else "A"

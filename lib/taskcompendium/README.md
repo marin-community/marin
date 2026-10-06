@@ -212,7 +212,7 @@ spec = TaskSpec(
     context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
     environment_requirements=EnvironmentRequirements(),
     answer_type=AnswerType.NUMBER,
-    verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
+    verifier=numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
 )
 conventions = (

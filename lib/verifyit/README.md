@@ -42,10 +42,23 @@ process exit after a verdict has been written.
 For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
 candidate when the output contains a box marker. Its braces must be balanced and its content must be
 nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
-expected answer. Without a box marker, `math` grades the last nonempty line and `numeric` grades the
-last number. Numeric expected values and absolute and relative tolerances must be finite. Tolerances
-must also be nonnegative. The effective tolerance,
-`max(tolerance_abs, tolerance_rel * abs(expected))`, must be finite.
+expected answer. Without a box marker, both modes read the last nonempty line. Numeric mode
+extracts exactly one integer, decimal, scientific-notation value or integer fraction from that line.
+Surrounding prose is ignored, including negation: `Definitely not 42` extracts `42`.
+When a box is present, its entire content must be a numeric literal, optionally wrapped in math delimiters.
+Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
+`2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
+
+Numeric private `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
+are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
+`tolerance_rel = 0.0` accepts both `1/2` and `0.5` without losing integer or decimal precision.
+The effective tolerance is `max(tolerance_abs, tolerance_rel * abs(expected))`. Float tolerances
+are converted to exact rational values through their decimal spelling before comparison;
+`0.01` permits an exact difference of `1/100`. Native float expected values are rejected
+because rounding may already have changed their meaning. `grade_numeric_candidate_float`
+compares already parsed floats directly with an explicit absolute tolerance; MMMU uses
+`0.0` and JEEBench uses `0.01` to retain their source scoring rules.
+Literal components and expanded decimal powers are limited to 4096 digits before parsing.
 
 [`spec.py`](src/verifyit/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`

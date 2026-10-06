@@ -19,6 +19,7 @@ from verifyit.candidate import (
 from verifyit.grade import InvalidTask, Reward, Status
 from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
+from verifyit.numeric import NumericCandidateError
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -132,7 +133,10 @@ def grade_task(
             letter = candidate.strip()
             if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
                 return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
-        return _grade_result(grade_text_candidate(verifier, candidate))
+        try:
+            return _grade_result(grade_text_candidate(verifier, candidate))
+        except NumericCandidateError:
+            return GradeResult(Outcome.GRADED, 0.0)
 
     if requirements.docker_image:
         if evidence is None:
@@ -273,7 +277,7 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
     )
 
 
-def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
+def numeric_answer(expected: str, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
 
 

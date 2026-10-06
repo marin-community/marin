@@ -3,8 +3,7 @@
 
 """Numeric-answer normalization and exact verifiers."""
 
-from math import isfinite
-
+from verifyit.numeric import numeric_literal
 from verifyit.spec import NumericSpec
 
 from taskcompendium.grader import grader_package
@@ -28,7 +27,7 @@ def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=problem.strip()),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=grader_package(NumericSpec(float(answer), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
+        verifier=grader_package(NumericSpec(answer.strip(), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
         source=row.source,
     )
 
@@ -40,17 +39,15 @@ def normalize_svamp(row: RawRow) -> TaskSpec | ImportRejection:
     if not isinstance(answer, str):
         return ImportRejection(reason="invalid_reference", detail="Answer must be a numeric string")
     try:
-        expected = float(answer.strip())
+        numeric_literal(answer)
     except ValueError:
         return ImportRejection(reason="invalid_reference", detail="Answer is not numeric")
-    if not isfinite(expected):
-        return ImportRejection(reason="invalid_reference", detail="Answer is not finite")
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=f"{body.strip()} {question.strip()}"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=grader_package(NumericSpec(expected, tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
+        verifier=grader_package(NumericSpec(answer.strip(), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
         source=row.source,
     )
 
