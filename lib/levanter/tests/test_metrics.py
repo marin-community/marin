@@ -16,6 +16,7 @@ import optax
 import pytest
 
 import levanter.tracker as tracker_mod
+import levanter.tracker.tracker_fns as tracker_fns
 from levanter.callbacks import eval_loss_loop
 from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
 from levanter.callbacks.watch import WatchConfig
@@ -34,6 +35,12 @@ from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
 
 # Use a batch size that remains divisible by the data-parallel axis on multi-device setups.
 Embed = hax.Axis("embed", size=8)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tracker(monkeypatch):
+    # Trainer uses the global tracker before it reads the test configuration.
+    monkeypatch.setattr(tracker_fns, "_global_tracker", None)
 
 
 @pytest.mark.parametrize(
@@ -493,15 +500,11 @@ def test_metrics_start_step_logs_real_updates(start_step, expected_steps, tmp_pa
     if start_step is not None:
         config = replace(config, metrics_start_step=start_step)
     optimizer = optax.inject_hyperparams(optax.sgd)(learning_rate=0.01)
+    trainer = Trainer(config, optimizer, simple_loss_fn)
     other_hook_steps = []
+    trainer.add_hook(lambda info: other_hook_steps.append(info.step))
     batch = hax.ones((Batch, Embed))
-    # Trainer uses the current tracker, which an earlier training test can leave set.
-    with (
-        tracker_mod.current_tracker(JsonLoggerConfig().init(None)),
-        caplog.at_level(logging.INFO, logger="levanter.json_logger"),
-        Trainer(config, optimizer, simple_loss_fn) as trainer,
-    ):
-        trainer.add_hook(lambda info: other_hook_steps.append(info.step))
+    with caplog.at_level(logging.INFO, logger="levanter.json_logger"), trainer:
         state = trainer.initial_state(jax.random.PRNGKey(0), model=SimpleModel.init(jax.random.PRNGKey(0)))
         for _ in range(4):
             info = trainer.train_step(state, batch)
@@ -521,10 +524,7 @@ def test_metrics_start_step_logs_real_updates(start_step, expected_steps, tmp_pa
 
     observed_weights = state.model.weight.array.tolist()
     unobserved_config = replace(config, tracker=NoopConfig(), watch=WatchConfig(watch_targets=[]), id="without-watch")
-    with (
-        tracker_mod.current_tracker(NoopConfig().init(None)),
-        Trainer(unobserved_config, optimizer, simple_loss_fn) as unobserved,
-    ):
+    with Trainer(unobserved_config, optimizer, simple_loss_fn) as unobserved:
         state = unobserved.initial_state(jax.random.PRNGKey(0), model=SimpleModel.init(jax.random.PRNGKey(0)))
         for _ in range(4):
             state = unobserved.train_step(state, batch).state
