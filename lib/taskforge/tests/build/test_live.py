@@ -15,7 +15,7 @@ import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from taskcompendium.grading_result import Outcome
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.build.author import author
 from taskforge.build.run import item_id_for, run_build
@@ -77,7 +77,7 @@ async def test_authored_program_builds_a_task_its_positive_control_passes(glm_se
         max_turns=len(turns),
         command_timeout=60,
         cleanup_timeout=60,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     rollout = await engine.run(draft.task, execution=draft.execution)
     assert rollout.grade.status == Outcome.GRADED

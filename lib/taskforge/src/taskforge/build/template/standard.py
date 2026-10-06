@@ -324,7 +324,7 @@ def grader_verifier(b: Build, draft: GraderDraft, made: Fixtures) -> VerifierSpe
         return b.spec.answer_verifier(ExactSpec(expected=(draft.expected,), ignore_case=True, ignore_whitespace=True))
     if draft.kind == "numeric":
         return b.spec.answer_verifier(
-            NumericSpec(expected=float(draft.expected), tolerance_abs=draft.tolerance, tolerance_rel=0.0)
+            NumericSpec(expected=draft.expected.strip(), tolerance_abs=draft.tolerance, tolerance_rel=0.0)
         )
     files = (
         EnvironmentFile(path=GRADER_SCRIPT, content=draft.script.encode(), mode=0o755),
