@@ -1462,6 +1462,9 @@ class GrugModelConfig:
     """MoE output projections: ``w_latent_up`` plus ``latent_up_count - 1`` more (``w_latent_up_extra``), each
     weighted per token by its own ``sigmoid(x W_g)`` (``x`` the router's input, ``W_g`` [D, count] zero-init so
     all start at 1/2) and summed. 1: the single ungated ``w_latent_up``."""
+    latent_up_gate_on_latent: bool = False
+    """With ``latent_up_count > 1``, the output-projection gate reads the combined expert output (the latent the
+    projections map, ``expert_out_dim`` wide) instead of the router's input."""
     latent_up_renorm: bool = False
     """With ``latent_up_count > 1``, divide each token's kept gate weights by their sum (they add to 1)."""
     latent_up_topk: int = 0
@@ -3867,6 +3870,7 @@ class MoEMLP(eqx.Module):
         expert_width, out_width = cfg.expert_in_dim, cfg.expert_out_dim
         latent = cfg.latent_dim
         mix_e = cfg.latent_mix_experts
+        gate_in = out_width if cfg.latent_up_gate_on_latent else d
         mix_in, mix_out = "moe_in" in cfg.latent_mix_sites, "moe_out" in cfg.latent_mix_sites
         selects = cfg.latent_select and (
             cfg.latent_select_layers == "all" or (cfg.latent_select_layers == "kda") == use_kda
@@ -3944,9 +3948,9 @@ class MoEMLP(eqx.Module):
             latent_up_gate=(
                 reshard(
                     (
-                        _init_weight(random.fold_in(k_up, 1), (d, cfg.latent_up_count), cfg.initializer_std)
+                        _init_weight(random.fold_in(k_up, 1), (gate_in, cfg.latent_up_count), cfg.initializer_std)
                         if cfg.latent_up_topk
-                        else jnp.zeros((d, cfg.latent_up_count))
+                        else jnp.zeros((gate_in, cfg.latent_up_count))
                     ),
                     P(None, None),
                 )
@@ -4506,8 +4510,13 @@ class MoEMLP(eqx.Module):
             routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up_extra is not None and self.w_latent_up is not None and self.latent_up_gate is not None:
             count = len(self.w_latent_up_extra) + 1
+            gate_input = routed_flat if self.cfg.latent_up_gate_on_latent else x_flat
             up_gate = mixture_weights(
-                x_flat, self.latent_up_gate, count, self.cfg.latent_up_topk or count, renorm=self.cfg.latent_up_renorm
+                gate_input,
+                self.latent_up_gate,
+                count,
+                self.cfg.latent_up_topk or count,
+                renorm=self.cfg.latent_up_renorm,
             )
             projections = [self.w_latent_up, *self.w_latent_up_extra]
             up_out = 0

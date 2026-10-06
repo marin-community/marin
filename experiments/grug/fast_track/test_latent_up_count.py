@@ -53,3 +53,16 @@ def test_renormed_top2_weights_sum_to_one():
     with jax.set_mesh(mesh):
         loss = eqx.filter_jit(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))(model)
     assert np.isfinite(float(loss))
+
+
+def test_gate_on_the_output_latent_reads_expert_out_dim():
+    mesh, model = t._model(ngram_stat_rows=0, latent_up_count=4, latent_up_topk=2, latent_up_gate_on_latent=True)
+    gate = model.stacked_blocks.stacked.mlp.latent_up_gate
+    assert gate.shape[-2:] == (model.config.expert_out_dim, 4)
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        loss, grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))
+        )(model)
+    assert np.isfinite(float(loss))
+    assert float(jnp.abs(grads.stacked_blocks.stacked.mlp.latent_up_gate).max()) > 0
