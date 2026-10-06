@@ -1487,6 +1487,9 @@ class GrugModelConfig:
     latent_mix_entropy_weight: float = 0.01
     latent_mix_renorm: bool = False
     latent_mix_kv_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
+    kv_shared_latent_dim: int = 0
+    """With the MLA KV-latent mixture: an always-on shared latent of this width (its own RMSNorm) is concatenated
+    in front of the mixture part, so ``w_uk`` / ``w_uv`` read ``kv_shared_latent_dim + mla_kv_latent_dim``."""
     latent_mix_moe_in_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
     """``moe_in`` mixture: ``concat`` gates blocks of the latent; ``sum`` makes ``W_down`` a token-conditioned mixture
     of ``latent_mix_experts`` full-width basis projections, ``latent = norm(sum_j a_j(x) x W_j)``."""
@@ -1667,6 +1670,8 @@ class GrugModelConfig:
             "kv",
         ):
             raise ValueError("latent_mix_balance / latent_mix_renorm are implemented for latent_mix_sites=('kv',) only")
+        if self.kv_shared_latent_dim and "kv" not in self.latent_mix_sites:
+            raise ValueError("kv_shared_latent_dim needs the MLA KV-latent mixture (kv in latent_mix_sites)")
         if "kv" in self.latent_mix_sites and (self.mla_share_kv_latent or self.attn_res_sum_inputs):
             raise ValueError(
                 "latent_mix site kv needs one KV latent per layer (no mla_share_kv_latent/attn_res_sum_inputs)"
@@ -2275,6 +2280,7 @@ class CausalSelfAttention(eqx.Module):
     switch_o_gate: Float[Array, "D NE"] | None  # SwitchHead output-expert gate, from the destination token
     kv_mix_gate: Float[Array, "W E"] | None  # mixture of latents on the MLA KV latent ("kv" in cfg.latent_mix_sites)
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
+    kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
     latent_k: LatentProj | None
     latent_v: LatentProj | None
@@ -2300,9 +2306,10 @@ class CausalSelfAttention(eqx.Module):
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
             k_q2, k_uk2, k_lam = random.split(random.fold_in(key, 1), 3)
-            kvl = cfg.mla_kv_latent_dim
             kv_mix = "kv" in cfg.latent_mix_sites
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
+            shared_kvl = cfg.kv_shared_latent_dim
+            kvl = cfg.mla_kv_latent_dim + shared_kvl  # what w_uk / w_uv read
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
             diff = cfg.mla_diff_attn
             group = cfg.mla_grouped_diff
@@ -2338,14 +2345,19 @@ class CausalSelfAttention(eqx.Module):
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(
-                    _init_weight(k_dkv, (cfg.kv_in_dim, kvl * (cfg.latent_mix_experts if kv_sum else 1)), std),
+                    _init_weight(
+                        k_dkv,
+                        (cfg.kv_in_dim, shared_kvl + cfg.mla_kv_latent_dim * (cfg.latent_mix_experts if kv_sum else 1)),
+                        std,
+                    ),
                     P(_FSDP_AXES, None),
                 ),
                 kv_latent_norm=(
-                    _grouped_rms_norm(cfg, cfg.latent_mix_experts, kvl // cfg.latent_mix_experts)
+                    _grouped_rms_norm(cfg, cfg.latent_mix_experts, cfg.mla_kv_latent_dim // cfg.latent_mix_experts)
                     if kv_mix and not kv_sum
-                    else _learned_rms_norm(cfg, kvl, cfg.layer_norm_eps, role="kv_latent")
+                    else _learned_rms_norm(cfg, cfg.mla_kv_latent_dim, cfg.layer_norm_eps, role="kv_latent")
                 ),
+                kv_shared_norm=_learned_rms_norm(cfg, shared_kvl, cfg.layer_norm_eps) if shared_kvl else None,
                 kv_mix_bias=(
                     jnp.zeros((cfg.latent_mix_experts,), jnp.float32)
                     if kv_mix and cfg.latent_mix_balance == LatentMixBalance.BIAS
@@ -2487,6 +2499,7 @@ class CausalSelfAttention(eqx.Module):
             switch_o_gate=reshard(_init_weight(k_so, (d, n * switch_o), std), P(None, None)) if switch_o else None,
             kv_mix_gate=None,
             kv_mix_bias=None,
+            kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
             latent_k=_latent("k", cfg.attn_latent_k, cfg.kv_in_dim, m * h, std),
             latent_v=_latent("v", cfg.attn_latent_v, cfg.kv_in_dim, m * h, std),
@@ -2547,6 +2560,8 @@ class CausalSelfAttention(eqx.Module):
             else:
                 blocks = self.cfg.latent_mix_experts
                 weights = self._kv_mix_weights(x if kv_input is None else kv_input)
+                shared_kvl = self.cfg.kv_shared_latent_dim
+                shared, latent = latent[..., :shared_kvl], latent[..., shared_kvl:]
                 experts = rearrange(latent, "... (e r) -> ... e r", e=blocks)
                 if self.cfg.latent_mix_kv_mode == KvMixMode.SUM:
                     mixed = jnp.einsum("...er,...e->...r", experts, weights.astype(experts.dtype))
@@ -2554,6 +2569,8 @@ class CausalSelfAttention(eqx.Module):
                 else:
                     normed = self.kv_latent_norm(experts)
                     kv_latent = rearrange(normed * weights[..., None].astype(normed.dtype), "... e r -> ... (e r)")
+                if self.kv_shared_norm is not None:
+                    kv_latent = jnp.concatenate([self.kv_shared_norm(shared), kv_latent], axis=-1)
             if share_latent:
                 kv_share["latent"] = kv_latent
         # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its

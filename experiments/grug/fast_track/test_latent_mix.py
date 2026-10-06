@@ -135,3 +135,24 @@ def test_sum_mode_mla_mixture_keeps_a_shared_latent_and_up_projection():
     loss, grads = _loss_and_grads(model, mesh)
     assert np.isfinite(float(loss))
     assert float(jnp.abs(grads.stacked_blocks.stacked.attn.kv_mix_gate).max()) > 0
+
+
+@pytest.mark.parametrize("mode", ["sum", "concat"])
+def test_shared_kv_latent_is_concatenated_before_the_top1_mixture(mode):
+    mesh, model = t._model(
+        ngram_stat_rows=0,
+        mla=True,
+        mla_kv_latent_dim=8,
+        kv_shared_latent_dim=8,
+        latent_mix_sites=("kv",),
+        latent_mix_experts=4 if mode == "sum" else 2,
+        latent_mix_topk=1,
+        latent_mix_kv_mode=mode,
+    )
+    attn = model.stacked_blocks.stacked.attn
+    assert attn.w_uk.shape[-2] == 16 and attn.kv_shared_norm.weight.shape[-1] == 8
+    assert attn.w_dkv.shape[-1] == 8 + (4 * 8 if mode == "sum" else 8)
+    loss, grads = _loss_and_grads(model, mesh)
+    assert np.isfinite(float(loss))
+    g = grads.stacked_blocks.stacked.attn
+    assert float(jnp.abs(g.kv_mix_gate).max()) > 0 and float(jnp.abs(g.kv_shared_norm.weight).max()) > 0
