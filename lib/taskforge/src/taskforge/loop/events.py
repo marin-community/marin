@@ -65,8 +65,9 @@ class EventKind(StrEnum):
     ADVERSARIES_RUN = "adversaries_run"
     """attrs: ``<role>_graded``, ``<role>_passes``, ``<role>_sentinel`` per role."""
     DECIDED = "decided"
-    """input_hash: the task digest. attrs: decision (a ``DecisionKind``), kind (reject), cause (retry),
-    findings, invalidate, not_before, repairs_used, retries_used, abandon."""
+    """input_hash: the task digest. attrs: decision (a ``DecisionKind``), repairs_used, retries_used;
+    kind (a ``RejectKind``) and reasons for reject; findings and invalidate for repair; cause, count,
+    abandon and not_before for retry."""
     TERMINAL = "terminal"
     """attrs: terminal (a ``Terminal``), reason, and kind (a ``RejectKind``) when rejected."""
 
