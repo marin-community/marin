@@ -54,7 +54,12 @@ class DockerMachine:
             raise RuntimeError("Machine is closed")
         if not command.argv:
             raise ValueError("Command argv is empty")
-        args = ["exec", "-i", "-w", command.cwd or self.spec.workdir]
+        args = ["exec", "-i"]
+        workdir = command.cwd or self.spec.workdir
+        if workdir:
+            args.extend(("-w", workdir))
+        if command.user is not None:
+            args.extend(("--user", command.user))
         for key, value in command.env.items():
             args.extend(("-e", f"{key}={value}"))
         args.extend((self.name, *command.argv))
@@ -79,16 +84,22 @@ class DockerMachine:
 
     async def upload(self, source: Path, target: str) -> None:
         parent = str(PurePosixPath(target).parent)
-        result = await docker("exec", self.name, "mkdir", "-p", parent)
+        result = await docker("exec", "--user", "0", self.name, "mkdir", "-p", parent)
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
-        result = await docker("cp", str(source), f"{self.name}:{target}")
+        copy_source = f"{source}/." if source.is_dir() else str(source)
+        if source.is_dir():
+            result = await docker("exec", "--user", "0", self.name, "mkdir", "-p", target)
+            if result.exit_code:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
+        result = await docker("cp", copy_source, f"{self.name}:{target}")
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        result = await docker("cp", f"{self.name}:{source}", str(target))
+        copy_source = f"{source}/." if target.is_dir() else source
+        result = await docker("cp", f"{self.name}:{copy_source}", str(target))
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
@@ -146,12 +157,22 @@ class DockerMachineFactory:
         ]
         if spec.memory_mb is not None:
             args.extend(("--memory", f"{spec.memory_mb}m"))
+        if spec.cpus is not None:
+            args.extend(("--cpus", str(spec.cpus)))
+        if spec.storage_mb is not None:
+            args.extend(("--storage-opt", f"size={spec.storage_mb}M"))
+        if spec.gpus:
+            args.extend(("--gpus", str(spec.gpus)))
         if self.runtime is not None:
             args.extend(("--runtime", self.runtime))
         for key, value in spec.env.items():
             args.extend(("-e", f"{key}={value}"))
         args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
-        result = await docker(*args)
+        try:
+            result = await docker(*args)
+        except BaseException:
+            await docker("rm", "-f", name)
+            raise
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
         return DockerMachine(name, spec)

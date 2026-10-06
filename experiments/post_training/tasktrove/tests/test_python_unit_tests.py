@@ -3,8 +3,8 @@
 
 import sys
 
-from tasktrove_verify.modes import grade_pytest
-from tasktrove_verify.spec import PytestSpec, parse_spec
+from verifyit.grade import Status, run
+from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
@@ -91,7 +91,7 @@ def test_file_without_local_test_function_is_rejected_as_null_grader():
     assert "defines no local test function" in record.error
 
 
-def test_pytest_mode_rejects_empty_implementation_and_accepts_oracle(tmp_path):
+def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tmp_path):
     tests = tmp_path / "tests"
     tests.mkdir()
     test_file = tests / "test_solution.py"
@@ -101,8 +101,17 @@ def test_pytest_mode_rejects_empty_implementation_and_accepts_oracle(tmp_path):
     solution = workspace / "solution.py"
     spec = PytestSpec(paths=(str(test_file),), python=sys.executable)
 
+    spec_path = tests / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+
     solution.write_text("")
-    assert grade_pytest.grade(spec, tests, workspace).reward == 0.0
+    missing_implementation = run(spec_path, workspace)
+    assert (missing_implementation.status, missing_implementation.reward) == (Status.INFRA_ERROR, 0.0)
+
+    solution.write_text("def add(left, right):\n    return left - right - 1\n")
+    wrong_answer = run(spec_path, workspace)
+    assert (wrong_answer.status, wrong_answer.reward) == (Status.SCORED, 0.0)
 
     solution.write_text("def add(left, right):\n    return left + right\n")
-    assert grade_pytest.grade(spec, tests, workspace).reward == 1.0
+    oracle = run(spec_path, workspace)
+    assert (oracle.status, oracle.reward) == (Status.SCORED, 1.0)

@@ -268,8 +268,6 @@ def store(telemetry_table):
         ("consumed/stop_reason_coverage", 1),
         ("policy/mismatch/pooled/log_ratio_mean", -0.1),
         ("policy/mismatch/pooled/log_ratio_mean_squared", 0.04),
-        ("tis/batch_skipped_no_logprobs", 0),
-        ("tis/skipped_fraction", 0),
         ("policy/mismatch/pooled/log_ratio_abs_p99", 0.7),
         ("policy/mismatch/pooled/lower_clip_pressure", 0.2),
         ("policy/mismatch/pooled/upper_clip_pressure", 0.1),
@@ -367,11 +365,9 @@ def store(telemetry_table):
             ("policy/mismatch/pooled/pos_last256/log_ratio_abs_mean", 0.23),
             ("policy/log_ratio_pos_first256/log_ratio_abs_mean", 0.01),
             ("policy/log_ratio_pos_last256/log_ratio_abs_mean", 0.04),
-            ("policy/offpolicy_mask/masked_fraction", 0.05),
-            ("policy/offpolicy_mask/vetoed_sequence_fraction", 0.02),
-            ("policy/m2_mask/m2_before", 0.03),
-            ("policy/m2_mask/masked_fraction", 0.07),
-            ("policy/tis/imp_ratio_capped_fraction", 0.12),
+            ("policy/correction/weight_mean", 0.75),
+            ("policy/correction/masked_fraction", 0.05),
+            ("policy/correction/truncated_fraction", 0.12),
             ("policy/ppo_clip_ratio", 0.08),
         ]:
             add(
@@ -433,7 +429,7 @@ PANEL_ROWS = {
     "Pre-update PPO-window pressure": 2,
     "Drift coverage and token-weight concentration": 2,
     "Mean squared model log-ratio": 1,
-    "TIS correction skips": 2,
+    "Mean correction weight": 2,
     "Core and cycle duration": 2,
     "Loss tokens trained per second": 2,
     "Core wall fractions": 1,
@@ -453,7 +449,7 @@ PANEL_ROWS = {
     "Trainer/vLLM logprob mismatch by staleness bucket": 4,
     "Trainer logprob drift within the update": 4,
     "Position dependence of |log \u03c1|": 8,
-    "Correction activity": 14,
+    "Correction activity": 6,
 }
 
 
@@ -943,11 +939,15 @@ def test_position_panel_keeps_ratio_families_and_positions_separate(store):
     assert not any("pos_middle" in row["series"] for row in rows)
 
 
-def test_correction_panel_distinguishes_populations_and_bounds_reference_coverage(store):
+def test_correction_panels_read_weights_and_distinct_fractions(store):
+    weights = query(store, "Mean correction weight")
+    assert [row["value"] for row in weights] == [0.75, 1.5]
+    axis = PANELS["Mean correction weight"]["fieldConfig"]["defaults"]
+    assert all(axis.get("min", float("-inf")) <= row["value"] <= axis.get("max", float("inf")) for row in weights)
     rows = query(store, "Correction activity")
-    assert [row["value"] for row in rows if "vetoed_sequence_fraction" in row["series"]] == [0.02, 0.04]
-    assert [row["value"] for row in rows if "policy/tis/imp_ratio_capped_fraction" in row["series"]] == [0.12, 0.24]
-    assert [row["value"] for row in rows if "offpolicy_mask/masked_fraction" in row["series"]] == [0.05, 0.1]
-    assert [row["value"] for row in rows if row["series"].startswith("M2 reference")] == [0.04, 0.04]
-    store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric')='policy/m2_mask/m2_before'")
-    assert not any(row["series"].startswith("M2 reference") for row in query(store, "Correction activity"))
+    assert [row["value"] for row in rows if "correction/truncated_fraction" in row["series"]] == [0.12, 0.24]
+    assert [row["value"] for row in rows if "correction/masked_fraction" in row["series"]] == [0.05, 0.1]
+    assert [row["value"] for row in rows if "policy/ppo_clip_ratio" in row["series"]] == [0.08, 0.16]
+    store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric') LIKE 'policy/correction/%'")
+    assert query(store, "Mean correction weight") == []
+    assert [row["value"] for row in query(store, "Correction activity")] == [0.08, 0.16]

@@ -39,7 +39,15 @@ const route = useRoute()
 const showArchived = ref(false)
 const showFlagged = ref(false)
 const completeOnly = ref(false)
-const cohort = ref('')
+const cohort = computed({
+  get: () => {
+    const raw = route.query.cohort
+    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || ''
+  },
+  set: (value: string) => {
+    void router.replace({ query: { ...route.query, cohort: value || meta.value?.default_cohort } })
+  },
+})
 const modelQuery = ref('')
 const facetValues = reactive<Record<string, string>>({})
 const aggregatePolicy = ref('')
@@ -75,6 +83,13 @@ const query = computed(() => {
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+// Pin the resolved default so shared URLs retain their cohort after the default changes.
+watch(
+  () => meta.value?.default_cohort,
+  (value) => {
+    if (value && !route.query.cohort) cohort.value = value
+  },
+)
 const comparabilityWarning = computed(() =>
   meta.value ? cohortWarning(cohort.value || meta.value.default_cohort, meta.value) : null,
 )
@@ -125,14 +140,18 @@ function clearFilters() {
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
+  if (cohort.value === 'all') return
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
   else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
 }
 function canSelect(model: string): boolean {
-  return selected.value.includes(model) || selected.value.length < MAX_COMPARE
+  return cohort.value !== 'all' && (selected.value.includes(model) || selected.value.length < MAX_COMPARE)
 }
-const comparing = computed(() => selected.value.length >= 2)
+const comparing = computed(() => cohort.value !== 'all' && selected.value.length >= 2)
+watch(selection, () => {
+  selected.value = []
+})
 
 // Benchmarks every selected model has a cell on — what Compare will actually score.
 const sharedTasks = computed<string[]>(() => {
@@ -179,7 +198,7 @@ function persistSelection(present: string[], updateRoute = true) {
   if (!updateRoute) return
   const selected = [...selectedEvals]
   const benchmarks = selected.length > 0 && selected.length !== present.length ? selected.join(',') : undefined
-  void router.replace({ query: { ...route.query, benchmarks } })
+  void router.replace({ query: { ...route.query, cohort: cohort.value, benchmarks } })
 }
 function syncSelection(present: string[]) {
   const fromRoute = routeBenchmarks()
@@ -442,10 +461,11 @@ function goToModel(model: string) {
         the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
       <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
+      <p v-if="cohort === 'all'" class="text-xs text-status-warning mt-2">Choose one cohort to compare models.</p>
     </div>
 
     <!-- Fleet readout -->
-    <div v-if="data" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
+    <div v-if="data && !loading && !error" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
       <div class="px-5 py-3 border-r border-surface-border-subtle">
         <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted">Models</div>
         <div class="font-mono text-2xl font-semibold tabular-nums">{{ readout.models }}</div>
@@ -580,13 +600,13 @@ function goToModel(model: string) {
       {{ error }}
     </div>
 
-    <PolicyRejections v-if="data" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
+    <PolicyRejections v-if="data && !loading && !error" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
 
-    <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
+    <div v-if="loading" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 
     <EmptyState v-else-if="data && data.rows.length === 0" icon="🏁" message="No models match these filters." />
 
-    <div v-else-if="data" class="space-y-6">
+    <div v-else-if="data && !error" class="space-y-6">
       <!-- Models: the eval rail as each row's measurement profile, plus the opt-in aggregate -->
       <div>
         <div class="flex items-baseline justify-between mb-2">

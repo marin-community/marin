@@ -32,6 +32,7 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
@@ -289,8 +290,8 @@ def _read_proc_cpu_millicores(
         return (0, prev_total, prev_utime)
     try:
         with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().split()
-        utime = int(fields[13]) + int(fields[14])
+            fields = stat_fields_after_comm(f.read())
+        utime = int(fields[11]) + int(fields[12])
 
         with open("/proc/stat") as f:
             cpu_line = f.readline()

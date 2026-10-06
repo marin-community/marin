@@ -37,12 +37,14 @@ The bloom can also be built once and shared across many corpus marks via
 :func:`decon_to_parquet` as ``prebuilt_bloom_dir`` to skip the inline build.
 """
 
+import functools
 import hashlib
 import json
 import logging
 import os
 import random
 import re
+import tempfile
 from collections import Counter, deque
 from collections.abc import Callable, Container, Iterator, Mapping
 from dataclasses import dataclass
@@ -206,8 +208,35 @@ class EvalBloom(BaseModel):
     n_eval_records: int = 0
 
 
+# Bound once: _bloom_hash runs for every 13-gram of every document, and the module
+# attribute lookup on hashlib is a measurable share of that call.
+_blake2b = hashlib.blake2b
+
+
 def _bloom_hash(x: str) -> int:
-    return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
+    return int.from_bytes(_blake2b(x.encode(), digest_size=8).digest(), "big")
+
+
+_BLOOM_CACHE_DIR = os.path.join(tempfile.gettempdir(), "marin-decon-bloom")
+
+
+@functools.lru_cache(maxsize=2)
+def _load_bloom(bloom_path: str) -> dupekit.Bloom:
+    """Load a bloom filter once per process through a node-local copy.
+
+    The subprocess-per-shard runner starts a fresh interpreter for every shard,
+    so the process cache alone would re-read the filter from object storage per
+    shard; the node-local copy is shared by every process on the worker. Bloom
+    dirs are content-addressed step outputs, so a path identifies its contents.
+    """
+    local_path = os.path.join(_BLOOM_CACHE_DIR, hashlib.sha256(bloom_path.encode()).hexdigest())
+    if not os.path.exists(local_path):
+        os.makedirs(_BLOOM_CACHE_DIR, exist_ok=True)
+        partial_path = f"{local_path}.{os.getpid()}.partial"
+        with open(partial_path, "wb") as fh:
+            fh.write(StoragePath(bloom_path).read_bytes())
+        os.replace(partial_path, local_path)
+    return dupekit.Bloom.load(local_path)
 
 
 def _has_alpha(ngram: str) -> bool:
@@ -222,7 +251,7 @@ def _has_alpha(ngram: str) -> bool:
     contamination, which is acceptable — a bare number run is never a leak we can
     attribute anyway.
     """
-    return any(c.isalpha() for c in ngram)
+    return any(map(str.isalpha, ngram))
 
 
 def _extract_token_ngrams(tokens: list[str], n: int, stride: int) -> Iterator[str]:
@@ -243,7 +272,9 @@ def _extract_streaming_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
             alpha_tokens -= had_alpha
 
         start, end = match.span()
-        has_alpha = any(text[index].isalpha() for index in range(start, end))
+        # map over the token slice runs in C; a generator with a text[index] lookup per
+        # character costs ~3x more, and this runs for every token of every document.
+        has_alpha = any(map(str.isalpha, text[start:end]))
         window.append((start, end, has_alpha))
         alpha_tokens += has_alpha
 
@@ -274,7 +305,7 @@ def _short_exact_feature(text: str, n: int) -> str | None:
     if not MIN_SHORT_EXACT_TOKENS <= len(matches) < n:
         return None
     spans = [match.span() for match in matches]
-    if not any(text[index].isalpha() for start, end in spans for index in range(start, end)):
+    if not any(any(map(str.isalpha, text[start:end])) for start, end in spans):
         return None
     return " ".join(text[start:end] for start, end in spans)
 
@@ -354,12 +385,16 @@ def _paragraph_overlap_matches_and_presence(
     has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
-    short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
     features: Iterator[str]
+    if len(paragraph) < LARGE_TEXT_STREAMING_THRESHOLD:
+        tokens = paragraph.split()
+        short_exact = _short_exact_feature_from_tokens(tokens, ngram.ngram_length)
+        features = _extract_token_ngrams(tokens, ngram.ngram_length, ngram.stride)
+    else:
+        short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
+        features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     if short_exact is not None:
         features = iter((short_exact,))
-    else:
-        features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     for feature in features:
         has_ngram_features = short_exact is None
         hash_value = _bloom_hash(feature)
@@ -713,8 +748,7 @@ def _make_marker(
     """
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
-        # Load bloom once per shard.
-        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+        bf = _load_bloom(bloom_path)
         reservoir: list[dict[str, Any]] = []
         n_flagged = 0
         rng = random.Random(shard.shard_idx)
@@ -723,7 +757,7 @@ def _make_marker(
 
             def rows_for(p: str) -> Iterator[dict[str, Any]]:
                 nonlocal n_flagged
-                for record in load_file(p):
+                for record in load_file(InputFileSpec(path=p, columns=["id", text_field])):
                     text = str(record.get(text_field, "") or "")
                     max_score, matched = _document_overlap_and_matches(text, bf, ngram, drop_hashes)
                     contaminated = bool(matched)
@@ -1547,7 +1581,7 @@ def _sample_drop_set_shard(
     first_sample_shard = next(sample_shards, None)
     if first_sample_shard is None:
         return
-    bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    bf = _load_bloom(bloom_path)
     for sample_shard in chain((first_sample_shard,), sample_shards):
         local_counts: Counter[int] = Counter()
         global_counts: Counter[int] = Counter()

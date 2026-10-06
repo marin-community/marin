@@ -125,7 +125,7 @@ def _strip_injected_file_path_column(spec: InputFileSpec, file_path_column: str)
     if file_path_column not in spec.columns:
         raise RuntimeError(f"Column filter must include file path column '{file_path_column}'.")
     reader_columns = [c for c in spec.columns if c != file_path_column]
-    return replace(spec, columns=reader_columns or None)
+    return replace(spec, columns=reader_columns)
 
 
 # Register HuggingFace filesystem with authentication if HF_TOKEN is available
@@ -381,12 +381,18 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
 
-    # Empty vortex files have no schema, so column projection would fail
-    num_rows = dataset.count_rows()
-    if num_rows == 0:
+    # Schema-less empty files cannot be projected by Vortex.
+    if not dataset.schema.names and dataset.count_rows() == 0:
         return
 
+    # Vortex rejects empty projections. Read one column to retain row counts,
+    # then drop it after applying the row range and filter.
+    empty_projection = columns == []
+    if empty_projection:
+        columns = [dataset.schema.names[0]]
+
     if spec.row_start is not None or spec.row_end is not None:
+        num_rows = dataset.count_rows()
         start = 0 if spec.row_start is None else spec.row_start
         end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
         indices = pa.array(np.arange(start, end, dtype=np.uint64))
@@ -394,6 +400,8 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
 
+    if empty_projection:
+        table = table.select([])
     counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
     yield from table.to_pylist()
 

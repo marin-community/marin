@@ -27,7 +27,8 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 from upath import UPath
 
-from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.grading import grade_task
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.harbor.protocol import chat_conversation
 from taskcompendium.lowering import (
     SPECIFICATION_FILE,
@@ -36,7 +37,6 @@ from taskcompendium.lowering import (
     read_submission_convention,
 )
 from taskcompendium.models import ConversationTrace
-from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
 CHAT_RESPONSE_FILE = "chat-response.json"
@@ -185,7 +185,7 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
             conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
-            result = grade_answer(specification, convention, conversation, self.environment)
+            result = grade_task(specification, convention, conversation)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
@@ -198,5 +198,8 @@ class SemanticVerifier(BaseVerifier):
     def _write_result(self, result: GradeResult) -> None:
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
         (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_text(
-            json.dumps({"status": result.status.value, "reward": result.reward, "error": result.error}) + "\n"
+            json.dumps(
+                {"status": result.status.value, "reward": result.reward, "error": result.error, "detail": result.detail}
+            )
+            + "\n"
         )

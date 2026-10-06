@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
@@ -36,6 +37,12 @@ class LocalClient:
 class LocalEndpoint:
     def close(self):
         pass
+
+
+@pytest.mark.parametrize("resource", ["cpus", "storage_mb"])
+def test_zero_resource_requests_cannot_silently_select_iris_defaults(resource):
+    with pytest.raises(ValueError, match=resource):
+        MachineSpec(source=RegistryImage("ubuntu:24.04"), **{resource: 0})
 
 
 def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:

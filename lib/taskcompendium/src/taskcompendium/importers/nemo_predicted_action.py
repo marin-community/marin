@@ -9,13 +9,13 @@ from typing import Any
 
 from pydantic import Json, JsonValue, TypeAdapter
 
+from taskcompendium.grading import predicted_action_verifier
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
-    FinalTools,
     FunctionCall,
     FunctionDefinition,
     Source,
@@ -23,12 +23,11 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
-from taskcompendium.verifiers.predicted_action import predicted_action_verifier
+from taskcompendium.submission import FinalAction, Submission
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
-IMPORTER_REVISION = "taskcompendium-nemo-predicted-action-v2"
+IMPORTER_REVISION = "taskcompendium-nemo-predicted-action-v3"
 FUNCTION_CALL_TYPE = "function_call"
 ARGUMENTS = TypeAdapter(Json[dict[str, JsonValue]])
 
@@ -111,7 +110,9 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
             )
             reasoning_without_visible_result = False
             continue
-        if reasoning_without_visible_result and (item.get("type") != "message" or item.get("role") != "assistant"):
+        if reasoning_without_visible_result and (
+            item.get("type") not in {None, "message"} or item.get("role") != "assistant"
+        ):
             raise ValueError("source reasoning has no visible assistant result")
         if pending_calls:
             events.append(AssistantToolCalls(calls=tuple(pending_calls)))
@@ -121,12 +122,14 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
                 raise ValueError("source function results require call_id and string output")
             events.append(ToolResult(call_id=item["call_id"], content=item["output"]))
             continue
-        if item.get("type") != "message":
+        if item.get("type") not in {None, "message"} or "role" not in item:
             raise ValueError("unsupported source input item")
         content = item.get("content")
         if isinstance(content, list):
             if not all(
-                isinstance(item, dict) and item.get("type") == "output_text" and isinstance(item.get("text"), str)
+                isinstance(item, dict)
+                and item.get("type") in {"input_text", "output_text"}
+                and isinstance(item.get("text"), str)
                 for item in content
             ):
                 raise ValueError("unsupported message content")
@@ -144,7 +147,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
     return tuple(events)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, SubmissionConvention]:
+def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Submission]:
     """Verify row identity and retain the expected action only in private TaskSpec data."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")
@@ -179,17 +182,14 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
         id=f"nemo-predicted-action-{expected_sha256}",
         context=ConversationInput(events=events),
         environment_requirements=EnvironmentRequirements(),
-        final_tools=FinalTools(
-            functions=functions,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-        ),
+        final_tools=functions,
         answer_type=AnswerType.NATIVE_ACTION,
         verifier=predicted_action_verifier(expected_calls),
         source=source,
     )
-    convention = SubmissionConvention(
+    convention = FinalAction(
         id="native-final-action",
-        answer_format=AnswerFormat.FINAL_ACTION,
+        require_call=tool_choice == "required",
+        max_calls=1 if parallel_tool_calls is False else None,
     )
     return specification, convention
