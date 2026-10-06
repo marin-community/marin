@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.spec import ScriptSpec, parse_spec
+from verifyit.spec import ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
@@ -52,9 +52,9 @@ def _run_checker(task, answer: str | None) -> float:
         if answer is not None:
             (root / "app" / "answer.txt").write_text(answer)
         env = {
-            "TASKTROVE_TESTS_DIR": str(root / "tests"),
-            "TASKTROVE_WORKSPACE": str(root / "app"),
-            "TASKTROVE_LOGS_DIR": str(root / "logs"),
+            "VERIFYIT_TESTS_DIR": str(root / "tests"),
+            "VERIFYIT_WORKSPACE": str(root / "app"),
+            "VERIFYIT_LOGS_DIR": str(root / "logs"),
             "PATH": "/usr/bin:/bin",
         }
         subprocess.run(["python3", str(root / "tests" / CHECKER_NAME)], env=env, check=True, capture_output=True)

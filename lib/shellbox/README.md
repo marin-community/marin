@@ -1,8 +1,9 @@
 # Marin Shellbox (0.1)
 
-`marin-shellbox` provides three Harbor import paths:
+`marin-shellbox` provides four Harbor import paths:
 
 - `shellbox.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
+- `shellbox.backends.docker.environment:DockerEnvironment`: one local Docker machine per trial, using a preloaded image and an explicit local Engine endpoint for bounded terminal reads.
 - `shellbox.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
 - `shellbox.backends.shellsim.environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
 
@@ -22,7 +23,7 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. QEMU and ShellSim have Harbor environment adapters. The three new backends expose the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. Docker, QEMU and ShellSim have Harbor environment adapters. gVisor, Daytona and Iris expose the machine contract; Harbor environment adapters and persistent Bash support remain separate work.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
@@ -301,10 +302,12 @@ The guest is isolated by QEMU's emulated machine boundary, but this prototype ha
 
 `shellbox.backends.docker.environment:DockerEnvironment` adapts a local Docker
 machine to Harbor commands and diagnostic transfer. It accepts a local image
-and explicit workdir, disables internet, and rejects compose and caller host
-mounts. Harbor uses best-effort directory downloads for agent and artifact logs on the
-host; the machine receives no verifier host directory. An explicit `MachineFactory` can supply the machine without Docker control-plane
-inputs; the Docker factory remains the production adapter’s default. Per-command
+and a workdir directly under `/`, such as `/workspace`. The workdir cannot be
+`/logs` or `/tests`. It disables internet and rejects compose, symlinked public
+inputs and caller host mounts. Harbor uses best-effort directory downloads for
+agent and artifact logs on the host; the machine receives no verifier host
+directory. An explicit `MachineFactory` can supply the machine without Docker
+control-plane inputs; the Docker factory remains the production adapter’s default. Per-command
 users retain Harbor default-user resolution. Public files are owned by the image UID/GID and
 retain their uploaded modes.
 
@@ -315,7 +318,8 @@ close remain available. Creation failures remove the container immediately.
 
 `TerminalFileReader` is an optional machine capability. Docker implements it with
 an explicit local Unix-socket Engine endpoint: it pauses a running machine or
-verifies a stopped machine, then reads one bounded regular-file tar without
-extracting it. Candidate shape failures raise `InvalidWorkspaceFile`; transport,
+verifies a stopped machine, then reads a tar containing one bounded regular file without
+extracting it. The filename is relative to the workdir and cannot contain a path
+separator. Candidate shape failures raise `InvalidWorkspaceFile`; transport,
 state, and cleanup failures propagate separately. This does not bound generic
 diagnostic directory transfer or provide a whole-workspace snapshot.

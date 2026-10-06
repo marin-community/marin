@@ -20,7 +20,7 @@ from pathlib import Path
 
 def _signal_ready() -> None:
     with socket.socket(socket.AF_UNIX) as ready:
-        ready.connect(os.environ["TASKCOMPENDIUM_FAKE_DOCKER_SOCKET"])
+        ready.connect(os.environ["SHELLBOX_FAKE_DOCKER_SOCKET"])
         ready.sendall(b"POST /fixture-ready HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
         ready.recv(1024)
 
@@ -31,8 +31,8 @@ def _run_exec(command: list[str], container: Path, workspace: Path, mapped: Call
     shell = command[marker + 1 :]
     user = command[command.index("--user") + 1] if "--user" in command else None
     if user is None:
-        uid = int(os.environ.get("TASKCOMPENDIUM_FAKE_IMAGE_UID", "0"))
-        gid = int(os.environ.get("TASKCOMPENDIUM_FAKE_IMAGE_GID", "0"))
+        uid = int(os.environ.get("SHELLBOX_FAKE_IMAGE_UID", "0"))
+        gid = int(os.environ.get("SHELLBOX_FAKE_IMAGE_GID", "0"))
     elif user == "root":
         uid = gid = 0
     else:
@@ -62,9 +62,9 @@ def _run_exec(command: list[str], container: Path, workspace: Path, mapped: Call
                 owners[str(target)] = owner
         owners_path.write_text(json.dumps(owners))
         return
-    if os.environ.get("TASKCOMPENDIUM_FAKE_NO_WORKER_PYTHON") and "python3" in shell[-1]:
+    if os.environ.get("SHELLBOX_FAKE_NO_WORKER_PYTHON") and "python3" in shell[-1]:
         sys.exit(127)
-    if os.environ.get("TASKCOMPENDIUM_FAKE_LOG_FAILURE") and "mkdir" in shell[-1] and "/logs/agent" in shell[-1]:
+    if os.environ.get("SHELLBOX_FAKE_LOG_FAILURE") and "mkdir" in shell[-1] and "/logs/agent" in shell[-1]:
         sys.stderr.write("fixture diagnostic directory unavailable")
         sys.exit(1)
     permissions = {}
@@ -92,10 +92,10 @@ def _run_exec(command: list[str], container: Path, workspace: Path, mapped: Call
 
 def main() -> None:
     args = sys.argv[1:]
-    root = Path(os.environ["TASKCOMPENDIUM_FAKE_DOCKER_ROOT"])
+    root = Path(os.environ["SHELLBOX_FAKE_DOCKER_ROOT"])
     root.mkdir(parents=True, exist_ok=True)
     if args[:2] == ["context", "inspect"]:
-        print(json.dumps({"Host": "unix://" + os.environ["TASKCOMPENDIUM_FAKE_DOCKER_SOCKET"]}))
+        print(json.dumps({"Host": "unix://" + os.environ["SHELLBOX_FAKE_DOCKER_SOCKET"]}))
         return
     if args[0] == "version":
         print("1.51")
@@ -121,7 +121,7 @@ def main() -> None:
         if "--pull=never" not in args:
             raise ValueError("CPU fixture must never pull an image")
         container.mkdir()
-        if os.environ.get("TASKCOMPENDIUM_FAKE_IMAGE_WORKSPACE_SYMLINK"):
+        if os.environ.get("SHELLBOX_FAKE_IMAGE_WORKSPACE_SYMLINK"):
             target = container / "image-target"
             target.mkdir()
             (target / "sentinel").write_text("image-original")
@@ -130,16 +130,16 @@ def main() -> None:
             (container / "workspace").mkdir()
         (container / "running").touch()
         (root / f"{name}.json").write_text(json.dumps({"project": name, "auto_remove": "--rm" in args}))
-        if os.environ.get("TASKCOMPENDIUM_FAKE_START_FAILURE"):
+        if os.environ.get("SHELLBOX_FAKE_START_FAILURE"):
             sys.stderr.write("fixture startup unavailable")
             sys.exit(1)
-        if os.environ.get("TASKCOMPENDIUM_FAKE_START_BLOCK"):
+        if os.environ.get("SHELLBOX_FAKE_START_BLOCK"):
             _signal_ready()
             signal.pause()
         print(hashlib.sha256(name.encode()).hexdigest())
         return
     if args[0] == "stop":
-        if os.environ.get("TASKCOMPENDIUM_FAKE_STOP_FAILURE"):
+        if os.environ.get("SHELLBOX_FAKE_STOP_FAILURE"):
             sys.stderr.write("fixture stop unavailable")
             sys.exit(1)
         (container / "running").unlink()

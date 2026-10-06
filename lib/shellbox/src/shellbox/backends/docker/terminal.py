@@ -141,7 +141,7 @@ class DockerTerminalReader:
 
     def __init__(self, container: str, workdir: str, control: DockerControlPlane, state: DockerMachineState):
         workspace = PurePosixPath(workdir)
-        if workspace == PurePosixPath("/") or workspace.parent != PurePosixPath("/") or str(workspace) != workdir:
+        if workspace.name in {"", ".", ".."} or workspace.parent != PurePosixPath("/") or str(workspace) != workdir:
             raise ValueError("Terminal file collection requires one normalized root-child workdir")
         self.container = container
         self.workdir = workdir

@@ -8,9 +8,10 @@ from typing import Literal
 
 import pytest
 from pydantic import JsonValue, PrivateAttr, TypeAdapter
-from tasktrove_verify.spec import Mode
+from verifyit.spec import Mode
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
+from taskcompendium.grading_contract import GradingAttempt, StateSubmission, TextSubmission
 from taskcompendium.models import (
     SCHEMA_VERSION,
     AnswerType,
@@ -25,12 +26,10 @@ from taskcompendium.models import (
 from taskcompendium.submission import (
     AnswerFormat,
     Convention,
-    GradingAttempt,
     JsonAnswer,
+    JsonValueAnswer,
     PlainText,
-    StateSubmission,
     SubmissionConvention,
-    TextSubmission,
 )
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
@@ -49,11 +48,16 @@ def _task(verifier, answer_type=AnswerType.TEXT):
 def _attempt(task, content):
     return GradingAttempt(
         conversation=ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content))),
-        workspace=None,
+        workspace=object(),
     )
 
 
 class StateAnswer(Convention):
+    submission_types = (StateSubmission,)
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.STATE
+
     answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
     value: JsonValue
 
@@ -74,6 +78,35 @@ async def test_structured_exact_compares_json_types_and_order(actual, reward):
     task = _task(structured_exact({"nested": {"left": None, "right": [1, True, "x"]}}), AnswerType.STATE)
     result = await grade_answer(task, StateAnswer(id="state", value=actual), _attempt(task, "Done."))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize("actual,reward", [({"value": 16.0}, 1.0), ({"value": 17}, 0.0)])
+async def test_json_answer_and_acquired_state_share_structured_grading(actual, reward):
+    verifier = structured_exact({"value": 16})
+    chat_task = _task(verifier, AnswerType.JSON)
+    state_task = _task(verifier, AnswerType.STATE)
+    chat_result = await grade_answer(
+        chat_task, JsonValueAnswer(id="json-value"), _attempt(chat_task, json.dumps(actual))
+    )
+    state_result = await grade_answer(state_task, StateAnswer(id="state", value=actual), _attempt(state_task, "Done."))
+    assert (chat_result.status, chat_result.reward) == (Outcome.GRADED, reward)
+    assert state_result == chat_result
+
+
+@pytest.mark.parametrize(
+    "actual,status,reward",
+    [("yes", Outcome.GRADED, 1.0), ("no", Outcome.GRADED, 0.0), (12, Outcome.SUBMISSION_FAILURE, 0.0)],
+)
+async def test_exact_verifier_accepts_string_json_and_acquired_state(actual, status, reward):
+    verifier = exact_answer("yes")
+    chat_task = _task(verifier, AnswerType.JSON)
+    state_task = _task(verifier, AnswerType.STATE)
+    chat_result = await grade_answer(
+        chat_task, JsonValueAnswer(id="json-value"), _attempt(chat_task, json.dumps(actual))
+    )
+    state_result = await grade_answer(state_task, StateAnswer(id="state", value=actual), _attempt(state_task, "Done."))
+    assert (chat_result.status, chat_result.reward) == (status, reward)
+    assert state_result == chat_result
 
 
 class ChangingText(PlainText):
@@ -111,7 +144,7 @@ async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
     "wire_kind,verifier,answer_type,correct,wrong",
     [
         ("exact", exact_answer("yes"), AnswerType.TEXT, "yes", "no"),
-        ("numeric", numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
+        ("numeric", numeric_answer("12.0", tolerance_abs="0.0", tolerance_rel="0.0"), AnswerType.NUMBER, "12", "13"),
         ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
     ],
 )
@@ -134,3 +167,28 @@ async def test_structured_exact_rejects_nonfinite_gold_before_serialization_but_
     task = _task(structured_exact(None), AnswerType.STATE)
     result = await grade_answer(task, StateAnswer(id="state", value=None), _attempt(task, "Done."))
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
+@pytest.mark.parametrize("content", ['{"answer":"yes","answer":"no"}', '{"answer":"yes","meta":{"x":1,"x":2}}'])
+async def test_duplicate_json_answer_is_submission_failure(content):
+    task = _task(exact_answer("yes"))
+    result = await grade_answer(task, JsonAnswer(id="json"), _attempt(task, content))
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+async def test_invalid_private_reference_precedes_one_time_submission_acquisition():
+    task = _task(
+        VerifierSpec(kind="numeric", parameters_json='{"expected":"bad","tolerance_abs":"0","tolerance_rel":"0"}')
+    )
+    convention = ChangingText(id="changing")
+    with pytest.raises(ValueError):
+        await grade_answer(task, convention, _attempt(task, "first"))
+    valid_task = _task(exact_answer("first"))
+    result = await grade_answer(valid_task, convention, _attempt(valid_task, "unused"))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
+@pytest.mark.parametrize("parameters", ['{"expected":"yes","expected":"no"}', '{"expected":{"key":1,"\\u006bey":2}}'])
+def test_ambiguous_private_verifier_json_rejects_duplicate_keys(parameters):
+    with pytest.raises(ValueError):
+        VerifierSpec(kind="exact", parameters_json=parameters)

@@ -103,9 +103,7 @@ baseline is the resumed evaluation, rather than the original step-0 policy.
 | Preset | Async cap | Sync cap | Behavior |
 | --- | ---: | ---: | --- |
 | `dry` | 1 | 1 | Initial evaluation and one training step. |
-| `calibrate` | 30 | 30 | Exploratory training without a default early stop. |
 | `gate` | 30 | 30 | Stops at sampled training evaluation reward ≥0.65. |
-| `on-policy` | 30 | 30 | Sets async staleness to zero and uses one update epoch. |
 
 Evaluation runs at step 0 and every five completed steps; `dry` evaluates
 every step. It records greedy responses and eight sampled responses per
@@ -136,7 +134,7 @@ launcher. Print an exploratory plan before using the submission function:
 
 ```bash
 uv run python -m experiments.post_training.cat_count_canary \
-  --version 2026.09.30.5 --preset calibrate \
+  --version 2026.09.30.5 --preset dry \
   --set trainer.policy.optimizer_config.lr=1e-6
 ```
 

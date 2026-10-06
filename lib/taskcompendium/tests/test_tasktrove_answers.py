@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove Clean MCQA import and direct-chat Harbor coverage."""
+"""TaskTrove Clean MCQA import and pure grading coverage."""
 
 import io
 import json
@@ -11,17 +11,15 @@ import tarfile
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.grade import grade as source_grade
-from tasktrove_verify.spec import McqSpec, Mode
+from verifyit.grade import grade as source_grade
+from verifyit.spec import McqSpec, Mode
 
 from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
-from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import AnswerType, ConversationTrace, TextMessage
-from taskcompendium.submission import GradingAttempt, JsonAnswer, PlainText, render_instruction
-
-from .harbor_replay import run_replay_trial
+from taskcompendium.submission import JsonAnswer, PlainText, render_instruction
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
@@ -158,45 +156,20 @@ def test_archive_rejects_excessive_empty_members():
         read_archive(data.getvalue(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
-async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
-    specification = import_task(_archive())
-    environment_config = HarborEnvironmentConfig()
-    task = lower_to_harbor(
-        specification,
-        PlainText(id="plain"),
-        environment_config,
-        tmp_path / "task",
-    )
-
-    result = await run_replay_trial(task, {"role": "assistant", "content": "C"}, tmp_path / "trials", "mcqa")
-
-    outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
-    assert result.exception_info is None, result.exception_info
-    assert outcome == {"status": "graded", "reward": 1.0, "error": None}
-
-
 def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
-    task = lower_to_harbor(
-        import_task(_archive()),
-        PlainText(id="plain"),
-        HarborEnvironmentConfig(),
-        tmp_path / "task",
-    )
+    path = tmp_path / "specification.json"
+    path.write_text(import_task(_archive()).model_dump_json())
     script = (
         "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.submission import GradingAttempt; "
-        "from taskcompendium.models import ConversationTrace, TextMessage; "
-        "from taskcompendium.lowering import read_submission_convention, read_specification; "
-        "root = Path(sys.argv[1]); "
-        "specification = read_specification(root / 'specification.json'); "
-        "result = asyncio.run(grade_answer(specification, "
-        "read_submission_convention(root / 'submission_convention.json'), "
+        "from taskcompendium.grading_contract import GradingAttempt; "
+        "from taskcompendium.models import TaskSpec, ConversationTrace, TextMessage; "
+        "from taskcompendium.submission import PlainText; "
+        "specification = TaskSpec.model_validate_json(Path(sys.argv[1]).read_text()); "
+        "result = asyncio.run(grade_answer(specification, PlainText(id='plain'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C')))))); "
-        "print(json.dumps({'status': result.status, 'reward': result.reward}))"
+        "TextMessage(role='assistant', content='C'))), object()))); "
+        "print(json.dumps({'status':result.status, 'reward':result.reward}))"
     )
-
-    completed = subprocess.run([sys.executable, "-c", script, str(task)], capture_output=True, text=True, check=True)
-
+    completed = subprocess.run([sys.executable, "-c", script, str(path)], capture_output=True, text=True, check=True)
     assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}

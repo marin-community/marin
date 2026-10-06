@@ -7,7 +7,7 @@ import hashlib
 import json
 import tomllib
 
-from tasktrove_verify.spec import McqSpec, parse_spec
+from verifyit.spec import McqSpec, parse_spec
 
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive

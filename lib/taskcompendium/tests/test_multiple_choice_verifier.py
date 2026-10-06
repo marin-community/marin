@@ -6,6 +6,7 @@
 import pytest
 
 from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -15,7 +16,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.submission import GradingAttempt, PlainText
+from taskcompendium.submission import PlainText
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 

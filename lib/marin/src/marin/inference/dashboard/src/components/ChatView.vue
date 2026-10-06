@@ -48,6 +48,8 @@ const props = defineProps<{
   hasChatTemplate: boolean
   chatTemplateProtocol: ChatTemplateProtocol | null
   streaming: boolean
+  baseUrl?: string
+  composerMode?: 'embedded' | 'external'
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -73,6 +75,7 @@ watch(
   },
 )
 onUnmounted(stopStreaming)
+defineExpose({ send, stopStreaming })
 
 function stopStreaming() {
   abort?.abort()
@@ -158,7 +161,7 @@ async function send(text?: string) {
 async function runToolExchange(conversation: Conversation, pythonTools: string, signal: AbortSignal) {
   let reply: AssistantMessage | null = null
   try {
-    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal) : []
+    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal, props.baseUrl) : []
     let workspaceFiles: Record<string, string> | null = null
     if (conversation.shellWorkspace) {
       workspaceFiles = parseWorkspaceFiles(conversation.shellWorkspace.filesJson)
@@ -185,6 +188,7 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
     )
   } catch (error) {
     if (isAbortError(error)) {
+      markReplyIncomplete(reply)
       appendMissingToolResults(conversation, reply, 'tool call cancelled')
     } else {
       reply ??= appendAssistantReply(conversation)
@@ -192,6 +196,10 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       reply.error = error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+function markReplyIncomplete(reply: AssistantMessage | null) {
+  if (reply) reply.completed = false
 }
 
 function appendAssistantReply(conversation: Conversation): AssistantMessage {
@@ -203,6 +211,7 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
     rawReasoning: '',
     thinkingSeconds: null,
     error: null,
+    completed: false,
     toolCalls: [],
   })
   // Return the reactive proxy so streaming deltas re-render.
@@ -225,11 +234,11 @@ async function executeToolCall(
       const workspace = conversation.shellWorkspace
       if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
       const command = bashCommand(call.arguments)
-      const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
+      const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal, props.baseUrl)
       result = shellResult
       if (shellResult.stop_reason === null) workspace.history.push(command)
     } else {
-      result = await invokeTool(call.name, pythonTools, call.arguments, signal)
+      result = await invokeTool(call.name, pythonTools, call.arguments, signal, props.baseUrl)
     }
   } catch (error) {
     if (isAbortError(error)) throw error
@@ -319,7 +328,7 @@ async function complete(
     if (thinkingStartedAt !== null && reply.thinkingSeconds === null && (reply.content || reply.toolCalls.length)) {
       reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
     }
-  })
+  }, props.baseUrl)
   if (debugEnabled && !signal.aborted) reply.requestDebug = requestDebug ?? { metrics: null, usage: null }
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
@@ -331,6 +340,7 @@ async function complete(
     reply.content = inline.visible
     reply.toolCalls = structuredCalls.calls.size ? finalizeToolCalls(structuredCalls, newId) : inline.calls
   }
+  reply.completed = !signal.aborted
 }
 
 </script>
@@ -344,7 +354,7 @@ async function complete(
           <div class="mb-5 text-center text-sm text-text-muted">
             Send a message to start. Conversations stay in this browser.
           </div>
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div v-if="composerMode !== 'external'" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               v-for="example in CHAT_EXAMPLES"
               :key="example.label"
@@ -380,7 +390,7 @@ async function complete(
       </div>
     </div>
 
-    <div class="border-t border-surface-border px-4 py-3">
+    <div v-if="composerMode !== 'external'" class="border-t border-surface-border px-4 py-3">
       <div class="mx-auto max-w-3xl">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2">

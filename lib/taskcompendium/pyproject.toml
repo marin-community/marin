@@ -5,12 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "taskcompendium"
 version = "0.1.0"
-description = "Semantic answer tasks and Harbor direct-chat lowerings"
+description = "Semantic task contracts, submission extraction, and shared grading"
 requires-python = ">=3.12,<3.14"
-dependencies = ["marin-rigging", "pydantic>=2.0", "tasktrove-verify"]
-
-[project.optional-dependencies]
-harbor = ["harbor", "marin-shellbox[harbor]"]
+dependencies = ["marin-rigging", "pydantic>=2.0", "verifyit"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
@@ -19,9 +16,7 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
 [tool.uv.sources]
 marin-rigging = { path = "../rigging", editable = true }
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-tasktrove-verify = { path = "../tasktrove-verify", editable = true }
-marin-shellbox = { path = "../shellbox", editable = true }
+verifyit = { path = "../verifyit", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
@@ -49,5 +44,5 @@ known-first-party = ["taskcompendium"]
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
 project-includes = ["src"]
-search-path = ["src", "../tasktrove-verify/src", "../rigging/src", "../shellbox/src"]
+search-path = ["src", "../verifyit/src", "../rigging/src"]
 python-interpreter = ".venv/bin/python"

@@ -500,7 +500,7 @@ nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
 see `gpu_racks` above). The hero training rule selects fresh running
-`iris.task_state` roots named `hero-*-coord` or `hero-*-coord-<retry>`. It derives
+`iris.task_state` roots named `/marin/hero-*-coord` or `/marin/hero-*-coord-<retry>`. It derives
 their run IDs and reads exact matches from structured `service=levanter` telemetry. It waits 15 minutes for
 training progress or 45 minutes for initialization, then remains pending for five
 minutes. Its `notification=hero-run`

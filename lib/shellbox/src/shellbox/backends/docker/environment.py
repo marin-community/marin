@@ -4,7 +4,7 @@
 """Harbor commands and diagnostic transfer over a Shellbox Docker machine."""
 
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
@@ -86,6 +86,24 @@ class DockerEnvironment(BaseEnvironment):
     def _validate_definition(self) -> None:
         if self.task_env_config.docker_image is None or not self.task_env_config.workdir:
             raise ValueError("Shellbox Docker requires an image and explicit workdir")
+        workdir = self.task_env_config.workdir
+        workspace = PurePosixPath(workdir)
+        if (
+            workspace.parent != PurePosixPath("/")
+            or str(workspace) != workdir
+            or workspace.name in {"", ".", ".."}
+            or workdir in {"/", "/logs", "/tests"}
+        ):
+            raise ValueError(
+                "Shellbox Docker requires a normalized root-child workdir outside Harbor log and test paths"
+            )
+        if self.task_env_config.allow_internet:
+            raise NotImplementedError("Shellbox Docker runs with internet disabled")
+        if self.environment_dir.is_symlink():
+            raise ValueError("Shellbox Docker public input directory cannot be a symlink")
+        for source in self.environment_dir.rglob("*"):
+            if source.is_symlink() or not (source.is_dir() or source.is_file()):
+                raise ValueError("Shellbox Docker public inputs must be regular files and directories")
         if self.os is not TaskOS.LINUX:
             raise NotImplementedError("Shellbox Docker supports Linux tasks only")
         if any((self.environment_dir / name).exists() for name in UNSUPPORTED_DEFINITION_FILES):

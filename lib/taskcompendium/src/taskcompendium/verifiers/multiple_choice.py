@@ -3,7 +3,7 @@
 
 """Select the shared multiple-choice contract during task conversion."""
 
-from tasktrove_verify.spec import McqSpec
+from verifyit.spec import McqSpec
 
 from taskcompendium.grading import verifier_descriptor
 from taskcompendium.models import VerifierSpec

@@ -1,30 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned NeMo final-action import and Harbor replay behavior."""
+"""Pinned NeMo final-action import, chat evidence, and pure grading behavior."""
 
 import json
 import subprocess
 import sys
-from io import BytesIO
 from pathlib import Path
 
 import pytest
 
+from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer, validate_verifier
-from taskcompendium.harbor.protocol import assistant_message
-from taskcompendium.harbor.runner import ChatLaunch, chat_agent_config, run_trial
+from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
-from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationToolCall,
     ConversationTrace,
+    TaskSpec,
 )
-from taskcompendium.submission import FinalAction, GradingAttempt, chat_request
-
-from .harbor_replay import run_replay_trial
+from taskcompendium.submission import FinalAction, chat_request, render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 
@@ -37,7 +34,7 @@ def _action(name: str, arguments: str) -> dict:
     }
 
 
-def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
+def test_pinned_nemo_row_keeps_expected_action_private():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     provenance = json.loads((FIXTURES / "predicted-action.provenance.json").read_text())
     assert canonical_sha256(row) == provenance["canonical_json_sha256"]
@@ -51,13 +48,12 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert [message.role for message in request.events] == ["system", "user", "assistant", "user"]
     assert request.events[0].content == row["responses_create_params"]["input"][0]["content"]
     assert request.events[-1].content == row["responses_create_params"]["input"][-1]["content"]
-    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
-    saved_specification = json.loads((task / "specification.json").read_text())
+    saved_specification = json.loads(specification.model_dump_json())
     assert set(saved_specification["context"]) == {"events"}
     assert saved_specification["answer_type"] == "native_action"
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
-    public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
+    public = render_instruction(specification, convention) + convention.model_dump_json()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public
     assert "authenticate_user" in {function.name for function in specification.final_tools}
@@ -65,30 +61,31 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
         import_row(row, "0" * 64)
 
 
-def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
+def test_serialized_nemo_verifier_grades_in_fresh_process(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
+    (tmp_path / "specification.json").write_text(specification.model_dump_json())
+    (tmp_path / "convention.json").write_text(convention.model_dump_json())
     script = (
         "import asyncio, json, sys; from pathlib import Path; "
+        "from pydantic import TypeAdapter; "
         "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.harbor.protocol import chat_conversation; "
-        "from taskcompendium.submission import GradingAttempt, chat_request; "
-        "from taskcompendium.lowering import read_submission_convention, read_specification; "
+        "from taskcompendium.chat import chat_conversation; "
+        "from taskcompendium.grading_contract import GradingAttempt; "
+        "from taskcompendium.submission import chat_request, SubmissionConvention; "
+        "from taskcompendium.models import TaskSpec; "
         "root = Path(sys.argv[1]); "
-        "specification = read_specification(root / 'specification.json'); "
-        "convention = read_submission_convention(root / 'submission_convention.json'); "
+        "specification = TaskSpec.model_validate_json((root/'specification.json').read_text()); "
+        "convention = TypeAdapter(SubmissionConvention).validate_json((root/'convention.json').read_text()); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation))); "
-        "print(json.dumps({'status': result.status, 'reward': result.reward}))"
+        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation, object()))); "
+        "print(json.dumps({'status':result.status, 'reward':result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
-
     completed = subprocess.run(
-        [sys.executable, "-c", script, str(task), response], capture_output=True, text=True, check=True
+        [sys.executable, "-c", script, str(tmp_path), response], capture_output=True, text=True, check=True
     )
-
     assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
 
 
@@ -141,27 +138,29 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
         import_row(row, canonical_sha256(row))
 
 
-def test_predicted_action_rejects_crafted_message_target_on_verifier_resolution(tmp_path):
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"expected_message": "Any response"},
+        {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}], "numeric_tolerance": 10**400},
+    ],
+)
+def test_predicted_action_rejects_invalid_contract_on_private_read(parameters):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, _ = import_row(row, canonical_sha256(row))
+    data = json.loads(specification.model_dump_json())
+    data["verifier"]["parameters_json"] = json.dumps(parameters)
+    restored = TaskSpec.model_validate_json(json.dumps(data))
+    with pytest.raises(ValueError):
+        validate_verifier(restored.verifier)
+
+
+def test_predicted_action_task_roundtrip_preserves_source_context():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
-    data = json.loads((task / "specification.json").read_text())
-    data["verifier"]["parameters_json"] = json.dumps({"expected_message": "Any response"})
-    (task / "specification.json").write_text(json.dumps(data))
-
-    with pytest.raises(ValueError, match="Invalid 'predicted_action' verifier parameters"):
-        validate_verifier(read_specification(task / "specification.json").verifier)
-
-
-def test_predicted_action_reuses_final_action_convention_without_changing_source_request(tmp_path):
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
-    candidates = compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),))
-
-    assert len(candidates) == 1
-    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
-    exported = read_specification(task / "specification.json")
-    assert exported.context == specification.context
+    restored = TaskSpec.model_validate_json(specification.model_dump_json())
+    assert restored.context == specification.context
+    assert chat_request(restored, convention) == chat_request(specification, convention)
 
 
 @pytest.mark.parametrize(
@@ -198,25 +197,16 @@ def test_predicted_action_reuses_final_action_convention_without_changing_source
         ),
     ],
 )
-async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, reward, status):
+async def test_predicted_action_chat_evidence_distinguishes_wrong_and_invalid_submission(response, reward, status):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    environment_config = HarborEnvironmentConfig()
-    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
-
-    result = await run_replay_trial(task, response, tmp_path / "trials", "run")
-
-    outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
-    assert (outcome["status"], outcome["reward"]) == (status, reward)
-    if reward is None:
-        assert result.verifier_result is None
-    else:
-        assert result.exception_info is None, result.exception_info
-        assert result.verifier_result.rewards == {"reward": reward}
-    assert (tmp_path / "trials/run/agent/submission.json").exists()
+    trace = chat_conversation([*chat_request(specification, convention)["messages"], response])
+    restored = ConversationTrace.model_validate_json(trace.model_dump_json())
+    result = await grade_answer(specification, convention, GradingAttempt(restored, object()))
+    assert (result.status, result.reward) == (status, reward)
 
 
-async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp_path, monkeypatch):
+async def test_predicted_action_chat_request_preserves_source_history_and_tools():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["input"][-1:-1] = [
         {
@@ -228,30 +218,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
         {"type": "function_call_output", "call_id": "call-profile", "output": '{"verified":false}'},
     ]
     specification, convention = import_row(row, canonical_sha256(row))
-    environment_config = HarborEnvironmentConfig()
-    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
-    requests = []
-    monkeypatch.setenv("NEMO_TEST_API_KEY", "test-token")
-
-    def respond(request, **_kwargs):
-        requests.append((json.loads(request.data), request.get_header("Authorization")))
-        response = {"choices": [{"message": _action("authenticate_user", row["expected_action"]["arguments"])}]}
-        return BytesIO(json.dumps(response).encode())
-
-    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
-    result = await run_trial(
-        task,
-        environment_config,
-        chat_agent_config(
-            task, ChatLaunch(model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY")
-        ),
-        tmp_path / "trials",
-        "run",
-    )
-
-    assert result.exception_info is None, result.exception_info
-    assert result.verifier_result.rewards == {"reward": 1.0}
-    request, authorization = requests[0]
+    request = chat_request(specification, convention)
     native_request = specification.final_tools
     assert [tool["function"]["name"] for tool in request["tools"]] == [function.name for function in native_request]
     assert [tool["function"]["parameters"] for tool in request["tools"]] == [
@@ -285,19 +252,14 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     assert request["messages"][-1]["content"] == row["responses_create_params"]["input"][-1]["content"]
     assert "tool_choice" not in request
     assert request["parallel_tool_calls"] is False
-    assert authorization == "Bearer test-token"
-    assert len(requests) == 1
-    with pytest.raises(ValueError, match="conflicts with the submission convention"):
-        await run_trial(
-            task,
-            environment_config,
-            chat_agent_config(
-                task, ChatLaunch(model="model", api_base="https://example.invalid", parallel_tool_calls=True)
-            ),
-            tmp_path / "trials",
-            "conflicting-launch",
-        )
-    assert len(requests) == 1
+    trace = chat_conversation(
+        [*request["messages"], _action(row["expected_action"]["name"], row["expected_action"]["arguments"])]
+    )
+    trace = ConversationTrace.model_validate_json(trace.model_dump_json())
+    assert trace.events[3].calls[0].arguments == {"user_id": "GROOM2024"}
+    assert trace.events[4].content == '{"verified":false}'
+    result = await grade_answer(specification, convention, GradingAttempt(trace, object()))
+    assert (result.status, result.reward) == ("graded", 1.0)
 
 
 async def test_predicted_action_grades_typed_evidence_from_any_harness():
@@ -314,7 +276,7 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = await grade_answer(specification, convention, GradingAttempt(conversation))
+    result = await grade_answer(specification, convention, GradingAttempt(conversation, object()))
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
@@ -323,31 +285,11 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     "response",
     [
         {"role": "assistant", "tool_calls": "not-a-list"},
-        _action("authenticate_user", "not-json"),
     ],
 )
-async def test_chat_protocol_failure_is_ungraded_and_retains_raw_response(tmp_path, monkeypatch, response):
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
-    environment_config = HarborEnvironmentConfig()
-    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
-
-    def respond(*_args, **_kwargs):
-        return BytesIO(json.dumps({"choices": [{"message": response}]}).encode())
-
-    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
-    result = await run_trial(
-        task,
-        environment_config,
-        chat_agent_config(task, ChatLaunch(model="model", api_base="https://example.invalid")),
-        tmp_path / "trials",
-        "run",
-    )
-
-    assert result.exception_info is not None
-    assert result.verifier_result is None
-    assert json.loads((tmp_path / "trials/run/agent/chat-response.json").read_text()) == response
-    assert not (tmp_path / "trials/run/agent/submission.json").exists()
+def test_chat_protocol_failure_rejects_invalid_transport_shape(response):
+    with pytest.raises(SubmissionFailure):
+        assistant_message(response)
 
 
 @pytest.mark.parametrize("require_call", [False, True])
@@ -356,7 +298,7 @@ async def test_imported_final_call_constraints_distinguish_invalid_submission(re
     row["responses_create_params"]["tool_choice"] = "required" if require_call else "auto"
     specification, convention = import_row(row, canonical_sha256(row))
     final = assistant_message({"role": "assistant", "content": "No action"})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("submission_failure" if require_call else "graded", 0.0)
     request = chat_request(specification, convention)
@@ -372,7 +314,7 @@ async def test_imported_parallel_actions_accept_multiple_final_calls():
     specification, convention = import_row(row, canonical_sha256(row))
     single = _action(original_call["name"], original_call["arguments"])["tool_calls"][0]
     final = assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("graded", 1.0)
     assert "parallel_tool_calls" not in chat_request(specification, convention)
@@ -393,6 +335,29 @@ async def test_final_action_max_two_preserves_the_submission_limit_before_scorin
             for index in range(call_count)
         )
     )
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
     result = await grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), attempt)
     assert (result.status, result.reward) == (status, reward)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ["not-json", '{"name":"Alice","name":"Bob"}', '{"name":{"x":1,"x":2}}', "[1]", '{"id":NaN}', '{"id":1e400}'],
+)
+def test_malformed_final_arguments_fail_at_chat_decoding(arguments):
+    with pytest.raises(SubmissionFailure):
+        assistant_message(_action("authenticate_user", arguments))
+
+
+@pytest.mark.parametrize("arguments", ['{"user_id":"first","user_id":"second"}', '{"nested":{"x":1,"x":2}}'])
+def test_chat_normalization_rejects_ambiguous_historical_arguments(arguments):
+    historical = _action("get_user_profile", arguments)
+    with pytest.raises(SubmissionFailure):
+        chat_conversation(
+            [
+                {"role": "user", "content": "Read the profile."},
+                historical,
+                {"role": "tool", "tool_call_id": "call-final", "content": "result"},
+                {"role": "assistant", "content": "Done."},
+            ]
+        )
