@@ -36,7 +36,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 import jsonschema
-from rolloutengine.task_session import SHELL_TOOL_NAME
+from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_tool_definition
 from shellbox.machine import Command, Machine
 
 from taskforge.ledger.records import EntryKind, Ledger, span
@@ -272,24 +272,9 @@ def shell_tool(machine: Machine, *, timeout: float, output_limit_bytes: int, use
         result = await machine.run(
             Command(argv=("sh", "-c", command), timeout=timeout, output_limit_bytes=output_limit_bytes, user=user)
         )
-        return json.dumps(
-            {
-                "stdout": result.stdout.decode(errors="replace"),
-                "stderr": result.stderr.decode(errors="replace"),
-                "exit_code": result.exit_code,
-                "reason": result.reason.value,
-                "truncated": result.stdout_truncated or result.stderr_truncated,
-            }
-        )
+        return shell_observation(result)
 
+    function = shell_tool_definition()["function"]
     return AgentTool(
-        name=SHELL_TOOL_NAME,
-        description="Run a shell command in the task workspace. Files persist between commands.",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-        handler=run,
+        name=SHELL_TOOL_NAME, description=function["description"], parameters=function["parameters"], handler=run
     )
