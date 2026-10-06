@@ -183,16 +183,18 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
     """A round's evidence from its attempt files: each trial's last attempt.
 
     Controls pair by id with ``draft.controls``; solver trials order by index; adversary trials group
-    by role directory, in ``AdversaryRole`` order.
+    by role directory, in ``AdversaryRole`` order. Indices must run from 0 without a gap, so every
+    outcome keeps the trial name it ran under.
 
     Raises:
-        ValueError: a control of ``draft`` has no attempt file.
+        ValueError: a control of ``draft`` has no attempt file, or a solver or adversary index below the
+            highest one on disk has none.
     """
     controls = trial_files(evidence_dir, TrialKind.CONTROL)
     missing = [c.id for c in draft.controls if c.id not in controls]
     if missing:
         raise ValueError(f"Controls {missing} have no attempt under {evidence_dir}")
-    solver = trial_files(evidence_dir, TrialKind.SOLVER)
+    solver = {int(name): _last(files.last) for name, files in trial_files(evidence_dir, TrialKind.SOLVER).items()}
     adversaries: dict[AdversaryRole, dict[int, Outcome]] = {}
     for name, files in trial_files(evidence_dir, TrialKind.ADVERSARY).items():
         role, index = name.split("/")
@@ -201,13 +203,20 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
     return ValidationEvidence(
         task_digest=task_digest(draft.task, draft.execution, draft.convention),
         controls=tuple(control_outcome(c, _last(controls[c.id].last)) for c in draft.controls),
-        solver=tuple(_last(solver[name].last) for name in sorted(solver, key=int)),
+        solver=_by_index("solver", solver, evidence_dir),
         adversaries={
-            role: tuple(adversaries[role][index] for index in sorted(adversaries[role]))
+            role: _by_index(f"adversary/{role}", adversaries[role], evidence_dir)
             for role in AdversaryRole
             if role in adversaries
         },
     )
+
+
+def _by_index(prefix: str, trials: Mapping[int, Outcome], evidence_dir: Path) -> tuple[Outcome, ...]:
+    missing = [f"{prefix}/{index}" for index in range(max(trials, default=-1) + 1) if index not in trials]
+    if missing:
+        raise ValueError(f"Trials {missing} have no attempt under {evidence_dir}")
+    return tuple(trials[index] for index in range(len(trials)))
 
 
 def _last(outcome: Outcome | None) -> Outcome:

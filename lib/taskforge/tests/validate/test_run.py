@@ -6,9 +6,11 @@ pass turned into a control that proves the grader fix."""
 
 import asyncio
 import json
+import shutil
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from taskcompendium.environment import EnvironmentKind, StdoutReward
 from taskcompendium.submission import PlainText
@@ -100,6 +102,24 @@ async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(tmp_path, fil
     assert [f.kind for f in summary.findings] == [FindingKind.TOO_EASY]
     assert summary.controls_met == tuple(c.id for c in file_controls)
     assert summary.roles[AdversaryRole.SHORTCUT].sentinel_replies == 2
+
+
+@pytest.mark.parametrize("removed", ["solver/1", "adversary/shortcut/0"])
+async def test_a_round_missing_a_trial_below_the_highest_index_does_not_load(
+    tmp_path, file_task, rounds, fakes, removed
+):
+    draft = rounds.draft(file_task, (), PLAIN)
+    policy = rounds.policy(k=3, adversary_k=2)
+    site = rounds.site(tmp_path)
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
+    await asyncio.gather(
+        run_solver(draft, policy, site, settings(fakes), model),
+        run_adversaries(draft, policy, site, settings(fakes), model),
+    )
+    shutil.rmtree(site.evidence_dir / removed)
+
+    with pytest.raises(ValueError, match=removed):
+        load_validation(draft, site.evidence_dir)
 
 
 async def test_re_entered_controls_replay_only_the_unsettled_ones(tmp_path, math_task, math_controls, rounds, fakes):
