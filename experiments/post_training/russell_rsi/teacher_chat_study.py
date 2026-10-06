@@ -299,13 +299,9 @@ async def collect_remaining_rows(
     directory: StoragePath,
     run_slot: Callable[[TaskSpec, StoragePath, TeacherModelConfig], Awaitable[dict]],
 ) -> dict:
-    tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in task_records.items()}
     selected = original["selection"]["selected"]
     if len(selected) != SOURCE_FAMILIES or len({entry["family"] for entry in selected}) != SOURCE_FAMILIES:
         raise ValueError("Chat study requires the exact ten-family source selection")
-    for entry in selected:
-        if digest(json.loads(task_records[entry["task_id"]])) != entry["task_sha256"]:
-            raise ValueError("Chat task differs from frozen admission")
     plan = {
         "protocol": PROTOCOL,
         "selection": original["selection"],
@@ -313,16 +309,35 @@ async def collect_remaining_rows(
         "consumed_trajectories": CONSUMED_TRAJECTORIES,
         "retained": retained,
     }
+    return await collect_chat_rows(plan, task_records, tokenizer, directory, run_slot, required_rows=CHAT_ROWS)
+
+
+async def collect_chat_rows(
+    plan: dict,
+    task_records: dict[str, str],
+    tokenizer: MarinTokenizer,
+    directory: StoragePath,
+    run_slot: Callable[[TaskSpec, StoragePath, TeacherModelConfig], Awaitable[dict]],
+    *,
+    required_rows: int,
+) -> dict:
+    """Collect distinct successful families in frozen order without replay of issued slots."""
+    selected = plan["selection"]["selected"]
+    tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in task_records.items()}
+    for entry in selected:
+        if digest(json.loads(task_records[entry["task_id"]])) != entry["task_sha256"]:
+            raise ValueError("Chat task differs from frozen admission")
     write_once(directory / "plan.json", plan)
+    plan_hash = compact_json_sha256(plan)
     marker = directory / "contract-failure.json"
     if marker.exists():
         raise RolloutContractError("Chat study has an immutable native contract failure")
-    accepted, attempts = list(retained), []
+    accepted, attempts = list(plan["retained"]), []
     families = {row["task"]["family"] for row in accepted}
     hashes = {row["row_sha256"] for row in accepted}
-    for slot_name in PERMITTED_SLOTS:
+    for slot_name in plan["permitted_slots"]:
         family, attempt = map(int, slot_name.split("-"))
-        entry = original["selection"]["selected"][family]
+        entry = selected[family]
         if entry["family"] in families:
             continue
         task = tasks[entry["task_id"]]
@@ -336,16 +351,14 @@ async def collect_remaining_rows(
             status = {**identity, "status": "interrupted_consumed"}
         else:
             if not rollout_path.exists():
-                model = TeacherModelConfig(
-                    compact_json_sha256(plan) + "-" + slot_name, **original["selection"]["teacher_model"]
-                )
+                model = TeacherModelConfig(plan_hash + "-" + slot_name, **plan["selection"]["teacher_model"])
                 try:
                     record = await run_slot(task, slot, model)
                 except RolloutContractError as error:
                     write_once(
                         marker,
                         {
-                            "plan_sha256": compact_json_sha256(plan),
+                            "plan_sha256": plan_hash,
                             **identity,
                             "exception_type": type(error).__name__,
                             "exception_message": str(error),
@@ -355,11 +368,11 @@ async def collect_remaining_rows(
                 write_once(rollout_path, record)
             record = json.loads(rollout_path.read_text())
             row = qualified_row(record, task, tokenizer)
+            row_hash = compact_json_sha256(row["example"]) if row is not None else None
             status = {**identity, "status": "failed", "rollout_sha256": compact_json_sha256(record)}
-            if row is not None and compact_json_sha256(row["example"]) in hashes:
+            if row is not None and row_hash in hashes:
                 status["status"] = "duplicate_student_row"
             elif row is not None:
-                row_hash = compact_json_sha256(row["example"])
                 status.update(
                     status="accepted", tokens=len(row["input_ids"]), assistant_targets=sum(row["assistant_mask"])
                 )
@@ -369,16 +382,16 @@ async def collect_remaining_rows(
                 write_once(slot / "student-row.json", row)
         write_once(slot / "qualification.json", status)
         attempts.append(status)
-        if len(accepted) == CHAT_ROWS:
+        if len(accepted) == required_rows:
             break
     result = {
-        "protocol": PROTOCOL,
-        "status": "passed" if len(accepted) == CHAT_ROWS else "insufficient_rows",
+        "protocol": plan["protocol"],
+        "status": "passed" if len(accepted) == required_rows else "insufficient_rows",
         "accepted": accepted,
         "attempts": attempts,
-        "consumed_predecessor_trajectories": CONSUMED_TRAJECTORIES,
+        "consumed_predecessor_trajectories": plan["consumed_trajectories"],
         "new_trajectories": len(attempts),
-        "cumulative_trajectories": CONSUMED_TRAJECTORIES + len(attempts),
+        "cumulative_trajectories": plan["consumed_trajectories"] + len(attempts),
     }
     write_once(directory / "collection.json", result)
     return result

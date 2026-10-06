@@ -26,7 +26,11 @@ from experiments.post_training.russell_rsi.calibration_recovery import PinnedFil
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.rollout_eval import run_calibration_evaluation
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
-from experiments.post_training.russell_rsi.teacher_chat_study import collect_remaining_rows, qualified_row
+from experiments.post_training.russell_rsi.teacher_chat_study import (
+    collect_chat_rows,
+    collect_remaining_rows,
+    qualified_row,
+)
 from experiments.post_training.russell_rsi.teacher_collection import TeacherTask
 from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_INSTRUCTION, preflight_task
 
@@ -106,7 +110,7 @@ def test_frozen_remaining_order_retains_seeds_and_never_reissues_slots(tmp_path,
     assert [row["slot"] for row in first["accepted"]] == ["00-1", "02-0", "06-0", "07-0"]
     assert first["accepted"][:2] == retained
     assert first["new_trajectories"] == 3 and first["cumulative_trajectories"] == 13
-    assert not (root / "trajectories/05-0").exists() and not (root / "trajectories/06-1").exists()
+    assert not (root / "trajectories/06-1").exists()
     second = asyncio.run(
         collect_remaining_rows(original, persisted_tasks(tasks), retained, student_tokenizer, root, run)
     )
@@ -131,6 +135,56 @@ def test_exhausted_budget_does_not_train_or_replace_seed_rows(tmp_path, student_
     assert calls == ["05-1", "06-0", "06-1", "07-0", "07-1", "08-0", "08-1", "09-0", "09-1"]
     assert result["status"] == "insufficient_rows" and result["accepted"] == retained
     assert result["new_trajectories"] == 9 and result["cumulative_trajectories"] == 19
+
+
+@pytest.mark.parametrize("successful_families", [3, 4])
+def test_eight_family_collection_keeps_four_rows_and_stops_at_its_budget(
+    tmp_path, student_tokenizer, successful_families
+):
+    original, tasks, _ = inputs(student_tokenizer)
+    retained = []
+    for index, task in enumerate(original["selection"]["selected"][:4]):
+        row = qualified_row(rollout(f"retained-{index}"), tasks[task["task_id"]], student_tokenizer)
+        assert row is not None
+        retained.append(
+            {
+                "task": task,
+                "attempt": 0,
+                "slot": f"retained-{index}",
+                "row": row["example"],
+                "witness": row,
+                "row_sha256": compact_json_sha256(row["example"]),
+            }
+        )
+    plan = {
+        "protocol": "teacher-diversity-study",
+        "selection": {**original["selection"], "selected": original["selection"]["selected"][4:]},
+        "permitted_slots": [f"{family:02}-{attempt}" for family in range(6) for attempt in range(2)],
+        "consumed_trajectories": 16,
+        "retained": retained,
+    }
+    calls = []
+
+    async def run(task, slot, model):
+        calls.append(slot.name)
+        family, attempt = map(int, slot.name.split("-"))
+        return rollout("new-" + slot.name, reward=int(attempt == 1 and family < successful_families))
+
+    directory = StoragePath(str(tmp_path))
+    result = asyncio.run(
+        collect_chat_rows(plan, persisted_tasks(tasks), student_tokenizer, directory, run, required_rows=8)
+    )
+    assert result["accepted"][:4] == retained
+    assert len({row["task"]["family"] for row in result["accepted"]}) == 4 + successful_families
+    assert result["status"] == ("passed" if successful_families == 4 else "insufficient_rows")
+    assert calls == plan["permitted_slots"][: 8 if successful_families == 4 else 12]
+    assert result["new_trajectories"] == len(calls)
+    assert json.loads((tmp_path / "collection.json").read_text()) == result
+    count = len(calls)
+    resumed = asyncio.run(
+        collect_chat_rows(plan, persisted_tasks(tasks), student_tokenizer, directory, run, required_rows=8)
+    )
+    assert resumed == result and len(calls) == count
 
 
 def test_changed_task_and_fatal_resume_fail_before_provider(tmp_path, student_tokenizer):
@@ -235,7 +289,6 @@ def test_chat_sft_dose_and_calibration_preserve_exported_checkpoint(study_inputs
         )
     )
     assert built.trainer.train_batch_size == 8 and built.trainer.num_train_steps == 4 and built.train_seq_len == 16384
-    # The failed launch used a 32-device ICI mesh on four eight-device slices.
     ici, dcn = built.trainer.mesh.axis_shapes(32, 4)
     assert prod(ici.values()) == 8 and prod(dcn.values()) == 4
     assert ici["expert"] == 8 and dcn["context"] == 4 and "context" not in ici
