@@ -1968,8 +1968,8 @@
     {
       "id": 400,
       "type": "timeseries",
-      "title": "H100 allocation by applied priority · incomplete history",
-      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with no verified historical band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals.",
+      "title": "H100 allocation by requested priority · incomplete history",
+      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with an unavailable requested band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals. Priority groups use each child job’s requested band; dispatch budget downgrades do not change that group.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2134,7 +2134,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Unresolved setup GPU requests"
+              "options": "Known setup GPU requests"
             },
             "properties": [
               {
@@ -2175,6 +2175,26 @@
             "matcher": {
               "id": "byName",
               "options": "Fleet unresolved-model GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Setup tasks (fleet)"
             },
             "properties": [
               {
@@ -2282,7 +2302,7 @@
             },
             {
               "selector": "setup_gpu_requests",
-              "text": "Unresolved setup GPU requests",
+              "text": "Known setup GPU requests",
               "type": "number"
             },
             {
@@ -2294,6 +2314,11 @@
               "selector": "unknown_model_gpu_requests",
               "text": "Fleet unresolved-model GPU requests",
               "type": "number"
+            },
+            {
+              "selector": "setup_tasks",
+              "text": "Setup tasks (fleet)",
+              "type": "number"
             }
           ]
         }
@@ -2302,8 +2327,8 @@
     {
       "id": 401,
       "type": "timeseries",
-      "title": "Blackwell (GB200) allocation by applied priority · incomplete history",
-      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with no verified historical band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals.",
+      "title": "Blackwell (GB200) allocation by requested priority · incomplete history",
+      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with an unavailable requested band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals. Priority groups use each child job’s requested band; dispatch budget downgrades do not change that group.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2468,7 +2493,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Unresolved setup GPU requests"
+              "options": "Known setup GPU requests"
             },
             "properties": [
               {
@@ -2509,6 +2534,26 @@
             "matcher": {
               "id": "byName",
               "options": "Fleet unresolved-model GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Setup tasks (fleet)"
             },
             "properties": [
               {
@@ -2616,7 +2661,7 @@
             },
             {
               "selector": "setup_gpu_requests",
-              "text": "Unresolved setup GPU requests",
+              "text": "Known setup GPU requests",
               "type": "number"
             },
             {
@@ -2628,6 +2673,11 @@
               "selector": "unknown_model_gpu_requests",
               "text": "Fleet unresolved-model GPU requests",
               "type": "number"
+            },
+            {
+              "selector": "setup_tasks",
+              "text": "Setup tasks (fleet)",
+              "type": "number"
             }
           ]
         }
@@ -2637,7 +2687,7 @@
       "id": 402,
       "type": "table",
       "title": "Allocation history coverage",
-      "description": "Incomplete samples include unverified historical capacity and pod setup/cleanup lifetimes. Setup requests are possible additional allocation, not allocated GPU counts. Metadata gaps may contain CPU or GPU tasks. Missing regional sources remain explicit. Fleet model gaps report requests whose GPU family cannot be resolved. They appear on both rows as the same fleet-wide gap, not as allocation assigned to either model.",
+      "description": "Incomplete samples include unverified historical capacity and pod setup/cleanup lifetimes. Setup requests are possible additional allocation, not allocated GPU counts. Metadata gaps may contain CPU or GPU tasks. Missing regional sources remain explicit. Fleet model gaps report requests whose GPU family cannot be resolved. They appear on both rows as the same fleet-wide gap, not as allocation assigned to either model. Setup samples count fleet-wide assigned/building tasks, including CPU tasks; GPU quantities stay blank where assignment timestamps are unavailable.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2708,12 +2758,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Setup gaps"
+              "options": "Setup (fleet)"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 150
               }
             ]
           },
@@ -2847,7 +2897,7 @@
             },
             {
               "selector": "setup_gap_samples",
-              "text": "Setup gaps",
+              "text": "Setup (fleet)",
               "type": "number"
             },
             {
@@ -2893,7 +2943,7 @@
               "Samples": 1,
               "Minutes/sample": 2,
               "Incomplete": 3,
-              "Setup gaps": 4,
+              "Setup (fleet)": 4,
               "Fleet metadata gaps": 5,
               "Source gaps": 6,
               "Fleet model gaps": 7,
@@ -2918,7 +2968,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Historical values recover Running GPU requests. Unresolved setup, pod cleanup, missing metadata and historical capacity leave every historical point incomplete. Unknown priority applies to recovered requests with an unavailable applied band. Idle remains blank because historical capacity and full allocation are unavailable. Missing regional reads leave blank spans. The coverage table reports the selected range and resolution. Production regional metadata read access is pending; the bridge reports unavailable until a metadata reader is configured."
+        "content": "Counts are recovered Running GPU requests grouped by requested priority; budget downgrades do not change the group. Setup/binding, cleanup, metadata and capacity gaps leave all historical points incomplete, with idle blank. Unknown priority means the requested band is unavailable. Production regional metadata access is pending. See coverage below."
       },
       "fieldConfig": {
         "defaults": {},

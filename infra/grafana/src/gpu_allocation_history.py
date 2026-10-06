@@ -55,8 +55,6 @@ class Attempt:
     gpus: int
     model: str
     requested: Priority
-    applied: Priority
-    current_attempt: int
     attempt: int
     created: int | None
     started: int | None
@@ -67,15 +65,11 @@ class Attempt:
 
 @dataclass(frozen=True)
 class RootLifetimes:
-    created: tuple[int, ...]
-    finished: tuple[int, ...]
     running: tuple[int, ...]
     stopped: tuple[int, ...]
 
-    def counts(self, at: int) -> tuple[int, int]:
-        alive = bisect_right(self.created, at) - bisect_right(self.finished, at)
-        running = bisect_right(self.running, at) - bisect_right(self.stopped, at)
-        return running, alive - running
+    def running_count(self, at: int) -> int:
+        return bisect_right(self.running, at) - bisect_right(self.stopped, at)
 
 
 def sampling_step(start_ms: int, end_ms: int) -> int:
@@ -125,8 +119,6 @@ def metadata_table(rows: list[dict], start_ms: int, end_ms: int) -> pa.Table:
             ("gpus", pa.int32()),
             ("model", pa.string()),
             ("requested", pa.string()),
-            ("applied", pa.string()),
-            ("current_attempt", pa.int32()),
             ("attempt", pa.int32()),
             ("created", pa.int64()),
             ("started", pa.int64()),
@@ -144,8 +136,6 @@ def metadata_table(rows: list[dict], start_ms: int, end_ms: int) -> pa.Table:
                 "gpus": int(row.get("gpuCount", 0)),
                 "model": row.get("gpuVariant", "").upper(),
                 "requested": _PRIORITIES.get(row.get("requestedPriority", ""), Priority.UNKNOWN),
-                "applied": _PRIORITIES.get(row.get("currentAppliedPriority", ""), Priority.UNKNOWN),
-                "current_attempt": int(row.get("currentAttemptId", -1)),
                 "attempt": int(row.get("attemptId", -1)),
                 "created": _optional_time(row, "createdAtMs"),
                 "started": _optional_time(row, "startedAtMs"),
@@ -169,8 +159,6 @@ def _root_lifetimes(attempts: Sequence[Attempt]) -> dict[tuple[int, str], RootLi
         roots[attempt.scope_start, attempt.root].append(attempt)
     return {
         root: RootLifetimes(
-            tuple(sorted(a.created for a in rows if a.created is not None)),
-            tuple(sorted(a.finished for a in rows if a.created is not None and a.finished is not None)),
             tuple(sorted(a.started for a in rows if a.started is not None)),
             tuple(sorted(a.finished for a in rows if a.started is not None and a.finished is not None)),
         )
@@ -201,37 +189,35 @@ def history_rows(
     unresolved = [0] * (len(times) + 1)
     indexes: dict[str, dict[tuple[int, str], RootLifetimes]] = {}
     available_scopes = []
+    setup_time_scopes = []
     for (day, cluster), table in metadata.items():
         available_scopes.append((day, int(table.schema.metadata[b"scope_end"])))
         # Each day's evidence is confined to that day, including on partial failure.
         attempts = {
             (row["task"], row["attempt"], row["scope_start"]): Attempt(
-                **{**row, "requested": Priority(row["requested"]), "applied": Priority(row["applied"])}
+                **{**row, "requested": Priority(row["requested"])}
             )
             for row in table.to_pylist()
         }
         indexes.setdefault(cluster, {}).update(_root_lifetimes(tuple(attempts.values())))
+        if any(attempt.created is not None for attempt in attempts.values()):
+            setup_time_scopes.append((day, int(table.schema.metadata[b"scope_end"])))
         for attempt in attempts.values():
             if not attempt.gpus:
                 continue
             if attempt.model not in MODELS:
-                if attempt.created is not None:
+                unknown_start = attempt.created if attempt.created is not None else attempt.started
+                if unknown_start is not None:
                     finish = attempt.finished if attempt.finished is not None else attempt.scope_end
                     _add_interval(
                         unresolved,
                         times,
-                        max(attempt.created, attempt.scope_start),
+                        max(unknown_start, attempt.scope_start),
                         min(finish, attempt.scope_end),
                         attempt.gpus,
                     )
                 continue
-            band = attempt.applied if attempt.attempt == attempt.current_attempt else attempt.requested
-            if attempt.attempt != attempt.current_attempt and band not in (
-                Priority.SYSTEM,
-                Priority.PRODUCTION,
-                Priority.BATCH,
-            ):
-                band = Priority.UNKNOWN
+            band = attempt.requested
             if attempt.started is not None:
                 finish = attempt.finished if attempt.finished is not None else attempt.scope_end
                 _add_interval(
@@ -260,6 +246,7 @@ def history_rows(
     result = []
     for index, at in enumerate(times):
         missing = 0
+        setup_tasks = 0
         missing_states = []
         for cluster in clusters:
             frame = frames.get((at, cluster), [])
@@ -267,14 +254,14 @@ def history_rows(
             if rollup is None:
                 missing_states.append(cluster)
                 continue
+            setup_tasks += rollup["assigned"] + rollup["building"]
             root_rows = [r for r in frame if r["root_job_id"]]
             count = sum(r["running"] + r["assigned"] + r["building"] for r in root_rows)
             missing += abs(count - rollup["running"] - rollup["assigned"] - rollup["building"])
             for root in root_rows:
                 lifetimes = indexes.get(cluster, {}).get(((at // DAY_MS) * DAY_MS, root["root_job_id"]))
-                observed_running, observed_setup = lifetimes.counts(_epoch_ms(root["ts"])) if lifetimes else (0, 0)
+                observed_running = lifetimes.running_count(_epoch_ms(root["ts"])) if lifetimes else 0
                 missing += abs(root["running"] - observed_running)
-                missing += abs(root["assigned"] + root["building"] - observed_setup)
         unknown_model += unresolved[index]
         for key, difference in totals.items():
             running[key] += difference[index]
@@ -282,7 +269,14 @@ def history_rows(
             waiting[model] += difference[index]
             status = "Incomplete: historical capacity and pod setup/cleanup lifetimes unavailable"
             unavailable = sorted(
-                {cluster for (day, cluster) in failures if day == (at // DAY_MS) * DAY_MS} | set(missing_states)
+                {cluster for (day, cluster) in failures if day == (at // DAY_MS) * DAY_MS}
+                | set(missing_states)
+                | {
+                    cluster
+                    for cluster in clusters
+                    if (table := metadata.get(((at // DAY_MS) * DAY_MS, cluster))) is None
+                    or at >= int(table.schema.metadata[b"scope_end"])
+                }
             )
             if unavailable:
                 status += "; missing sources: " + ", ".join(unavailable)
@@ -301,7 +295,12 @@ def history_rows(
                     "idle": None,
                     "incomplete": 1,
                     "resolution_minutes": step_ms // 60_000,
-                    "setup_gpu_requests": waiting[model],
+                    "setup_tasks": setup_tasks,
+                    "setup_gpu_requests": (
+                        waiting[model]
+                        if not setup_tasks or any(begin <= at < stop for begin, stop in setup_time_scopes)
+                        else None
+                    ),
                     "missing_task_metadata": missing,
                     "unknown_model_gpu_requests": unknown_model,
                     "status": status,

@@ -84,7 +84,7 @@ def _state(points):
     return pa.Table.from_pylist(rows, schema=schema)
 
 
-def test_history_preserves_retry_boundaries_child_shapes_and_unknown_old_priority():
+def test_history_preserves_retry_boundaries_child_shapes_and_requested_priority():
     metadata = metadata_table(
         [
             _attempt("/u/root/0", 0, 1, applied="INTERACTIVE"),
@@ -99,7 +99,8 @@ def test_history_preserves_retry_boundaries_child_shapes_and_unknown_old_priorit
     state = _state([(60_000, 59_000, 2, 0), (120_000, 119_000, 3, 1)])
     rows = history_rows(state, {(0, CLUSTER): metadata}, {}, 60_000, 180_000, 60_000, (CLUSTER,))
     h100 = [r for r in rows if r["model"] == "H100"]
-    assert h100[0]["unknown_priority"] == 2
+    assert h100[0]["interactive"] == 2
+    assert h100[0]["unknown_priority"] == 0
     assert h100[0]["batch"] == 0
     assert h100[1]["interactive"] == 2
     assert h100[1]["batch"] == 0  # The eight-GPU attempt ended exactly at this instant.
@@ -124,10 +125,14 @@ def test_history_does_not_extend_a_cached_attempt_into_a_day_with_missing_metada
     assert all(row["idle"] is None for row in rows)
 
 
-def test_history_does_not_assign_unresolved_gpu_models_to_a_priority_or_idle_band():
+@pytest.mark.parametrize("started", [None, 1])
+def test_history_does_not_assign_unresolved_gpu_models_to_a_priority_or_idle_band(started):
+    attempt = _attempt("/u/root/0", 8, started, model="auto")
+    if started is not None:
+        del attempt["createdAtMs"]
     rows = history_rows(
-        _state([(60_000, 59_000, 0, 1)]),
-        {(0, CLUSTER): metadata_table([_attempt("/u/root/0", 8, None, model="auto")], 0, DAY_MS)},
+        _state([(60_000, 59_000, int(started is not None), int(started is None))]),
+        {(0, CLUSTER): metadata_table([attempt], 0, DAY_MS)},
         {},
         60_000,
         120_000,
@@ -149,6 +154,26 @@ def test_history_does_not_project_counts_past_the_metadata_observation_range():
         (CLUSTER,),
     )
     assert all(row["batch"] is None and row["idle"] is None for row in rows)
+
+
+def test_read_api_intervals_without_assignment_times_do_not_invent_setup_gpu_counts():
+    attempt = _attempt("/u/root/0", 8, 20_000)
+    del attempt["createdAtMs"]  # Existing TaskAttempt RPCs do not expose assignment creation.
+    rows = history_rows(
+        _state([(60_000, 59_000, 1, 2)]),
+        {(0, CLUSTER): metadata_table([attempt], 0, DAY_MS)},
+        {},
+        60_000,
+        120_000,
+        60_000,
+        (CLUSTER,),
+    )
+    h100 = next(row for row in rows if row["model"] == "H100")
+    assert h100["interactive"] == 8
+    assert h100["setup_tasks"] == 2
+    assert h100["setup_gpu_requests"] is None
+    assert h100["missing_task_metadata"] == 0
+    assert h100["idle"] is None
 
 
 def _database_source(database):
@@ -217,7 +242,8 @@ def test_bridge_reads_whole_emissions_and_shares_inputs_between_both_models():
             first = client.get("/finelog/marin/v1/gpu/allocation", params={**params, "model": "H100"})
             second = client.get("/finelog/marin/v1/gpu/allocation", params={**params, "model": "GB200"})
             assert first.status_code == second.status_code == 200
-            assert first.json()[0]["batch"] == 4
+            assert first.json()[0]["interactive"] == 4
+            assert first.json()[0]["batch"] == 0  # The captured dispatch band was Batch.
             assert first.json()[0]["missing_task_metadata"] == 0
             assert second.json()[0]["batch"] == 0
             assert first.json()[0]["unknown_model_gpu_requests"] == 8

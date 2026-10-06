@@ -398,15 +398,17 @@ The H100 and Blackwell (GB200) allocation panels on Fleet accelerators default t
 seven days. They sample retained Running GPU requests at common instants: every
 minute for ranges up to six hours, five minutes up to two days, and fifteen
 minutes up to seven days. Each request uses the owning child job's GPU shape and
-its attempt interval. A current attempt uses its persisted applied priority,
-including budget downgrades. Older Interactive attempts with an unverified band
-appear as unknown priority; older System, Production and Batch bands follow the
-controller's immutable-band policy.
+its attempt interval. Priority groups use the owning child job's requested band.
+An Interactive request dispatched as Batch remains in the Interactive group.
+Requests whose requested band is unavailable use unknown priority. There is no
+requested/applied toggle or applied-priority lookup.
 
 Historical points are incomplete. Retained metadata does not establish exact
 node binding during setup, pod cleanup after an attempt ends, or historical
 Kubernetes allocatable capacity. The coverage table quantifies setup and metadata
-gaps and names unavailable regional sources. Missing allocation does not become
+gaps and names unavailable regional sources. Setup task counts are fleet-wide and
+include CPU tasks. Setup GPU quantities remain blank when assignment times are
+unavailable through the read APIs. Missing allocation does not become
 unknown priority or idle. A missing regional source leaves a blank span instead of
 a reduced fleet total. Cluster Capacity remains the live allocation reference.
 

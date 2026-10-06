@@ -747,7 +747,7 @@ def create_app(
                             "samples": len(points),
                             "incomplete_samples": sum(r["incomplete"] for r in points),
                             "resolution_minutes": points[0]["resolution_minutes"] if points else None,
-                            "setup_gap_samples": sum(r["setup_gpu_requests"] > 0 for r in points),
+                            "setup_gap_samples": sum(r["setup_tasks"] > 0 for r in points),
                             "metadata_gap_samples": sum(r["missing_task_metadata"] > 0 for r in points),
                             "missing_source_samples": sum(bool(r["missing_clusters"]) for r in points),
                             "unknown_model_gap_samples": sum(r["unknown_model_gpu_requests"] > 0 for r in points),
