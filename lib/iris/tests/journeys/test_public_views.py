@@ -56,14 +56,18 @@ def test_succeeded_task_status_omits_failure_highlights_even_with_error_like_log
 
 
 def test_list_tasks_reports_current_timing_and_only_the_latest_failed_attempt(journey):
-    job = journey.submit("bounded-attempt-list", failure_retries=2)
+    job = journey.submit("bounded-attempt-list", tasks=2, failure_retries=2)
     journey.settle()
+    first_attempt, untouched = journey.tasks(job)
+    assert [attempt.attempt_id for attempt in first_attempt.attempts] == [0]
+    assert [attempt.attempt_id for attempt in untouched.attempts] == [0]
+
     journey.fail(job[0], error="first failure")
     journey.settle()
     journey.fail(job[0], error="latest failure")
     journey.settle()
 
-    (listed,) = journey.tasks(job)
+    listed, untouched = journey.tasks(job)
     detail = journey.task(job[0])
 
     assert listed.state == job_pb2.TASK_STATE_RUNNING
@@ -71,4 +75,5 @@ def test_list_tasks_reports_current_timing_and_only_the_latest_failed_attempt(jo
     assert [attempt.attempt_id for attempt in listed.attempts] == [1, 2]
     assert listed.attempts[0].error == "latest failure"
     assert listed.attempts[-1].started_at == listed.started_at
+    assert [attempt.attempt_id for attempt in untouched.attempts] == [0]
     assert [attempt.attempt_id for attempt in detail.attempts] == [0, 1, 2]

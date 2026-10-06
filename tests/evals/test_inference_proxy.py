@@ -15,6 +15,7 @@ from typing import cast
 import httpx
 import marin.inference.iris as iris_module
 import pytest
+from fray.client import JobHandle
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
@@ -272,8 +273,11 @@ def test_direct_inference_session_reports_backend_state(
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                job_status=lambda _job_id: SimpleNamespace(state=JobState.RUNNING),
-                list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
+                job_status=lambda _job_id: SimpleNamespace(
+                    state=JobState.RUNNING,
+                    task_count=1,
+                    task_state_counts={task_state: 1},
+                ),
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
             )
         ),
@@ -281,6 +285,38 @@ def test_direct_inference_session_reports_backend_state(
     session = _remote_session()
 
     assert session.backend_state() is expected
+
+
+@pytest.mark.parametrize(
+    ("task_state", "expected_error"),
+    [
+        (TaskState.PENDING, "to be placed"),
+        (TaskState.ASSIGNED, "waiting for inference endpoint"),
+        (TaskState.RUNNING, "waiting for inference endpoint"),
+    ],
+)
+def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
+    task_state: TaskState, expected_error: str, monkeypatch
+) -> None:
+    class ExpiredDeadline:
+        def expired(self) -> bool:
+            return True
+
+    monkeypatch.setattr(iris_module.Deadline, "from_seconds", lambda _seconds: ExpiredDeadline())
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=lambda _endpoint_name: [],
+                job_status=lambda _job_id: SimpleNamespace(task_state_counts={task_state: 1}),
+            )
+        ),
+    )
+    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+
+    with pytest.raises(TimeoutError, match=expected_error):
+        iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=60)
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
@@ -301,11 +337,11 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
     task_pending = True
     probe_statuses: list[int] = []
 
-    def list_tasks(_job_id):
+    def job_status(_job_id):
         nonlocal task_pending
         state = TaskState.PENDING if task_pending else TaskState.RUNNING
         task_pending = False
-        return [SimpleNamespace(state=state)]
+        return SimpleNamespace(state=JobState.RUNNING, task_count=1, task_state_counts={state: 1})
 
     def probe_endpoint(_url, timeout):
         del timeout
@@ -318,8 +354,7 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                job_status=lambda *_args: SimpleNamespace(state=JobState.RUNNING),
-                list_tasks=list_tasks,
+                job_status=job_status,
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
             )
         ),
@@ -353,8 +388,11 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                job_status=lambda *_args: SimpleNamespace(state=JobState.RUNNING),
-                list_tasks=lambda _job_id: [SimpleNamespace(state=TaskState.RUNNING)],
+                job_status=lambda *_args: SimpleNamespace(
+                    state=JobState.RUNNING,
+                    task_count=1,
+                    task_state_counts={TaskState.RUNNING: 1},
+                ),
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
             )
         ),
