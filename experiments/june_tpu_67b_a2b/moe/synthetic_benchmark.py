@@ -102,6 +102,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
     parser.add_argument("--attention", choices=get_args(GrugAttentionImplementation), default="reference")
     parser.add_argument("--moe-impl", default="ring", help="MoE dispatch backend (default: ring).")
+    parser.add_argument("--capacity-factor", type=float, help="EP receiver capacity factor (default: model's 1.0).")
+    parser.add_argument(
+        "--pooled-transport-capacity-factor",
+        type=float,
+        help="Sender pool capacity factor; required by --moe-impl fixed_pooled_wave_all_to_all.",
+    )
+    parser.add_argument(
+        "--num-expert-waves",
+        type=int,
+        default=1,
+        help="Waves for fixed_pooled_wave_all_to_all; must divide the local expert count.",
+    )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
     parser.add_argument("--log-dir", type=Path, default=Path("logs/june-synthetic"))
@@ -138,8 +150,15 @@ def main() -> None:
     args = parse_args()
     model, default_mp = preset(args.size, args.seq_len)
     model = dataclasses.replace(
-        model, attention_implementation=args.attention, moe_implementation=args.moe_impl, remat_mode=args.remat_mode
+        model,
+        attention_implementation=args.attention,
+        moe_implementation=args.moe_impl,
+        remat_mode=args.remat_mode,
+        pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
+        num_expert_waves=args.num_expert_waves,
     )
+    if args.capacity_factor is not None:
+        model = dataclasses.replace(model, capacity_factor=args.capacity_factor)
     if args.layers is not None:
         model = dataclasses.replace(model, num_layers=args.layers)
     batch_size = jax.device_count() if args.batch_size is None else args.batch_size
@@ -193,7 +212,8 @@ def main() -> None:
     flops_per_example, _ = _compute_flops(model_config=model)
     logger.info(
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
-        "expert_axis=%d attention=%s moe=%s remat=%s watch_interval=%d flops_per_example=%.4e",
+        "expert_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s watch_interval=%d "
+        "flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -208,6 +228,9 @@ def main() -> None:
         args.expert_axis,
         args.attention,
         args.moe_impl,
+        model.capacity_factor,
+        model.pooled_transport_capacity_factor,
+        model.num_expert_waves,
         args.remat_mode,
         args.watch_interval,
         flops_per_example,
