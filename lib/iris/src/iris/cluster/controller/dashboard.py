@@ -91,8 +91,8 @@ FederationOwnerCheck = Callable[[JobName, str], bool]
 CONTROLLER_SHUTTING_DOWN = "Controller is shutting down"
 # Kubernetes exec can block for minutes. Limit both active calls and queued work
 # independently of the controller's ordinary RPC handler pool.
-_EXEC_RPC_THREADS = 16
-_EXEC_RPC_PENDING = 128
+_EXEC_RPC_THREADS = 128
+_EXEC_RPC_PENDING = 1024
 
 
 class _ControllerDrainingInterceptor:
