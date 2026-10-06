@@ -3,6 +3,7 @@
 
 """Use synthetic completed records; no workers or models are started."""
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Callable
@@ -19,7 +20,7 @@ from marin.external_dependencies import MARIN_SKYRL
 from experiments.post_training.russell_rsi import test_interrupted_calibration, test_teacher_four_pass
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.coding_eval_feedback import collect_coding_eval_evidence
-from experiments.post_training.russell_rsi.interrupted_calibration import run_foreground_coding
+from experiments.post_training.russell_rsi.interrupted_calibration import coding_attempt, run_foreground_coding
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import StudySelectionConfig
 from experiments.post_training.russell_rsi.retention_continuation import (
     FAILED_SOURCE_COMMIT,
@@ -98,7 +99,13 @@ def completed_coding(interrupted_study, tmp_path):
     source_pin = pin(tmp_path / "source.json", source)
     result_pin = pin(coding_dir / ".artifact.json", record)
     (coding_dir / ".executor_status").write_text("SUCCESS")
-    journal_pin = pin(coding_dir / "journal/coding/result.json", saved)
+    journal = coding_attempt(bound)
+
+    async def completed():
+        return saved
+
+    asyncio.run(journal.run(completed))
+    journal_pin = pin(coding_dir / "journal/coding/result.json", {"binding": journal.binding, "result": saved})
     failure = {
         "protocol": FAILURE_PROTOCOL,
         "calibration_status": "incomplete_infrastructure",
@@ -225,6 +232,11 @@ def test_retention_continuation_has_one_retention_and_no_coding_inference(comple
                 "records_sha256": [compact_json_sha256(value) for value in records],
             },
         )
+        pin(
+            tmp_path / "coding-evidence/.artifact.json",
+            {"fingerprint": original["coding-sft"].fingerprint(), "output_path": str(tmp_path / "coding-evidence")},
+        )
+        (tmp_path / "coding-evidence/.executor_status").write_text("SUCCESS")
         config.update(coding_evidence_uri=evidence["uri"], coding_evidence_sha256=evidence["sha256"])
     amendment = pin(tmp_path / "failure.json", failure)
     config.update(launch_failure_uri=amendment["uri"], launch_failure_sha256=amendment["sha256"])
@@ -251,6 +263,10 @@ def test_retention_continuation_has_one_retention_and_no_coding_inference(comple
     assert final.selection.selection.record.parent == old_selection.record.parent
     assert final.selection.selection.original_parent == old_selection.original_parent
     assert outputs["terminal"].run is seal_retention_continuation
+    if saved_evidence:
+        pin(tmp_path / "coding-evidence/.artifact.json", {"fingerprint": "different-producer"})
+        with pytest.raises(ValueError, match="original producer"):
+            retention_continuation_stages(config, prepared)
 
 
 @pytest.mark.parametrize("defect", ["model", "journal", "panel", "admitted"])

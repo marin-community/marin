@@ -8,7 +8,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
@@ -18,7 +18,7 @@ from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.records import read_record, record_path
-from marin.evaluation.runner import run_evaluation_batch
+from marin.evaluation.runner import EndpointRoute, EvaluationBatch, run_evaluation_batch
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.run_environment import dependency_groups_for_resources
@@ -51,6 +51,7 @@ from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_PROB
 PROTOCOL = "russell-rsi-calibration-interruption-v1"
 OUTPUT_PROTOCOL = "russell-rsi-interrupted-calibration-sft-only-v1"
 WORKER_TIMEOUT_HOURS = 6
+CODING_TRANSPORT_RETRY_BUDGET = 900
 BRANCH_PACKAGES = (
     "marin",
     "rigging",
@@ -216,26 +217,8 @@ class BoundedIrisClient:
         return self.client.submit(**kwargs)
 
 
-def coding_attempt(config: EvalStepConfig) -> AttemptJournal:
-    """Bind the single coding batch before server or worker startup."""
-    binding = json.loads(json.dumps(asdict(config)))
-    return AttemptJournal(
-        StoragePath(config.artifact_path) / "journal" / "coding",
-        {
-            "protocol": OUTPUT_PROTOCOL,
-            "config": binding,
-            "job_policy": {"failure_retries": 0, "preemption_retries": 0, "model_retries": 0},
-        },
-    )
-
-
-def run_foreground_coding(config: EvalStepConfig) -> EvaluationResult:
-    """Run the existing coding evaluation from the foreground coordinator."""
-    attempt = coding_attempt(config)
-    saved = attempt.saved_result()
-    if saved is not None:
-        return EvaluationResult(**saved)
-
+def foreground_coding_batch(config: EvalStepConfig, endpoint_route: EndpointRoute) -> EvaluationBatch:
+    """Build the unchanged coding panels with an explicit worker endpoint route."""
     batch = prepare_evaluation_batch(
         LaunchSpec(
             model=config.model,
@@ -260,12 +243,60 @@ def run_foreground_coding(config: EvalStepConfig) -> EvaluationResult:
             evaluation.executor,
             config=replace(
                 evaluation.executor.config,
-                # lm-eval v0.4.12 counts total attempts in this field.
+                # Local coding adapters retain their separate transport retry budget.
                 extra_model_args={**evaluation.executor.config.extra_model_args, "max_retries": 1},
             ),
         )
-        evaluations.append(replace(evaluation, executor=executor))
-    batch = replace(batch, evaluations=tuple(evaluations))
+        if endpoint_route is EndpointRoute.CAPABILITY:
+            executor = replace(
+                executor,
+                config=replace(
+                    executor.config,
+                    extra_model_args={
+                        **executor.config.extra_model_args,
+                        "transport_retry_budget": CODING_TRANSPORT_RETRY_BUDGET,
+                    },
+                ),
+            )
+        evaluations.append(replace(evaluation, executor=executor, endpoint_route=endpoint_route))
+    return replace(batch, evaluations=tuple(evaluations))
+
+
+def coding_attempt(config: EvalStepConfig, *, transport_binding: dict | None = None) -> AttemptJournal:
+    """Bind the single coding batch before server or worker startup."""
+    binding = json.loads(json.dumps(asdict(config)))
+    journal_binding = {
+        "protocol": OUTPUT_PROTOCOL,
+        "config": binding,
+        "job_policy": {"failure_retries": 0, "preemption_retries": 0, "model_retries": 0},
+    }
+    if transport_binding is not None:
+        batch = foreground_coding_batch(config, EndpointRoute.CAPABILITY)
+        journal_binding["transport_replacement"] = {
+            **transport_binding,
+            "evaluations": [
+                {
+                    "route": item.endpoint_route.value,
+                    "executor_config": asdict(cast(EvalchemyExecutor, item.executor).config),
+                }
+                for item in batch.evaluations
+            ],
+        }
+        journal_binding["job_policy"] = {"failure_retries": 0, "preemption_retries": 0}
+    return AttemptJournal(
+        StoragePath(config.artifact_path) / "journal" / "coding", json.loads(json.dumps(journal_binding))
+    )
+
+
+def run_foreground_coding(config: EvalStepConfig, *, transport_binding: dict | None = None) -> EvaluationResult:
+    """Run the existing coding evaluation from the foreground coordinator."""
+    attempt = coding_attempt(config, transport_binding=transport_binding)
+    saved = attempt.saved_result()
+    if saved is not None:
+        return EvaluationResult(**saved)
+
+    route = EndpointRoute.CAPABILITY if transport_binding is not None else EndpointRoute.DIRECT
+    batch = foreground_coding_batch(config, route)
     if not isinstance(iris_ctx().client, BoundedIrisClient):
         raise ValueError("Foreground coding requires the bounded CW02 client")
 

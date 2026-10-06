@@ -4,8 +4,10 @@
 """Continue never-issued retention after a transport failure, reusing completed coding."""
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest
@@ -22,8 +24,10 @@ from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingEvidenceConfig, CodingPanel, PanelItem
+from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     InterruptedSelectionConfig,
+    coding_attempt,
     retention_journal,
     retention_request,
     seal_interrupted_selection,
@@ -194,33 +198,27 @@ def prepare_retention_continuation(
     )
 
 
-def retention_continuation_stages(config: dict, prepared: PreparedRetentionContinuation) -> dict[str, ArtifactStep]:
-    """Select only after original coding and the same frozen retention complete."""
-    if config["protocol"] != PROTOCOL or config["version"] != VERSION:
-        raise ValueError("Retention selection changed the continuation protocol or version")
-    if _pin(config, "retention_config") != prepared.retention_config:
-        raise ValueError("Selection substituted a different retention configuration")
-    source, old_selection = prepared.source, prepared.selection
-    old_evidence, old_coding, model, retention = (
-        prepared.coding_evidence,
-        prepared.coding,
-        prepared.model,
-        prepared.tasks,
-    )
-    failure_pin = prepared.failure
+def completed_coding_evidence(
+    config: dict,
+    *,
+    source: dict,
+    old_coding: ArtifactStep,
+    old_evidence: ArtifactStep,
+    model: ArtifactStep,
+    old_selection: StudySelectionConfig,
+    version: str,
+    protocol: str,
+    journal_factory: Callable[[Any], AttemptJournal] = coding_attempt,
+) -> tuple[ArtifactStep, PinnedFile, PinnedFile]:
+    """Validate a completed producer and reuse or extract its canonical coding evidence."""
     result_pin = _pin(config, "coding_result")
     journal_pin = _pin(config, "coding_journal_result")
     record = result_pin.read_json()
     if "path" in record["result"]:
         raise ValueError("Completed coding producer record has an unexpected embedded path")
     result = {"path": record["output_path"], **record["result"]}
-    retention_path = prepared.step.path(source["recovery_artifact_prefix"])
-    for path in (result["path"], retention_path):
-        if StatusFile(path, worker_id="continuation-preflight").status != STATUS_SUCCESS:
-            raise ValueError("Selection requires completed original coding and frozen retention")
-    retention_record = read_record(retention_path)
-    if retention_record is None or retention_record.fingerprint != prepared.step.fingerprint():
-        raise ValueError("Completed retention does not match its frozen continuation producer")
+    if StatusFile(result["path"], worker_id="continuation-preflight").status != STATUS_SUCCESS:
+        raise ValueError("Selection requires completed coding")
     expected_config = old_coding.build_config(
         StepContext.for_run(
             record["output_path"],
@@ -229,15 +227,18 @@ def retention_continuation_stages(config: dict, prepared: PreparedRetentionConti
             runtime_args=old_coding.runtime_args,
         )
     )
+    journal = journal_factory(expected_config)
     if (
         record["name"] != old_coding.name
-        or record["version"] != source["version"]
+        or record["version"] != old_coding.version
         or record["fingerprint"] != old_coding.fingerprint()
         or canonical_json(record["config"]) != canonical_json(expected_config)
         or str(StoragePath(result_pin.uri).parent) != result["path"]
         or len(result["run_ids"]) != 2
         or len(result["results_paths"]) != 2
-        or result != journal_pin.read_json()
+        or str(StoragePath(journal_pin.uri)) != str(StoragePath(result["path"]) / "journal/coding/result.json")
+        or journal_pin.read_json() != {"binding": journal.binding, "result": result}
+        or journal.saved_result() != result
     ):
         raise ValueError("Completed coding producer, model, panels, or journal differ")
     evidence_pair = ("coding_evidence_uri" in config, "coding_evidence_sha256" in config)
@@ -246,6 +247,14 @@ def retention_continuation_stages(config: dict, prepared: PreparedRetentionConti
     if evidence_pair[0]:
         evidence_pin = _pin(config, "coding_evidence")
         evidence = evidence_pin.read_json()
+        evidence_path = str(StoragePath(evidence_pin.uri).parent)
+        producer = read_record(evidence_path)
+        if (
+            StatusFile(evidence_path, worker_id="continuation-preflight").status != STATUS_SUCCESS
+            or producer is None
+            or producer.fingerprint != old_evidence.fingerprint()
+        ):
+            raise ValueError("Completed coding evidence does not match its original producer")
         records = tuple(
             read_evaluation_record(record_path(result["records_prefix"], run_id)).model_dump(mode="json", by_alias=True)
             for run_id in result["run_ids"]
@@ -260,15 +269,15 @@ def retention_continuation_stages(config: dict, prepared: PreparedRetentionConti
         ):
             raise ValueError("Completed coding evidence changed its model or panel")
         coding_evidence = ArtifactStep.adopt(
-            f"documents/{PROTOCOL}-completed-coding",
-            VERSION,
+            f"documents/{protocol}-completed-coding",
+            version,
             str(StoragePath(evidence_pin.uri).parent),
             config={"producer_identity": artifact_identity(old_evidence), **asdict(evidence_pin)},
         )
     else:
         saved_result = ArtifactStep.adopt(
-            f"evals/{PROTOCOL}-completed-coding",
-            VERSION,
+            f"evals/{protocol}-completed-coding",
+            version,
             result["path"],
             kind=EvaluationResult,
             config={"producer_identity": artifact_identity(old_coding), **asdict(result_pin)},
@@ -287,8 +296,41 @@ def retention_continuation_stages(config: dict, prepared: PreparedRetentionConti
             )
 
         coding_evidence = replace(
-            old_evidence, version=VERSION, deps=(saved_result, model), build_config=evidence_config
+            old_evidence, version=version, deps=(saved_result, model), build_config=evidence_config
         )
+    return coding_evidence, result_pin, journal_pin
+
+
+def retention_continuation_stages(config: dict, prepared: PreparedRetentionContinuation) -> dict[str, ArtifactStep]:
+    """Select only after original coding and the same frozen retention complete."""
+    if config["protocol"] != PROTOCOL or config["version"] != VERSION:
+        raise ValueError("Retention selection changed the continuation protocol or version")
+    if _pin(config, "retention_config") != prepared.retention_config:
+        raise ValueError("Selection substituted a different retention configuration")
+    source, old_selection = prepared.source, prepared.selection
+    old_evidence, old_coding, model, retention = (
+        prepared.coding_evidence,
+        prepared.coding,
+        prepared.model,
+        prepared.tasks,
+    )
+    failure_pin = prepared.failure
+    retention_path = prepared.step.path(source["recovery_artifact_prefix"])
+    if StatusFile(retention_path, worker_id="continuation-preflight").status != STATUS_SUCCESS:
+        raise ValueError("Selection requires completed frozen retention")
+    retention_record = read_record(retention_path)
+    if retention_record is None or retention_record.fingerprint != prepared.step.fingerprint():
+        raise ValueError("Completed retention does not match its frozen continuation producer")
+    coding_evidence, result_pin, journal_pin = completed_coding_evidence(
+        config,
+        source=source,
+        old_coding=old_coding,
+        old_evidence=old_evidence,
+        model=model,
+        old_selection=old_selection,
+        version=VERSION,
+        protocol=PROTOCOL,
+    )
     study = StudyBaseline(
         PROTOCOL, old_selection.record.parent, old_selection.original_parent, old_selection.record.retention_task_ids
     )

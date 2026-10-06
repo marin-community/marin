@@ -18,8 +18,10 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx, iris_ctx_scope
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import controller_pb2, job_pb2
+from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig, _run_evalchemy_child
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.runner import EndpointRoute
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, run
 from marin.experiment.cli import graph_handles
@@ -27,7 +29,7 @@ from marin.inference.config import IrisConfig, RemoteInferenceConfig, ServedMode
 from marin.inference.iris import remote_inference
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
-from experiments.post_training.russell_rsi import test_teacher_four_pass
+from experiments.post_training.russell_rsi import interrupted_calibration, test_teacher_four_pass
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     OUTPUT_PROTOCOL,
     PROTOCOL,
@@ -207,6 +209,33 @@ def test_coding_completed_replay_and_incomplete_refusal_precede_any_client(inter
         run_foreground_coding(bound)
 
 
+@pytest.mark.parametrize(
+    "transport_binding,route", [(None, EndpointRoute.DIRECT), ({"replacement": "v9"}, EndpointRoute.CAPABILITY)]
+)
+def test_foreground_coding_preserves_capability_route(
+    interrupted_study, tmp_path, monkeypatch, transport_binding, route
+):
+    config, _, _, _ = interrupted_study
+    coding = four_pass_post_workflow(config, "evaluate-interrupted")["coding-sft"].deps[0]
+    bound = coding.build_config(
+        StepContext.for_run(str(tmp_path / "coding"), str(tmp_path), deps=coding.deps, runtime_args=coding.runtime_args)
+    )
+    captured = []
+
+    def capture(batch, **kwargs):
+        captured.append(batch)
+        raise CapturedSubmission
+
+    monkeypatch.setattr(interrupted_calibration, "run_evaluation_batch", capture)
+    client = BoundedIrisClient(cast(IrisClient, object()))
+    with iris_ctx_scope(IrisContext(job_id=None, client=cast(IrisClient, client))):
+        with pytest.raises(CapturedSubmission):
+            run_foreground_coding(bound, transport_binding=transport_binding)
+    (batch,) = captured
+    assert [item.endpoint_route for item in batch.evaluations] == [route] * 2
+    assert [item.executor.config.extra_model_args["max_retries"] for item in batch.evaluations] == [1, 1]
+
+
 def save_foreground_context(config: dict) -> None:
     path = config["path"]
     context = iris_ctx()
@@ -282,7 +311,11 @@ def test_direct_cluster_route_in_serialized_worker_requests(interrupted_study, t
                 else:
                     _run_evalchemy_child(
                         RunningModel(
-                            OpenAIEndpoint("http://no-model.invalid/v1", "frozen-model"), tokenizer="frozen-tokenizer"
+                            OpenAIEndpoint(
+                                "https://iris.example/proxy/t/cluster=cw-us-east-02a/token/endpoint/v1",
+                                "frozen-model",
+                            ),
+                            tokenizer="frozen-tokenizer",
                         ),
                         EvalchemyRunConfig(name="coding", tasks=(EvalTaskConfig("humanevalplus", None),)),
                         str(tmp_path),
@@ -292,6 +325,10 @@ def test_direct_cluster_route_in_serialized_worker_requests(interrupted_study, t
         cluster.shutdown()
     (wire,) = captured
     assert not any(constraint.key == CLUSTER_CONSTRAINT_KEY for constraint in wire.constraints)
+    if stage == "evalchemy":
+        child = json.loads(wire.environment.env_vars[CONFIG_ENV_KEY])
+        assert child["base_url"] == "https://iris.example/proxy/t/cluster=cw-us-east-02a/token/endpoint/v1"
+        assert child["model_id"] == "frozen-model"
     if stage != "evalchemy":
         assert wire.resources.device.gpu.count == 8
     if stage == "serving":

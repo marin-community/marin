@@ -23,6 +23,13 @@ from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
+from experiments.post_training.russell_rsi.coding_transport_replacement import (
+    PROTOCOL as CODING_REPLACEMENT_PROTOCOL,
+)
+from experiments.post_training.russell_rsi.coding_transport_replacement import (
+    prepare_coding_replacement,
+    replacement_selection_stages,
+)
 from experiments.post_training.russell_rsi.interrupted_calibration import (
     BRANCH_PACKAGES,
     OUTPUT_PROTOCOL,
@@ -81,7 +88,11 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
 @click.option("--config-sha256", required=True)
 @click.option("--source-review-uri", required=True)
 @click.option("--source-review-sha256", required=True)
-@click.option("--stage", type=click.Choice(["evaluate-interrupted", "retain", "select"]), required=True)
+@click.option(
+    "--stage",
+    type=click.Choice(["evaluate-interrupted", "retain", "select", "replace-coding", "select-replacement"]),
+    required=True,
+)
 @foreground_build_options
 def main(
     config_uri: str, config_sha256: str, source_review_uri: str, source_review_sha256: str, stage: str
@@ -89,6 +100,27 @@ def main(
     configure_coreweave_s3()
     require_reviewed_source(source_review_uri, source_review_sha256)
     config = json.loads(pinned_bytes(config_uri, config_sha256))
+    if stage in {"replace-coding", "select-replacement"}:
+        if resolve_version(CODING_REPLACEMENT_PROTOCOL, None) != config["version"]:
+            raise click.UsageError("Coding replacement version differs from its frozen amendment")
+        coding_pin = (
+            PinnedFile(config_uri, config_sha256)
+            if stage == "replace-coding"
+            else PinnedFile(config["coding_config_uri"], config["coding_config_sha256"])
+        )
+        coding_config = coding_pin.read_json()
+        amendment = PinnedFile(
+            coding_config["transport_amendment_uri"], coding_config["transport_amendment_sha256"]
+        ).read_json()
+        retention_pin = PinnedFile(**amendment["retention"]["config"])
+        retention_config = retention_pin.read_json()
+        source = PinnedFile(retention_config["source_config_uri"], retention_config["source_config_sha256"]).read_json()
+        original = chat_study_post_workflow(source, "evaluate-interrupted")
+        retention = prepare_retention_continuation(retention_config, source, original, retention_pin)
+        replacement = prepare_coding_replacement(coding_config, coding_pin, retention)
+        if stage == "replace-coding":
+            return [replacement.coding]
+        return [replacement_selection_stages(config, replacement)["terminal"]]
     if stage in {"retain", "select"}:
         if resolve_version(RETENTION_CONTINUATION_PROTOCOL, None) != config["version"]:
             raise click.UsageError("Retention continuation version differs from its frozen amendment")
