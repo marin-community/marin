@@ -10,7 +10,12 @@ from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evaluation.pipeline import eval_step
-from experiments.post_training.russell_rsi.bootstrap_loop import PILOT_UPDATES
+from experiments.post_training.russell_rsi.bootstrap_loop import (
+    PILOT_UPDATES,
+    QualifiedTask,
+    RoundPlan,
+    calibration_measurements,
+)
 from experiments.post_training.russell_rsi.launch import (
     CLUSTER,
     OptimizerStepConfig,
@@ -19,7 +24,13 @@ from experiments.post_training.russell_rsi.launch import (
     require_optimizer_updates,
     train_step,
 )
-from experiments.post_training.russell_rsi.replay import GROUPS_PER_UPDATE, ROLLOUTS_PER_GROUP
+from experiments.post_training.russell_rsi.replay import (
+    GROUPS_PER_UPDATE,
+    REPLAY_SEED,
+    ROLLOUTS_PER_GROUP,
+    calibration_signal_failure,
+    sampled_replay_plan,
+)
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
@@ -94,3 +105,40 @@ def four_update_trial(
         federated_cluster=CLUSTER,
     )
     return {"rl": trained, "updates": updates, "reload": reload}
+
+
+def calibrated_schedule(
+    summary: dict, plan: RoundPlan, families: dict[str, str], targeted_tasks: tuple[QualifiedTask, ...], protocol: str
+) -> dict:
+    """Apply completeness and signal gates to explicit targets."""
+    measurements = calibration_measurements(summary, plan.task_bank, plan.current_checkpoint, plan.bank_identity)
+    failure = calibration_signal_failure(measurements)
+    if failure is not None:
+        return {"protocol": protocol, "signal_gate_passed": False, "reason": failure, "schedule": None}
+    schedule = sampled_replay_plan(
+        plan,
+        measurements,
+        targeted_tasks,
+        pilot_number=2,
+        bank_identity=plan.bank_identity,
+        calibration_identity=plan.calibration_identity,
+        frozen_identity=f"{protocol}-replay",
+        parent_identity=plan.current_checkpoint,
+        model_identity=plan.current_checkpoint,
+        family_by_task=families,
+        updates=PILOT_UPDATES,
+        seed=REPLAY_SEED,
+    )
+    if not schedule["signal_gate_passed"]:
+        return {
+            "protocol": protocol,
+            "signal_gate_passed": False,
+            "reason": "weighted_q4_below_threshold",
+            "schedule": None,
+        }
+    schedule = bounded_schedule(
+        schedule,
+        protocol,
+        ["Replay repeats contracts and creates no independent evaluation evidence."],
+    )
+    return {"protocol": protocol, "signal_gate_passed": True, "reason": None, "schedule": schedule}

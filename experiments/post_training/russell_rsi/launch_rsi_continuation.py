@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 
 import click
@@ -25,13 +26,12 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     CheckpointScore,
     QualifiedTask,
     RoundPlan,
-    calibration_measurements,
     promotes,
     qualified_bank,
     restored_round,
     write_once,
 )
-from experiments.post_training.russell_rsi.calibrated_trial import bounded_schedule, four_update_trial
+from experiments.post_training.russell_rsi.calibrated_trial import calibrated_schedule, four_update_trial
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
@@ -51,9 +51,7 @@ from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.replay import (
     REPLAY_SEED,
     ReplayDatasetConfig,
-    calibration_signal_failure,
     freeze_replay_dataset,
-    sampled_replay_plan,
     validate_replay_plan,
 )
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
@@ -123,39 +121,7 @@ def expanded_bank(
 
 def continuation_schedule(summary: dict, plan: RoundPlan, families: dict[str, str]) -> dict:
     """Use the existing family sampler with a fresh, bounded trial identity."""
-    measurements = calibration_measurements(summary, plan.task_bank, plan.current_checkpoint, plan.bank_identity)
-    failure = calibration_signal_failure(measurements)
-    if failure is not None:
-        return {"protocol": PROTOCOL, "signal_gate_passed": False, "reason": failure, "schedule": None}
-    schedule = sampled_replay_plan(
-        plan,
-        measurements,
-        plan.task_bank[RETAINED_TASKS:],
-        pilot_number=2,
-        bank_identity=plan.bank_identity,
-        calibration_identity=plan.calibration_identity,
-        frozen_identity=f"{PROTOCOL}-replay",
-        parent_identity=plan.current_checkpoint,
-        model_identity=plan.current_checkpoint,
-        family_by_task=families,
-        updates=UPDATES,
-        seed=REPLAY_SEED,
-    )
-    if not schedule["signal_gate_passed"]:
-        return {
-            "protocol": PROTOCOL,
-            "signal_gate_passed": False,
-            "reason": "weighted_q4_below_threshold",
-            "schedule": None,
-        }
-    schedule = bounded_schedule(
-        schedule,
-        PROTOCOL,
-        [
-            "Replay repeats contracts and creates no independent evaluation evidence.",
-        ],
-    )
-    return {"protocol": PROTOCOL, "signal_gate_passed": True, "reason": None, "schedule": schedule}
+    return calibrated_schedule(summary, plan, families, plan.task_bank[RETAINED_TASKS:], PROTOCOL)
 
 
 @dataclass(frozen=True)
@@ -204,17 +170,23 @@ def seal_continuation_selection(config: ContinuationSelectionConfig) -> None:
         config.retention_identity,
         config.retention_task_ids,
     )
-    selected = candidate if promotes(candidate, config.incumbent) else config.incumbent
     write_once(
         StoragePath(prefix_join(config.output_path, "continuation-selection.json")),
-        {
-            "protocol": PROTOCOL,
-            "incumbent": asdict(config.incumbent),
-            "candidate": asdict(candidate),
-            "selected": asdict(selected),
-            "original_parent": asdict(config.parent),
-        },
+        selection_record(candidate, config.incumbent, config.parent, PROTOCOL),
     )
+
+
+def selection_record(
+    candidate: CheckpointScore, incumbent: CheckpointScore, parent: CheckpointScore, protocol: str
+) -> dict:
+    selected = candidate if promotes(candidate, incumbent) else incumbent
+    return {
+        "protocol": protocol,
+        "incumbent": asdict(incumbent),
+        "candidate": asdict(candidate),
+        "selected": asdict(selected),
+        "original_parent": asdict(parent),
+    }
 
 
 def continuation_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
@@ -383,10 +355,43 @@ def continuation_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     )
     trial = four_update_trial(data, model, version, retention, config["machine_config"], PROTOCOL)
     trained, updates, reload = trial["rl"], trial["updates"], trial["reload"]
-    evaluation = evaluation_model(f"russell-rsi-{PROTOCOL}", SKYRL_POLICY_LOCATION, None)
-    outputs = {"rl": trained, "reload": reload}
     if stage == "train":
-        return {**outputs, "terminal": reload}
+        return {"rl": trained, "reload": reload, "terminal": reload}
+    return trial_evaluation_graph(
+        trained=trained,
+        updates=updates,
+        reload=reload,
+        panel=panel,
+        retention=retention,
+        incumbent_score=incumbent_score,
+        parent_score=parent_score,
+        runtime=runtime,
+        protocol=PROTOCOL,
+        version=version,
+        task_ids=task_ids,
+        selection_writer=seal_continuation_selection,
+    )
+
+
+def trial_evaluation_graph(
+    *,
+    trained: ArtifactStep,
+    updates: ArtifactStep,
+    reload: ArtifactStep,
+    panel: CodingPanel,
+    retention: ArtifactStep,
+    incumbent_score: CheckpointScore,
+    parent_score: CheckpointScore,
+    runtime: RuntimeBundle,
+    protocol: str,
+    version: str,
+    task_ids: tuple[str, ...],
+    selection_writer: Callable[[ContinuationSelectionConfig], None],
+) -> dict[str, ArtifactStep]:
+    """Bind normal coding and retention evaluation behind export and reload."""
+    panel_digest = compact_json_sha256(asdict(panel))
+    evaluation = evaluation_model(f"russell-rsi-{protocol}", SKYRL_POLICY_LOCATION, None)
+    outputs = {"rl": trained, "reload": reload}
     coding = eval_step(
         evaluation,
         "humanevalplus,mbppplus",
@@ -413,17 +418,17 @@ def continuation_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
         )
 
     evidence = ArtifactStep(
-        name=f"documents/russell-rsi-{PROTOCOL}-coding",
+        name=f"documents/russell-rsi-{protocol}-coding",
         version=version,
         artifact_type=Artifact,
         deps=(coding, trained),
         build_config=evidence_config,
         run=collect_coding_eval_evidence,
     )
-    retained = development_step(retention, trained, version, runtime, f"{PROTOCOL}-retention", limit=RETENTION_TASKS)
+    retained = development_step(retention, trained, version, runtime, f"{protocol}-retention", limit=RETENTION_TASKS)
     retained = replace(retained, deps=tuple(dict.fromkeys((*retained.deps, updates, reload))))
     selection = ArtifactStep(
-        name=f"documents/russell-rsi-{PROTOCOL}-selection",
+        name=f"documents/russell-rsi-{protocol}-selection",
         version=version,
         artifact_type=Artifact,
         deps=(evidence, retained),
@@ -438,7 +443,7 @@ def continuation_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
             parent_score,
             ctx.output_path,
         ),
-        run=seal_continuation_selection,
+        run=selection_writer,
     )
     return {**outputs, "coding": evidence, "retention": retained, "selection": selection, "terminal": selection}
 
