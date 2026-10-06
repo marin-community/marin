@@ -20,7 +20,7 @@ from enum import StrEnum
 from pydantic import TypeAdapter
 from rolloutengine.task_session import SHELL_TOOL_NAME
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind
-from taskcompendium.grading import Outcome
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage, VerifierKind
 from taskcompendium.submission import ANSWER_CALL_NAME
 

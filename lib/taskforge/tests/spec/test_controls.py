@@ -5,7 +5,9 @@ from dataclasses import replace
 
 import pytest
 from taskcompendium.environment import EnvironmentKind, ExitCodeReward, RewardFileFormat
-from taskcompendium.grading import Outcome, verifier_descriptor
+from taskcompendium.execution import StageExecution, TaskExecution
+from taskcompendium.grading import verifier_descriptor
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, StageRewardStrategy, TaskSpec
 from verifyit.spec import ExactSpec
 
@@ -25,6 +27,7 @@ from taskforge.spec.controls import (
 from taskforge.spec.draft import assemble, environment, file, reward_file, shell_verifier, stage, staged
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
+NO_EXECUTION = TaskExecution()
 GRADED_ONE = Expectation(Outcome.GRADED, reward_min=1.0)
 GRADED_ZERO = Expectation(Outcome.GRADED, reward_max=0.0)
 
@@ -41,6 +44,7 @@ def file_task() -> TaskSpec:
         environment(EnvironmentKind.SHELLSIM),
         file_check(),
         SOURCE,
+        execution=NO_EXECUTION,
     )
 
 
@@ -59,6 +63,7 @@ def rubric_task() -> TaskSpec:
         environment(EnvironmentKind.SHELLSIM),
         shell_verifier(("sh", "-c", script), reward_file("/logs/reward.json", RewardFileFormat.JSON), timeout=5),
         SOURCE,
+        execution=NO_EXECUTION,
     )
 
 
@@ -70,6 +75,7 @@ def answer_task() -> TaskSpec:
         environment(EnvironmentKind.NULL),
         verifier_descriptor(ExactSpec(expected=("12",))),
         SOURCE,
+        execution=NO_EXECUTION,
     )
 
 
@@ -189,6 +195,7 @@ def test_every_stage_needs_its_own_controls():
         environment(EnvironmentKind.SHELLSIM),
         staged(StageRewardStrategy.FINAL),
         SOURCE,
+        execution=TaskExecution(stages={"one": StageExecution(), "two": StageExecution()}),
         stages=(stage("one", file_check()), stage("two", file_check("/workspace/b"), instruction="Again.")),
     )
     with pytest.raises(ValueError, match="Stage 1 lacks"):

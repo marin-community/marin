@@ -4,9 +4,15 @@
 """Assemble a TaskCompendium ``TaskSpec`` from builder outputs.
 
 These helpers own the serialized details a builder should not repeat: verifier
-``parameters_json``, base64 file content, stage contexts, and the capability
-requirements of executable environments. ``assemble`` adds the checks TaskSpec
-itself does not make and returns a spec that survives a JSON round trip.
+``parameters_json``, stage contexts, and the capability requirements of
+executable environments. ``assemble`` adds the checks TaskSpec itself does not
+make and returns a spec that survives a JSON round trip.
+
+A task's execution settings are not part of the ``TaskSpec`` (TaskCompendium
+0.24): deadlines, the agent user and each stage's working files, setup and
+healthcheck live in a ``TaskExecution`` that travels beside the task.
+``assemble`` checks the ``TaskExecution`` against the task; the builder returns
+both (``BuildOutput.execution``), and validation passes both to RolloutEngine.
 """
 
 from collections.abc import Mapping, Sequence
@@ -29,6 +35,7 @@ from taskcompendium.environment import (
     StdoutReward,
     VerifierArtifact,
 )
+from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import validate_verifier, verifier_descriptor
 from taskcompendium.models import (
     FILESYSTEM_CAPABILITY,
@@ -134,23 +141,27 @@ def shell_verifier(
     """
     parameters = ShellVerifierSpec(
         argv=tuple(argv),
-        files=tuple(files),
         timeout=timeout,
         env=dict(env or {}),
         user=user,
         reward=reward,
-        environment=grading_environment,
         collect=tuple(collect),
         artifacts=tuple(artifacts),
     )
-    return VerifierSpec(kind=VerifierKind.SHELL, parameters_json=parameters.model_dump_json())
+    return VerifierSpec(
+        kind=VerifierKind.SHELL,
+        parameters_json=parameters.model_dump_json(),
+        files=tuple(files),
+        environment=grading_environment,
+    )
 
 
 def answer_verifier(spec: CandidateSpec) -> VerifierSpec:
     """A generic verifyit answer grader; the build SDK's name for ``verifier_descriptor``.
 
-    TaskCompendium 0.22 resolves only verifyit's pure candidate modes (exact,
-    numeric, mcq, predicted_action).
+    Only verifyit's candidate modes (exact, numeric, mcq, predicted_action)
+    grade a final answer without a private runtime; RolloutEngine refuses the
+    other modes on a task without an application-supplied session.
     """
     return verifier_descriptor(spec)
 
@@ -176,28 +187,19 @@ def stage(
     name: str,
     verifier: VerifierSpec,
     instruction: str | None = None,
-    workdir_files: Sequence[EnvironmentFile] = (),
-    setup: Sequence[EnvironmentCommand] = (),
-    healthcheck: HealthcheckSpec | None = None,
-    agent_timeout: float | None = None,
-    agent_user: str | None = None,
     minimum_rewards: Mapping[str, float] | None = None,
 ) -> TaskStage:
     """One stage on the shared task machine.
 
     The first stage uses the task instruction and takes no ``instruction``; every
     later stage needs one. The task stops after a stage whose rewards fall below
-    any of its ``minimum_rewards``.
+    any of its ``minimum_rewards``. The stage's working files, setup, healthcheck,
+    deadline and user are a ``StageExecution`` in ``TaskExecution.stages[name]``.
     """
     return TaskStage(
         name=name,
         context=None if instruction is None else _user_context(instruction),
         verifier=verifier,
-        workdir_files=tuple(workdir_files),
-        setup=tuple(setup),
-        healthcheck=healthcheck,
-        agent_timeout=agent_timeout,
-        agent_user=agent_user,
         minimum_rewards=dict(minimum_rewards or {}),
     )
 
@@ -209,21 +211,25 @@ def assemble(
     environment: EnvironmentSpec,
     verifier: VerifierSpec,
     source: Source,
+    *,
+    execution: TaskExecution,
     system: str | None = None,
     stages: Sequence[TaskStage] = (),
     final_tools: Sequence[FunctionDefinition] = (),
-    attempt_timeout: float | None = None,
-    agent_timeout: float | None = None,
-    agent_user: str | None = None,
     metadata: Mapping[str, JsonValue] | None = None,
     tags: Sequence[str] = (),
 ) -> TaskSpec:
     """Build a TaskSpec and reject one that RolloutEngine could not grade as intended.
 
+    ``execution`` holds the deadlines, agent user and stage preparation the task
+    runs with. It is checked here but not stored in the TaskSpec: keep it beside
+    the task and pass both to RolloutEngine.
+
     Raises:
-        ValueError: TaskSpec validation failed, a grader does not fit the answer
-            type or environment, a private grader file is agent-visible, or a
-            stage gates on a reward component its grader never reports.
+        ValueError: TaskSpec validation failed, ``execution`` does not name
+            exactly the task's stages, a grader does not fit the answer type or
+            environment, a private grader file is agent-visible, or a stage gates
+            on a reward component its grader never reports.
     """
     executable = environment.kind != EnvironmentKind.NULL
     events = (
@@ -240,19 +246,17 @@ def assemble(
         answer_type=answer_type,
         verifier=verifier,
         environment=environment,
-        attempt_timeout=attempt_timeout,
-        agent_timeout=agent_timeout,
-        agent_user=agent_user,
         stages=tuple(stages),
         source=source,
         metadata=dict(metadata or {}),
         tags=tuple(tags),
     )
+    check_execution(spec, execution)
     stage_graders = tuple(item.verifier for item in spec.stages)
     for grader in (spec.verifier, *stage_graders):
         validate_verifier(grader)
     for grader in stage_graders or (spec.verifier,):
-        _check_grader(spec, grader)
+        _check_grader(spec, execution, grader)
     for item in spec.stages:
         named = sorted(set(item.minimum_rewards) - {DEFAULT_REWARD})
         if named and not emits_reward_components(item.verifier):
@@ -263,21 +267,28 @@ def assemble(
     return restored
 
 
+def check_execution(task: TaskSpec, execution: TaskExecution) -> None:
+    """Raise ``ValueError`` unless ``execution`` prepares exactly the stages ``task`` has."""
+    names = [item.name for item in task.stages]
+    if sorted(execution.stages) != sorted(names):
+        raise ValueError(f"Execution stages {sorted(execution.stages)} do not match the task's stages {sorted(names)}")
+
+
 def _user_context(instruction: str) -> ConversationInput:
     return ConversationInput(events=(TextMessage(role="user", content=instruction),))
 
 
-def _agent_visible_files(spec: TaskSpec) -> tuple[EnvironmentFile, ...]:
+def _agent_visible_files(spec: TaskSpec, execution: TaskExecution) -> tuple[EnvironmentFile, ...]:
     environment = spec.environment
     build = environment.image.files if isinstance(environment.image, DockerBuild) else ()
-    return (*environment.files, *build, *(item for stage in spec.stages for item in stage.workdir_files))
+    return (*environment.files, *build, *(item for stage in execution.stages.values() for item in stage.workdir_files))
 
 
-def _check_grader(spec: TaskSpec, grader: VerifierSpec) -> None:
+def _check_grader(spec: TaskSpec, execution: TaskExecution, grader: VerifierSpec) -> None:
     if grader.kind == VerifierKind.SKIPPED:
         return
     if grader.kind == VerifierKind.SHELL:
-        _check_shell_grader(spec, ShellVerifierSpec.model_validate_json(grader.parameters_json))
+        _check_shell_grader(spec, execution, grader)
         return
     if spec.answer_type in MACHINE_ANSWER_TYPES:
         raise ValueError(f"A {spec.answer_type.value!r} answer requires a shell verifier, not {grader.kind!r}")
@@ -287,11 +298,11 @@ def _check_grader(spec: TaskSpec, grader: VerifierSpec) -> None:
         raise ValueError(f"A {grader.kind!r} verifier requires a text or number answer")
 
 
-def _check_shell_grader(spec: TaskSpec, grader: ShellVerifierSpec) -> None:
+def _check_shell_grader(spec: TaskSpec, execution: TaskExecution, grader: VerifierSpec) -> None:
     environment = spec.environment
     if environment.kind == EnvironmentKind.NULL:
         raise ValueError("A shell verifier requires an executable task environment")
-    visible = {item.content for item in _agent_visible_files(spec)}
+    visible = {item.content for item in _agent_visible_files(spec, execution)}
     leaked = sorted(item.path for item in grader.files if item.content in visible)
     if leaked:
         raise ValueError(f"Private verifier file content is also agent-visible: {leaked}")
