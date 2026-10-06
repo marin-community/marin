@@ -284,6 +284,7 @@ def train_step(
     *,
     bounded_scale: Scale | None = None,
     checkpoint_interval: int | None = None,
+    execution_priority: str = "interactive",
 ) -> ArtifactStep[SkyRLRun]:
     selected = bounded_scale or SCALES[scale]
     label = f"{name_component}-{scale}" if name_component else scale
@@ -309,7 +310,7 @@ def train_step(
             cpu=32,
             memory="512GB",
             disk="2TB",
-            priority="interactive",
+            priority=execution_priority,
             max_retries=0,
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,

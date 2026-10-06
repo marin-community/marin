@@ -340,7 +340,9 @@ def incumbent_bank_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
             pip_packages=["./lib/taskcompendium"],
         ),
     )
-    trial = four_update_trial(data, model, version, retention, config["machine_config"], PROTOCOL)
+    trial = four_update_trial(
+        data, model, version, retention, config["machine_config"], PROTOCOL, execution_priority="batch"
+    )
     if stage == "train":
         return {**trial, "terminal": trial["reload"]}
     return trial_evaluation_graph(

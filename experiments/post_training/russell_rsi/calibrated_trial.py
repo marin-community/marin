@@ -65,6 +65,8 @@ def four_update_trial(
     retention: ArtifactStep[Artifact],
     machine_config: dict,
     protocol: str,
+    *,
+    execution_priority: str = "interactive",
 ) -> dict[str, ArtifactStep]:
     """Bind the trial, its optimizer gate, and its one-item serving reload."""
     trained = train_step(
@@ -76,6 +78,7 @@ def four_update_trial(
         machine_config,
         protocol,
         sampling_mode=SamplingMode.CALIBRATED_REPLAY,
+        execution_priority=execution_priority,
     )
 
     def update_config(ctx: StepContext):

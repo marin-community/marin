@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 from marin.execution.lazy import StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
@@ -234,6 +235,28 @@ def test_incumbent_cli_preflight_accepts_matching_runtime_and_version(incumbent_
 
 class CapturedForegroundConnection(Exception):
     pass
+
+
+def test_incumbent_trial_emits_batch_placement_without_retries(incumbent_inputs, tmp_path):
+    config, tasks, _ = incumbent_inputs
+    sealed_calibration(config, tasks, tmp_path, [0.0, 1.0] * 4)
+    trained = incumbent_bank_workflow(config, "train")["rl"]
+    prefix = str(tmp_path / "artifacts")
+    context = StepContext.for_run(trained.path(prefix), prefix, deps=trained.deps, runtime_args=trained.runtime_args)
+    launch = yaml.safe_load(trained.build_config(context).launch_config_yaml)
+    assert launch["iris"]["priority"] == "batch"
+    assert launch["iris"]["max_retries"] == 0
+    allocation = launch["iris"]["allocation"]
+    assert (allocation["num_nodes"], allocation["gpus_per_node"], allocation["gpu_variant"]) == (5, 8, "H100")
+    placement = launch["skyrl"]["trainer"]["placement"]
+    assert placement["policy_num_nodes"] * placement["policy_num_gpus_per_node"] == 32
+    generator = launch["skyrl"]["generator"]
+    assert (
+        generator["num_inference_engines"]
+        * generator["inference_engine_tensor_parallel_size"]
+        * generator["inference_engine_pipeline_parallel_size"]
+        * generator["inference_engine_data_parallel_size"]
+    ) == 8
 
 
 def test_calibration_cli_run_reaches_foreground_iris_connection(incumbent_inputs, tmp_path, monkeypatch):
