@@ -32,7 +32,7 @@ STOP_COMMAND = (
     '[ -f "$1" ] || exit 1; read -r pid < "$1"; '
     'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
     '[ "$pid" -gt 1 ] || exit 1; '
-    'if kill -0 -- "-$pid" 2>/dev/null; then kill -KILL -- "-$pid" || exit 1; fi; '
+    'kill -KILL "-$pid" || exit 1; '
     'rm -f "$1"'
 )
 
