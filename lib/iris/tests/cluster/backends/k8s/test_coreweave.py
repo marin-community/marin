@@ -1134,8 +1134,6 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
     ]
 
 
-
-
 @pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])
 def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(monkeypatch, change):
     provider, k8s = _make_provider()
