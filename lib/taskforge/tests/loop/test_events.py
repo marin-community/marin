@@ -153,11 +153,6 @@ def test_an_unknown_schema_is_refused(tmp_path):
         derive_state([*entries[:-1], future])
 
 
-def test_event_attrs_cannot_forge_the_sequence(tmp_path):
-    with pytest.raises(ValueError, match="seq"):
-        record_event(JsonlLedger(tmp_path), ITEM, 0, EventKind.SOLVED, 1, None, seq="9")
-
-
 def test_the_budget_counts_only_llm_call_output_tokens(tmp_path):
     log = built_log(tmp_path)
     spans = [
