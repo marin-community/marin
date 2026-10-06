@@ -48,8 +48,9 @@ template arguments. Functions entered in **Python tools** are converted to the
 standard OpenAI `tools` request field so the served model's active template
 formats them.
 
-If a reply reaches **Max tokens** while producing only thinking, Chat warns that
-the model stopped before answering. Increase **Max tokens** and retry the prompt.
+When a reply reaches **Max tokens**, Chat warns that it may be incomplete. This
+applies whether the model stopped during thinking or after starting an answer.
+Increase **Max tokens** and retry the prompt.
 
 Enable **Raw chat** above the Chat composer to replace the rendered messages
 with one plain-text transcript of the entire chat. The transcript includes the

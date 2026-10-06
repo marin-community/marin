@@ -17,13 +17,8 @@ const rendered = computed(() =>
 const thinkingActive = computed(
   () => props.message.role === 'assistant' && props.streaming && !props.message.content,
 )
-const thinkingCutOff = computed(
-  () =>
-    props.message.role === 'assistant' &&
-    props.message.finishReason === 'length' &&
-    Boolean(props.message.thinking.trim()) &&
-    !props.message.content.trim() &&
-    !props.message.toolCalls?.length,
+const maxTokensReached = computed(
+  () => props.message.role === 'assistant' && props.message.finishReason === 'length',
 )
 const empty = computed(
   () =>
@@ -32,7 +27,8 @@ const empty = computed(
     !props.message.content &&
     !props.message.thinking &&
     !props.message.toolCalls?.length &&
-    !props.message.error,
+    !props.message.error &&
+    !maxTokensReached.value,
 )
 
 const copied = ref(false)
@@ -79,11 +75,11 @@ async function copy() {
         :seconds="message.thinkingSeconds"
       />
       <p
-        v-if="thinkingCutOff"
+        v-if="maxTokensReached"
         role="status"
         class="mb-2 rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger"
       >
-        The model reached the Max tokens limit while thinking, before answering. Increase Max tokens and try again.
+        The response hit the Max tokens limit and may be incomplete. Increase Max tokens and try again.
       </p>
       <details v-if="showVllmDebug && message.requestDebug" class="mb-2 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs text-text-secondary">
         <summary class="cursor-pointer font-medium text-text-muted">Request stats</summary>
