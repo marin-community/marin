@@ -10,4 +10,5 @@ prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "9311b1c3eb75491ad817f12b6dfc613e812cb624" }
+# The isolated lock keeps the selected branch revision immutable.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }

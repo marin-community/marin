@@ -19,15 +19,20 @@ def lm_flops_per_token(
     global_every: int | None = None,
     local_kv_heads: int | None = None,
     global_kv_heads: int | None = None,
+    num_full_attention_layers: int | None = None,
 ):
     """Analytic forward FLOPs per token.
 
     ``sliding_window`` + ``global_every`` model interleaved local/global attention: every
     ``global_every``-th layer runs full attention over ``seq_len`` while the rest attend only a
-    ``sliding_window`` span. ``local_kv_heads`` / ``global_kv_heads`` give those two layer classes
-    different KV-head counts (heterogeneous GQA). Left at their defaults (``None``) every layer is full
-    attention with ``num_kv_heads``, matching the original megatron-lm estimate exactly.
+    ``sliding_window`` span. ``num_full_attention_layers`` gives that count directly for schedules
+    that are not a plain stride, such as every fourth layer plus the last. ``local_kv_heads`` /
+    ``global_kv_heads`` give those two layer classes different KV-head counts (heterogeneous GQA).
+    Left at their defaults (``None``) every layer is full attention with ``num_kv_heads``, matching
+    the original megatron-lm estimate exactly.
     """
+    if num_full_attention_layers is not None and not 0 <= num_full_attention_layers <= num_layers:
+        raise ValueError(f"num_full_attention_layers ({num_full_attention_layers}) must be in [0, {num_layers}]")
     head_dim = hidden_dim / num_heads
     shared_intermediate_dim = intermediate_dim if shared_intermediate_dim is None else shared_intermediate_dim
     routed_mlp = 2 * (3 if glu else 2) * hidden_dim * intermediate_dim * num_experts_per_tok
@@ -47,8 +52,10 @@ def lm_flops_per_token(
         seq_flops += 2 * seq_len * attn_span * head_dim * num_heads
         return seq_flops / seq_len
 
-    if sliding_window is not None and global_every is not None and 0 < sliding_window < seq_len:
-        num_global_layers = num_layers // global_every
+    if num_full_attention_layers is None and global_every is not None:
+        num_full_attention_layers = num_layers // global_every
+    if sliding_window is not None and num_full_attention_layers is not None and 0 < sliding_window < seq_len:
+        num_global_layers = num_full_attention_layers
         num_local_layers = num_layers - num_global_layers
         local_kv = local_kv_heads if local_kv_heads is not None else num_kv_heads
         global_kv = global_kv_heads if global_kv_heads is not None else num_kv_heads

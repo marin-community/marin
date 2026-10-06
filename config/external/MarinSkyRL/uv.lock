@@ -1542,7 +1542,7 @@ shellsim = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=9311b1c3eb75491ad817f12b6dfc613e812cb624#9311b1c3eb75491ad817f12b6dfc613e812cb624" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#544d5d6f14116a06bde0209352585903133bd618" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
