@@ -32,7 +32,7 @@ from minisweagent.utils.serialize import recursive_merge
 from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 from shellbox.backends.qemu.bundle import guest_code_id
-from shellbox.mini_agent import NativeMiniAgent
+from shellbox.mini_agent import MINI_VERSION, NativeMiniAgent
 
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
@@ -59,7 +59,6 @@ GUEST_MEMORY_MB = 4096
 AGENT_SETUP_TIMEOUT = 360
 AGENT_TIMEOUT = 1800
 VERIFIER_TIMEOUT = 300
-MINI_VERSION = "2.1.0"
 LITELLM_VERSION = "1.104.0"
 NATIVE_MODEL_RETRY_ENV = {"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1"}
 QUALIFICATION_JOB_TIMEOUT = 6 * 3600
