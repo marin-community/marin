@@ -59,6 +59,7 @@ def make_task_backend(
     config: IrisClusterConfig,
     *,
     descriptor: BackendDescriptor,
+    log_server_address: str,
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
@@ -70,7 +71,8 @@ def make_task_backend(
     profile tables are passed to the K8s backend; node agents write per-pod
     resource samples, while RPC worker daemons write their own rows.
     ``autoscaler`` provisions capacity for that backend (None for clusters with
-    no controller-managed capacity).
+    no controller-managed capacity). ``log_server_address`` is the finelog URL
+    that the log sidecar of a sandbox pod writes to.
     """
     which = config.provider_kind()
     if which == "kubernetes_provider":
@@ -123,6 +125,7 @@ def make_task_backend(
                 host_network=kp.host_network,
                 cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,
+                log_server_address=log_server_address,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
                 task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
@@ -217,6 +220,7 @@ def make_backend(
         provider = make_task_backend(
             config,
             descriptor=descriptor,
+            log_server_address=log_stack.address,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
@@ -228,6 +232,7 @@ def make_backend(
         return make_task_backend(
             config,
             descriptor=descriptor,
+            log_server_address=log_stack.address,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
@@ -265,6 +270,7 @@ def make_backend(
     provider = make_task_backend(
         config,
         descriptor=descriptor,
+        log_server_address=log_stack.address,
         task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,

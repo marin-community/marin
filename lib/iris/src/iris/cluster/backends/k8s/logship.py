@@ -14,7 +14,10 @@ the environment the pod manifest sets:
 
 - ``IRIS_TASK_ID`` — the wire ``task:attempt`` id; the finelog key is derived
   from it with the attempt suffix always present (``/user/job/0:0``).
-- ``IRIS_CONTROLLER_ADDRESS`` — resolves the log server endpoint.
+- ``IRIS_LOG_SERVER_ADDRESS`` — the log server URL, set for a pod whose network
+  cannot reach the controller (a sandbox pod).
+- ``IRIS_CONTROLLER_ADDRESS`` — otherwise, resolves the log server endpoint
+  through the controller's registry.
 - ``IRIS_POD_NAMESPACE`` / ``IRIS_POD_NAME`` — locate the CRI log directory.
 
 The push is unauthenticated: the finelog log service performs no auth, the same
@@ -58,6 +61,8 @@ _TAIL_IDLE_POLL_SECONDS = 0.25
 
 # Flush deadline applied on shutdown so a finelog hiccup cannot hang pod teardown.
 _SHUTDOWN_FLUSH_TIMEOUT_SECONDS = 5.0
+
+LOG_SERVER_ADDRESS_ENV = "IRIS_LOG_SERVER_ADDRESS"
 
 
 @dataclass
@@ -347,12 +352,15 @@ def _connect_log_client(controller_address: str) -> LogClient:
 def _ship(stop: threading.Event) -> None:
     """Connect to the log server and ship the task container's logs until stopped."""
     task_id = os.environ["IRIS_TASK_ID"]
-    controller_address = os.environ["IRIS_CONTROLLER_ADDRESS"]
     namespace = os.environ["IRIS_POD_NAMESPACE"]
     pod_name = os.environ["IRIS_POD_NAME"]
 
     key, attempt_id = log_key_and_attempt(task_id)
-    client = _connect_log_client(controller_address)
+    log_server_address = os.environ.get(LOG_SERVER_ADDRESS_ENV)
+    if log_server_address:
+        client = LogClient.connect(log_server_address)
+    else:
+        client = _connect_log_client(os.environ["IRIS_CONTROLLER_ADDRESS"])
     shipper = LogShipper(client, _log_dir_glob(namespace, pod_name), key, attempt_id, stop)
 
     logger.info("logship: shipping logs for %s (attempt %d) from %s", key, attempt_id, pod_name)

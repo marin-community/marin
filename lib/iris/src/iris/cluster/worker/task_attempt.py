@@ -780,7 +780,7 @@ class TaskAttempt:
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
             mounts=list(isolation.mounts),
-            network_mode=NETWORK_MODE_HOST if isolation.allow_host_network else NETWORK_MODE_NONE,
+            network_mode=NETWORK_MODE_HOST if isolation.reach_cluster_network else NETWORK_MODE_NONE,
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),

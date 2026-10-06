@@ -27,6 +27,7 @@ from finelog.client.log_client import Table
 from google.protobuf import json_format
 from rigging.timing import Timestamp
 
+from iris.cluster.backends.k8s.logship import LOG_SERVER_ADDRESS_ENV
 from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_CONTAINER_NAME,
     OUTPUT_CONTROL_PATH,
@@ -63,6 +64,7 @@ from iris.cluster.platforms.k8s.constants import (
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
+    SANDBOX_POD_LABEL,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -522,6 +524,9 @@ class PodConfig:
     service_account: str = ""
     host_network: bool = False
     controller_address: str | None = None
+    # The finelog URL the log sidecar of a sandbox pod writes to directly; the
+    # sandbox NetworkPolicy blocks the controller it would otherwise resolve it through.
+    log_server_address: str = ""
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
     task_outputs: TaskOutputPolicy | None = None
@@ -638,6 +643,7 @@ def _build_init_container_spec(
 def _build_logship_sidecar(
     task_id_wire: str,
     controller_address: str | None,
+    log_server_address: str | None,
     logship_image: str,
 ) -> dict:
     """Build the native log-shipping sidecar container spec.
@@ -648,8 +654,9 @@ def _build_logship_sidecar(
     and the kubelet terminates the sidecar after it. The sidecar tails the task
     container's CRI log file from the node (mounted read-only via the
     ``varlogpods`` hostPath) and pushes lines to finelog. It resolves the log
-    server via the controller and pushes unauthenticated — the finelog log
-    service performs no auth, matching the controller's own writes.
+    server via the controller, or uses ``log_server_address`` directly when the
+    pod cannot reach the controller, and pushes unauthenticated — the finelog
+    log service performs no auth, matching the controller's own writes.
 
     Runs ``logship_image`` (the iris controller image) rather than the task
     image, which lacks the iris package until the task's own dependency sync.
@@ -659,7 +666,9 @@ def _build_logship_sidecar(
         {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
         {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
     ]
-    if controller_address:
+    if log_server_address:
+        env.append({"name": LOG_SERVER_ADDRESS_ENV, "value": log_server_address})
+    elif controller_address:
         env.append({"name": "IRIS_CONTROLLER_ADDRESS", "value": controller_address})
     return {
         "name": _LOGSHIP_CONTAINER_NAME,
@@ -840,7 +849,7 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile)
     service_account = config.service_account if isolation.include_service_account else ""
-    host_network = config.host_network and isolation.allow_host_network
+    host_network = config.host_network and isolation.reach_cluster_network
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -958,6 +967,8 @@ def _build_pod_manifest(
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
+    if not isolation.reach_cluster_network:
+        labels[SANDBOX_POD_LABEL] = "true"
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1022,9 +1033,11 @@ def _build_pod_manifest(
     # excluded from pod-phase computation, so completion detection (which keys on
     # pod.status.phase) is unaffected. The hostPath volume gives it read-only
     # access to the node's pod log directory.
+    reaches_controller = isolation.reach_cluster_network
     logship = _build_logship_sidecar(
         iris_env["IRIS_TASK_ID"],
-        config.controller_address,
+        config.controller_address if reaches_controller else None,
+        None if reaches_controller else config.log_server_address,
         config.logship_image,
     )
     volumes.append(

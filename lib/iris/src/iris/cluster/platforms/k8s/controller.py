@@ -18,6 +18,7 @@ import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 
+from finelog.deploy.config import K8S_APP_LABEL, FinelogConfig, load_finelog_config
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
@@ -36,6 +37,8 @@ from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     NVIDIA_GPU_TOLERATION,
+    SANDBOX_NETWORK_POLICY_NAME,
+    SANDBOX_POD_LABEL,
 )
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
@@ -408,6 +411,60 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
     }
 
 
+# Namespace label the API server sets on every namespace (Kubernetes >= 1.21).
+_NAMESPACE_NAME_LABEL = "kubernetes.io/metadata.name"
+_DNS_NAMESPACE = "kube-system"
+_DNS_PORT = 53
+
+
+def _namespace_pods(namespace: str, pod_labels: dict[str, str] | None = None) -> dict:
+    peer: dict = {"namespaceSelector": {"matchLabels": {_NAMESPACE_NAME_LABEL: namespace}}}
+    if pod_labels:
+        peer["podSelector"] = {"matchLabels": pod_labels}
+    return peer
+
+
+def build_sandbox_network_policy(namespace: str, finelog: FinelogConfig | None) -> dict:
+    """Build the NetworkPolicy that cuts sandbox pods off from cluster services.
+
+    Selects pods labeled ``SANDBOX_POD_LABEL``, denies all ingress, and allows
+    egress only to DNS in kube-system and, when the cluster runs an in-cluster
+    finelog, to its pods on the finelog port. The task container shares the
+    pod's network with the log sidecar, so this is also all the task can reach:
+    not the controller, worker RPC ports, other pods, or the metadata server.
+    ``kubectl exec`` goes through the kubelet and is unaffected.
+    """
+    egress: list[dict] = [
+        {
+            "to": [_namespace_pods(_DNS_NAMESPACE)],
+            "ports": [{"protocol": "UDP", "port": _DNS_PORT}, {"protocol": "TCP", "port": _DNS_PORT}],
+        }
+    ]
+    if finelog is not None:
+        if finelog.deployment.k8s is None:
+            raise InfraError(
+                f"finelog config {finelog.name!r} is not deployed on Kubernetes; "
+                "sandbox pods can only ship logs to an in-cluster finelog"
+            )
+        egress.append(
+            {
+                "to": [_namespace_pods(finelog.deployment.k8s.namespace, {K8S_APP_LABEL: finelog.name})],
+                "ports": [{"protocol": "TCP", "port": finelog.port}],
+            }
+        )
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": SANDBOX_NETWORK_POLICY_NAME, "namespace": namespace},
+        "spec": {
+            "podSelector": {"matchLabels": {SANDBOX_POD_LABEL: "true"}},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [],
+            "egress": egress,
+        },
+    }
+
+
 # ============================================================================
 # K8sControllerProvider
 # ============================================================================
@@ -511,6 +568,7 @@ class K8sControllerProvider:
         default_env.update(collect_inject_env(config.defaults.inject_env))
         if default_env:
             self.ensure_task_env_secret(default_env)
+        self.ensure_sandbox_network_policy(config)
 
         signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
         if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
@@ -912,6 +970,17 @@ class K8sControllerProvider:
                 "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
             }
         )
+
+    def ensure_sandbox_network_policy(self, config: IrisClusterConfig) -> None:
+        """Create the NetworkPolicy that isolates sandbox pods.
+
+        Never deleted on stop: it selects only sandbox pods, and removing it
+        while one runs would reconnect that pod to the controller.
+        """
+        finelog = load_finelog_config(config.finelog.config) if config.finelog.config else None
+        if finelog is None:
+            logger.warning("No finelog.config: the log server runs inside the controller, and sandbox pods ship no logs")
+        self._kubectl.apply_json(build_sandbox_network_policy(self._namespace, finelog))
 
     def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
         """Create the iris-controller-env Secret holding the controller's own credentials.

@@ -28,20 +28,21 @@ class TaskIsolation:
         include_cluster_env: The operator's task_env and, on Kubernetes, the
             env Secret (object-store keys, injected credentials).
         include_controller_address: The controller address in the task env.
-            The Kubernetes logship sidecar keeps it regardless.
         include_shared_caches: The node-shared download caches.
         include_service_account: On Kubernetes, the pod service account and its token.
-        allow_host_network: Whether the task may share the node's network. On
-            Docker workers a task without it runs with no network at all, so
-            it cannot reach the VM network or the metadata server; on
-            Kubernetes it overrides the cluster's host-network setting.
+        reach_cluster_network: Whether the task's network reaches cluster
+            services (controller, workers, metadata server). On Docker workers
+            a task without it runs with no network at all. On Kubernetes its pod
+            gets no host network and carries the label the sandbox
+            NetworkPolicy selects, and its log sidecar writes to finelog
+            directly instead of resolving it through the controller.
     """
 
     include_cluster_env: bool
     include_controller_address: bool
     include_shared_caches: bool
     include_service_account: bool
-    allow_host_network: bool
+    reach_cluster_network: bool
 
     @property
     def mounts(self) -> tuple[MountSpec, ...]:
@@ -53,7 +54,7 @@ _CLUSTER_TASK = TaskIsolation(
     include_controller_address=True,
     include_shared_caches=True,
     include_service_account=True,
-    allow_host_network=True,
+    reach_cluster_network=True,
 )
 
 _SANDBOX_TASK = TaskIsolation(
@@ -61,7 +62,7 @@ _SANDBOX_TASK = TaskIsolation(
     include_controller_address=False,
     include_shared_caches=False,
     include_service_account=False,
-    allow_host_network=False,
+    reach_cluster_network=False,
 )
 
 
