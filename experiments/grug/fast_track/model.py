@@ -932,6 +932,13 @@ class GrugModelConfig:
     write at 1/G of the width."""
     tail_expert_write_groups: int = 0
     """``expert_write_groups`` for the ``latent_out_full_layers`` tail layers only."""
+    expert_write_blocks: int = 0
+    """B > 0: the expert output splits into B equal blocks and each neuron writes a fixed random
+    ``expert_write_keep``-subset of them. ``w_down`` is stored compact (``keep / B`` of the output width per
+    neuron) and scattered to the full width in the forward, so the pattern is exact under any optimizer."""
+    expert_write_keep: int = 0
+    tail_expert_write_blocks: int = 0
+    """``expert_write_blocks`` for the ``latent_out_full_layers`` tail layers only (same ``expert_write_keep``)."""
     expert_private_dim: int = 0
     """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
     input, ``g = expert mod expert_private_groups`` (one ``[D, r]`` projection per group), appended to the expert's
@@ -1832,6 +1839,10 @@ class GrugModelConfig:
             self.latent_dim is None or self.latent_dim % self.latent_matryoshka_blocks or self.latent_mix_sites
         ):
             raise ValueError("latent_matryoshka_blocks must divide latent_dim, without latent_mix_sites")
+        if self.expert_write_blocks and (
+            not 0 < self.expert_write_keep < self.expert_write_blocks or self.expert_out_dim % self.expert_write_blocks
+        ):
+            raise ValueError("expert_write_blocks must divide the expert output, with 0 < expert_write_keep < blocks")
         if self.expert_write_groups and (
             self.intermediate_dim % self.expert_write_groups or self.expert_out_dim % self.expert_write_groups
         ):
@@ -4097,7 +4108,12 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             latent_select_mask=_latent_select_mask(cfg, layer_index) if selects else None,
-            expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, out_width, k_expert),
+            expert_mlp=_expert_mlp_init(
+                _bank_config(cfg, 1),
+                expert_width,
+                (out_width * cfg.expert_write_keep // cfg.expert_write_blocks if cfg.expert_write_blocks else out_width),
+                k_expert,
+            ),
             expert_mlp_b=(
                 _expert_mlp_init(_bank_config(cfg, 2), expert_width, out_width, random.fold_in(k_expert, 2))
                 if cfg.moe_bank2_experts
@@ -4554,6 +4570,8 @@ class MoEMLP(eqx.Module):
             bank_mlps = [_mask_expert_reads(em, self.cfg) for em in bank_mlps]
         if self.cfg.expert_write_groups:
             bank_mlps = [_mask_expert_writes(em, self.cfg) for em in bank_mlps]
+        if self.cfg.expert_write_blocks:
+            bank_mlps = [_scatter_expert_writes(em, self.cfg) for em in bank_mlps]
         if self.cfg.expert_router_orthogonal != "off":
             assert self.router is not None and self.w_latent_down is not None and len(bank_mlps) == 1
             bank_mlps = [
@@ -5757,6 +5775,31 @@ def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key:
     if cfg.expert_write_groups:
         mlp = _mask_expert_writes(mlp, cfg)
     return _mask_expert_reads(mlp, cfg) if cfg.expert_read_subset else mlp
+
+
+_EXPERT_WRITE_BLOCKS_SALT = 7311
+
+
+def _expert_write_block_ids(cfg: "GrugModelConfig", neurons: int) -> jax.Array:
+    """``[I, keep]`` sorted output-block ids each neuron writes: a fixed random subset per neuron."""
+    keys = random.split(random.PRNGKey(_EXPERT_WRITE_BLOCKS_SALT), neurons)
+    perms = jax.vmap(lambda k: random.permutation(k, cfg.expert_write_blocks))(keys)
+    return jnp.sort(perms[:, : cfg.expert_write_keep], axis=-1)
+
+
+def _scatter_expert_writes(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
+    """Expand the compact ``[E, I, keep * w]`` ``w_down`` to ``[E, I, B * w]``: neuron i's k-th block of w goes to
+    output block ``ids[i, k]``, every other block is zero."""
+    blocks, keep = cfg.expert_write_blocks, cfg.expert_write_keep
+    neurons = em.w_down.shape[-2]
+    width = em.w_down.shape[-1] // keep
+    spec = _padded_spec(em.w_down)
+    place = jax.nn.one_hot(_expert_write_block_ids(cfg, neurons), blocks, dtype=em.w_down.dtype)  # [I, keep, B]
+    place = reshard(place, P(spec[1], None, None))
+    compact = reshard(rearrange(em.w_down, "e i (k w) -> e i k w", k=keep), P(spec[0], spec[1], None, None))
+    full = jnp.einsum("eikw,ikb->eibw", compact, place, out_sharding=P(spec[0], spec[1], None, None))
+    full = reshard(rearrange(full, "e i b w -> e i (b w)", w=width), P(spec[0], spec[1], None))
+    return eqx.tree_at(lambda m: m.w_down, em, full)
 
 
 def _mask_expert_writes(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
@@ -8732,6 +8775,8 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         latent_out_full_layers=(),
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
+        expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
+        tail_expert_write_blocks=0,
     )
 
 

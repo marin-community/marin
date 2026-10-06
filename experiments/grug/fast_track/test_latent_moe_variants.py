@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import experiments.grug.fast_track.test_ngram_stat as t
+from experiments.grug.fast_track.model import _expert_write_block_ids, _scatter_expert_writes
 from experiments.grug.fast_track.optimizer import _is_gate_or_router_weight
 
 
@@ -96,3 +97,19 @@ def test_write_groups_mask_w_down_block_diagonally_and_keep_it_under_training():
     loss, grads = _loss_and_grads(model, mesh)
     g = np.asarray(_mlp(grads).expert_mlp.w_down)
     assert np.isfinite(float(loss)) and np.all(g[..., : neurons // 2, out // 2 :] == 0)
+
+
+def test_scattered_writes_place_each_neuron_on_its_own_block_subset():
+    mesh, model = t._model(ngram_stat_rows=0, latent_out_dim=32, expert_write_blocks=8, expert_write_keep=4)
+    mlp = jax.tree.map(lambda a: a[0] if eqx.is_array(a) else a, _mlp(model))
+    assert mlp.expert_mlp.w_down.shape[-1] == 16
+    with jax.set_mesh(mesh):
+        full = np.asarray(_scatter_expert_writes(mlp.expert_mlp, model.config).w_down)  # [E, I, 32]
+    ids = np.asarray(_expert_write_block_ids(model.config, full.shape[1]))
+    written = np.abs(full).reshape(*full.shape[:2], 8, 4).max(-1) > 0  # [E, I, 8]
+    expected = np.zeros((full.shape[1], 8), bool)
+    np.put_along_axis(expected, ids, True, axis=-1)
+    assert (written == expected[None]).all()
+    assert len({tuple(r) for r in ids}) > 1  # neurons differ
+    loss, grads = _loss_and_grads(model, mesh)
+    assert np.isfinite(float(loss)) and _trains(_mlp(grads).expert_mlp.w_down)
