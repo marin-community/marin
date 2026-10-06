@@ -86,15 +86,18 @@ if triton is not None and tl is not None:
                 k_mask = k_idx < k_this_token
                 m_abs = ms + k_idx
                 perm_idx = tl.load(m_perm_ptr + m_abs, mask=k_mask, other=0).to(tl.int64)
-
                 x_ptrs = x_ptr + perm_idx[:, None] * stride_xm + h_idx[None, :] * stride_xh
-                x_mask = k_mask[:, None] & h_mask[None, :]
-                x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
 
                 if w_is_none:
+                    x_mask = k_mask[:, None] & h_mask[None, :]
+                    x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
                     acc += tl.sum(x_vals, axis=0)
                 else:
                     w_vals = tl.load(w_ptr + m_abs, mask=k_mask, other=0.0).to(tl.float32)
+                    # A zero-weight row contributes nothing, so it is never read and may hold
+                    # anything, including non-finite values.
+                    x_mask = (k_mask & (w_vals != 0.0))[:, None] & h_mask[None, :]
+                    x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
                     acc += tl.sum(x_vals * w_vals[:, None], axis=0)
 
             out_ptrs = out_ptr + t_idx * stride_outt + h_idx * stride_outh
@@ -141,9 +144,14 @@ if triton is not None and tl is not None:
         dw = tl.sum(dout * x, axis=0)
         tl.store(dw_ptr + assignment, dw)
 
+    @triton.jit
+    def _write_nothing_kernel(marker_ptr, out_ptr):
+        pass
+
 else:
     _sonic_token_gather_sum_kernel = None
     _sonic_token_gather_sum_bwd_kernel = None
+    _write_nothing_kernel = None
 
 
 def _require_sonic_deps() -> None:
@@ -166,6 +174,22 @@ def sonic_gather_sum_available() -> bool:
         and _sonic_token_gather_sum_kernel is not None
         and _sonic_token_gather_sum_bwd_kernel is not None
         and gpu_device_present()
+    )
+
+
+def unwritten_buffer(shape: tuple[int, ...], dtype: DTypeLike, marker: Int[Array, ""]) -> Array:
+    """A buffer with unspecified contents, made by a GPU kernel that writes nothing.
+
+    The kernel takes ``marker`` as an operand without reading it, so the buffer depends on the
+    marker: a loop-carried marker keeps the buffer inside the loop body, and two call sites with
+    different markers get two buffers.
+    """
+    _require_sonic_deps()
+    return jt.triton_call(
+        marker,
+        kernel=_write_nothing_kernel,
+        out_shape=jax.ShapeDtypeStruct(shape, dtype),
+        grid=(1,),
     )
 
 
@@ -294,6 +318,12 @@ def sonic_gather_sum(
     dispatch_positions: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
 ) -> Float[Array, "T H"]:
+    """Sum each token's ``K`` rows of ``dispatch_output``, gathered at its positions and weighted.
+
+    A row with zero weight is not read, so it may hold unspecified values. The backward still
+    reads every row for the weight gradient. A caller that passes unspecified rows zeroes their
+    weights with ``jnp.where``, whose transpose discards those gradients.
+    """
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
