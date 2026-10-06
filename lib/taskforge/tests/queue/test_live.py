@@ -14,7 +14,6 @@ import time
 from pathlib import Path
 
 import pytest
-from rigging.timing import ExponentialBackoff
 from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import ledger_files, read_entries
@@ -36,7 +35,7 @@ from taskforge.triage.program import GlmRubric
 from taskforge.validate.adversary import AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
-from taskforge.validate.trials import Deadlines
+from taskforge.validate.trials import Deadlines, RetryBackoff
 
 EVIDENCE = Path(__file__).parents[2] / ".evidence" / "queue"
 TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
@@ -111,7 +110,7 @@ def policy() -> LoopPolicy:
         deadlines=Deadlines(agent_timeout=900, attempt_timeout=1200),
         max_retries=2,
         token_contract_retries=2,
-        retry_backoff=ExponentialBackoff(initial=5, maximum=60, factor=2),
+        retry_backoff=RetryBackoff(initial=5, maximum=60, factor=2, jitter=0.1),
     )
     return LoopPolicy(
         proposals_per_idea=1,
@@ -120,7 +119,7 @@ def policy() -> LoopPolicy:
         max_build_revisions=2,
         max_repairs=0,
         max_validation_retries=1,
-        retry_backoff=ExponentialBackoff(initial=10, maximum=60, factor=2),
+        retry_backoff=RetryBackoff(initial=10, maximum=60, factor=2, jitter=0.1),
         output_token_budget=1_000_000,
         validation=validation,
     )
