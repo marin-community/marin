@@ -39,7 +39,12 @@ GRADING_FAILURES = {
     GradingFailure.INVALID_REWARD: Cause.GRADER_INVALID_REWARD,
     GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
 }
-ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ", "Environment healthcheck failed", "Task stage ")
+ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = (
+    "Environment setup command ",
+    "Environment healthcheck failed",
+    "Task stage ",
+    "Cannot find the stage working directory",
+)
 """Message prefixes of the setup, healthcheck and stage-setup errors RolloutEngine raises."""
 
 
@@ -94,8 +99,8 @@ def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
 
     ``rolloutengine.machines`` and ``rolloutengine.task_session`` raise these as a bare
     ``RuntimeError`` or ``TimeoutError``, the same types as machine failures, so this matches
-    message prefixes. Replace it with the typed errors requested in #9782 (rolloutengine typed
-    setup errors) once they land.
+    message prefixes. Replace it with the typed errors requested in #9782 once #9799 (rolloutengine
+    typed setup failures) lands.
     """
     return isinstance(error, RuntimeError | TimeoutError) and str(error).startswith(ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES)
 
