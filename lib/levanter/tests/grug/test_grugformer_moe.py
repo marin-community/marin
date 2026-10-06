@@ -20,6 +20,7 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import (
+    _deinterleave_gate_up,
     _interleave_gate_up,
     _interleave_halves,
     _prepare_moe_dispatch,
@@ -39,7 +40,7 @@ from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.ep_ragged_all_to_all import (
     _accepted_assignments,
     _gather_dispatch_rows,
-    _ragged_dot_expert_mlp,
+    _RaggedDotExpertMlp,
     _transport_buffer,
     _TransportBufferSite,
     _unpermute_from_global_expert,
@@ -50,6 +51,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
+    RoutingWeightGradient,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     moe_mlp,
@@ -107,16 +109,19 @@ def _make_single_expert_mesh() -> Mesh:
     )
 
 
-def _count_jaxpr_primitives(value, primitive_name: str) -> int:
+def _count_jaxpr_primitives(value, primitive_name: str, where=lambda eqn: True) -> int:
+    """Count the ``primitive_name`` equations that satisfy ``where``, including in sub-programs."""
     jaxpr = getattr(value, "jaxpr", value)
     if isinstance(jaxpr, jax_core.Jaxpr):
-        return sum(eqn.primitive.name == primitive_name for eqn in jaxpr.eqns) + sum(
-            _count_jaxpr_primitives(param, primitive_name) for eqn in jaxpr.eqns for param in eqn.params.values()
+        return sum(eqn.primitive.name == primitive_name and where(eqn) for eqn in jaxpr.eqns) + sum(
+            _count_jaxpr_primitives(param, primitive_name, where)
+            for eqn in jaxpr.eqns
+            for param in eqn.params.values()
         )
     if isinstance(value, dict):
-        return sum(_count_jaxpr_primitives(item, primitive_name) for item in value.values())
+        return sum(_count_jaxpr_primitives(item, primitive_name, where) for item in value.values())
     if isinstance(value, (tuple, list)):
-        return sum(_count_jaxpr_primitives(item, primitive_name) for item in value)
+        return sum(_count_jaxpr_primitives(item, primitive_name, where) for item in value)
     return 0
 
 
@@ -601,7 +606,7 @@ def test_combine_skips_dropped_rows_and_differentiates_accepted_zero_weights():
     np.testing.assert_allclose(np.asarray(actual_weight_gradient), expected_weight_gradient, rtol=1e-5, atol=1e-6)
 
 
-def test_portable_expert_mlp_ignores_rows_past_the_active_count():
+def test_portable_expert_mlp_backward_ignores_rows_past_the_active_count():
     capacity, hidden, inter, experts = 10, 4, 6, 2
     active_group_sizes = jnp.asarray([3, 4], dtype=jnp.int32)
     physical_group_sizes = jnp.asarray([3, 7], dtype=jnp.int32)
@@ -614,24 +619,27 @@ def test_portable_expert_mlp_ignores_rows_past_the_active_count():
     x_unspecified = x.at[7:].set(jnp.nan)
     cotangent_unspecified = cotangent.at[7:].set(jnp.nan)
 
-    def run(x, w13, w2, cotangent):
-        out, backward = jax.vjp(
-            lambda x, w13, w2: _ragged_dot_expert_mlp(
-                x, w13, w2, physical_group_sizes, active_group_sizes, jax.nn.silu
-            ),
-            x,
-            w13,
-            w2,
-        )
-        return out, backward(cotangent)
+    expert_mlp = _RaggedDotExpertMlp(jax.nn.silu)
 
-    clean_out, (clean_dx, clean_dw13, clean_dw2) = run(x.at[7:].set(0), w13, w2, cotangent.at[7:].set(0))
-    out, (dx, dw13, dw2) = run(x_unspecified, w13, w2, cotangent_unspecified)
+    def run(x, cotangent):
+        out, residuals = expert_mlp.forward(x, w13, w2, physical_group_sizes, active_group_sizes)
+        return out, expert_mlp.backward(residuals, cotangent)
+
+    clean_out, (clean_dx, clean_dw13, clean_dw2, clean_output_dot) = run(x.at[7:].set(0), cotangent.at[7:].set(0))
+    out, (dx, dw13, dw2, output_dot) = run(x_unspecified, cotangent_unspecified)
 
     np.testing.assert_array_equal(np.asarray(out[:7]), np.asarray(clean_out[:7]))
     np.testing.assert_array_equal(np.asarray(dx[:7]), np.asarray(clean_dx[:7]))
     np.testing.assert_array_equal(np.asarray(dw13), np.asarray(clean_dw13))
     np.testing.assert_array_equal(np.asarray(dw2), np.asarray(clean_dw2))
+    np.testing.assert_array_equal(np.asarray(output_dot[:7]), np.asarray(clean_output_dot[:7]))
+    # The row dot is the gradient of a per-row output scale, <y, dy>.
+    np.testing.assert_allclose(
+        np.asarray(clean_output_dot[:7]),
+        np.sum(np.asarray(clean_out[:7]) * np.asarray(cotangent[:7]), axis=-1),
+        rtol=1e-5,
+        atol=1e-5,
+    )
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
@@ -695,6 +703,21 @@ def test_interleave_places_gate_and_up_in_alternating_columns(dtype):
     assert interleaved.dtype == w13.dtype
     np.testing.assert_array_equal(np.asarray(interleaved[..., 0::2]), np.asarray(w13[..., :moe_dim]))
     np.testing.assert_array_equal(np.asarray(interleaved[..., 1::2]), np.asarray(w13[..., moe_dim:]))
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
+def test_deinterleave_matches_the_interleave_transpose(dtype):
+    moe_dim = 4
+    w13 = _arange_w13(dtype, moe_dim=moe_dim)
+    cotangent = (jnp.arange(w13.size, dtype=jnp.float32).reshape(w13.shape) / 7).astype(dtype)
+
+    _, transpose = jax.vjp(lambda w: _interleave_gate_up(w, moe_dim), w13)
+    (expected,) = transpose(cotangent)
+
+    np.testing.assert_array_equal(np.asarray(_deinterleave_gate_up(cotangent)), np.asarray(expected))
+    np.testing.assert_array_equal(
+        np.asarray(_deinterleave_gate_up(_interleave_gate_up(w13, moe_dim))), np.asarray(w13)
+    )
 
 
 @pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
@@ -1581,6 +1604,42 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         np.testing.assert_array_equal(returned[s], expected)
 
 
+def test_expert_granular_a2a_params_are_each_others_transpose():
+    """The return parameters equal what JAX's ragged_all_to_all transpose rule derives from the
+    dispatch parameters with its two offset all-to-alls, and vice versa, so the backend's backward
+    can use them directly. Checked under forced capacity clipping."""
+    shards, local_experts, tokens, topk = 4, 3, 10, 2
+    num_experts = shards * local_experts
+    rng = np.random.default_rng(1)
+    selected = rng.integers(0, num_experts, size=(shards, tokens * topk))
+    group_sizes = np.stack([np.bincount(selected[s], minlength=num_experts) for s in range(shards)]).astype(np.int32)
+    clipped = _clip_receiver_group_sizes(
+        jnp.asarray(group_sizes), local_expert_size=local_experts, receiver_capacity=int(0.7 * tokens * topk)
+    )
+    assert int(jnp.sum(clipped)) < group_sizes.sum()  # drops actually happen
+    params = [
+        _expert_granular_a2a_params(jnp.asarray(group_sizes), clipped, jnp.asarray(s), local_expert_size=local_experts)
+        for s in range(shards)
+    ]
+
+    def exchanged(field, direction, shard):
+        # A tiled all_to_all over the expert axis: chunk ``shard`` of every peer's vector.
+        return np.concatenate(
+            [
+                np.asarray(getattr(params[peer][direction], field)).reshape(shards, local_experts)[shard]
+                for peer in range(shards)
+            ]
+        )
+
+    for direction, mirror in ((0, 1), (1, 0)):
+        for s in range(shards):
+            forward, transpose = params[s][direction], params[s][mirror]
+            np.testing.assert_array_equal(exchanged("output_offsets", direction, s), transpose.input_offsets)
+            np.testing.assert_array_equal(exchanged("input_offsets", direction, s), transpose.output_offsets)
+            np.testing.assert_array_equal(forward.recv_sizes, transpose.send_sizes)
+            np.testing.assert_array_equal(forward.send_sizes, transpose.recv_sizes)
+
+
 def test_expert_granular_a2a_params_chunked_masking_composes():
     """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
     reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,
@@ -1635,10 +1694,19 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
         np.testing.assert_array_equal(returned[s], expected)
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize(
+    ("implementation", "routing_weight_gradient"),
+    [
+        ("ring", RoutingWeightGradient.EXACT),
+        ("ragged_all_to_all", RoutingWeightGradient.EXACT),
+        ("ragged_all_to_all", RoutingWeightGradient.EXPERT_SIDE),
+    ],
+    ids=["ring", "ragged", "ragged_expert_side"],
+)
 @pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
 def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     implementation: MoeImplementation,
+    routing_weight_gradient: RoutingWeightGradient,
     padded: bool,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1670,11 +1738,15 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     dtype = jnp.bfloat16 if platform in {"gpu", "tpu"} else jnp.float32
     relative_tolerance = _BF16_MOE_RELATIVE_TOLERANCE if dtype == jnp.bfloat16 else _FP32_MOE_RELATIVE_TOLERANCE
     x = x.astype(dtype)
-    combine_weights = combine_weights.astype(dtype)
+    # Two accepted assignments whose weighted output cotangent w * dout rounds to zero: token 0's
+    # first has weight zero, and token 2's first has a normal weight while the product underflows,
+    # because token 2's output cotangent is tiny. Their weight gradient is still <dout, y>.
+    edge_assignments = (np.array([0, 2]), np.array([0, 0]))
+    combine_weights = combine_weights.astype(dtype).at[0, 0].set(0).at[2, 0].set(2.0**-10)
     token_valid = (jnp.arange(tokens) % 4 != 1) if padded else jnp.ones((tokens,), dtype=jnp.bool_)
     w_up_gate = w_up_gate.astype(dtype)
     w_down = w_down.astype(dtype)
-    cotangent = jax.random.normal(jax.random.key(24), x.shape, dtype=dtype)
+    cotangent = jax.random.normal(jax.random.key(24), x.shape, dtype=dtype).at[2].multiply(2.0**-120)
 
     x_reference = x.astype(jnp.float32)
     combine_weights_reference = combine_weights.astype(jnp.float32) * token_valid[:, None]
@@ -1690,13 +1762,26 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     )
     expected_gradients = jax.jit(
         jax.grad(
-            lambda x, w_up_gate, w_down: jnp.sum(
-                _dense_moe_output(x, selected_experts, combine_weights_reference, w_up_gate, w_down)
-                * cotangent_reference
+            lambda x, w_up_gate, w_down, combine_weights: jnp.sum(
+                _dense_moe_output(x, selected_experts, combine_weights, w_up_gate, w_down) * cotangent_reference
             ),
-            argnums=(0, 1, 2),
+            argnums=(0, 1, 2, 3),
         )
-    )(x_reference, w_up_gate_reference, w_down_reference)
+    )(x_reference, w_up_gate_reference, w_down_reference, combine_weights_reference)
+    # Padding tokens take no part in routing, so their routing weights get no gradient.
+    expected_gradients = (*expected_gradients[:3], expected_gradients[3] * token_valid[:, None])
+
+    def assignment_output(token, slot):
+        # y for one assignment: the dense output's derivative with respect to its weight.
+        one_hot = jnp.zeros_like(combine_weights_reference).at[token, slot].set(1)
+        return _dense_moe_output(x_reference, selected_experts, one_hot, w_up_gate_reference, w_down_reference)[token]
+
+    # The edge gradients <dout, y> are far below the gradient's maximum, so check each against the
+    # rounding of its own products.
+    edge_scales = [
+        float(jnp.sum(jnp.abs(cotangent_reference[token] * assignment_output(token, slot))))
+        for token, slot in zip(*edge_assignments, strict=True)
+    ]
 
     batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
     token_sharding = NamedSharding(mesh, P(("data", "expert")))
@@ -1709,7 +1794,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     w_down = jax.sharding.reshard(w_down, expert_sharding)
     cotangent = jax.sharding.reshard(cotangent, batch_sharding)
 
-    def backend_output(x, w_up_gate, w_down):
+    def backend_output(x, w_up_gate, w_down, combine_weights):
         return moe_mlp(
             x,
             selected_experts,
@@ -1721,16 +1806,19 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
             mesh=mesh,
             report_capacity_overflow=True,
             capacity_factor=2.0,
+            routing_weight_gradient=routing_weight_gradient,
         )
 
     with jax.set_mesh(mesh):
-        actual, overflow = jax.jit(backend_output)(x, w_up_gate, w_down)
+        actual, overflow = jax.jit(backend_output)(x, w_up_gate, w_down, combine_weights)
         actual_gradients = jax.jit(
             jax.grad(
-                lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down)[0] * cotangent),
-                argnums=(0, 1, 2),
+                lambda x, w_up_gate, w_down, combine_weights: jnp.sum(
+                    backend_output(x, w_up_gate, w_down, combine_weights)[0] * cotangent
+                ),
+                argnums=(0, 1, 2, 3),
             )
-        )(x, w_up_gate, w_down)
+        )(x, w_up_gate, w_down, combine_weights)
 
     def relative_max_error(actual, expected):
         actual = np.asarray(actual, dtype=np.float32)
@@ -1738,11 +1826,85 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         return np.max(np.abs(actual - expected)) / np.max(np.abs(expected))
 
     assert relative_max_error(actual, expected) < relative_tolerance
-    for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+    for actual_gradient in actual_gradients:
         assert np.isfinite(np.asarray(actual_gradient)).all()
+    for actual_gradient, expected_gradient in zip(actual_gradients[:3], expected_gradients[:3], strict=True):
         assert relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
+    actual_weight_gradient = np.asarray(actual_gradients[3], dtype=np.float32)
+    expected_weight_gradient = np.asarray(expected_gradients[3])
+    if routing_weight_gradient == RoutingWeightGradient.EXPERT_SIDE:
+        # The edge assignments are outside EXPERT_SIDE's contract; compare every other weight.
+        inside = np.ones(expected_weight_gradient.shape, dtype=bool)
+        inside[edge_assignments] = False
+        assert (
+            relative_max_error(actual_weight_gradient[inside], expected_weight_gradient[inside]) < relative_tolerance
+        )
+    else:
+        assert relative_max_error(actual_weight_gradient, expected_weight_gradient) < relative_tolerance
+        edge_errors = np.abs(actual_weight_gradient[edge_assignments] - expected_weight_gradient[edge_assignments])
+        np.testing.assert_array_less(edge_errors, relative_tolerance * np.asarray(edge_scales))
     assert int(overflow.dropped) == 0
     assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * topk
+
+
+@pytest.mark.parametrize(
+    ("routing_weight_gradient", "row_dot_transports"),
+    [(RoutingWeightGradient.EXACT, 0), (RoutingWeightGradient.EXPERT_SIDE, 2)],
+)
+def test_ragged_backward_takes_the_routing_weight_gradient_where_selected(
+    routing_weight_gradient: RoutingWeightGradient, row_dot_transports: int
+):
+    # EXPERT_SIDE sends each expert row's <h, dh> back in a [rows, 1] float32 transport, one per expert
+    # chunk (two here); EXACT differentiates the combine over the kept expert outputs instead.
+    mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 16, 32, 64, 4, 2
+
+    def spec(shape, dtype, *partition):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=NamedSharding(mesh, P(*partition)))
+
+    def loss(x, combine_weights, w_up_gate, w_down, selected_experts):
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=mesh,
+            routing_weight_gradient=routing_weight_gradient,
+        )
+        return jnp.sum(out)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        # bfloat16, the dtype the GPU expert kernels take; the row dots stay float32.
+        jaxpr = jax.make_jaxpr(jax.grad(loss, argnums=(0, 1, 2, 3)))(
+            spec((tokens, hidden_dim), jnp.bfloat16, ("data", "expert"), None),
+            spec((tokens, topk), jnp.bfloat16, ("data", "expert"), None),
+            spec((num_experts, hidden_dim, 2 * intermediate_dim), jnp.bfloat16, "expert", None, None),
+            spec((num_experts, intermediate_dim, hidden_dim), jnp.bfloat16, "expert", None, None),
+            spec((tokens, topk), jnp.int32, ("data", "expert"), None),
+        )
+
+    def is_row_dot(eqn):
+        return eqn.invars[0].aval.shape[-1:] == (1,) and eqn.invars[0].aval.dtype == jnp.float32
+
+    assert _count_jaxpr_primitives(jaxpr, "ragged_all_to_all", is_row_dot) == row_dot_transports
+
+
+def test_expert_side_routing_weight_gradient_needs_the_ragged_backend():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(33), tokens=8, hidden_dim=8, intermediate_dim=8, num_experts=4, topk=2
+    )
+    with pytest.raises(ValueError, match="needs the ragged_all_to_all implementation"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ring",
+            routing_weight_gradient=RoutingWeightGradient.EXPERT_SIDE,
+        )
 
 
 def _filled_transport_buffer(fill: float):
@@ -1808,7 +1970,10 @@ def _unwritten_rows_routings(
     return routings
 
 
-def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("routing_weight_gradient", list(RoutingWeightGradient), ids=lambda g: str(g))
+def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
+    routing_weight_gradient: RoutingWeightGradient, monkeypatch: pytest.MonkeyPatch
+):
     # The transport buffers start with unspecified contents, and every consumer must read only the
     # rows a collective wrote. Filling them with NaN instead of zero must change no output or
     # gradient, in the forward, the backward, or a recompute, so a reader of an unwritten row
@@ -1853,6 +2018,7 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(monkeypatch: pytest
             mesh=mesh,
             report_capacity_overflow=True,
             capacity_factor=0.5,
+            routing_weight_gradient=routing_weight_gradient,
         )
 
     def loss(x, w_up_gate, w_down, combine_weights, routing):
@@ -2140,7 +2306,7 @@ def test_transport_buffer_sites_prevent_cse():
     def distinct_sites(tie):
         return (
             _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.DISPATCH_OUTPUT),
-            _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.OPERAND_COTANGENT),
+            _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.DISPATCH_COTANGENT),
         )
 
     def repeated_site(tie):

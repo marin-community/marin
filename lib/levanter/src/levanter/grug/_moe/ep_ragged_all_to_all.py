@@ -19,12 +19,13 @@ Axis names used in the shape annotations:
     U       expert-granular transfers on the expert axis
 """
 
+import dataclasses
 import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum
-from typing import Protocol
+from enum import auto, IntEnum, StrEnum
+from typing import NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -33,6 +34,7 @@ from jaxtyping import Array, Bool, Float, Int
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import (
     _assignment_validity,
+    _deinterleave_gate_up,
     _interleave_gate_up,
     _scaled_capacity,
     CapacityDrops,
@@ -68,73 +70,95 @@ RAGGED_REQUIRED_XLA_FLAGS = (
 
 
 class _ExpertMlp(Protocol):
-    """Runs the expert MLP over a receiver buffer laid out expert-major.
+    """Runs the expert MLP over a receiver buffer laid out expert-major, with its own backward.
 
     Implementations take both views of the buffer's group sizes: the physical sizes, which charge
     trailing padding to the last expert, and the active sizes, which count only received rows.
     Rows past the active count are unspecified, and may be non-finite, in ``x_dispatch`` and in
     the output's cotangent. Implementations keep them out of the active output rows and out of
     the weight gradients, and leave their own output rows past the active count unspecified.
+
+    ``backward`` also returns each row's ``<y, dy>`` in fp32, the gradient of a per-row scale
+    applied to the output. The routed-expert backward turns it into the routing-weight
+    gradient, so it never needs the output ``y`` itself.
     """
 
-    def __call__(
+    def forward(
         self,
         x_dispatch: Float[Array, "C H"],
         moe_w13_local: Float[Array, "Echunk H I2"],
         moe_w2_local: Float[Array, "Echunk I H"],
         physical_group_sizes: Int[Array, "Echunk"],
         active_group_sizes: Int[Array, "Echunk"],
-        activation_fn: Callable[[jax.Array], jax.Array],
-    ) -> Float[Array, "C H"]: ...
+    ) -> tuple[Float[Array, "C H"], tuple[jax.Array, ...]]: ...
+
+    def backward(
+        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
+    ) -> tuple[Float[Array, "C H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "C"]]: ...
 
 
-def _ragged_dot_expert_mlp(
-    x_dispatch: Float[Array, "C H"],
-    moe_w13_local: Float[Array, "Echunk H I2"],
-    moe_w2_local: Float[Array, "Echunk I H"],
-    physical_group_sizes: Int[Array, "Echunk"],
-    active_group_sizes: Int[Array, "Echunk"],
-    activation_fn: Callable[[jax.Array], jax.Array],
-) -> Float[Array, "C H"]:
+@dataclasses.dataclass(frozen=True)
+class _RaggedDotExpertMlp:
     """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows.
 
     `ragged_dot` covers the whole static buffer, so the rows past the active count are zeroed on
     the way in and on the way out. The output mask also zeroes their cotangent rows, which keeps
     them out of the weight gradients.
     """
-    active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
-    x_dispatch = jnp.where(active, x_dispatch, 0)
-    w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
-    moe_dim = moe_w2_local.shape[1]
-    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    out = ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
-    return jnp.where(active, out, 0)
+
+    activation_fn: Callable[[jax.Array], jax.Array]
+
+    def _apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
+        x_dispatch = jnp.where(active, x_dispatch, 0)
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out = ragged_dot(self.activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
+        return jnp.where(active, out, 0)
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        out = self._apply(x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes)
+        return out, (x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, out)
+
+    def backward(self, residuals, cotangent):
+        x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, out = residuals
+        _, vjp = jax.vjp(
+            lambda x, w13, w2: self._apply(x, w13, w2, physical_group_sizes, active_group_sizes),
+            x_dispatch,
+            moe_w13_local,
+            moe_w2_local,
+        )
+        dx, dw13, dw2 = vjp(cotangent)
+        output_dot_cotangent = jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32), axis=-1)
+        return dx, dw13, dw2, output_dot_cotangent
 
 
-def _cute_expert_mlp(
-    x_dispatch: Float[Array, "C H"],
-    moe_w13_local: Float[Array, "Echunk H I2"],
-    moe_w2_local: Float[Array, "Echunk I H"],
-    physical_group_sizes: Int[Array, "Echunk"],
-    active_group_sizes: Int[Array, "Echunk"],
-    activation_fn: Callable[[jax.Array], jax.Array],
-) -> Float[Array, "C H"]:
+@dataclasses.dataclass(frozen=True)
+class _CuteExpertMlp:
     """Expert MLP on QuACK's SM100 grouped GEMMs, activation path and weight gradients alike.
 
     The grouped kernels are driven by segment boundaries, so they take the active sizes and
-    leave trailing rows unspecified. The return transport reads only the active rows.
+    leave trailing rows unspecified. SwiGLU is fused into the gate/up GEMM.
     """
-    del activation_fn, physical_group_sizes
 
-    # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
-    from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad  # noqa: PLC0415
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_fwd  # noqa: PLC0415
 
-    moe_dim = moe_w2_local.shape[1]
-    w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
-    cumulative_group_sizes = jnp.concatenate(
-        [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
-    )
-    return _expert_mlp_quack_wgrad(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+        cumulative_group_sizes = jnp.concatenate(
+            [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
+        )
+        return _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
+
+    def backward(self, residuals, cotangent):
+        from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_backward  # noqa: PLC0415
+
+        dx, dw13_interleaved, dw2, output_dot_cotangent = _expert_mlp_quack_wgrad_backward(residuals, cotangent)
+        return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot_cotangent
 
 
 @functools.cache
@@ -171,8 +195,8 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _Expe
     portable `ragged_dot` path, which computes the same function.
     """
     if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
-        return _cute_expert_mlp
-    return _ragged_dot_expert_mlp
+        return _CuteExpertMlp()
+    return _RaggedDotExpertMlp(activation_fn)
 
 
 def _unpermute_from_global_expert(
@@ -258,7 +282,9 @@ _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bw
 class _TransportBufferSite(IntEnum):
     DISPATCH_OUTPUT = auto()
     RETURN_OUTPUT = auto()
-    OPERAND_COTANGENT = auto()
+    DISPATCH_COTANGENT = auto()
+    RETURN_COTANGENT = auto()
+    OUTPUT_DOT_COTANGENT = auto()
 
 
 def _transport_buffer(
@@ -284,115 +310,17 @@ def _transport_buffer(
     return jax.lax.broadcast(marker.astype(dtype), (rows, hidden_dim))
 
 
-def _reverse_ragged_a2a(
-    cotangent: Float[Array, "O H"], init: Float[Array, "R H"], params: ExpertA2aParams
-) -> Float[Array, "R H"]:
-    """Send each received row's cotangent back to the operand row it came from, into ``init``."""
-    # Exchanged offsets reverse the collective, matching JAX's transpose rule.
-    exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
-    exchanged_input_offsets = jax.lax.all_to_all(params.input_offsets, "expert", 0, 0, tiled=True)
-    return jax.lax.ragged_all_to_all(
-        cotangent,
-        init,
-        exchanged_output_offsets,
-        params.recv_sizes,
-        exchanged_input_offsets,
-        params.send_sizes,
-        axis_name="expert",
-    )
+class RoutingWeightGradient(StrEnum):
+    """How the ragged expert-parallel backend differentiates the combine weights."""
 
-
-# The two wrappers below write the received rows into ``output_init`` in place. Every caller
-# passes an ``output_init`` whose rows at the written positions depend on no differentiated
-# input: a fresh transport buffer, or one that earlier chunks wrote only at other rows. On such an
-# input the overwrite has the derivative of adding the received rows to ``output_init``, so the
-# transpose passes the output cotangent to ``output_init`` unchanged. JAX's transpose rule would
-# zero the written rows first, one full pass over the buffer per call. The wrappers also build
-# their backward buffers inside the layer loop, where JAX's rule would hoist them (#8822).
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
-def _ragged_a2a_add(
-    operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
-    params: ExpertA2aParams,
-) -> Float[Array, "O H"]:
-    """Write the rows ``operand`` sends over the expert axis into ``output_init``.
-
-    ``output_init`` must not depend on a differentiated input at the rows this call writes.
-    ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
-    Operand rows this call does not send get unspecified cotangent rows.
-    """
-    del operand_rows
-    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
-
-
-def _ragged_a2a_add_fwd(
-    operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
-    params: ExpertA2aParams,
-) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
-    return _ragged_a2a_add(operand_rows, operand, output_init, params), params
-
-
-def _ragged_a2a_add_bwd(
-    operand_rows: int,
-    params: ExpertA2aParams,
-    cotangent: Float[Array, "O H"],
-) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
-    init = _transport_buffer(
-        operand_rows,
-        cotangent.shape[1],
-        cotangent.dtype,
-        params.recv_sizes,
-        site=_TransportBufferSite.OPERAND_COTANGENT,
-    )
-    return _reverse_ragged_a2a(cotangent, init, params), cotangent, None
-
-
-_ragged_a2a_add.defvjp(_ragged_a2a_add_fwd, _ragged_a2a_add_bwd)
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
-def _ragged_a2a_add_forwarding(
-    operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
-    params: ExpertA2aParams,
-) -> tuple[Float[Array, "O H"], Float[Array, "R H"]]:
-    """``_ragged_a2a_add`` that also returns ``operand`` for a later call to read.
-
-    Later calls must read rows of the forwarded operand disjoint from the rows this call reads.
-    The backward then writes this call's operand cotangent into the forwarded operand's
-    cotangent, which is zero on those rows, where reading the operand directly in every call
-    would give each call a zero-filled cotangent buffer and a sum over the calls.
-    """
-    del operand_rows
-    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert"), operand
-
-
-def _ragged_a2a_add_forwarding_fwd(
-    operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
-    params: ExpertA2aParams,
-) -> tuple[tuple[Float[Array, "O H"], Float[Array, "R H"]], ExpertA2aParams]:
-    return _ragged_a2a_add_forwarding(operand_rows, operand, output_init, params), params
-
-
-def _ragged_a2a_add_forwarding_bwd(
-    operand_rows: int,
-    params: ExpertA2aParams,
-    cotangents: tuple[Float[Array, "O H"], Float[Array, "R H"]],
-) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
-    del operand_rows
-    cotangent, forwarded_cotangent = cotangents
-    return _reverse_ragged_a2a(cotangent, forwarded_cotangent, params), cotangent, None
-
-
-_ragged_a2a_add_forwarding.defvjp(_ragged_a2a_add_forwarding_fwd, _ragged_a2a_add_forwarding_bwd)
+    # <dout, y> for each assignment, read from the expert outputs, which the backward keeps.
+    EXACT = auto()
+    # <h, dh> / w for each expert row, from the expert MLP's own backward, where dh is the cotangent
+    # of the activation h and the row's output cotangent is w * dout. The backward needs neither the
+    # expert outputs nor their return transport, but the gradient is zero or inexact wherever
+    # w * dout rounds to zero in the cotangent dtype: at w = 0, and in float16 also for normal weights
+    # times small output cotangents.
+    EXPERT_SIDE = auto()
 
 
 def _accepted_assignments(
@@ -420,6 +348,278 @@ def _accepted_assignments(
     )
 
 
+class _ExpertRouting(NamedTuple):
+    """This shard's routing, all integer or boolean, shared by the forward and the backward."""
+
+    sorted_indices: Int[Array, "TK"]
+    accepted: Bool[Array, "Tlocal K"]
+    group_sizes: Int[Array, "E"]
+    all_group_sizes: Int[Array, "S E"]
+    chunk_clipped_group_sizes: tuple[Int[Array, "S E"], ...]
+    shard_id: Int[Array, ""]
+
+
+@dataclasses.dataclass(frozen=True)
+class _ExpertLayout:
+    """Static shapes of the chunked expert pipeline on one shard."""
+
+    tokens_per_shard: int
+    topk: int
+    local_experts: int
+    ep_size: int
+    chunk_experts: int
+    chunk_capacity: int
+    expert_mlp: _ExpertMlp
+    weight_gradient: RoutingWeightGradient
+
+    @property
+    def chunks(self) -> int:
+        return self.local_experts // self.chunk_experts
+
+
+class _ChunkPlan(NamedTuple):
+    """One chunk's transfers and group sizes.
+
+    ``_expert_granular_a2a_params`` builds the dispatch and return parameters as mirror
+    transfers: each is the other's transpose (JAX's ragged_all_to_all transpose rule derives the
+    same offsets with two offset all-to-alls), so the backward sends cotangents back along the
+    mirror transfer's parameters.
+    """
+
+    dispatch_params: ExpertA2aParams
+    return_params: ExpertA2aParams
+    physical_group_sizes: Int[Array, "Echunk"]
+    active_group_sizes: Int[Array, "Echunk"]
+
+
+class _ChunkResiduals(NamedTuple):
+    plan: _ChunkPlan
+    expert_mlp: tuple[jax.Array, ...]
+
+
+def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_ChunkPlan, ...]:
+    plans = []
+    for chunk_index, clipped_group_sizes in enumerate(routing.chunk_clipped_group_sizes):
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
+            # Sender starts come from the full (unmasked) sizes, so each chunk reads its
+            # groups' accepted prefixes in place in the shared sorted buffer.
+            dispatch_params, return_params = _expert_granular_a2a_params(
+                routing.all_group_sizes,
+                clipped_group_sizes,
+                routing.shard_id,
+                local_expert_size=layout.local_experts,
+            )
+            active_all = jnp.sum(  # [Elocal]
+                clipped_group_sizes.reshape(layout.ep_size, layout.ep_size, layout.local_experts)[
+                    :, routing.shard_id, :
+                ],
+                axis=0,
+            )
+            experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
+            active_group_sizes = active_all[experts]  # [Echunk]
+            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
+            physical_group_sizes = active_group_sizes.at[-1].add(layout.chunk_capacity - total_valid)  # [Echunk]
+            plans.append(_ChunkPlan(dispatch_params, return_params, physical_group_sizes, active_group_sizes))
+    return tuple(plans)
+
+
+def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _ExpertLayout) -> Float[Array, "C H"]:
+    # Accepted rows are the prefix of each unclipped expert group and receiver offsets pack
+    # arrivals expert-major, so the received buffer feeds the grouped MLP directly: no sender
+    # compaction and no receiver-side permute.
+    dispatch_init = _transport_buffer(  # [C, H]
+        layout.chunk_capacity,
+        sorted_x.shape[1],
+        sorted_x.dtype,
+        plan.dispatch_params.send_sizes,
+        site=_TransportBufferSite.DISPATCH_OUTPUT,
+    )
+    return jax.lax.ragged_all_to_all(sorted_x, dispatch_init, *plan.dispatch_params, axis_name="expert")
+
+
+def _routed_experts_forward(
+    sorted_x: Float[Array, "TK H"],
+    weights: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    routing: _ExpertRouting,
+    layout: _ExpertLayout,
+) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...], Float[Array, "TK H"]]:
+    assignments, hidden_dim = sorted_x.shape
+    plans = _chunk_plans(routing, layout)
+    # Rows no chunk writes are the dropped assignments, which the combine skips.
+    returned = _transport_buffer(
+        assignments, hidden_dim, sorted_x.dtype, routing.group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
+    )  # [TK, H]
+    chunk_residuals = []
+    for chunk_index, plan in enumerate(plans):
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
+            source = sorted_x
+            if chunk_residuals:
+                # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
+                # of every chunk at the same time, and the chunk buffers are all live at once,
+                # which is the memory the chunks exist to save. The barrier waits for the previous
+                # chunk's backward inputs rather than its return transport: the backward does not
+                # need the return, so a recompute for the backward drops it and must not be held
+                # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
+                # slower in a rematted four-GPU layer scan.)
+                source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
+            x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+            experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
+            out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
+                x_dispatch,
+                moe_w13_local[experts],
+                moe_w2_local[experts],
+                plan.physical_group_sizes,
+                plan.active_group_sizes,
+            )
+            # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
+            # Chaining every chunk through one output buffer composes the disjoint writes, with
+            # no expansion step.
+            returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
+            chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
+
+    with jax.named_scope("combine"):
+        out = _unpermute_from_global_expert(
+            returned,
+            routing.sorted_indices,
+            weights,
+            routing.accepted,
+            tokens_per_shard=layout.tokens_per_shard,
+            topk=layout.topk,
+        ).astype(sorted_x.dtype)
+    return out, tuple(chunk_residuals), returned
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(5,))
+def _routed_experts(
+    sorted_x: Float[Array, "TK H"],
+    weights: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    routing: _ExpertRouting,
+    layout: _ExpertLayout,
+) -> Float[Array, "Tlocal H"]:
+    """Dispatch the sorted rows to their experts, run the expert MLP, return and combine.
+
+    ``weights`` must be zero for every assignment that ``routing.accepted`` marks as dropped.
+
+    ``layout.weight_gradient`` selects the routing-weight gradient `RoutingWeightGradient`. EXACT
+    keeps the returned expert outputs ``y`` for the backward and differentiates the combine. With
+    EXPERT_SIDE, each output row is ``y = h @ W2`` and its cotangent there is ``dy = w * dout``, so
+    ``<dout, y> = <h, dh> / w`` with ``dh = dy @ W2^T``, which the expert MLP backward computes
+    anyway. That backward reads neither ``y``, nor the return transport, nor the combined output,
+    and when the combined output is saved for the backward, a recompute for the backward runs only
+    the dispatch and the gate/up projection. But where ``w * dout`` rounds to zero in the cotangent
+    dtype, the row's cotangent carries no information, and the weight gradient is zero or inexact.
+    """
+    out, _residuals, _returned = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+    )
+    return out
+
+
+def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout):
+    out, chunk_residuals, returned = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+    )
+    if layout.weight_gradient == RoutingWeightGradient.EXPERT_SIDE:
+        returned = None
+    return out, (weights, routing, chunk_residuals, returned)
+
+
+def _routed_experts_bwd(layout, residuals, out_cotangent):
+    weights, routing, chunk_residuals, returned = residuals
+    expert_side = layout.weight_gradient == RoutingWeightGradient.EXPERT_SIDE
+    assignments = routing.sorted_indices.shape[0]
+    hidden_dim = out_cotangent.shape[1]
+    weights_f32 = weights.astype(jnp.float32)
+    with jax.named_scope("combine"):
+        # The combine's transpose: every accepted row's cotangent is its token's output cotangent
+        # times its routing weight, rounded once, as the fused gather-sum's backward rounds it.
+        sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
+        token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
+        returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)  # [TK, H]
+
+    dispatch_cotangent = _transport_buffer(
+        assignments,
+        hidden_dim,
+        out_cotangent.dtype,
+        routing.group_sizes,
+        site=_TransportBufferSite.DISPATCH_COTANGENT,
+    )  # [TK, H]
+    if expert_side:
+        output_dot = _transport_buffer(
+            assignments, 1, jnp.float32, routing.group_sizes, site=_TransportBufferSite.OUTPUT_DOT_COTANGENT
+        )  # [TK, 1]
+    moe_w13_cotangents = []
+    moe_w2_cotangents = []
+    for chunk_index in reversed(range(layout.chunks)):
+        plan, expert_mlp_residuals = chunk_residuals[chunk_index]
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
+            out_dispatch_init = _transport_buffer(
+                layout.chunk_capacity,
+                hidden_dim,
+                out_cotangent.dtype,
+                plan.return_params.recv_sizes,
+                site=_TransportBufferSite.RETURN_COTANGENT,
+            )
+            # Each transport's cotangent travels back along its mirror transfer.
+            out_dispatch_cotangent = jax.lax.ragged_all_to_all(
+                returned_cotangent, out_dispatch_init, *plan.dispatch_params, axis_name="expert"
+            )
+            x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot = layout.expert_mlp.backward(
+                expert_mlp_residuals, out_dispatch_cotangent
+            )
+            # Chunks read disjoint rows of the sorted buffer, so each writes its rows of one
+            # shared cotangent buffer, and the rows no chunk writes are the dropped assignments.
+            dispatch_cotangent = jax.lax.ragged_all_to_all(
+                x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
+            )
+            if expert_side:
+                # Each row's <y, dy> travels back to its assignment's sorted position like y did.
+                output_dot = jax.lax.ragged_all_to_all(
+                    row_output_dot[:, None], output_dot, *plan.return_params, axis_name="expert"
+                )
+            moe_w13_cotangents.append(w13_cotangent)
+            moe_w2_cotangents.append(w2_cotangent)
+
+    with jax.named_scope("combine"):
+        if expert_side:
+            positions = jnp.argsort(routing.sorted_indices)
+            assignment_output_dot = output_dot[:, 0][positions].reshape(weights.shape)
+            # d/dw of w * <dout, y> is <dout, y> = <dy, y> / w. Dropped and padding assignments
+            # carry no weight and get a zero gradient without the division.
+            divisible = routing.accepted & (weights_f32 != 0)
+            weights_cotangent = jnp.where(divisible, assignment_output_dot / jnp.where(divisible, weights_f32, 1), 0)
+        else:
+            combined, combine_vjp = jax.vjp(
+                lambda w: _unpermute_from_global_expert(
+                    returned,
+                    routing.sorted_indices,
+                    w,
+                    routing.accepted,
+                    tokens_per_shard=layout.tokens_per_shard,
+                    topk=layout.topk,
+                ),
+                weights_f32,
+            )
+            (weights_cotangent,) = combine_vjp(out_cotangent.astype(combined.dtype))
+            # Dropped rows were never written, and their gradient may have read anything.
+            weights_cotangent = jnp.where(routing.accepted, weights_cotangent, 0)
+        weights_cotangent = weights_cotangent.astype(weights.dtype)
+    return (
+        dispatch_cotangent,
+        weights_cotangent,
+        jnp.concatenate(moe_w13_cotangents[::-1], axis=0),
+        jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
+        None,
+    )
+
+
+_routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd)
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -432,6 +632,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    routing_weight_gradient: RoutingWeightGradient,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -455,7 +656,6 @@ def _moe_mlp_ep_ragged_a2a_local(
     chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
     chunk_experts = local_experts // chunks
     chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
-    hidden_dim = x_local.shape[1]
 
     with jax.named_scope("dispatch"):
         assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
@@ -476,14 +676,14 @@ def _moe_mlp_ep_ragged_a2a_local(
             chunk_experts,
         )
         chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
-        chunk_clipped_group_sizes = [  # [S, E] each
+        chunk_clipped_group_sizes = tuple(  # [S, E] each
             _clip_receiver_group_sizes(
                 jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0),
                 local_expert_size=local_experts,
                 receiver_capacity=logical_chunk_capacity,
             )
             for chunk_index in range(chunks)
-        ]
+        )
         # Every expert belongs to one chunk, so summing the chunks gives each expert's accepted
         # prefix of this shard's group.
         accepted_group_sizes = sum(clipped[shard_id] for clipped in chunk_clipped_group_sizes)  # [E]
@@ -491,78 +691,30 @@ def _moe_mlp_ep_ragged_a2a_local(
         accepted = accepted.reshape(tokens_per_shard, topk)
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, accepted.astype(jnp.float32), topk)  # [TK, H]
 
-    expert_mlp = _select_expert_mlp(activation_fn)
-    # Rows no chunk writes are the dropped assignments, which the combine skips.
-    returned = _transport_buffer(
-        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
-    )  # [TK, H]
-    # Each chunk reads only its own experts' groups of the sorted buffer, so chunks read disjoint
-    # rows and every chunk but the last forwards the buffer to the next.
-    chunk_source = sorted_x
-    for chunk_index, clipped_group_sizes in enumerate(chunk_clipped_group_sizes):
-        with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            # Sender starts come from the full (unmasked) sizes, so each chunk reads its
-            # groups' accepted prefixes in place in the shared sorted buffer.
-            dispatch_params, return_params = _expert_granular_a2a_params(
-                all_group_sizes,
-                clipped_group_sizes,
-                shard_id,
-                local_expert_size=local_experts,
-            )
-            # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
-            # of every chunk at the same time. This causes the high memory use that the chunks
-            # prevent. A variant that overlaps one transport with the MLP stays within memory.
-            # But it does not increase the speed. The transport and the MLP compete for the
-            # same SMs.
-            chunk_source, _ = jax.lax.optimization_barrier((chunk_source, returned))
-            # Accepted rows are the prefix of each unclipped expert group and receiver offsets
-            # pack arrivals expert-major, so the received buffer feeds the grouped MLP
-            # directly: no sender compaction and no receiver-side permute.
-            dispatch_init = _transport_buffer(  # [C, H]
-                chunk_capacity,
-                hidden_dim,
-                x_local.dtype,
-                dispatch_params.send_sizes,
-                site=_TransportBufferSite.DISPATCH_OUTPUT,
-            )
-            if chunk_index < chunks - 1:
-                x_dispatch, chunk_source = _ragged_a2a_add_forwarding(  # [C, H]
-                    assignments_per_shard, chunk_source, dispatch_init, dispatch_params
-                )
-            else:
-                x_dispatch = _ragged_a2a_add(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)
-            active_all = jnp.sum(  # [Elocal]
-                clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
-            )
-            active_group_sizes = active_all[
-                chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts
-            ]  # [Echunk]
-            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-            physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)  # [Echunk]
-            out_dispatch = expert_mlp(  # [C, H]
-                x_dispatch,
-                moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
-                moe_w2_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
-                physical_group_sizes,
-                active_group_sizes,
-                activation_fn,
-            )
-            # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
-            # Chaining every chunk through one output buffer composes the disjoint writes, with
-            # no expansion step.
-            returned = _ragged_a2a_add(chunk_capacity, out_dispatch, returned, return_params)
+    routing = _ExpertRouting(
+        sorted_indices=sorted_indices,
+        accepted=accepted,
+        group_sizes=group_sizes,
+        all_group_sizes=all_group_sizes,
+        chunk_clipped_group_sizes=chunk_clipped_group_sizes,
+        shard_id=shard_id,
+    )
+    layout = _ExpertLayout(
+        tokens_per_shard=tokens_per_shard,
+        topk=topk,
+        local_experts=local_experts,
+        ep_size=ep_size,
+        chunk_experts=chunk_experts,
+        chunk_capacity=chunk_capacity,
+        expert_mlp=_select_expert_mlp(activation_fn),
+        weight_gradient=routing_weight_gradient,
+    )
+    # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
+    # row, and the `where` discards any gradient for it.
+    weights = jnp.where(accepted, combine_weights_local, 0)
+    out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
 
     with jax.named_scope("combine"):
-        # A dropped or padding assignment gets weight zero, so the gather-sum never reads its
-        # unwritten row, and the `where` discards the weight gradient read from that row.
-        out_local = _unpermute_from_global_expert(
-            returned,
-            sorted_indices,
-            jnp.where(accepted, combine_weights_local, 0),
-            accepted,
-            tokens_per_shard=tokens_per_shard,
-            topk=topk,
-        ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
