@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pulumi
-from config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME
+from config import CHEROOT_PACKAGE, ENDPOINT_NAME, HEALTH_PATH, PORT_NAME
 from iac.iris.service import IrisService, IrisServiceArgs
 from iris.cluster.types import ResourceSpec
 from release import XPROF_RS_BINARY_PATH
@@ -28,6 +28,7 @@ def main() -> None:
             health_path=HEALTH_PATH,
             env=dict(config.get_object("env") or {}),
             secret_env=dict(config.get_object("secret_env") or {}),
+            pip_packages=(CHEROOT_PACKAGE,),
             sync_packages=("marin-iris", "marin-rigging"),
             build_commands=(".venv/bin/python -m infra.xprof.download",),
             extra_bundle_includes=(XPROF_RS_BINARY_PATH,),

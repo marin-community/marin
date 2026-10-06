@@ -8,6 +8,7 @@ PORT_NAME = "xprof"
 HEALTH_PATH = "/healthz"
 PUBLIC_PATH = proxy_path(ENDPOINT_NAME)
 BACKEND_HOST = "127.0.0.1"
+CHEROOT_PACKAGE = "cheroot==11.1.2"
 
 # XProf overview_page requests over ALL_HOSTS on large profiles routinely take
 # longer than the controller proxy's 120s default, so raise the per-endpoint
