@@ -118,17 +118,6 @@ def local_machine(tmp_path: Path, rpc=None, task: LocalTask | None = None) -> tu
     return machine, job
 
 
-def submitted_job(monkeypatch, factory: IrisMachineFactory, network: NetworkPolicy = NetworkPolicy.DENY) -> dict:
-    """Return the keyword arguments ``create`` passes to ``IrisClient.submit``."""
-    client = RecordingClient()
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-    with pytest.raises(SubmissionRecorded):
-        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir="/tmp", network=network)))
-    return client.submitted
-
-
 @pytest.mark.parametrize("resource", ["cpus", "storage_mb"])
 def test_zero_resource_requests_cannot_silently_select_iris_defaults(resource):
     with pytest.raises(ValueError, match=resource):
@@ -220,7 +209,14 @@ def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path:
     ],
 )
 def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
-    submitted = submitted_job(monkeypatch, IrisMachineFactory(controller_url="http://controller"), network)
+    client = RecordingClient()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
 
-    assert submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
-    assert submitted["egress_policy"] == egress
+    with pytest.raises(SubmissionRecorded):
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir="/tmp", network=network)))
+
+    assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert client.submitted["egress_policy"] == egress
