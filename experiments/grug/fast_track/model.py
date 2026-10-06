@@ -1451,6 +1451,8 @@ class GrugModelConfig:
     latent_mix_balance: "LatentMixBalance" = dataclasses.field(default_factory=lambda: LatentMixBalance.NONE)
     """Load balancing of the MLA KV-latent mixture's block selection (``kv`` in ``latent_mix_sites``)."""
     latent_mix_entropy_weight: float = 0.01
+    latent_mix_renorm: bool = False
+    """MLA KV-latent mixture: divide the chosen blocks' sigmoid weights by their sum (each token's sum to 1)."""
     """``LatentMixBalance.ENTROPY``: weight of the regularizer ``-H(mean over tokens of softmax(gate logits))``."""
     qk_mult_per_head: bool = False
     """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
@@ -1610,8 +1612,10 @@ class GrugModelConfig:
         if self.latent_mix_sites and not 1 <= self.latent_mix_topk <= self.latent_mix_experts:
             raise ValueError("latent_mix_topk must be in [1, latent_mix_experts]")
         LatentMixBalance(self.latent_mix_balance)
-        if self.latent_mix_balance != LatentMixBalance.NONE and self.latent_mix_sites != ("kv",):
-            raise ValueError("latent_mix_balance is implemented for latent_mix_sites=('kv',) only")
+        if (self.latent_mix_balance != LatentMixBalance.NONE or self.latent_mix_renorm) and self.latent_mix_sites != (
+            "kv",
+        ):
+            raise ValueError("latent_mix_balance / latent_mix_renorm are implemented for latent_mix_sites=('kv',) only")
         if "kv" in self.latent_mix_sites and (self.mla_share_kv_latent or self.attn_res_sum_inputs):
             raise ValueError(
                 "latent_mix site kv needs one KV latent per layer (no mla_share_kv_latent/attn_res_sum_inputs)"
@@ -2086,11 +2090,12 @@ def mixture_weights(
     topk: int,
     selection_bias: Float[Array, " E"] | None = None,
     entropy_weight: float = 0.0,
+    renorm: bool = False,
 ) -> Float[Array, "... E"]:
     """SwitchHead's sigmoid top-k weights for one group of ``experts`` blocks, over any leading axes of ``x``
     (computed in place, so the weights keep ``x``'s batch sharding). ``selection_bias`` (``LatentMixBalance.BIAS``)
     shifts only which blocks are picked; ``entropy_weight`` (``LatentMixBalance.ENTROPY``) adds the balance
-    regularizer's gradient to the logits."""
+    regularizer's gradient to the logits; ``renorm`` scales each token's kept weights to sum to 1."""
     logits = jnp.einsum("...d,de->...e", x, gate).astype(jnp.float32)
     if entropy_weight:
         logits = _entropy_balanced(logits, entropy_weight)
@@ -2104,7 +2109,10 @@ def mixture_weights(
         # The bias gets the load error as its gradient; the 0 * keeps its custom VJP on the backward path.
         load = jnp.mean(chosen.astype(jnp.float32), axis=tuple(range(chosen.ndim - 1)))
         weights = weights + 0.0 * _load_error_grad(selection_bias, jax.lax.stop_gradient(load))
-    return jnp.where(chosen, weights, 0.0)
+    kept = jnp.where(chosen, weights, 0.0)
+    if renorm:
+        kept = kept / jnp.sum(kept, axis=-1, keepdims=True)
+    return kept
 
 
 @jax.custom_vjp
@@ -2422,7 +2430,13 @@ class CausalSelfAttention(eqx.Module):
         cfg = self.cfg
         entropy = cfg.latent_mix_entropy_weight if cfg.latent_mix_balance == LatentMixBalance.ENTROPY else 0.0
         return mixture_weights(
-            kv_in, self.kv_mix_gate, cfg.latent_mix_experts, cfg.latent_mix_topk, self.kv_mix_bias, entropy
+            kv_in,
+            self.kv_mix_gate,
+            cfg.latent_mix_experts,
+            cfg.latent_mix_topk,
+            self.kv_mix_bias,
+            entropy,
+            cfg.latent_mix_renorm,
         )
 
     def _mla_qkv(

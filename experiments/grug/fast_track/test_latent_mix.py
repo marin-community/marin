@@ -104,3 +104,11 @@ def test_bias_balanced_mla_mixture_trains_and_routes_bias_to_sign_sgd():
     assert np.isfinite(float(loss))
     g = np.asarray(grads.stacked_blocks.stacked.attn.kv_mix_bias)
     np.testing.assert_allclose(g.sum(-1), 0.0, atol=1e-6)
+
+
+def test_renormed_mixture_weights_sum_to_one_over_the_kept_blocks():
+    x = jax.random.normal(jax.random.PRNGKey(0), (16, 8))
+    gate = jax.random.normal(jax.random.PRNGKey(1), (8, 8))
+    weights = np.asarray(mixture_weights(x, gate, 8, 2, renorm=True))
+    np.testing.assert_allclose(weights.sum(-1), 1.0, rtol=1e-6)
+    assert ((weights > 0).sum(-1) == 2).all()
