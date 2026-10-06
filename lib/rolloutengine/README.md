@@ -1,7 +1,9 @@
 # Rollout engine
 
 `marin-rolloutengine` executes one TaskCompendium task through Shellbox and returns
-`RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
+`RolloutData`: the conversation, served token IDs, loss mask, optional log probabilities, grade, and per-turn records.
+Under the default `TokenContract.EXACT`, the token IDs are the exact training sequence.
+Under `TokenContract.TEXT`, the endpoint re-tokenizes each request, so the IDs are informational and the loss mask is all zeros.
 
 Callers supply a model callable, machine factories, and optional `TaskSession`
 factories for task actions and grading.
@@ -18,7 +20,7 @@ After the turn loop, the default session grades an in-process `VerifyitGrader` o
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
 A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
-for the session lifecycle, exact-token contract, failure handling, and backend configuration.
+for the session lifecycle, token contracts, failure handling, and backend configuration.
 
 From the Marin repository root:
 
