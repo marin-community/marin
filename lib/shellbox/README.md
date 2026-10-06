@@ -7,7 +7,7 @@
 - `shellbox.backends.shellsim.environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
 - `shellbox.mini_agent:NativeMiniAgent`: the native mini-swe-agent controller runs on the host. A private Unix socket sends commands to `QemuEnvironment`. The guest has no network.
 
-The native mini adapter requires an isolated environment with mini-swe-agent `2.1.0` and Harbor commit `2666d6526477ae3e46030a8dc4f3f2c68fd7a84f`. It does not change the workspace Harbor pin. Set `api_base` for the host model endpoint. Set `config_specs` to the native CLI config list, including `mini.yaml` when its prompts are necessary. The adapter keeps the native InteractiveAgent, `--yolo`, `--exit-immediately`, provider settings, completion sentinel and trajectory format.
+The native mini adapter requires an isolated environment with mini-swe-agent `2.1.0` and Harbor commit `2666d6526477ae3e46030a8dc4f3f2c68fd7a84f`. It does not change the workspace Harbor pin. Set `api_base` for the host model endpoint. Supply the required `config_specs` constructor argument with the native CLI config list, including `mini.yaml` when its prompts are necessary. The adapter keeps the native InteractiveAgent, `--yolo`, `--exit-immediately`, provider settings, completion sentinel and trajectory format.
 
 A native limit prompt receives batch EOF. It cannot grant more steps.
 

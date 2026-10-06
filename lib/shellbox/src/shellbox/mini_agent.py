@@ -43,7 +43,7 @@ class NativeMiniAgent(BaseAgent):
 
     SUPPORTS_ATIF = True
 
-    def __init__(self, *args, config_specs: list[str] | None = None, api_base: str | None = None, **kwargs):
+    def __init__(self, *args, config_specs: list[str], api_base: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.config_specs = config_specs
         self.api_base = api_base
@@ -214,11 +214,7 @@ class NativeMiniAgent(BaseAgent):
                 f"--output={trajectory}",
                 "--environment-class=shellbox.mini_environment.MiniQemuEnvironment",
             ]
-            for spec in (
-                self.config_specs
-                if self.config_specs is not None
-                else [os.getenv("MSWEA_MINI_CONFIG_PATH", "mini.yaml")]
-            ):
+            for spec in self.config_specs:
                 arguments.extend(("-c", spec))
             arguments.extend(("-c", str(task_config), "-c", f"environment.socket_path={socket_path}"))
             child_env = (
