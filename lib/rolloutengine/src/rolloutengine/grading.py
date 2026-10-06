@@ -8,6 +8,7 @@ import json
 import math
 import tarfile
 from collections.abc import Mapping
+from dataclasses import replace
 from functools import partial
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -34,9 +35,9 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import validate_verifier
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
-from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.runtime.task_grading import _grade_result, grade_task
 from taskcompendium.submission import SubmissionConvention
-from verifyit.grade import Status
+from verifyit.grade import Reward, Status
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
@@ -305,13 +306,9 @@ async def _reward_file_content(
     return result.stdout
 
 
-def _reject_json_constant(value: str) -> None:
-    raise ValueError(f"Non-JSON numeric constant: {value}")
-
-
-def _parse_verdict(content: bytes) -> tuple[Status, float, dict[str, Any]]:
+def _parse_verdict(content: bytes) -> Reward:
     """Read a verdict written by ``verifyit.grade.write_reward`` and apply its reward contract."""
-    verdict = json.loads(content, parse_constant=_reject_json_constant)
+    verdict = json.loads(content)
     if not isinstance(verdict, dict) or set(verdict) != VERDICT_KEYS:
         raise ValueError("A verdict must be an object with exactly reward, status, and detail")
     try:
@@ -326,7 +323,9 @@ def _parse_verdict(content: bytes) -> tuple[Status, float, dict[str, Any]]:
     detail = verdict["detail"]
     if not isinstance(detail, dict):
         raise ValueError("A verdict detail must be a JSON object")
-    return status, float(reward), detail
+    # json.loads accepts NaN and Infinity; a verdict must round-trip as strict JSON.
+    json.dumps(detail, allow_nan=False)
+    return Reward(float(reward), status, detail)
 
 
 async def _verdict_file_grade(
@@ -345,7 +344,7 @@ async def _verdict_file_grade(
     if isinstance(content, GradeResult):
         return content
     try:
-        status, reward, detail = _parse_verdict(content)
+        verdict = _parse_verdict(content)
     except (UnicodeError, ValueError) as error:
         return GradeResult(
             Outcome.INFRA_ERROR,
@@ -354,11 +353,7 @@ async def _verdict_file_grade(
             diagnostics=diagnostics,
             failure=GradingFailure.INVALID_REWARD,
         )
-    if status == Status.SCORED:
-        return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics, detail=detail)
-    outcome = Outcome.INVALID_TASK if status == Status.INVALID_TASK else Outcome.INFRA_ERROR
-    error = detail.get("error")
-    return GradeResult(outcome, None, error if isinstance(error, str) else None, diagnostics=diagnostics, detail=detail)
+    return replace(_grade_result(verdict), diagnostics=diagnostics)
 
 
 async def _file_grade(

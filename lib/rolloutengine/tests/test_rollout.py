@@ -815,7 +815,7 @@ VERDICT_PATH = "/logs/verifier/verdict.json"
             '{"reward": 1.0, "status": "scored", "detail": {"nan": NaN}}',
             Outcome.INFRA_ERROR,
             None,
-            "Non-JSON numeric constant: NaN",
+            "Out of range float values are not JSON compliant",
             "invalid_reward",
         ),
         (
