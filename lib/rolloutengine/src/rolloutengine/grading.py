@@ -88,11 +88,59 @@ async def _grade_rollout(
     if machine is None:
         raise ValueError("Shell grading requires a task machine")
     verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
-    for command in verifier.collect:
+    for command_index, command in enumerate(verifier.collect):
         result = await machine.run(_machine_command(command))
         if result.exit_code != 0:
+            diagnostics: dict[str, Any] = {
+                "command_index": command_index,
+                "exit_code": result.exit_code,
+                "reason": result.reason.value,
+                "stdout": result.stdout.decode(errors="replace"),
+                "stderr": result.stderr.decode(errors="replace"),
+                "stdout_truncated": result.stdout_truncated,
+                "stderr_truncated": result.stderr_truncated,
+            }
+            if submission_sink is not None:
+                preservation_errors = []
+                preserved_artifacts = []
+                try:
+                    async with asyncio.timeout(verifier.timeout):
+                        with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
+                            for index, artifact in enumerate(verifier.artifacts):
+                                path = Path(directory) / str(index)
+                                operation = "download"
+                                try:
+                                    if not await _download_artifact(machine, artifact, path, verifier.timeout):
+                                        continue
+                                    operation = "submission_sink"
+                                    await submission_sink(artifact, path)
+                                    preserved_artifacts.append(artifact.source)
+                                except Exception as error:
+                                    # Preserve the collection failure and record secondary preservation errors.
+                                    preservation_errors.append(
+                                        {
+                                            "artifact_source": artifact.source,
+                                            "operation": operation,
+                                            "type": type(error).__name__,
+                                            "error": str(error),
+                                        }
+                                    )
+                except TimeoutError:
+                    preservation_errors.append(
+                        {
+                            "operation": "preservation",
+                            "type": "TimeoutError",
+                            "error": "Artifact preservation timed out",
+                        }
+                    )
+                diagnostics["preserved_artifacts"] = preserved_artifacts
+                diagnostics["preservation_errors"] = preservation_errors
             return GradeResult(
-                Outcome.INFRA_ERROR, None, "Cannot collect grading inputs", failure=GradingFailure.EXECUTION
+                Outcome.INFRA_ERROR,
+                None,
+                "Cannot collect grading inputs",
+                diagnostics=diagnostics,
+                failure=GradingFailure.EXECUTION,
             )
     if verifier.environment is None:
         return await _shell_grade(verifier, messages, machine)

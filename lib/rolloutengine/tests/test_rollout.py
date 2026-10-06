@@ -29,7 +29,7 @@ from taskcompendium.environment import (
     VerifierArtifact,
 )
 from taskcompendium.grading import numeric_answer
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -985,3 +985,146 @@ async def test_staged_first_response_rejection_keeps_grade_without_invented_acti
         assert record.steps[-1].transition.grade is not None
         assert record.steps[-1].transition.grade.reward == 1
         assert record.steps[-1].transition.reward == record.grade.reward
+
+
+@pytest.fixture
+def failed_collection_task():
+    verifier = ShellVerifierSpec(
+        argv=("true",),
+        timeout=5,
+        reward=ExitCodeReward(),
+        environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+        collect=(
+            EnvironmentCommand(
+                argv=(
+                    "sh",
+                    "-c",
+                    "cp /workspace/input /workspace/submission; "
+                    "echo collector-output; echo collector-error >&2; exit 7",
+                ),
+                timeout=5,
+            ),
+            EnvironmentCommand(argv=("sh", "-c", "echo later > /workspace/submission"), timeout=5),
+        ),
+        artifacts=(
+            VerifierArtifact(source="/workspace/submission", target="/workspace/submission", kind=ArtifactKind.FILE),
+        ),
+    )
+    return file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                files=(EnvironmentFile(path="/workspace/input", content=b"\x00\xff\r\n"),),
+            ),
+            "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
+        }
+    )
+
+
+@pytest.mark.parametrize("save_submission", [True, False])
+async def test_failed_collection_preserves_submission_and_diagnostics(tmp_path, failed_collection_task, save_submission):
+    saved = tmp_path / "submission"
+
+    async def preserve(artifact, path):
+        saved.write_bytes(path.read_bytes())
+
+    model = ReplayModel([{"role": "assistant", "content": "Completed."}])
+    factory = RecordingShellSimFactory()
+    runner = ShellboxRolloutEngine(
+        model.complete,
+        {EnvironmentKind.SHELLSIM: factory},
+        max_turns=3,
+        command_timeout=5,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        submission_sink=preserve if save_submission else None,
+    )
+    result = await runner.run(failed_collection_task)
+    assert result.grade.status == Outcome.INFRA_ERROR
+    assert result.grade.reward is None
+    assert result.grade.failure == GradingFailure.EXECUTION
+    diagnostics = result.grade.diagnostics
+    assert {
+        key: value for key, value in diagnostics.items() if key not in {"preservation_errors", "preserved_artifacts"}
+    } == {
+        "command_index": 0,
+        "exit_code": 7,
+        "reason": "exited",
+        "stdout": "collector-output\n",
+        "stderr": "collector-error\n",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+    }
+    assert len(factory.machines) == 1
+    if save_submission:
+        assert saved.read_bytes() == b"\x00\xff\r\n"
+        assert diagnostics["preserved_artifacts"] == ["/workspace/submission"]
+        assert diagnostics["preservation_errors"] == []
+    else:
+        assert not saved.exists()
+
+
+@pytest.mark.parametrize("failure", ["missing", "sink_failure"])
+async def test_failed_collection_keeps_preservation_errors_secondary(failed_collection_task, failure):
+    task = failed_collection_task
+    if failure == "missing":
+        task = task.model_copy(update={"environment": task.environment.model_copy(update={"files": ()})})
+
+    async def preserve(artifact, path):
+        raise OSError("Submission storage failed")
+
+    model = ReplayModel([{"role": "assistant", "content": "Completed."}])
+    factory = RecordingShellSimFactory()
+    runner = ShellboxRolloutEngine(
+        model.complete,
+        {EnvironmentKind.SHELLSIM: factory},
+        max_turns=3,
+        command_timeout=5,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        submission_sink=preserve,
+    )
+    result = await runner.run(task)
+    assert result.grade.status == Outcome.INFRA_ERROR
+    assert result.grade.reward is None
+    assert result.grade.failure == GradingFailure.EXECUTION
+    assert result.grade.error == "Cannot collect grading inputs"
+    assert result.grade.diagnostics["exit_code"] == 7
+    assert result.grade.diagnostics["preserved_artifacts"] == []
+    errors = result.grade.diagnostics["preservation_errors"]
+    assert len(errors) == 1
+    assert errors[0]["artifact_source"] == "/workspace/submission"
+    assert errors[0]["operation"] == ("download" if failure == "missing" else "submission_sink")
+    if failure == "sink_failure":
+        assert errors[0]["type"] == "OSError"
+        assert errors[0]["error"] == "Submission storage failed"
+    assert len(factory.machines) == 1
+
+
+async def test_failed_collection_bounds_artifact_preservation(failed_collection_task):
+    received = []
+
+    async def preserve(artifact, path):
+        received.append(path.read_bytes())
+        await asyncio.Future()
+
+    model = ReplayModel([{"role": "assistant", "content": "Completed."}])
+    factory = RecordingShellSimFactory()
+    runner = ShellboxRolloutEngine(
+        model.complete,
+        {EnvironmentKind.SHELLSIM: factory},
+        max_turns=3,
+        command_timeout=5,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        submission_sink=preserve,
+    )
+    result = await runner.run(failed_collection_task)
+    assert received == [b"\x00\xff\r\n"]
+    assert result.grade.status == Outcome.INFRA_ERROR
+    assert result.grade.reward is None
+    assert result.grade.failure == GradingFailure.EXECUTION
+    assert result.grade.error == "Cannot collect grading inputs"
+    assert result.grade.diagnostics["exit_code"] == 7
+    assert result.grade.diagnostics["preserved_artifacts"] == []
+    assert result.grade.diagnostics["preservation_errors"] == [
+        {"operation": "preservation", "type": "TimeoutError", "error": "Artifact preservation timed out"}
+    ]
+    assert len(factory.machines) == 1
