@@ -41,6 +41,8 @@ from marin.evaluation.records import (
     record_path,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.execution.step_runner import run_step
+from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
@@ -124,6 +126,7 @@ class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
     endpoint_route: EndpointRoute
+    step: StepSpec
     secret_env_keys: tuple[str, ...] = ()
 
 
@@ -182,10 +185,10 @@ def _read_record_if_exists(path: str) -> EvalRunRecord | None:
 
 
 def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> _RecordPublication:
-    """Preserve per-eval success across parent retries, including unfinished pipeline steps.
+    """Preserve the first successful record after a parent loses its eval step lease.
 
-    Policy launches use the runner directly, and a pipeline step completes only after the group job.
-    The record write therefore needs its own atomic success guard.
+    An evaluator child can outlive the parent that held the StepSpec lock. Its late result must not
+    replace an earlier success from another attempt.
     """
     destination = conditional_object(record_path(prefix, record.run_id))
     payload = record.model_dump_json(indent=2, by_alias=True).encode()
@@ -359,6 +362,10 @@ class _EvaluationExecution:
     log_tails: dict[str, tuple[str, ...]]
 
 
+class _EvaluationStepFailed(RuntimeError):
+    """An evaluation wrote a failure record, so its StepSpec must remain retryable."""
+
+
 def _run_one_evaluation(
     batch: EvaluationBatch,
     evaluation: Evaluation,
@@ -527,12 +534,29 @@ def evaluate_batch(
 
     for index, evaluation in enumerate(batch.evaluations):
         path = record_path(batch.records_prefix, evaluation.identity.run_id)
-        existing = _read_record_if_exists(path)
-        if existing is not None and existing.status is RunStatus.SUCCEEDED:
+        execution: _EvaluationExecution | None = None
+
+        def run_eval_step(_output_path: str, *, path: str = path, evaluation: Evaluation = evaluation) -> dict[str, str]:
+            nonlocal execution
+            existing = _read_record_if_exists(path)
+            if existing is not None and existing.status is RunStatus.SUCCEEDED:
+                return {"record_path": path}
+            execution = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars, judge)
+            if execution.failure is not None:
+                raise _EvaluationStepFailed(execution.failure)
+            return {"record_path": execution.record_path}
+
+        try:
+            run_step(replace(evaluation.step, fn=run_eval_step))
+        except _EvaluationStepFailed:
+            assert execution is not None
+        if execution is None:
+            record = _read_record_if_exists(path)
+            if record is None or record.status is not RunStatus.SUCCEEDED:
+                raise RuntimeError(f"eval step {evaluation.identity.run_id} completed without a successful record")
             logger.info("skipping completed eval %s", evaluation.identity.run_id)
             paths.append(path)
             continue
-        execution = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars, judge)
         paths.append(execution.record_path)
         if execution.failure is not None:
             failed.append(execution.failure)
@@ -616,15 +640,21 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
     paths = [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
-    pending = tuple(
-        evaluation
-        for evaluation, path in zip(batch.evaluations, paths, strict=True)
-        if (existing := _read_record_if_exists(path)) is None or existing.status is not RunStatus.SUCCEEDED
-    )
+    pending: list[Evaluation] = []
+    for evaluation, path in zip(batch.evaluations, paths, strict=True):
+        existing = _read_record_if_exists(path)
+        if existing is None or existing.status is not RunStatus.SUCCEEDED:
+            pending.append(evaluation)
+            continue
+
+        def completed_eval_step(_output_path: str, *, path: str = path) -> dict[str, str]:
+            return {"record_path": path}
+
+        run_step(replace(evaluation.step, fn=completed_eval_step))
     if not pending:
         logger.info("all %d evals in batch %s already succeeded", len(batch.evaluations), batch.group_id)
         return paths
-    batch = replace(batch, evaluations=pending)
+    batch = replace(batch, evaluations=tuple(pending))
     orchestrator_job_id = str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
     evaluation_env = {

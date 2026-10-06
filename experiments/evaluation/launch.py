@@ -48,6 +48,7 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import resolved_serve_config
+from marin.execution.step_spec import StepSpec
 from marin.external_dependencies import EVALCHEMY
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.storage_path import prefix_join
@@ -283,6 +284,7 @@ def build_evaluation_batch(
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
+    group_id = _group_id(model.name)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
     secret_env: dict[str, SecretSpec] = {}
@@ -304,13 +306,18 @@ def build_evaluation_batch(
                 ),
                 executor=definition.executor,
                 endpoint_route=definition.endpoint_route,
+                step=StepSpec(
+                    name=f"eval/{model.name}/{eval_key}",
+                    override_output_path=prefix_join(records_prefix, run_id),
+                    hash_attrs={"run_id": run_id, "group_id": group_id, "eval_runtime": definition.runtime_descriptor},
+                ),
                 secret_env_keys=tuple(definition.secret_env),
             )
         )
 
     endpoint_cluster = accelerator.target_cluster or spec.submission_cluster
     return EvaluationBatch(
-        group_id=_group_id(model.name),
+        group_id=group_id,
         user=user,
         version=spec.version,
         description=spec.description,

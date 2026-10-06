@@ -66,6 +66,8 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.execution.step_spec import StepSpec
+from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 from marin.external_dependencies import EVALCHEMY, HARBOR
 from marin.inference.config import (
     EffectiveServing,
@@ -255,6 +257,7 @@ def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute =
         ),
         executor=executor,
         endpoint_route=endpoint_route,
+        step=StepSpec(name=f"eval/{name}", override_output_path=str(root / "records" / f"run-{name}")),
     )
 
 
@@ -372,11 +375,35 @@ def test_run_evaluation_batch_restart_keeps_completed_record_without_serving(tmp
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
     path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
     original = Path(path).read_bytes()
+    status_path = Path(evaluation.step.output_path) / ".executor_status"
+    status_path.unlink()  # An older successful record has no per-eval StepSpec status.
 
     _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("completed eval started serving again"))
 
     assert run_evaluation_batch(batch) == [path]
     assert Path(path).read_bytes() == original
+    assert StatusFile(evaluation.step.output_path, worker_id="test").status == STATUS_SUCCESS
+
+
+def test_evaluate_batch_step_cache_skips_completed_eval(tmp_path, monkeypatch):
+    executions = 0
+
+    def executor(_session, _output_dir, _env_vars, *, judge=None):
+        nonlocal executions
+        executions += 1
+        return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
+
+    evaluation = _evaluation(tmp_path, "finished", executor)
+    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+
+    first = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})
+    second = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/retry", env_vars={})
+
+    assert first == second
+    assert executions == 1
+    assert read_record(first[0]).jobs["orchestrator"] == "/first"
+    assert StatusFile(evaluation.step.output_path, worker_id="test").status == STATUS_SUCCESS
 
 
 def test_run_evaluation_batch_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
@@ -403,6 +430,8 @@ def test_run_evaluation_batch_restart_only_runs_unfinished_evals(tmp_path, monke
     ]
     assert read_record(paths[0]).jobs["orchestrator"] == "/first"
     assert read_record(paths[1]).jobs["orchestrator"] == "/orchestrator"
+    assert StatusFile(finished.step.output_path, worker_id="test").status == STATUS_SUCCESS
+    assert StatusFile(pending.step.output_path, worker_id="test").status == STATUS_SUCCESS
 
 
 def test_run_evaluation_batch_startup_failure_preserves_success_from_other_attempt(tmp_path, monkeypatch):
@@ -604,9 +633,11 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     failed = read_record(str(records / "run-failure" / "record.json"))
     succeeded = read_record(str(records / "run-success" / "record.json"))
     assert failed.status is RunStatus.FAILED
+    assert StatusFile(batch.evaluations[0].step.output_path, worker_id="test").status == STATUS_FAILED
     assert failed.jobs == {"orchestrator": "/orchestrator", "eval": "/eval/failure"}
     assert failed.log_tails == {"eval": ("failure detail",)}
     assert succeeded.status is RunStatus.SUCCEEDED
+    assert StatusFile(batch.evaluations[1].step.output_path, worker_id="test").status == STATUS_SUCCESS
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert succeeded.serving is not None
     assert succeeded.serving.effective
@@ -683,7 +714,8 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
         "marin.evaluation.inference_metrics.PrometheusScraper.scrape",
         lambda _self: scrapes.pop(0),
     )
-    clock = iter((10.0, 12.0))
+    # StepSpec times the enclosing run; the inference window spans the middle two reads.
+    clock = iter((0.0, 10.0, 12.0, 12.0))
     monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
     monkeypatch.setattr(
@@ -1154,6 +1186,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
         ),
         executor=_successful_evaluation,
         endpoint_route=EndpointRoute.CAPABILITY,
+        step=StepSpec(name="eval/secret", override_output_path=str(tmp_path / "records" / "run-secret")),
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -2104,3 +2137,4 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     assert batch.records_prefix == "gs://marin-eval-metadata/evals"
     evaluation = batch.evaluations[0]
     assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"
+    assert evaluation.step.output_path == f"{batch.records_prefix}/{evaluation.identity.run_id}"

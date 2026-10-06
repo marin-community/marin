@@ -8,6 +8,9 @@ model once, runs every selected eval against that endpoint in order, and writes 
 inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
 scans those records into its Postgres query index.
 
+Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id}/`; the group can
+still share one serving session for its unfinished evals.
+
 `marin.evaluation.runner` opens one candidate `remote_inference` session and optionally one shared
 hosted-judge session. Evalchemy resolves the serving endpoint's direct address on its Iris cluster
 before each evaluation. Harbor keeps the minted capability URLs because its sandboxes reach the
@@ -156,6 +159,9 @@ dashboard) without cluster access.
 
 When Iris restarts an orchestrator, the runner reads its existing records before serving. It skips
 evaluations with a `succeeded` record and returns immediately when the whole batch has succeeded.
+It reconciles these records into the per-eval StepSpec status, including records from runs that
+predate per-eval steps. Failed eval steps remain retryable.
+
 Record publication uses a conditional object write: a later attempt can replace a failed record, but
 cannot replace a successful one. This also protects a success that appears after the restarted
 orchestrator begins serving. An evaluator already launched before the first success may still share
@@ -196,7 +202,9 @@ override is a runtime arg, so changing it does not change the artifact identity.
 
 The policy launcher calls the CLI directly. In a pipeline, the step is marked successful only after
 the whole orchestrator job finishes, so its cache does not cover an individual eval that completed
-before an orchestrator failure. The runner's per-eval record guard applies to both launch paths.
+before an orchestrator failure. Both launch paths execute each eval through a per-eval StepSpec inside
+the orchestrator; the record guard also protects a success from a late writer after the step lock is
+lost.
 
 For produced models, pass the producer handles in `deps` and resolve their locations in
 `resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.
