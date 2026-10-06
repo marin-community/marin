@@ -851,6 +851,7 @@ def _build_pod_manifest(
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
         controller_address=config.controller_address if isolation.include_controller_address else None,
+        task_token=run_req.task_token if isolation.include_task_token else None,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,

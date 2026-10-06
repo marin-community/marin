@@ -57,6 +57,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
+from iris.cluster.types import JobName
 from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,10 @@ DEFAULT_USER_ROLE = "user"
 WORKER_ROLE = "worker"
 # Role granted to a config-listed admin.
 ADMIN_ROLE = "admin"
+# Role of the token a task's own client presents. Its subject is the job's owner,
+# so owner-gated RPCs (child jobs, exec, endpoints) behave as for that user; it
+# never carries admin authority.
+TASK_ROLE = "task"
 
 # TTL for the control-plane admin token LocalCluster mints in-process for its
 # auto-login (aud="iris"). Short-lived and non-refreshable. Deployed clusters
@@ -88,6 +93,10 @@ SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # short-lived tokens, or a worker-credential rotation lever) are in the auth design
 # doc's follow-ups.
 WORKER_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
+# Task token lifetime. Not revocable; a fresh token is minted for each dispatch,
+# so a retried or rescheduled attempt starts a new lifetime. It must outlive one
+# attempt of a long training task.
+TASK_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 
 # Provider name when trusted_cidrs alone enables auth: in-network callers get
 # identity by location, everything else needs a token.
@@ -276,6 +285,15 @@ class JwtTokenManager:
             {"sub": user_id, "role": role, "jti": key_id},
             audience=CONTROL_PLANE_AUDIENCE,
             ttl_seconds=ttl_seconds,
+        )
+
+    def create_task_token(self, job_id: JobName) -> str:
+        """Mint the control-plane token a task of ``job_id`` presents as its owner."""
+        return self.create_token(
+            job_id.user,
+            TASK_ROLE,
+            f"iris_task_{secrets.token_urlsafe(8)}",
+            ttl_seconds=TASK_TOKEN_TTL_SECONDS,
         )
 
     def create_endpoint_token(

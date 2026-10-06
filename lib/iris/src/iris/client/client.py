@@ -1515,6 +1515,7 @@ def get_iris_ctx() -> IrisContext | None:
         client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,
+            credentials=job_info.credentials,
         )
 
     ctx = IrisContext.from_job_info(job_info, client=client)

@@ -171,6 +171,7 @@ def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
     controller_address: str | None,
+    task_token: str | None,
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
@@ -186,6 +187,7 @@ def build_iris_env(
         num_tasks=task.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
+        task_token=task_token,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,
@@ -762,6 +764,7 @@ class TaskAttempt:
             self,
             self._worker_id,
             self._controller_address if isolation.include_controller_address else None,
+            self.request.task_token if isolation.include_task_token else None,
         )
         env = dict(iris_env)
 
