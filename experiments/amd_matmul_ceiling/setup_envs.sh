@@ -34,7 +34,6 @@ uv pip install --no-config --python "$agent_work/venv-torch/bin/python" packagin
 # MAMF-finder reads power and clocks through amdsmi. Torch loads the ROCm SDK's own libamd_smi, and a second copy
 # from /opt/rocm makes amdsmi report no GPUs, so use the SDK's binding in place: it finds the SDK library relative
 # to its own file. A .pth file still applies under `python -I`, which MAMF runs with.
-uv pip uninstall --no-config --python "$agent_work/venv-torch/bin/python" amdsmi 2>/dev/null || true
 "$agent_work/venv-torch/bin/python" -I -c "import _rocm_sdk_core, pathlib, sysconfig
 sdk_smi = pathlib.Path(_rocm_sdk_core.__file__).parent / 'share' / 'amd_smi'
 pathlib.Path(sysconfig.get_path('purelib'), 'rocm_sdk_amdsmi.pth').write_text(f'{sdk_smi}\n')"

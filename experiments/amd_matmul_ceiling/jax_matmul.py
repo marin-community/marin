@@ -43,6 +43,15 @@ class Shape:
 
 
 @dataclasses.dataclass(frozen=True)
+class RunHeader:
+    jax: str
+    device_kind: str
+    platform: str
+    xla_flags: str
+    num_shapes: int
+
+
+@dataclasses.dataclass(frozen=True)
 class ShapeResult:
     shape: str
     dtype: str
@@ -138,19 +147,19 @@ def main() -> None:
     shapes = list(dict.fromkeys(shapes))
 
     device = jax.devices()[0]
-    header = {
-        "jax": jax.__version__,
-        "device_kind": device.device_kind,
-        "platform": device.platform,
-        "xla_flags": os.environ.get("XLA_FLAGS", ""),
-        "num_shapes": len(shapes),
-    }
+    header = RunHeader(
+        jax=jax.__version__,
+        device_kind=device.device_kind,
+        platform=device.platform,
+        xla_flags=os.environ.get("XLA_FLAGS", ""),
+        num_shapes=len(shapes),
+    )
     logger.info("%s", header)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     best: ShapeResult | None = None
     with args.output.open("w") as out:
-        out.write(json.dumps({"header": header}) + "\n")
+        out.write(json.dumps({"header": dataclasses.asdict(header)}) + "\n")
         for i, shape in enumerate(shapes):
             result = time_shape(
                 shape,
