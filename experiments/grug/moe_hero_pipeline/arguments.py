@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded synthetic pipeline trial with main-recipe precision and optimizer controls."""
+"""Bounded pipeline trial with optional checkpoint save and resume."""
 
 import argparse
 from collections.abc import Sequence
@@ -19,6 +19,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--process-id", type=int)
     parser.add_argument("--local-device-id", type=int)
     parser.add_argument("--processes-per-task", type=int, help="Local process count for the main recipe runtime")
+    parser.add_argument("--real-data", action="store_true", help="Read the current immutable Hero Harrier mixture")
+    parser.add_argument("--data-output-root", help="Caller-owned root for resolving the real-data context")
+    parser.add_argument(
+        "--data-schedule-steps", type=int, help="Hero mixture schedule horizon, independent of trial steps"
+    )
     parser.add_argument(
         "--main-hero-recipe",
         action="store_true",
@@ -53,6 +58,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--stop-after-step", type=int, help="End a bounded run before the configured total steps")
+    parser.add_argument("--checkpoint-root", help="Restore from and save under this checkpoint directory")
+    parser.add_argument("--checkpoint-every-steps", type=int, default=0)
     parser.add_argument(
         "--synchronize-devices-after-step",
         action="store_true",
@@ -87,6 +94,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("diagnostic-layers requires full-hero and a positive layer count")
     if args.sequence_length is not None and args.sequence_length < 1:
         parser.error("sequence-length must be positive")
+    if args.real_data and (not args.main_hero_recipe or not args.data_output_root):
+        parser.error("real-data requires main-hero-recipe and data-output-root")
+    if args.real_data and (args.data_schedule_steps is None or args.data_schedule_steps < args.steps):
+        parser.error("real-data requires data-schedule-steps at least as large as steps")
     if args.moe_implementation is not None and not args.main_hero_recipe:
         parser.error("moe-implementation requires main-hero-recipe")
     if args.expert_waves < 1:
@@ -95,6 +106,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("steps and expert-axis-size must be positive")
     if args.stop_after_step is not None and not 1 <= args.stop_after_step <= args.steps:
         parser.error("stop-after-step must be between 1 and steps")
+    if args.checkpoint_every_steps < 0 or (args.checkpoint_every_steps and not args.checkpoint_root):
+        parser.error("checkpoint-every-steps must be nonnegative and requires checkpoint-root when set")
 
     if (args.schedule == AutomaticPipelineSchedule.DUALPIPE_V) != (args.physical_stages is not None):
         raise ValueError("DualPipeV requires physical-stages; other schedules use one logical stage per physical stage")
