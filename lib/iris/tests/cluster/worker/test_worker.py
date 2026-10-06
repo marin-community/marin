@@ -19,7 +19,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import EGRESS_NETWORK, DockerRuntime
 from iris.cluster.runtime.types import (
     NETWORK_MODE_HOST,
     NETWORK_MODE_NONE,
@@ -830,7 +830,7 @@ def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_sto
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
     request = create_run_task_request()
     request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
-    request.sandbox_egress = job_pb2.SANDBOX_EGRESS_NONE
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
     request.environment.env_vars["TASK_VAR"] = "1"
 
     task = w.get_task(w.submit_task(request))
@@ -846,15 +846,22 @@ def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_sto
 @pytest.mark.parametrize(
     "profile, egress, network_mode",
     [
-        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.SANDBOX_EGRESS_NONE, NETWORK_MODE_NONE),
-        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.SANDBOX_EGRESS_UNSPECIFIED, NETWORK_MODE_HOST),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, NETWORK_MODE_NONE),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, NETWORK_MODE_HOST),
     ],
 )
-def test_only_sandbox_container_runs_without_host_network(mock_worker, mock_runtime, profile, egress, network_mode):
-    """A SANDBOX task on a Docker worker gets no network, so it cannot reach the VM or metadata server."""
+def test_egress_policy_selects_the_docker_network(
+    mock_worker, mock_runtime, monkeypatch, tmp_path, profile, egress, network_mode
+):
+    """Only CLUSTER uses the host network; INTERNET joins the filtered egress network once bootstrap installed it."""
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("nameserver 8.8.8.8\n")
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(resolv_conf))
     request = create_run_task_request()
     request.container_profile = profile
-    request.sandbox_egress = egress
+    request.egress_policy = egress
 
     task = mock_worker.get_task(mock_worker.submit_task(request))
     task.thread.join(timeout=15.0)
@@ -862,11 +869,12 @@ def test_only_sandbox_container_runs_without_host_network(mock_worker, mock_runt
     assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
 
 
-def test_docker_worker_refuses_sandbox_internet_egress(mock_worker, mock_runtime):
-    """A bridge container would reach the VPC and metadata server, so the task fails before any container starts."""
+def test_docker_worker_refuses_internet_egress_without_the_host_filter(mock_worker, mock_runtime, monkeypatch, tmp_path):
+    """Without the bootstrap filter a bridge container reaches the VPC, so the task fails before any container starts."""
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(tmp_path / "missing"))
     request = create_run_task_request()
     request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
-    request.sandbox_egress = job_pb2.SANDBOX_EGRESS_INTERNET
+    request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
 
     task = mock_worker.get_task(mock_worker.submit_task(request))
     task.thread.join(timeout=15.0)

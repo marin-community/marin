@@ -27,7 +27,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
-from iris.cluster.runtime.docker import DockerContainerHandle
+from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerContainerHandle
 from iris.cluster.runtime.env import (
     IRIS_ATTEMPT_UID_ENV,
     IRIS_WORKER_REGION_ENV,
@@ -149,16 +149,22 @@ class _TaskOutcome:
 def docker_network_mode(network: TaskNetwork) -> str:
     """The Docker network mode for a task's network.
 
-    A Docker worker cannot run INTERNET: a bridge container on a worker VM
-    reaches the VPC and the metadata server through the VM's routes, and the
-    worker container has no NET_ADMIN to filter them. The controller rejects
-    such jobs at submission; this refuses any that arrive anyway.
+    INTERNET runs on the bridge network whose host filter worker bootstrap
+    installs. A bridge container without that filter reaches the VPC and the
+    metadata server through the VM's routes, so the worker refuses INTERNET
+    unless bootstrap has written ``EGRESS_RESOLV_CONF``, which it does only
+    after the filter is in place.
     """
     if network is TaskNetwork.CLUSTER:
         return NETWORK_MODE_HOST
     if network is TaskNetwork.NONE:
         return NETWORK_MODE_NONE
-    raise ValueError("Sandbox egress internet is not supported on docker workers; request sandbox egress none")
+    if not Path(EGRESS_RESOLV_CONF).exists():
+        raise ValueError(
+            f"Egress policy internet needs the worker's host egress filter, and {EGRESS_RESOLV_CONF} is "
+            "missing: worker bootstrap has not installed the filter since this VM booted"
+        )
+    return EGRESS_NETWORK
 
 
 def build_iris_env(
@@ -751,7 +757,7 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
-        isolation = task_isolation(self.request.container_profile, self.request.sandbox_egress)
+        isolation = task_isolation(self.request.container_profile, self.request.egress_policy)
         iris_env = build_iris_env(
             self,
             self._worker_id,

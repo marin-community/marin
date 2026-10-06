@@ -85,7 +85,7 @@ def build_run_request(
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
         container_profile=row.container_profile,
-        sandbox_egress=row.sandbox_egress,
+        egress_policy=row.egress_policy,
     )
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:

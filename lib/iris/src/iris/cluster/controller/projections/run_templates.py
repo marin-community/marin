@@ -57,7 +57,7 @@ def build_run_request_fields(
     attempt_id: int = 0,
     priority: int = 0,
     container_profile: int = 0,
-    sandbox_egress: int = 0,
+    egress_policy: int = 0,
 ) -> job_pb2.RunTaskRequest:
     """Build a RunTaskRequest carrying the per-job fields shared by the template
     and per-attempt construction paths.
@@ -85,7 +85,7 @@ def build_run_request_fields(
         attempt_id=attempt_id,
         priority=priority,
         container_profile=container_profile,
-        sandbox_egress=sandbox_egress,
+        egress_policy=egress_policy,
     )
     for filename, data in workdir_files.items():
         request.entrypoint.workdir_files[filename] = data
@@ -154,7 +154,7 @@ class RunTemplatesProjection(Projection):
             constraints_json=job.constraints_json,
             task_image=job.task_image,
             container_profile=job.container_profile,
-            sandbox_egress=job.sandbox_egress,
+            egress_policy=job.egress_policy,
         )
 
         with self._lock:

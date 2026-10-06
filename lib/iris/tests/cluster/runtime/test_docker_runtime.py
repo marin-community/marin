@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, _security_flags
+from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerRuntime, _security_flags
 from iris.cluster.runtime.types import NETWORK_MODE_HOST, NETWORK_MODE_NONE, ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
 
@@ -135,11 +135,18 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
 
 
 @pytest.mark.parametrize(
-    "network_mode, expect_sysctls",
-    [(NETWORK_MODE_NONE, False), (NETWORK_MODE_HOST, False), ("bridge", True)],
+    "network_mode, expect_sysctls, expect_egress_resolv_conf",
+    [
+        (NETWORK_MODE_NONE, False, False),
+        (NETWORK_MODE_HOST, False, False),
+        ("bridge", True, False),
+        (EGRESS_NETWORK, False, True),
+    ],
 )
-def test_create_container_network_flags(monkeypatch, tmp_path, runtime, network_mode, expect_sysctls):
-    """The container joins the configured network; only its own network namespace gets sysctl tuning."""
+def test_create_container_network_flags(
+    monkeypatch, tmp_path, runtime, network_mode, expect_sysctls, expect_egress_resolv_conf
+):
+    """The container joins the configured network; a plain bridge gets sysctl tuning, the egress network public DNS."""
     commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -165,6 +172,7 @@ def test_create_container_network_flags(monkeypatch, tmp_path, runtime, network_
     create_command = next(command for command in commands if command[:2] == ["docker", "create"])
     assert create_command[create_command.index("--network") + 1] == network_mode
     assert ("--sysctl" in create_command) == expect_sysctls
+    assert (f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro" in create_command) == expect_egress_resolv_conf
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
@@ -227,10 +235,9 @@ def test_security_flags_docker_access_mounts_socket():
     assert "--cap-drop" in flags
 
 
-@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX])
-def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps(profile):
-    """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
-    flags = _security_flags(profile, is_tpu_run=False)
+def test_security_flags_sandbox_uses_runsc_runtime_and_default_caps():
+    """SANDBOX selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_SANDBOX, is_tpu_run=False)
     assert flags == ["--runtime", "runsc"]
     # in-guest root needs the default cap set, so the container is NOT cap-dropped
     # or privileged — gVisor provides the host isolation instead.

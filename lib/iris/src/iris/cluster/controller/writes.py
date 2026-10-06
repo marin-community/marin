@@ -282,7 +282,7 @@ def insert_job_config(
     priority_band: int,
     task_image: str,
     container_profile: int = 0,
-    sandbox_egress: int = 0,
+    egress_policy: int = 0,
     submit_argv_json: list | None = None,
     fail_if_exists: bool = False,
 ) -> None:
@@ -312,7 +312,7 @@ def insert_job_config(
             priority_band=priority_band,
             task_image=task_image,
             container_profile=container_profile,
-            sandbox_egress=sandbox_egress,
+            egress_policy=egress_policy,
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
             fail_if_exists=fail_if_exists,
         )

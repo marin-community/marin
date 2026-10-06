@@ -17,7 +17,7 @@ from iris.cluster.backends.k8s.tasks import (
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.platforms.k8s.constants import SANDBOX_EGRESS_LABEL
+from iris.cluster.platforms.k8s.constants import EGRESS_LABEL
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
@@ -1029,20 +1029,9 @@ def test_docker_access_pod_manifest_raises():
     assert "DOCKER_ACCESS is not supported" in update.error
 
 
-def test_gvisor_profile_sets_runtime_class_and_benign_context():
-    """GVISOR sets the pod runtimeClassName and a non-privileged securityContext."""
-    req = make_run_req("/my-job/task-0")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_GVISOR
-    manifest = _build_pod_manifest(req, pod_config())
-    assert manifest["spec"]["runtimeClassName"] == "gvisor"
-    ctx = manifest["spec"]["containers"][0]["securityContext"]
-    assert "privileged" not in ctx
-    assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
-
-
 @pytest.mark.parametrize(
     "egress, label",
-    [(job_pb2.SANDBOX_EGRESS_INTERNET, "internet"), (job_pb2.SANDBOX_EGRESS_NONE, "none")],
+    [(job_pb2.EGRESS_POLICY_INTERNET, "internet"), (job_pb2.EGRESS_POLICY_NONE, "none")],
 )
 def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     """SANDBOX keeps the job's env and drops every cluster-held input.
@@ -1052,7 +1041,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     """
     req = make_run_req("/my-job/task-0")
     req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
-    req.sandbox_egress = egress
+    req.egress_policy = egress
     req.environment.env_vars["TASK_VAR"] = "1"
     config = pod_config(
         controller_address="http://ctrl:8080",
@@ -1068,6 +1057,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     env = {e["name"]: e.get("value") for e in task["env"]}
 
     assert spec["runtimeClassName"] == "gvisor"
+    assert "privileged" not in task["securityContext"]
     assert env["TASK_VAR"] == "1"
     assert "MARIN_PREFIX" not in env
     assert "IRIS_CONTROLLER_ADDRESS" not in env
@@ -1078,7 +1068,30 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert not [v for v in spec["volumes"] if "hostPath" in v and v["name"] in {m.name for m in STANDARD_MOUNTS}]
     assert [c["name"] for c in spec["containers"]] == ["task"]
     assert spec["initContainers"] == []
-    assert manifest["metadata"]["labels"][SANDBOX_EGRESS_LABEL] == label
+    assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
+
+
+def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluster_route():
+    """The egress policy sets the network for any profile; the profile alone decides the cluster env."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    req.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+    config = pod_config(
+        controller_address="http://ctrl:8080",
+        task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        task_outputs=TaskOutputPolicy(),
+        host_network=True,
+    )
+    manifest = _build_pod_manifest(req, config)
+    spec = manifest["spec"]
+    env = {e["name"]: e.get("value") for e in spec["containers"][0]["env"]}
+
+    assert env["MARIN_PREFIX"] == "s3://bucket/prefix"
+    assert "runtimeClassName" not in spec
+    assert "hostNetwork" not in spec
+    assert [c["name"] for c in spec["containers"]] == ["task"]
+    assert spec["initContainers"] == []
+    assert manifest["metadata"]["labels"][EGRESS_LABEL] == "internet"
 
 
 # ---------------------------------------------------------------------------

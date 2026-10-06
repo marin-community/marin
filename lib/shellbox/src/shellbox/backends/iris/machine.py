@@ -33,9 +33,9 @@ DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
-SANDBOX_EGRESS = {
-    NetworkPolicy.ALLOW: job_pb2.SANDBOX_EGRESS_INTERNET,
-    NetworkPolicy.DENY: job_pb2.SANDBOX_EGRESS_NONE,
+EGRESS_POLICIES = {
+    NetworkPolicy.ALLOW: job_pb2.EGRESS_POLICY_INTERNET,
+    NetworkPolicy.DENY: job_pb2.EGRESS_POLICY_NONE,
 }
 
 
@@ -244,7 +244,7 @@ class IrisMachineFactory:
                 ),
                 task_image=spec.source.reference,
                 container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
-                sandbox_egress=SANDBOX_EGRESS[spec.network],
+                egress_policy=EGRESS_POLICIES[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
                 timeout=Duration.from_seconds(self.job_ttl),
                 max_retries_failure=0,

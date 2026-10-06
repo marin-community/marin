@@ -59,7 +59,7 @@ from iris.cluster.runtime.types import (
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
-from iris.rpc.proto_display import GVISOR_CONTAINER_PROFILES, resolve_container_profile
+from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,18 @@ RESERVED_HOST_PORTS = "8081,8431,8470-8482"
 
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
+# The bridge network an EGRESS_POLICY_INTERNET task runs on. Worker bootstrap
+# creates it on bridge EGRESS_BRIDGE and installs host firewall rules that drop
+# its traffic to EGRESS_BLOCKED_CIDRS and to the host itself. It writes
+# EGRESS_RESOLV_CONF, naming public resolvers, only after those rules are in
+# place, so the file's presence means the filter is installed. EGRESS_RUN_DIR is
+# on the host's tmpfs: a reboot clears the rules and the file together.
+EGRESS_NETWORK = "iris-egress"
+EGRESS_BRIDGE = "iris-egress0"
+EGRESS_RUN_DIR = "/run/iris"
+EGRESS_RESOLV_CONF = f"{EGRESS_RUN_DIR}/egress/resolv.conf"
+EGRESS_DNS_SERVERS: tuple[str, ...] = ("8.8.8.8", "1.1.1.1")
+
 _NETWORK_SYSCTLS: dict[str, str] = {
     "net.ipv4.ip_local_port_range": EPHEMERAL_PORT_RANGE,
     "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
@@ -266,7 +278,7 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
     # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
     # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
-    if resolved in GVISOR_CONTAINER_PROFILES and not is_tpu_run:
+    if resolved == job_pb2.CONTAINER_PROFILE_SANDBOX and not is_tpu_run:
         return ["--runtime", "runsc"]
 
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
@@ -706,11 +718,17 @@ exec {quoted_cmd}
             cmd.extend(["--network", config.network_mode])
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
+        # Docker's embedded resolver forwards to the VM's resolver, the metadata
+        # server the filter blocks, and relies on NAT rules gVisor's network stack
+        # does not apply. The bootstrap-written resolv.conf names public resolvers.
+        if config.network_mode == EGRESS_NETWORK:
+            cmd.extend(["-v", f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro"])
 
         # Network sysctl tuning for containers with own network namespace (#3066).
-        # Host-network containers inherit host settings from VM bootstrap, and a
-        # container without a network has nothing to tune.
-        if config.network_mode not in (NETWORK_MODE_HOST, NETWORK_MODE_NONE):
+        # Host-network containers inherit host settings from VM bootstrap, a
+        # container without a network has nothing to tune, and gVisor sandboxes
+        # on the egress network do not accept every host sysctl.
+        if config.network_mode not in (NETWORK_MODE_HOST, NETWORK_MODE_NONE, EGRESS_NETWORK):
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
 

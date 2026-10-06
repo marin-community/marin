@@ -96,11 +96,11 @@ class RecordingClient(LocalClient):
 @pytest.mark.parametrize(
     ("network", "egress"),
     [
-        (NetworkPolicy.ALLOW, job_pb2.SANDBOX_EGRESS_INTERNET),
-        (NetworkPolicy.DENY, job_pb2.SANDBOX_EGRESS_NONE),
+        (NetworkPolicy.ALLOW, job_pb2.EGRESS_POLICY_INTERNET),
+        (NetworkPolicy.DENY, job_pb2.EGRESS_POLICY_NONE),
     ],
 )
-def test_network_policy_selects_the_sandbox_egress(monkeypatch, network, egress):
+def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     client = RecordingClient()
     endpoint = SimpleNamespace(url="http://controller:10000", credentials=None, close=lambda: None)
     monkeypatch.setattr(iris_machine, "connect_controller", lambda **_: endpoint)
@@ -111,4 +111,4 @@ def test_network_policy_selects_the_sandbox_egress(monkeypatch, network, egress)
         asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=network)))
 
     assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
-    assert client.submitted["sandbox_egress"] == egress
+    assert client.submitted["egress_policy"] == egress

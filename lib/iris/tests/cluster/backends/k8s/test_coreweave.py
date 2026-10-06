@@ -1090,15 +1090,15 @@ def _apply_stub(k8s: InMemoryK8sService, kind: str, name: str, namespace: str = 
 
 
 # ============================================================================
-# Tests: sandbox NetworkPolicy
+# Tests: egress NetworkPolicy
 # ============================================================================
 
 
-def _sandbox_policy_egress(k8s: InMemoryK8sService, mode: str) -> list[dict]:
-    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, f"iris-sandbox-egress-{mode}")
+def _egress_policy_rules(k8s: InMemoryK8sService, mode: str) -> list[dict]:
+    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, f"iris-egress-{mode}")
     assert policy is not None
     spec = policy["spec"]
-    assert spec["podSelector"] == {"matchLabels": {"iris.sandbox-egress": mode}}
+    assert spec["podSelector"] == {"matchLabels": {"iris.egress": mode}}
     assert set(spec["policyTypes"]) == {"Ingress", "Egress"}
     assert spec["ingress"] == []
     return spec["egress"]
@@ -1118,7 +1118,7 @@ _PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/
         pytest.param("198.18.0.0/15", [*_PRIVATE_RANGES, "198.18.0.0/15"], id="service-range-public"),
     ],
 )
-def test_start_controller_creates_one_sandbox_policy_per_egress_mode(service_cidr, blocked):
+def test_start_controller_creates_one_network_policy_per_egress_policy(service_cidr, blocked):
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     cluster_config.kubernetes_provider.service_cidr = service_cidr
@@ -1126,8 +1126,8 @@ def test_start_controller_creates_one_sandbox_policy_per_egress_mode(service_cid
 
     provider.start_controller(cluster_config)
 
-    assert _sandbox_policy_egress(k8s, "none") == [_DNS_RULE]
-    assert _sandbox_policy_egress(k8s, "internet") == [
+    assert _egress_policy_rules(k8s, "none") == [_DNS_RULE]
+    assert _egress_policy_rules(k8s, "internet") == [
         _DNS_RULE,
         {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
     ]

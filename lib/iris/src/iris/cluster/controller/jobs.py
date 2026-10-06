@@ -40,6 +40,7 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
+from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -54,7 +55,6 @@ from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authoriz
 from iris.rpc.proto_display import (
     ADMIN_PRIORITY_BAND_VALUES,
     CONTAINER_PROFILE_VALUES,
-    GVISOR_CONTAINER_PROFILES,
     PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
@@ -604,13 +604,13 @@ def _validate_launch_profile(
             "host docker socket); this cluster's backend does not support it. Use a privileged "
             "profile with an in-pod runtime, or submit to a docker-worker cluster.",
         )
-    if resolve_container_profile(request.container_profile) in GVISOR_CONTAINER_PROFILES and (
+    if request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and (
         request.resources.device.WhichOneof("device") in ("gpu", "tpu")
     ):
         raise ConnectError(
             Code.INVALID_ARGUMENT,
-            "Container profiles gvisor and sandbox are CPU-only: the runsc runtime cannot pass a GPU "
-            "or TPU through to the sandboxed guest. Use the default or privileged profile for "
+            "Container profile sandbox is CPU-only: the runsc runtime cannot pass a GPU or TPU "
+            "through to the sandboxed guest. Use the default or privileged profile for "
             "accelerator tasks.",
         )
     if request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and (request.bundle_blob or request.bundle_id):
@@ -619,34 +619,15 @@ def _validate_launch_profile(
             "Container profile sandbox runs a self-contained image and accepts no workspace bundle; "
             "submit without a workspace.",
         )
-    _resolve_sandbox_egress(dependencies, request)
+    _resolve_egress_policy(request)
 
 
-def _resolve_sandbox_egress(
-    dependencies: JobDependencies,
-    request: controller_pb2.Controller.LaunchJobRequest,
-) -> None:
-    """Resolve UNSPECIFIED egress for a sandbox job in place, and reject what no backend here enforces."""
-    if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
-        if request.sandbox_egress != job_pb2.SANDBOX_EGRESS_UNSPECIFIED:
-            raise ConnectError(Code.INVALID_ARGUMENT, "sandbox_egress applies only to container profile sandbox")
-        return
-    if request.sandbox_egress == job_pb2.SANDBOX_EGRESS_UNSPECIFIED:
-        request.sandbox_egress = job_pb2.SANDBOX_EGRESS_INTERNET
-    if request.sandbox_egress not in (job_pb2.SANDBOX_EGRESS_NONE, job_pb2.SANDBOX_EGRESS_INTERNET):
-        raise ConnectError(
-            Code.INVALID_ARGUMENT, f"Unknown sandbox egress {request.sandbox_egress}; upgrade the controller"
-        )
-    if (
-        request.sandbox_egress == job_pb2.SANDBOX_EGRESS_INTERNET
-        and BackendCapability.WORKER_FLEET in dependencies.runtime.backend.descriptor.capabilities
-    ):
-        raise ConnectError(
-            Code.INVALID_ARGUMENT,
-            "Sandbox egress internet is not available on docker worker backends: a bridge container "
-            "on a worker VM can reach the VPC and the metadata server, and the worker cannot install "
-            "the filter that blocks them. Request sandbox egress none, or submit to a Kubernetes cluster.",
-        )
+def _resolve_egress_policy(request: controller_pb2.Controller.LaunchJobRequest) -> None:
+    """Resolve UNSPECIFIED egress in place and reject an unknown policy or a sandbox on the cluster network."""
+    try:
+        request.egress_policy = resolve_egress_policy(request.container_profile, request.egress_policy)
+    except ValueError as e:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(e)) from e
 
 
 def _validate_launch_capacity(

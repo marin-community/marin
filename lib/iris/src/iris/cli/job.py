@@ -60,6 +60,7 @@ from iris.rpc import job_pb2
 from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
+    EGRESS_POLICY_NAMES,
     PRIORITY_BAND_NAMES,
     priority_band_value,
 )
@@ -586,6 +587,7 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
+    egress_policy: str | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -684,6 +686,10 @@ def run_iris_job(
     if container_profile is not None:
         profile = job_pb2.ContainerProfile.Value(container_profile)
         logger.info(f"Container profile: {container_profile}")
+    egress = job_pb2.EGRESS_POLICY_UNSPECIFIED
+    if egress_policy is not None:
+        egress = job_pb2.EgressPolicy.Value(egress_policy)
+        logger.info(f"Egress policy: {egress_policy}")
 
     return _submit_and_wait_job(
         controller_url=controller_url,
@@ -704,6 +710,7 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         container_profile=profile,
+        egress_policy=egress,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -731,6 +738,7 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -766,6 +774,7 @@ def _submit_and_wait_job(
         user=user,
         priority_band=priority_band,
         container_profile=container_profile,
+        egress_policy=egress_policy,
         submit_argv=submit_argv,
         task_image=task_image,
     )
@@ -970,6 +979,16 @@ Examples:
     ),
 )
 @click.option(
+    "--egress-policy",
+    type=click.Choice(EGRESS_POLICY_NAMES, case_sensitive=False),
+    default=None,
+    help=(
+        "What the job's network reaches (default: EGRESS_POLICY_INTERNET for SANDBOX, "
+        "EGRESS_POLICY_CLUSTER otherwise). INTERNET reaches public addresses only and NONE "
+        "nothing; neither reaches the controller, so the task cannot launch child jobs."
+    ),
+)
+@click.option(
     "--cancel-on-exit/--no-cancel-on-exit",
     default=True,
     help="Cancel the Job on Ctrl+C. Tunnel failures leave it running.",
@@ -1013,6 +1032,7 @@ def run(
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
+    egress_policy: str | None,
     cancel_on_exit: bool,
     exclude: tuple[str, ...],
     cmd: tuple[str, ...],
@@ -1075,6 +1095,7 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
+            egress_policy=egress_policy,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

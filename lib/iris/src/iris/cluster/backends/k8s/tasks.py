@@ -60,10 +60,10 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
-    SANDBOX_EGRESS_LABEL,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -134,12 +134,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
-from iris.rpc.proto_display import (
-    ADMIN_PRIORITY_BAND_VALUES,
-    GVISOR_CONTAINER_PROFILES,
-    priority_band_name,
-    resolve_container_profile,
-)
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -839,7 +834,7 @@ def _build_pod_manifest(
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     managed_label = config.managed_label
-    isolation = task_isolation(run_req.container_profile, run_req.sandbox_egress)
+    isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
     host_network = config.host_network and isolation.network is TaskNetwork.CLUSTER
 
@@ -960,7 +955,7 @@ def _build_pod_manifest(
     if managed_label:
         labels[managed_label] = "true"
     if isolation.network is not TaskNetwork.CLUSTER:
-        labels[SANDBOX_EGRESS_LABEL] = isolation.network.value
+        labels[EGRESS_LABEL] = isolation.network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1066,7 +1061,7 @@ def _build_pod_manifest(
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
-    if resolve_container_profile(run_req.container_profile) in GVISOR_CONTAINER_PROFILES:
+    if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
         spec["runtimeClassName"] = "gvisor"
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False

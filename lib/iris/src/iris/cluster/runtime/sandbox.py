@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Map a container profile to the cluster resources its task container receives.
+"""Map a container profile and egress policy to what a task container receives.
 
-:func:`task_isolation` returns a backend-neutral :class:`TaskIsolation`;
-``CONTAINER_PROFILE_SANDBOX`` withholds every cluster resource and all other
-profiles receive all of them.
+:func:`task_isolation` returns a backend-neutral :class:`TaskIsolation`. The
+profile decides the cluster resources: ``CONTAINER_PROFILE_SANDBOX`` withholds
+every one and all other profiles receive all of them. The egress policy decides
+the network, for every profile.
 """
 
 from dataclasses import dataclass
@@ -21,13 +22,26 @@ from iris.rpc import job_pb2
 _UNSHARED_MOUNTS: tuple[MountSpec, ...] = tuple(m for m in STANDARD_MOUNTS if m.kind is not MountKind.CACHE)
 
 
+# Destinations an INTERNET task may not reach: private networks (pods, nodes,
+# the controller, VPC peers), carrier-grade NAT, and link-local (the cloud
+# metadata server). The Kubernetes NetworkPolicy and the Docker worker's host
+# filter (worker bootstrap) both block these.
+EGRESS_BLOCKED_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "169.254.0.0/16",
+)
+
+
 class TaskNetwork(StrEnum):
-    """What a task's network can reach.
+    """What a task's network can reach (``job_pb2.EgressPolicy``, resolved).
 
     CLUSTER is the cluster network: the node's host network where configured,
-    the controller, workers and other pods. A sandbox gets INTERNET (public
-    addresses only) or NONE; both exclude the controller, workers, other pods
-    and the metadata server.
+    the controller, workers and other pods. INTERNET (public addresses only)
+    and NONE both exclude the controller, workers, other pods and the metadata
+    server.
     """
 
     CLUSTER = "cluster"
@@ -35,10 +49,26 @@ class TaskNetwork(StrEnum):
     NONE = "none"
 
 
-_SANDBOX_NETWORKS = {
-    job_pb2.SANDBOX_EGRESS_INTERNET: TaskNetwork.INTERNET,
-    job_pb2.SANDBOX_EGRESS_NONE: TaskNetwork.NONE,
+_NETWORKS: dict[int, TaskNetwork] = {
+    job_pb2.EGRESS_POLICY_CLUSTER: TaskNetwork.CLUSTER,
+    job_pb2.EGRESS_POLICY_INTERNET: TaskNetwork.INTERNET,
+    job_pb2.EGRESS_POLICY_NONE: TaskNetwork.NONE,
 }
+
+
+def resolve_egress_policy(profile: int, egress_policy: int) -> job_pb2.EgressPolicy:
+    """Resolve UNSPECIFIED to the profile's default: INTERNET for SANDBOX, CLUSTER otherwise.
+
+    Raises ValueError for an unknown policy or a SANDBOX job on the cluster network.
+    """
+    sandbox = profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+    if egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+        return job_pb2.EGRESS_POLICY_INTERNET if sandbox else job_pb2.EGRESS_POLICY_CLUSTER
+    if egress_policy not in _NETWORKS:
+        raise ValueError(f"Unknown egress policy {egress_policy}")
+    if sandbox and egress_policy == job_pb2.EGRESS_POLICY_CLUSTER:
+        raise ValueError("Container profile sandbox cannot use egress policy cluster")
+    return job_pb2.EgressPolicy.ValueType(egress_policy)
 
 
 @dataclass(frozen=True)
@@ -52,10 +82,11 @@ class TaskIsolation:
         include_shared_caches: The node-shared download caches.
         include_service_account: On Kubernetes, the pod service account and its token.
         network: What the task's network reaches. Outside CLUSTER, a Docker
-            worker runs the task with no network (it rejects INTERNET), and a
-            Kubernetes pod gets no host network, carries the label its
-            NetworkPolicy selects, and runs without the log-shipping and
-            output-upload sidecars, which would share the task's network.
+            worker runs the task on the filtered egress network (INTERNET) or
+            with no network (NONE), and a Kubernetes pod gets no host network,
+            carries the label its NetworkPolicy selects, and runs without the
+            log-shipping and output-upload sidecars, which would share the
+            task's network.
     """
 
     include_cluster_env: bool
@@ -69,30 +100,18 @@ class TaskIsolation:
         return STANDARD_MOUNTS if self.include_shared_caches else _UNSHARED_MOUNTS
 
 
-_CLUSTER_TASK = TaskIsolation(
-    include_cluster_env=True,
-    include_controller_address=True,
-    include_shared_caches=True,
-    include_service_account=True,
-    network=TaskNetwork.CLUSTER,
-)
+def task_isolation(profile: int, egress_policy: int) -> TaskIsolation:
+    """Isolation for a ``job_pb2.ContainerProfile`` and its ``job_pb2.EgressPolicy``.
 
-
-def task_isolation(profile: int, sandbox_egress: int) -> TaskIsolation:
-    """Isolation for a ``job_pb2.ContainerProfile`` and its resolved ``job_pb2.SandboxEgress``.
-
-    SANDBOX withholds every cluster resource and gets the network its egress
-    names; every other profile receives everything.
+    SANDBOX withholds every cluster resource; every other profile receives all
+    of them. The network follows the egress policy, resolved as
+    :func:`resolve_egress_policy` does.
     """
-    if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
-        return _CLUSTER_TASK
-    network = _SANDBOX_NETWORKS.get(sandbox_egress)
-    if network is None:
-        raise ValueError(f"Sandbox task has unresolved egress {sandbox_egress}")
+    cluster_resources = profile != job_pb2.CONTAINER_PROFILE_SANDBOX
     return TaskIsolation(
-        include_cluster_env=False,
-        include_controller_address=False,
-        include_shared_caches=False,
-        include_service_account=False,
-        network=network,
+        include_cluster_env=cluster_resources,
+        include_controller_address=cluster_resources,
+        include_shared_caches=cluster_resources,
+        include_service_account=cluster_resources,
+        network=_NETWORKS[resolve_egress_policy(profile, egress_policy)],
     )
