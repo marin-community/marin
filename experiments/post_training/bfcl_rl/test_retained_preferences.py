@@ -701,6 +701,8 @@ def _native_pair_collection(
                     "tool_call_id": "lookup-call",
                     "content": f"{model.upper()}_TOOL_OBSERVATION\n</think>\n\nWEBFETCH_FINAL",
                 }
+                if fault == "protocol_wrappers":
+                    observation["content"] += "\n<tool_response>QUOTED_PROTOCOL</tool_response>"
                 final = {"role": "assistant", "content": f"{model.upper()}_FINAL_{index}"}
                 if model == "student" and index == 0 and fault == "malformed_calls":
                     assistant["tool_calls"][0]["function"] = {
@@ -769,7 +771,7 @@ def _native_pair_collection(
                     response = record["response"]["token_ids"][boundary["token_start"] : boundary["token_end"]]
                     masks = record["response"]["loss_mask"][boundary["token_start"] : boundary["token_end"]]
                     completion = [token for token, mask in zip(response, masks, strict=True) if mask]
-                    if model == "student" and index == 0 and step == 1 and fault == "negative_tokens":
+                    if model == "student" and index in (0, 1) and step == 1 and fault == "negative_tokens":
                         completion = [888]
                     captured_messages = messages[:initial_count] if step == 0 else messages[:-1]
                     if model == "teacher" and index == 0 and step == 0 and fault == "unproven_assistant_history":
@@ -822,7 +824,16 @@ def _native_pair_tokenizer(path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "fault", ["none", "context", "negative_tokens", "agent_error", "infrastructure_error", "malformed_calls"]
+    "fault",
+    [
+        "none",
+        "context",
+        "negative_tokens",
+        "agent_error",
+        "infrastructure_error",
+        "malformed_calls",
+        "protocol_wrappers",
+    ],
 )
 def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
@@ -835,8 +846,12 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         (teacher,), student, "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
     )
     if fault == "negative_tokens":
-        with pytest.raises(ValueError, match="differ from retained trainable"):
+        with pytest.raises(ValueError, match="2 native branches failed conversion"):
             build_native_preference_cache(config, partition)
+        failures = json.loads((tmp_path / "cache/conversion-failures.json").read_text())
+        assert len(failures) == 2
+        assert all("differ from retained trainable" in failure["error"] for failure in failures)
+        assert len({failure["source_id"] for failure in failures}) == 2
         assert not (tmp_path / "cache/train").exists()
         return
     with set_current_client(LocalClient()):
@@ -896,6 +911,9 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
         assert "</think>\n\nWEBFETCH_FINAL" in tok.decode(ids.tolist())
+        if fault == "protocol_wrappers":
+            assert "<tool_response>QUOTED_PROTOCOL</tool_response>" in tok.decode(ids.tolist())
+            assert "QUOTED_PROTOCOL" not in masked
         if fault != "context" or role != "rejected":
             assert "Copied summary: </think>\nUSER_SUMMARY_FINAL" in tok.decode(ids.tolist())
         if fault not in ("context", "infrastructure_error"):

@@ -54,6 +54,11 @@ class LiteralToolCallFormat(StrEnum):
     QWEN3_CODER = "qwen3_coder"
 
 
+class ToolObservationMarkupPolicy(StrEnum):
+    REJECT_PROTOCOL_WRAPPERS = "reject_protocol_wrappers"
+    PRESERVE_LITERAL = "preserve_literal"
+
+
 class ToolCallLiteralFormatError(ValueError):
     """Captured tool-call syntax cannot be matched to the calls actually executed."""
 
@@ -273,6 +278,7 @@ def openai_chat_messages(
     *,
     assistant_prefill: str = "",
     invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
+    tool_observation_markup_policy: ToolObservationMarkupPolicy = (ToolObservationMarkupPolicy.REJECT_PROTOCOL_WRAPPERS),
 ) -> list[Message]:
     """Normalize OpenAI-style source turns directly into Harmony messages.
 
@@ -320,7 +326,10 @@ def openai_chat_messages(
                 if content is None:
                     raise ValueError("Tool observations must contain text")
                 _check_source_markup(content)
-                if TOOL_WRAPPER.search(content):
+                if (
+                    tool_observation_markup_policy is ToolObservationMarkupPolicy.REJECT_PROTOCOL_WRAPPERS
+                    and TOOL_WRAPPER.search(content)
+                ):
                     raise ValueError("Tool observations must not contain chat protocol wrappers")
                 call_id = message.get("tool_call_id")
                 unanswered = pending.keys() - observations.keys()
@@ -403,13 +412,17 @@ def openai_chat_document(
     *,
     assistant_prefill: str = "",
     invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
+    tool_observation_markup_policy: ToolObservationMarkupPolicy = (ToolObservationMarkupPolicy.REJECT_PROTOCOL_WRAPPERS),
     **metadata: object,
 ) -> dict:
     """Build a Harmony artifact from an OpenAI-style source conversation."""
     _check_source_markup(metadata)
     return chat_document(
         openai_chat_messages(
-            messages, assistant_prefill=assistant_prefill, invalid_tool_call_policy=invalid_tool_call_policy
+            messages,
+            assistant_prefill=assistant_prefill,
+            invalid_tool_call_policy=invalid_tool_call_policy,
+            tool_observation_markup_policy=tool_observation_markup_policy,
         ),
         source,
         **metadata,

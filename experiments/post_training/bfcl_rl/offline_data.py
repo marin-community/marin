@@ -17,6 +17,7 @@ from marin.datakit.chat_normalize import InvalidToolCallPolicy, normalize_chat_t
 from marin.datakit.chat_render import render_marin_chat
 from marin.datakit.download.rollout_transforms import (
     LiteralToolCallFormat,
+    ToolObservationMarkupPolicy,
     normalize_reasoning_delimiters,
     normalize_tool_call_literals,
     openai_chat_document,
@@ -63,7 +64,10 @@ class NativeModelTrace:
 def native_prompt_sha256(messages: list[dict], tools: list[dict], assistant_prefill: str) -> str:
     prompt = render_marin_chat(
         openai_chat_messages(
-            messages, assistant_prefill=assistant_prefill, invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN
+            messages,
+            assistant_prefill=assistant_prefill,
+            invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+            tool_observation_markup_policy=ToolObservationMarkupPolicy.PRESERVE_LITERAL,
         ),
         tools=tools,
         enable_thinking=STUDENT_REASONING_MODE,
@@ -237,6 +241,7 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
         source_id=f"{trace.identity.run_id}/{trace.retained_record['record_id']}",
         assistant_prefill=trace.assistant_prefill,
         invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+        tool_observation_markup_policy=ToolObservationMarkupPolicy.PRESERVE_LITERAL,
         chat_template_kwargs={"tools": trace.tools, "enable_thinking": STUDENT_REASONING_MODE},
     )
     document["assistant_literals"] = literals
