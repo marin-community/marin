@@ -26,6 +26,7 @@ from marin.evaluation.eval_stats import (
     ResultFlag,
 )
 from marin.evaluation.evaluation_config import eval_task_directory
+from marin.evaluation.lm_eval_samples import is_scratch_artifact
 from marin.evaluation.metric_selection import (
     LM_EVAL_STDERR_SUFFIX,
     REPEAT_MEAN_SUFFIX,
@@ -71,12 +72,17 @@ def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
     return float(value) if value is not None else None
 
 
-def _task_item_count(metrics: Mapping[str, float]) -> int | None:
-    """The graded-item count a task's metric dict reports, or None when it reports none."""
+def task_item_count(metrics: Mapping[str, float]) -> int | None:
+    """The graded-item count a task's metric dict reports, or None when it reports none.
+
+    A reported count that is not a whole number is not an item count, so a fractional
+    value also reads as None rather than being truncated.
+    """
     for key in (SAMPLE_COUNT_METRIC, *TOTAL_METRICS):
         value = metrics.get(key)
         if value is not None:
-            return int(value)
+            numeric = float(value)
+            return int(numeric) if numeric.is_integer() else None
     return None
 
 
@@ -95,12 +101,18 @@ def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
     return None
 
 
+def _is_scratch_task_key(task_key: str) -> bool:
+    return is_scratch_artifact(f"{task_key}/")
+
+
 def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
     """Read evaluator-canonical scores under their recorded benchmark protocols."""
     scores: dict[str, _TaskScore] = {}
     missing_primary = False
     task_keys = dict.fromkeys((*record.metrics, *record.canonical_metrics))
     for task_key in task_keys:
+        if _is_scratch_task_key(task_key):
+            continue
         task = _task_ref(record, task_key)
         benchmark = task.benchmark if task is not None else None
         if benchmark is None:
@@ -149,13 +161,13 @@ def _legacy_canonical_metric_name(name: str) -> str:
 def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False) -> tuple[list[_TaskScore], bool]:
     """Each task entry's primary metric, deduplicated by leaf task name.
 
-    A record can carry the same task twice under different evalchemy task directories (a real record
-    holds the whole 62-entry mmlu panel under both ``mmlu_5shot`` and a ``tmp...`` directory, scoring
-    0.63502 and 0.63488). Those entries measure the same items, so keeping both would double the item
-    count and average a benchmark against itself; the first wins and the rest are dropped.
+    A record can carry the same task twice under different evalchemy task directories. Scratch
+    ``tmp...`` entries are excluded; the first remaining score wins for duplicate task leaves.
     """
     scores: dict[str, _TaskScore] = {}
     for task_key, metrics in (record.metrics or {}).items():
+        if _is_scratch_task_key(task_key):
+            continue
         task = _task_ref(record, task_key)
         if undeclared_only and task is not None and task.benchmark is not None:
             continue
@@ -171,7 +183,7 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
             value=value,
             metric=_legacy_canonical_metric_name(base_metric(name)),
             stderr=stderr_for(metrics, name),
-            n_scored=_task_item_count(metrics),
+            n_scored=task_item_count(metrics),
         )
     return list(scores.values()), False
 
@@ -207,6 +219,8 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
     """
     reported_by_leaf: dict[str, RecordTaskCoverage] = {}
     for task_key, entry in (record.coverage or {}).items():
+        if _is_scratch_task_key(task_key):
+            continue
         reported_by_leaf.setdefault(task_key.rsplit("/", 1)[-1], entry)
     reported = list(reported_by_leaf.values())
     if not reported:

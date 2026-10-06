@@ -293,20 +293,30 @@ jobs:
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
 
+  taskcompendium:
+    name: taskcompendium-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'taskcompendium-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "lib/taskcompendium/uv.lock"
+      - name: Test TaskCompendium and Harbor adapters
+        run: uv run --project lib/taskcompendium --frozen --extra harbor --group test pytest lib/taskcompendium/tests -q
+
   iris_e2e_smoke:
     name: iris-e2e-smoke
     needs: select
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -343,15 +353,6 @@ jobs:
             lib/iris/tests/e2e/test_smoke.py \
             -m requires_cluster -o "addopts=" --tb=short -v
 
-      - name: Verify screenshots with Claude
-        # Skip on PRs without secrets access (forks, dependabot): no token means
-        # the claude CLI can't authenticate, so the step would only error out.
-        if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          python -m lib.iris.scripts.verify_screenshots \
-            --screenshot-dir ${{ github.workspace }}/iris-screenshots
-
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -363,7 +364,7 @@ jobs:
 
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -373,6 +374,7 @@ jobs:
             "${{ needs.unit.result }}" \
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
+            "${{ needs.taskcompendium.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

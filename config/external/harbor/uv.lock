@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -803,7 +803,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=main#5e26ffcf490c7a5c990f22ad06f37cc7ec188ce0" }
+source = { git = "https://github.com/marin-community/harbor.git?branch=main#0985d012bcf4cc9d1acb1a831a86350cd31ac72a" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -1062,6 +1062,7 @@ dependencies = [
     { name = "daytona" },
     { name = "gcsfs" },
     { name = "harbor", extra = ["archive"] },
+    { name = "marin-rigging" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
 ]
@@ -1071,6 +1072,7 @@ requires-dist = [
     { name = "daytona", specifier = "==0.200.2" },
     { name = "gcsfs" },
     { name = "harbor", extras = ["archive"], git = "https://github.com/marin-community/harbor.git?branch=main" },
+    { name = "marin-rigging", specifier = ">=0.2.0" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
 ]

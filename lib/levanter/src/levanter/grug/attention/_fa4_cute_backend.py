@@ -74,23 +74,6 @@ def _optional_dependency_error() -> RuntimeError:
     )
 
 
-def cutlass_cute_available() -> bool:
-    """Return whether the optional CuTe/JAX CUTLASS modules are importable."""
-    try:
-        _import_cutlass_cute()
-    except Exception:
-        return False
-    return True
-
-
-def require_cutlass_cute() -> None:
-    """Raise a clear error if nvidia-cutlass-dsl with JAX support is unavailable."""
-    try:
-        _import_cutlass_cute()
-    except Exception as exc:
-        raise _optional_dependency_error() from exc
-
-
 def segmented_flash_attention_forward(
     q: jax.Array,
     k: jax.Array,
@@ -1072,9 +1055,7 @@ def _broadcast_backward_block_sparse_metadata(
 
 
 __all__ = [
-    "cutlass_cute_available",
     "fa4_cute_attention_forward",
-    "require_cutlass_cute",
     "segmented_flash_attention_backward",
     "segmented_flash_attention_backward_sm90_native",
     "segmented_flash_attention_forward",

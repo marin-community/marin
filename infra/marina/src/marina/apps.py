@@ -3,8 +3,9 @@
 
 """Python apps: what an app package may define and what the kernel hands it.
 
-A Python app is a package at ``apps/<name>/`` (it has an ``__init__.py``). Its ``app``
-module defines ``create_api(services) -> RegisteredApi``. The kernel mounts its ASGI app
+A Python app is a package at ``apps/<name>/`` (or ``apps/<name>/backend/`` when
+its URL name conflicts with an installed package). Its ``app`` module defines
+``create_api(services) -> RegisteredApi``. The kernel mounts its ASGI app
 at ``/<name>/api/`` behind the same authentication as every other route and generates
 MCP tools from its explicitly marked OpenAPI operations. The module may also define
 ``migrate(engine)``, which ``marina migrate`` runs against the app's schema before a
@@ -12,6 +13,7 @@ deploy serves traffic. A static app has no package and only a ``dist``.
 """
 
 import importlib
+import importlib.util
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -68,14 +70,34 @@ def registered_api(api: FastAPI, *, mounted_app: ASGIApp | None = None) -> Regis
 
 
 def is_python_app(manifest: AppManifest) -> bool:
-    return (manifest.root / "__init__.py").is_file()
+    return (manifest.root / "__init__.py").is_file() or (manifest.root / "backend" / "__init__.py").is_file()
 
 
 def _module(manifest: AppManifest):
     apps_dir = str(manifest.root.parent)
     if apps_dir not in sys.path:
         sys.path.insert(0, apps_dir)
-    return importlib.import_module(f"{manifest.name}.{APP_MODULE}")
+    backend = manifest.root / "backend"
+    if not (backend / "__init__.py").is_file():
+        return importlib.import_module(f"{manifest.name}.{APP_MODULE}")
+
+    # Keep the URL name free for an installed package, while retaining relative imports.
+    package_name = f"_marina_app_{manifest.name.replace('-', '_')}"
+    if package_name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            package_name,
+            backend / "__init__.py",
+            submodule_search_locations=[str(backend)],
+        )
+        assert spec is not None and spec.loader is not None
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[package_name] = package
+        try:
+            spec.loader.exec_module(package)
+        except BaseException:
+            del sys.modules[package_name]
+            raise
+    return importlib.import_module(f"{package_name}.{APP_MODULE}")
 
 
 def create_api(manifest: AppManifest, services: Services) -> RegisteredApi:

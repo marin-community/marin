@@ -9,10 +9,12 @@ losses, and gradients against the unsplit model. Run them with
 checkpoint continuation test compares two AdamW updates after restore with an
 uninterrupted run, including a changing learning rate and a changed stage split.
 
-The synthetic runner can save and resume complete pipeline checkpoints. Its
-AdamW default is a bring-up configuration; the validated long-context recipe
-explicitly selects BF16 MuonH and both host offloads. Production continuation
-and long-run training stability remain unvalidated.
+The synthetic runner can save and resume complete pipeline checkpoints.
+`--main-hero-recipe` uses FP32 parameters, BF16 compute and compute-scaled
+MuonH; it requires `--optimizer muonh` and an explicit `--processes-per-task`
+count. The legacy AdamW default is a bring-up configuration. The historical
+long-context recipe explicitly selects BF16 MuonH and both host offloads.
+Production continuation and long-run training stability remain unvalidated.
 
 Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
 `--checkpoint-every-steps` to save at that interval and on the final step. Keep
@@ -24,7 +26,19 @@ be shared by every worker. A checkpoint written by the standard Hero FSDP
 trainer has a different state tree, including optional master and EMA weights;
 loading that format into this pipeline has not been implemented or validated.
 
-## Validated result
+The current optimizer normalizes each layer's routed expert bank together, matching
+the stacked EP model. Set `--expert-normalization per_expert` for a comparison;
+the shared `GrugMoeMuonHConfig.expert_normalization` selects this choice.
+The historical hardware runs used the earlier per-expert behavior; they do not
+validate this normalization correction. The current optimizer and frozen-QB
+options have CPU numerical/state-transition coverage.
+
+QB bias adapts after each update by default. Set `--qb-bias-mode frozen` to
+retain the current pending bias while continuing to train expert and router weights. This controls the QB bias
+only; it does not freeze the router weights. Frozen QB has CPU state-transition
+coverage but has not been evaluated for SFT or RL training quality.
+
+## Historical validated result
 
 The full 535,477,106,688-parameter, 48-layer model completed ten finite synthetic
 updates at sequence length 65,536 on 192 H100s in `cw-rno2a`. The recipe uses
@@ -42,7 +56,18 @@ initialization with synthetic data, not training-quality results. The complete
 scaling table, negative results, dependency findings, and W&B links are in
 [experiment #9277](https://github.com/marin-community/marin/issues/9277).
 
-## Runtime requirements
+PP24 gives two transformer layers per stage, reducing the parameters and
+optimizer state owned by each worker. EP8 keeps expert communication within
+an eight-GPU worker's NVLink fabric. CP1 was the initial working integration;
+this layout was chosen to fit the model and then fill the 1F1B pipeline, rather
+than through a matched comparison with PP8/EP32/CP4. More pipeline stages also
+increase the number of microbatches needed to amortize pipeline fill and drain.
+The subsequent PP24/EP4/CP2 diagnostic completed ten updates at batch 96,
+68.539 seconds/update and 9.877% MFU. It reduced tokens per GPU and tokens per
+update; differing batch sizes and attention-helper versions prevent an isolated
+CP comparison. No matched Megatron layout benchmark was performed.
+
+## Historical runtime requirements
 
 The measured runs used JAXPP `46b8443eed01f54688dd24ae451203a504b1cff8` with
 local overlays. A stock installation of that pin is insufficient. Required
@@ -77,7 +102,8 @@ uv run --no-sync python -m iris.hooks.multigpu_main --nproc 1 --devices-per-proc
   python -u -m experiments.grug.moe_hero_pipeline.pipeline_smoke --full-hero \
     --schedule standard_1f1b --stages 24 --expert-axis-size 8 \
     --microbatches 48 --batch-size 384 --sequence-length 65536 --expert-waves 6 \
-    --optimizer muonh --offload-opt-state --offload-activations \
+    --optimizer muonh --expert-normalization per_expert \
+    --offload-opt-state --offload-activations \
     --park-state-during-warmup --synchronize-devices-after-step \
     --compilation-cache /tmp/hero-pp-jax-cache \
     --steps 10 --run-id <unique-run-id>
@@ -95,16 +121,6 @@ baseline evidence. These ignored artifacts are not a published reproduction
 package. Subsequent runner cleanup removed per-leaf finite-state diagnostics
 and per-step memory dumps; it has not been benchmarked again on hardware.
 
-## Review boundaries
-
-The small Muon expert-stack sharding correction and its numerical regression
-can be reviewed independently. The Hero stage adapter, runner, and parity tests
-form the Marin pipeline change. JAXPP memory-space rebinding and forward-host
-residual placement are separate dependency fixes; explicit startup preparation
-needs its own lifecycle API. Resolve these dependencies before presenting the
-65K command as a stock-install recipe.
-
-DualPipeV split-rematerialization, delayed-cotangent offload, and per-task waits
-remain experimental scratch overlays. They are not required by the validated
-1F1B recipe and should stay outside its initial PR. Follow the existing CP work
-rather than introducing another context-parallel implementation here.
+[PR #9662](https://github.com/marin-community/marin/pull/9662) extends this
+foundation with a GB200 launcher, tracked runtime setup, checkpoint/data support
+and bounded main-recipe hardware validation.

@@ -6,6 +6,7 @@ import dataclasses
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 import optax
 import pytest
@@ -20,9 +21,12 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_pipeline.checkpoint import checkpoint_state, restore_checkpoint, save_checkpoint
 from experiments.grug.moe_hero_pipeline.pipeline import (
     GrugMoeAutomaticPipelineState,
+    GrugMoePipelineStage,
+    QbBiasMode,
     _apply_qb_betas,
     _copy_array_to_host,
     split_transformer,
+    updated_pipeline_state,
 )
 
 
@@ -48,7 +52,9 @@ def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
         sconv=True,
         sconv_kernel=3,
         qb_estimator=qb_estimator,
-        qb_hist_bins=32,
+        # Keep this fixture's margins away from bin edges, where scan/stage
+        # roundoff can produce a full-bin quantile jump.
+        qb_hist_bins=33,
         attention_implementation="reference",
         moe_implementation="scatter",
         initializer_std=0.2,
@@ -82,6 +88,55 @@ def _packed_batch() -> GrugLmExample:
     )
 
 
+@pytest.mark.parametrize("qb_bias_mode", [QbBiasMode.ADAPTIVE, QbBiasMode.FROZEN])
+def test_pipeline_update_trains_weights_with_adaptive_or_frozen_router_bias(qb_bias_mode):
+    mesh, model = _tiny_hero(QbEstimator.HIST)
+    optimizer = optax.sgd(0.1, momentum=0.5)
+    policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    with jax.set_mesh(mesh):
+        stages = split_transformer(model, 2, layer_counts=(2, 3))
+        params = []
+        for stage in stages:
+            trainable, _ = eqx.partition(stage, eqx.is_array)
+            for index in range(len(stage.blocks)):
+                trainable = eqx.tree_at(
+                    lambda current, index=index: current.blocks[index].mlp.router_bias, trainable, None
+                )
+            params.append(trainable)
+        betas = tuple(
+            jnp.arange(len(stage.blocks) * model.config.num_experts, dtype=jnp.float32).reshape(
+                len(stage.blocks), model.config.num_experts
+            )
+            for stage in stages
+        )
+        state = GrugMoeAutomaticPipelineState(tuple(params), tuple(optimizer.init(param) for param in params), betas)
+        grads = eqx.filter_grad(lambda values: sum(jnp.sum(value**2) for value in jax.tree.leaves(values)))(
+            state.trainable_params
+        )
+        measured_beta_sums = tuple(jnp.full_like(beta, 12.0) for beta in betas)
+        updated = updated_pipeline_state(
+            state, grads, measured_beta_sums, optimizer, policy, microbatches=4, qb_bias_mode=qb_bias_mode
+        )
+        second = updated_pipeline_state(
+            updated, grads, measured_beta_sums, optimizer, policy, microbatches=4, qb_bias_mode=qb_bias_mode
+        )
+
+    for original, actual, second_actual in zip(
+        jax.tree.leaves(state.trainable_params),
+        jax.tree.leaves(updated.trainable_params),
+        jax.tree.leaves(second.trainable_params),
+        strict=True,
+    ):
+        # d(sum(p**2))/dp = 2p. Momentum carries the first gradient into step two.
+        np.testing.assert_allclose(actual, 0.8 * original, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(second_actual, 0.5 * original, rtol=1e-5, atol=1e-5)
+        assert actual.dtype == jnp.float32
+    for original, actual, second_actual in zip(betas, updated.pending_qb_betas, second.pending_qb_betas, strict=True):
+        expected = original if qb_bias_mode == QbBiasMode.FROZEN else jnp.full_like(original, 3.0)
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(second_actual, expected)
+
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
     mesh, model = _tiny_hero(QbEstimator.HIST)
@@ -111,13 +166,16 @@ def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
 def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimator):
     mesh, model = _tiny_hero(qb_estimator)
     batch = _packed_batch()
+    # Compile the scan and whole stages: executing shard_map primitives
+    # separately exceeds the CPU compilation budget.
     with jax.set_mesh(mesh):
-        expected_hidden, expected_metrics = model(batch.tokens, batch.attn_mask)
+        expected_hidden, expected_metrics = eqx.filter_jit(Transformer.__call__)(model, batch.tokens, batch.attn_mask)
         stages = split_transformer(model, 2, layer_counts=(2, 3))
         hidden = stages[0].embed(batch.tokens)
         stage_metrics = []
+        run_blocks = eqx.filter_jit(GrugMoePipelineStage.run_blocks)
         for stage in stages:
-            hidden, metrics = stage.run_blocks(hidden, batch.attn_mask)
+            hidden, metrics = run_blocks(stage, hidden, batch.attn_mask)
             stage_metrics.append(metrics)
         hidden = stages[-1].finish(hidden)
 
@@ -274,22 +332,15 @@ def _serial_training_step(state, batch, optimizer):
         return loss, tuple(next_betas)
 
     (loss, next_betas), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.trainable_params)
-    updates = tuple(
-        optimizer.update(gradient, opt_state, params)
-        for gradient, opt_state, params in zip(grads, state.opt_state, state.trainable_params, strict=True)
+    next_state = updated_pipeline_state(
+        state,
+        grads,
+        next_betas,
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        microbatches=1,
     )
-    return (
-        dataclasses.replace(
-            state,
-            trainable_params=tuple(
-                optax.apply_updates(params, update)
-                for params, (update, _) in zip(state.trainable_params, updates, strict=True)
-            ),
-            opt_state=tuple(next_state for _, next_state in updates),
-            pending_qb_betas=next_betas,
-        ),
-        loss,
-    )
+    return next_state, loss
 
 
 @pytest.mark.timeout(180)

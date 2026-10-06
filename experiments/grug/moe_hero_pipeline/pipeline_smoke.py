@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded synthetic Hero pipeline trial with optional checkpoint save and resume."""
+"""Bounded synthetic Hero pipeline trial with recipe controls and checkpoint resume."""
 
 import argparse
 import dataclasses
@@ -17,8 +17,8 @@ import numpy as np
 import optax
 import wandb
 from finestore.cache import PersistentKvCache
-from fray.device_flops import device_flops
-from iris.runtime.jax_init import initialize_jax
+from fray.device_flops import device_flops_for_jax_device
+from iris.jax.init import initialize_jax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxpp import dime2, env_vars
@@ -28,15 +28,21 @@ from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.utils.jax_utils import barrier_sync_named, multihost_allgather_sync
 
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe_hero_ep.train import _compute_flops
+from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
+    _apply_hero_ep_runtime_defaults,
+    _compute_flops,
+    verify_ragged_pjrt,
+)
+from experiments.grug.moe_hero_pipeline.arguments import parse_args
 from experiments.grug.moe_hero_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_hero_pipeline.pipeline import (
     _HOST_MEMORY_KIND,
     BATCH_AXES,
     TRAIN_LOSS_KEY,
-    AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
     automatic_stage_to_mpmd_indices,
     initialize_stage_local_pipeline_state,
@@ -50,13 +56,11 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 
 _MULTIHOST_TIMEOUT = 600
 _MP_POLICY = "params=bfloat16,compute=bfloat16,output=bfloat16"
-_ADAMW_CONFIG = {
-    "learning_rate": 1e-4,
-    "b1": 0.9,
-    "b2": 0.95,
-    "mu_dtype": jnp.bfloat16,
-    "weight_decay": 0.1,
-}
+_ADAMW_LEARNING_RATE = 1e-4
+_ADAMW_BETA1 = 0.9
+_ADAMW_BETA2 = 0.95
+_ADAMW_MOMENTUM_DTYPE = jnp.bfloat16
+_ADAMW_WEIGHT_DECAY = 0.1
 
 
 def _log(event: str, **fields) -> None:
@@ -166,64 +170,10 @@ def _initialize_pipeline_communicators(mpmd_mesh, placements: tuple[int, ...]) -
     barrier_sync_named("hero_pipeline_channels_connected", timeout=_MULTIHOST_TIMEOUT)
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--full-hero", action="store_true")
-    parser.add_argument("--diagnostic-layers", type=int, help="Use fewer full-width hero layers for fault isolation")
-    parser.add_argument(
-        "--schedule",
-        type=AutomaticPipelineSchedule,
-        choices=list(AutomaticPipelineSchedule),
-        default=AutomaticPipelineSchedule.STANDARD_1F1B,
-    )
-    parser.add_argument("--physical-stages", type=int)
-    parser.add_argument("--stages", type=int, default=2)
-    parser.add_argument("--expert-axis-size", type=int, default=1)
-    parser.add_argument("--microbatches", type=int, default=2)
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--sequence-length", type=int)
-    parser.add_argument("--expert-waves", type=int, default=3)
-    parser.add_argument("--offload-opt-state", action="store_true")
-    parser.add_argument("--offload-activations", action="store_true")
-    parser.add_argument(
-        "--park-state-during-warmup",
-        action="store_true",
-        help="Park real device state on pinned host during disposable warmup, then restore it",
-    )
-    parser.add_argument("--steps", type=int, default=3)
-    parser.add_argument("--stop-after-step", type=int, help="End a bounded run before the configured total steps")
-    parser.add_argument("--checkpoint-root", help="Restore from and save under this checkpoint directory")
-    parser.add_argument("--checkpoint-every-steps", type=int, default=0)
-    parser.add_argument(
-        "--synchronize-devices-after-step",
-        action="store_true",
-        help="Diagnostic CUDA synchronization on every local device after each optimizer step",
-    )
-    parser.add_argument("--optimizer", choices=("adamw", "muonh"), default="adamw")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--run-id", help="Optional rank-zero W&B console capture in marin-community/marin_moe")
-    parser.add_argument("--compilation-cache", default="/tmp/hero-pipeline-jax-cache")
-    args = parser.parse_args()
-    if args.diagnostic_layers is not None and (not args.full_hero or args.diagnostic_layers < 1):
-        parser.error("diagnostic-layers requires full-hero and a positive layer count")
-    if args.sequence_length is not None and args.sequence_length < 1:
-        parser.error("sequence-length must be positive")
-    if args.expert_waves < 1:
-        parser.error("expert-waves must be positive")
-    if args.steps < 1 or args.expert_axis_size < 1:
-        parser.error("steps and expert-axis-size must be positive")
-    if args.stop_after_step is not None and not 1 <= args.stop_after_step <= args.steps:
-        parser.error("stop-after-step must be between 1 and steps")
-    if args.checkpoint_every_steps < 0 or (args.checkpoint_every_steps and not args.checkpoint_root):
-        parser.error("checkpoint-every-steps must be nonnegative and requires checkpoint-root when set")
-
-    if (args.schedule == AutomaticPipelineSchedule.DUALPIPE_V) != (args.physical_stages is not None):
-        raise ValueError("DualPipeV requires physical-stages; other schedules use one logical stage per physical stage")
-    return args
-
-
 def _model_config(args: argparse.Namespace) -> GrugModelConfig:
-    if args.full_hero:
+    if args.main_hero_recipe:
+        model_config = HERO_MODEL_CONFIG
+    elif args.full_hero:
         model_config = dataclasses.replace(
             HERO_MODEL_CONFIG,
             attention_implementation="gpu_fa4_cute",
@@ -259,20 +209,91 @@ def _model_config(args: argparse.Namespace) -> GrugModelConfig:
             pooled_transport_capacity_factor=1.15,
             remat_mode="recompute_all",
         )
+    if args.attention_implementation is not None:
+        model_config = dataclasses.replace(model_config, attention_implementation=args.attention_implementation)
+    if args.moe_implementation is not None:
+        model_config = dataclasses.replace(
+            model_config, moe_implementation=args.moe_implementation, num_expert_waves=args.expert_waves
+        )
     if args.diagnostic_layers is not None:
         model_config = dataclasses.replace(model_config, num_layers=args.diagnostic_layers)
     if args.sequence_length is not None:
         model_config = dataclasses.replace(model_config, max_seq_len=args.sequence_length)
     if args.offload_activations:
-        model_config = dataclasses.replace(model_config, remat_mode="offload_carry")
+        model_config = dataclasses.replace(model_config, remat_mode=OFFLOAD_CARRY_REMAT_MODE)
     return model_config
 
 
+def _optimizer_and_contract(
+    args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int
+) -> tuple[optax.GradientTransformation, dict[str, object]]:
+    if args.main_hero_recipe:
+        optimizer_config = dataclasses.replace(
+            MoeHeuristic().build_optimizer_config(
+                num_train_steps=args.steps,
+                batch_size=batch_size,
+                hidden_dim=model_config.hidden_dim,
+                seq_len=model_config.max_seq_len,
+            ),
+            use_syrk=all("H100" not in device.device_kind for device in jax.local_devices()),
+            gate_router_weight_decay=0.02,
+            expert_normalization=args.expert_normalization,
+        )
+        optimizer = optimizer_config.build(args.steps)
+        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
+    elif args.optimizer == "muonh":
+        optimizer_config = GrugMoeMuonHConfig(
+            learning_rate=13 / 3 * 1e-4,
+            adam_lr=1e-4,
+            warmup=0,
+            lr_schedule="constant",
+            expert_normalization=args.expert_normalization,
+        )
+        optimizer = optimizer_config.build(args.steps)
+        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
+    else:
+        optimizer = optax.adamw(
+            _ADAMW_LEARNING_RATE,
+            b1=_ADAMW_BETA1,
+            b2=_ADAMW_BETA2,
+            mu_dtype=_ADAMW_MOMENTUM_DTYPE,
+            weight_decay=_ADAMW_WEIGHT_DECAY,
+        )
+        optimizer_contract = {
+            "type": "adamw",
+            "learning_rate": _ADAMW_LEARNING_RATE,
+            "b1": _ADAMW_BETA1,
+            "b2": _ADAMW_BETA2,
+            "mu_dtype": np.dtype(_ADAMW_MOMENTUM_DTYPE).name,
+            "weight_decay": _ADAMW_WEIGHT_DECAY,
+        }
+    return optimizer, optimizer_contract
+
+
 def main() -> None:
-    args = _parse_args()
+    args = parse_args()
+    model_config = _model_config(args)
+    if args.main_hero_recipe:
+        _apply_hero_ep_runtime_defaults(
+            inline_watch_enabled=False,
+            moe_implementation=model_config.moe_implementation,
+            remat_mode=model_config.remat_mode,
+            processes_per_task=args.processes_per_task,
+        )
+        if model_config.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+            verify_ragged_pjrt()
     # Configure both caches before Iris initialization can select object storage.
     jax.config.update("jax_compilation_cache_dir", args.compilation_cache)
     install_cutlass_cache(PersistentKvCache.in_memory())
+    if args.coordinator_address:
+        if args.num_processes is None or args.process_id is None or args.local_device_id is None:
+            raise ValueError("External bootstrap requires num-processes, process-id, and local-device-id")
+        jax.distributed.initialize(
+            coordinator_address=args.coordinator_address,
+            num_processes=args.num_processes,
+            process_id=args.process_id,
+            local_device_ids=[args.local_device_id],
+        )
     initialize_jax()
     if args.run_id and jax.process_index() == 0:
         wandb.init(
@@ -280,7 +301,7 @@ def main() -> None:
             project="marin_moe",
             id=args.run_id,
             name=args.run_id,
-            group="hero-h100-pipeline",
+            group="pipeline-gpu-validation",
             resume="never",
             config=vars(args),
             settings=wandb.Settings(save_code=False, console="redirect"),
@@ -290,34 +311,23 @@ def main() -> None:
     )
     placements = automatic_stage_to_mpmd_indices(config, args.schedule)
     mesh, mpmd_mesh = make_pipeline_mesh(config, expert_axis_size=args.expert_axis_size, replica_axis_size=1)
-    model_config = _model_config(args)
-    full_hero = args.full_hero and args.diagnostic_layers is None
+    full_hero = (args.full_hero or args.main_hero_recipe) and args.diagnostic_layers is None
     batch_multiple = args.microbatches * jax.device_count() // config.mpmd_stages
     batch_size = args.batch_size if args.batch_size is not None else batch_multiple
     if batch_size < 1 or batch_size % batch_multiple:
         raise ValueError(f"batch-size must be a positive multiple of {batch_multiple}")
-    policy = jmp.get_policy(_MP_POLICY)
+    mp_policy = "params=float32,compute=bfloat16,output=bfloat16" if args.main_hero_recipe else _MP_POLICY
+    policy = jmp.get_policy(mp_policy)
     flops_per_example, _ = _compute_flops(model_config=model_config)
-    peak_flops = device_flops("h100")
+    peak_flops = device_flops_for_jax_device(jax.local_devices()[0].device_kind)
     assert peak_flops is not None
-    if args.optimizer == "muonh":
-        optimizer_config = GrugMoeMuonHConfig(
-            learning_rate=13 / 3 * 1e-4, adam_lr=1e-4, warmup=0, lr_schedule="constant"
-        )
-        optimizer = optimizer_config.build(args.steps)
-        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
-    else:
-        optimizer = optax.adamw(**_ADAMW_CONFIG)
-        optimizer_contract = {
-            "type": "adamw",
-            **_ADAMW_CONFIG,
-            "mu_dtype": jnp.dtype(_ADAMW_CONFIG["mu_dtype"]).name,
-        }
+    optimizer, optimizer_contract = _optimizer_and_contract(args, model_config, batch_size)
     checkpoint_contract = {
         "model": dataclasses.asdict(model_config),
-        "mp_policy": _MP_POLICY,
+        "mp_policy": mp_policy,
         "optimizer": optimizer_contract,
         "training_steps": args.steps,
+        "qb_bias_mode": args.qb_bias_mode,
     }
     _log(
         "pipeline_init",
@@ -330,7 +340,9 @@ def main() -> None:
         experts=args.expert_axis_size,
         microbatches=args.microbatches,
         devices=jax.device_count(),
-        optimizer=f"{args.optimizer}_bf16",
+        optimizer=f"{args.optimizer}",
+        mp_policy=mp_policy,
+        optimizer_config=optimizer_contract,
         offload_opt_state=args.offload_opt_state,
         offload_activations=args.offload_activations,
         full_hero=full_hero,
@@ -359,6 +371,7 @@ def main() -> None:
     with jax.set_mesh(mesh):
         sharding = NamedSharding(mesh, P(BATCH_AXES, None))
         batch = GrugLmExample(tokens=jax.device_put(tokens, sharding), loss_weight=jax.device_put(weights, sharding))
+    with jax.set_mesh(mesh):
         denominator = jnp.sum(batch.loss_weight)
         batches = reshape_batch_into_microbatches(batch, args.microbatches)
     step = make_automatic_pipeline_step(
@@ -370,7 +383,9 @@ def main() -> None:
         config=config,
         mpmd_mesh=mpmd_mesh,
         schedule_name=args.schedule,
+        logsumexp_weight=1e-4 if args.main_hero_recipe else None,
         offload_opt_state=args.offload_opt_state,
+        qb_bias_mode=args.qb_bias_mode,
     )
     started = time.monotonic()
     prepared = prepare_automatic_mpmd_step(step, state, batches, denominator, mpmd_mesh)
@@ -427,7 +442,9 @@ def main() -> None:
             mfu_percent=mfu_percent,
         )
         if args.run_id and jax.process_index() == 0:
-            wandb.log({"train/loss": loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps)
+            wandb.log(
+                {TRAIN_LOSS_KEY: loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps
+            )
         if args.checkpoint_root and args.checkpoint_every_steps:
             if completed_steps % args.checkpoint_every_steps == 0 or completed_steps == last_step:
                 path = save_checkpoint(args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract)

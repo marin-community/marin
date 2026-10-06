@@ -306,7 +306,7 @@ GROUP BY 1, 2 ORDER BY 1
 def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
     """Build a bounded table of recent RL runs, their dashboard link windows, and the dashboard
     whose run picker offers each run: the async view for a run whose trainer stamps
-    training_loop 'async', the sync view for every other run."""
+    training_type 'async', the sync view for every other run."""
     validate_time_window(
         start_ms,
         end_ms,
@@ -321,7 +321,7 @@ SELECT run_id AS run,
        MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
        MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
        MAX(timestamp_ms) AS last_seen,
-       MAX(CASE WHEN json_get(resource_attributes_json, 'training_loop') = 'async' THEN 1 ELSE 0 END) AS is_async
+       MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"
 WHERE service = 'marinskyrl' AND name = 'policy_step' AND run_id IS NOT NULL
   AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}

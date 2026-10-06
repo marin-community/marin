@@ -8,8 +8,11 @@ model once, runs every selected eval against that endpoint in order, and writes 
 inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
 scans those records into its Postgres query index.
 
-`marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
-each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
+`marin.evaluation.runner` opens one candidate `remote_inference` session and optionally one shared
+hosted-judge session. Evalchemy resolves the serving endpoint's direct address on its Iris cluster
+before each evaluation. Harbor keeps the minted capability URLs because its sandboxes reach the
+candidate and hosted judge from outside Iris. The orchestrator scrapes vLLM metrics through the
+direct address. An evaluation failure is recorded and later evaluations continue. If inference fails,
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
@@ -45,6 +48,14 @@ uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8
 # Override GPU placement and scheduling priority.
 uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke \
   --federated_cluster cw-rno2a --priority interactive
+
+# Co-host one judge for every Harbor verifier in this batch.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --platform gpu \
+  --judge-model qwen3.5-122b-a10b-fp8 --judge-accelerator H100x8 \
+  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
+  --federated_cluster cw-rno2a --limit 2
 ```
 
 Key options: exactly one of `--model` or `--model-config` selects a registry entry or a catalog-schema
@@ -52,6 +63,8 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
+verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.
@@ -153,6 +166,14 @@ its native results and trajectories and writes flattened trajectory steps to the
 ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
+Evalchemy transport failures retain their `failure_category` in the source artifact and an
+infrastructure-error marker in the normalized sample. Coverage excludes these items from `n_scored`,
+and metrics are recomputed from scored items. A run with infrastructure errors and less than 90%
+attempted-item coverage records `infra_failed`; pipeline steps do not cache it as a successful eval.
+
+For repeated Evalchemy samples, `samples.trial_id` is the string form of `sample_repeat`; a
+single-attempt sample leaves it empty. This keeps independent answers to the same question distinct.
+
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
 `infra/marina/apps/evaldash/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.
@@ -189,10 +210,10 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifbench`, and
-`mrcr` files preserve Marin's publication-policy defaults. Select them individually with repeatable
-`--evalchemy-config` options on a compatible backend; the `chat` suite remains the shorter
-general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
+The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifeval`, `ifbench`, and
+`mrcr` files preserve Marin's publication-policy defaults. They are registered by name, so select
+them with `--evals` or `eval_step`; they belong to no suite, and the `chat` suite remains the
+shorter general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
 not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
@@ -200,6 +221,12 @@ The evaluation child then invokes the `evalchemy` console script from the pinned
 A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
 the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
 tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
+
+For a `--version eval-policy-...-verified` launch, the launcher selects the Evalchemy and Harbor
+revisions in `RUNTIME_COMMITS` from `lib/marin/src/marin/evaluation/eval_policy.py`. Evalchemy's
+child requirement uses the pinned Evalchemy commit. Harbor preflight and workers use
+`config/external/harbor/pins/<Harbor commit>/uv.lock` with `uv run --frozen`. Launches without a
+verified policy version use the current shared pins in `config/external/`.
 
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include

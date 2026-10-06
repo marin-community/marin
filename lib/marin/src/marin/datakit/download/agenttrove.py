@@ -50,7 +50,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import terminus_protocol_messages
+from marin.datakit.download.terminus import ThinkTokens, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -65,6 +65,7 @@ SOURCE_CHAT_SCHEMA = pa.schema(
 
 HF_DATASET_ID = "open-thoughts/AgentTrove"
 HF_REVISION = "b395a43"
+TERMINUS_THINK_TOKENS = ThinkTokens("<think>", "</think>")
 
 # Lowercased substrings identifying an excluded teacher family across the
 # ``model``, ``model_provider``, and ``original_teacher`` fields.
@@ -156,7 +157,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             return []
         messages, metadata = converted
     else:
-        messages = terminus_protocol_messages(conversations)
+        messages = terminus_protocol_messages(conversations, TERMINUS_THINK_TOKENS)
         if messages is None:
             return []
         metadata = {}
@@ -241,7 +242,7 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.17.native-terminus-source-filter"},
+        hash_attrs={"version": "2026.09.25", "think_tokens": TERMINUS_THINK_TOKENS},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed
