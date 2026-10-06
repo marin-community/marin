@@ -27,12 +27,14 @@ class RewardStats:
     """Statistics over graded outcomes only.
 
     ``solved`` counts grades that pass: ``GradeResult.passed`` when the grader reports it, else a
-    reward at the grader's ``score_max``.
+    reward at the grader's ``score_max``. ``timed_out`` counts the graded trials the agent deadline
+    ended; they are included in ``graded``, ``mean_reward`` and ``solved``.
     """
 
     graded: int
     mean_reward: float | None
     solved: int
+    timed_out: int
 
 
 @dataclass(frozen=True)
@@ -49,11 +51,14 @@ class Evidence:
     def reward_stats(self, kind: TrialKind) -> RewardStats:
         graded = [outcome for outcome in self.outcomes.get(kind, ()) if isinstance(outcome, Graded)]
         if not graded:
-            return RewardStats(graded=0, mean_reward=None, solved=0)
+            return RewardStats(graded=0, mean_reward=None, solved=0, timed_out=0)
         solved = sum(
             (outcome.reward >= outcome.grade.score_max) if outcome.grade.passed is None else outcome.grade.passed
             for outcome in graded
         )
         return RewardStats(
-            graded=len(graded), mean_reward=sum(outcome.reward for outcome in graded) / len(graded), solved=solved
+            graded=len(graded),
+            mean_reward=sum(outcome.reward for outcome in graded) / len(graded),
+            solved=solved,
+            timed_out=sum(outcome.timed_out for outcome in graded),
         )

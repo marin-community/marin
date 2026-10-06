@@ -46,14 +46,10 @@ ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ", "Environme
 def classify(failure: BaseException | RolloutData) -> Cause:
     """Map an exception, or a rollout returned without a usable grade, to its ``Cause``.
 
-    A rollout that stopped at the agent deadline is ``AGENT_TIMEOUT`` whatever its grade.
-
     Raises:
-        ValueError: ``failure`` is a rollout with a usable grade that did not time out.
+        ValueError: ``failure`` is a rollout with a usable grade.
     """
     if isinstance(failure, RolloutData):
-        if failure.stop_reason == AGENT_TIMEOUT_STOP_REASON:
-            return Cause.AGENT_TIMEOUT
         return _grade_cause(failure)
     return _exception_cause(failure)
 
@@ -61,16 +57,12 @@ def classify(failure: BaseException | RolloutData) -> Cause:
 def trial_outcome(result: RolloutData | Exception) -> Outcome:
     """The outcome of one engine run: what ``ShellboxRolloutEngine.run`` returned or raised.
 
-    A rollout that stopped at the agent deadline (stop reason ``agent_timeout``) is
-    ``Ungraded(AGENT_TIMEOUT)``. RolloutEngine still grades the state the agent left; that grade stays
-    on ``Ungraded.rollout`` and in the detail, but the trial is never counted as graded.
+    An agent deadline is a normal ending: RolloutEngine grades the state the agent left, and the
+    trial is ``Graded`` with that grade and ``timed_out`` set, so timed-out trials stay in the
+    denominator. A deadline that expired before the first response leaves nothing to grade
+    (``UNAVAILABLE``), which is ``Ungraded(AGENT_TIMEOUT)``.
     """
     if isinstance(result, RolloutData):
-        if result.stop_reason == AGENT_TIMEOUT_STOP_REASON:
-            grade = result.grade
-            return Ungraded(
-                Cause.AGENT_TIMEOUT, f"agent deadline expired; engine grade {grade.status} {grade.reward}", result
-            )
         if result.grade.status in GRADED_STATUSES:
             return Graded(result)
         return Ungraded(classify(result), result.grade.error or str(result.grade.status), result)
@@ -149,6 +141,8 @@ def _grade_cause(rollout: RolloutData) -> Cause:
         return Cause.VERIFIER_SKIPPED
     if grade.status is GradeStatus.INVALID_TASK:
         return Cause.INVALID_TASK
+    if rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON:
+        return Cause.AGENT_TIMEOUT
     if rollout.stop_reason == LENGTH_STOP_REASON and not rollout.steps:
         return Cause.GENERATION_LIMIT
     return Cause.NO_GRADE

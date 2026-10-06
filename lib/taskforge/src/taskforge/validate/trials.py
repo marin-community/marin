@@ -188,14 +188,19 @@ def _record(fields: SpanFields, outcome: Outcome, plan: TrialPlan, trial: str, a
 
 def _attributes(outcome: Outcome) -> dict[str, str]:
     if isinstance(outcome, Graded):
-        return {"outcome": "graded", "status": str(outcome.grade.status), "reward": str(outcome.reward)}
+        return {
+            "outcome": "graded",
+            "status": str(outcome.grade.status),
+            "reward": str(outcome.reward),
+            "timed_out": str(outcome.timed_out),
+        }
     return {"outcome": "ungraded", "retryable": str(outcome.retryable)}
 
 
 def outcome_json(outcome: Outcome) -> bytes:
     """The evidence record of one attempt."""
     record: dict[str, Any] = (
-        {"outcome": "graded", "reward": outcome.reward}
+        {"outcome": "graded", "reward": outcome.reward, "timed_out": outcome.timed_out}
         if isinstance(outcome, Graded)
         else {
             "outcome": "ungraded",
