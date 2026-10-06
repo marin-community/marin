@@ -3,9 +3,10 @@
 
 """Streaming Triton kernels for the depthwise causal short convolution.
 
-The Pallas kernels (``pallas_gpu.py``) read each ``[BS, BC]`` tile once per tap at a shifted
-offset, because Pallas Triton cannot slice or shift a register tile. That is 3.0 HBM passes
-forward and 6.7 backward against floors of 2 and 3.
+The op is bandwidth-bound: about 2 FLOP per byte against a GB200 ridge of ~312, so its cost is
+the number of times the tensor crosses HBM. The floor is 2 passes forward (read x, write y) and
+3 backward (read x and dy, write dx). A kernel that reads each tile once per tap at a shifted
+offset takes 3.0 and 6.7.
 
 These kernels walk the sequence instead, the way ``Dao-AILab/causal-conv1d`` does. A program
 owns one channel block of one sequence chunk and steps through its rows in order, keeping the
@@ -20,12 +21,13 @@ The backward runs close to the instruction-issue limit, so a step whose rows, ha
 in one document skips the segment masks: every mask is true there, so the result is the same, and
 the step issues about 40% fewer instructions. ``dw`` accumulates with explicit fused multiply-adds.
 
-Numerics match the Pallas kernels. With ``exact`` set (bfloat16 only), every multiply and add
-rounds to bfloat16 in the reference's order: ascending lags forward, descending lags then tap 0
+With ``exact`` set and bfloat16 inputs, every multiply and add rounds to bfloat16 in the
+reference's order: ascending lags forward, descending lags then tap 0
 for ``dx``. The forward and ``dx`` are then bit-identical to ``short_conv_reference``. On SM90 and
 newer the bf16 ops are packed PTX (``mul.rn.bf16x2``, ``add.rn.bf16x2``); older GPUs, which lack
-them, take an fp32 op and a bf16 cast, which rounds the same way. Without ``exact``, taps
-accumulate in fp32. ``dw`` accumulates in fp32 per chunk; the caller sums the partials.
+them, take an fp32 op and a bf16 cast, which rounds the same way. Float32 inputs, and bfloat16
+without ``exact``, accumulate in fp32; for float32 that is the reference's per-op rounding.
+``dw`` accumulates in fp32 per chunk; the caller sums the partials.
 
 The kernels handle ``kernel_size == 4`` only, the hero's width.
 """
@@ -38,7 +40,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from .config import OOB_SEGMENT
+from .reference import OOB_SEGMENT
 
 try:
     import jax_triton as jt
@@ -108,7 +110,8 @@ SEQUENCE_MULTIPLE = math.lcm(FORWARD_TILES.chunk, BACKWARD_TILES.chunk)
 
 
 def triton_short_conv_available() -> bool:
-    return jt is not None and triton is not None and jax.default_backend() == "gpu"
+    """Whether the Triton packages are installed and this process's default devices are GPUs."""
+    return jt is not None and triton is not None and jax.devices()[0].platform == "gpu"
 
 
 @functools.cache
@@ -122,8 +125,8 @@ def triton_short_conv_shapes_supported(
     weight_shape: tuple[int, ...], x_shape: tuple[int, ...], dtype, exact_reference_rounding: bool
 ) -> str | None:
     """Returns None when the kernels can run these shapes and dtype, else a reason."""
-    if exact_reference_rounding and jnp.dtype(dtype) != jnp.dtype(jnp.bfloat16):
-        return f"exact reference rounding is implemented for bfloat16 only, got {jnp.dtype(dtype)}"
+    if exact_reference_rounding and jnp.dtype(dtype) not in (jnp.dtype(jnp.bfloat16), jnp.dtype(jnp.float32)):
+        return f"exact reference rounding is implemented for bfloat16 and float32 only, got {jnp.dtype(dtype)}"
     if len(x_shape) != 3 or len(weight_shape) != 2:
         return f"expected weight [W, C] and x [B, S, C], got {weight_shape} and {x_shape}"
     width, weight_channels = weight_shape
@@ -413,6 +416,8 @@ def _launch_kwargs(x: jax.Array, tiles: TritonShortConvTiles, exact: bool) -> di
     block_c = tiles.channel_block(channels)
     assert block_c is not None and seq_len % tiles.chunk == 0, (x.shape, tiles)
     assert tiles.chunk % tiles.rows_per_step == 0, tiles
+    # Float32 needs no rounding step: fp32 arithmetic is the reference's per-op rounding.
+    bf16_exact = exact and x.dtype == jnp.bfloat16
     return dict(
         grid=(channels // block_c, seq_len // tiles.chunk, batch),
         num_warps=tiles.num_warps,
@@ -427,8 +432,8 @@ def _launch_kwargs(x: jax.Array, tiles: TritonShortConvTiles, exact: bool) -> di
         chunk=tiles.chunk,
         block_c=block_c,
         rows_per_step=tiles.rows_per_step,
-        exact=exact,
-        packed=exact and _packed_bf16_arithmetic(),
+        exact=bf16_exact,
+        packed=bf16_exact and _packed_bf16_arithmetic(),
     )
 
 

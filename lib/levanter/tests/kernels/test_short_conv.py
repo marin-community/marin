@@ -1,28 +1,16 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Correctness gate for the fused depthwise causal short convolution (SConv).
+"""Correctness gate for the depthwise causal short convolution (SConv).
 
-The Pallas kernel targets a GPU and cannot execute on CPU as compiled code, but Pallas's
-reference interpreter executes the *kernel body* -- grid, block specs, the neighbouring
-sequence-block views that supply the halo, the edge masking, the register accumulation --
-with plain XLA ops. Everything here therefore exercises the real algorithm on CPU. What
-it does not and cannot cover is whether the kernel *lowers* on a given GPU architecture;
-`test_pallas_short_conv_matches_reference_on_gpu` covers that when a GPU is present.
+The Triton kernel runs only on a GPU, so its tests skip elsewhere. They hold it to the pad-and-shift
+reference: the bf16 forward and ``dx`` bit for bit, and ``dw`` within the error of an fp32 sum rounded
+once to bf16, because its association order is not part of the contract. The wrapper around the
+kernel -- the halo exchange, padding, and the gates against hidden all-gathers -- runs on CPU, through
+the reference or a traced kernel call.
 
-The bar is bitwise: the forward and `dx` must be bit-identical to the pad-and-shift
-reference, because a fused conv changes only *when* bytes cross HBM, never the
-arithmetic. `dw` is a reduction over 65,536 tokens whose association order XLA does not
-define, so it is checked against a float64 oracle instead -- the Pallas kernel must be at
-least as accurate as the reference, not identical to it, and the Triton kernel must be
-within the error of an fp32 sum rounded once to bf16.
-
-The whole module is scoped to the backends this Triton kernel targets. `dx` is bitwise
-only because `_dx_body` accumulates in the order XLA's transpose of the pad-and-shift
-forward emits, and that order is a property of the backend's transpose, not of the
-algorithm: on TPU the multi-tap shapes disagree in the last bit or two while `W=1`, which
-has no accumulation to associate, still matches exactly. Running the interpreter on TPU
-therefore measures XLA:TPU rather than the kernel that ships.
+``dx`` is bitwise only against XLA's CPU/GPU transpose of the reference, whose accumulation order the
+kernel follows; on TPU the multi-tap shapes disagree in the last bit or two.
 """
 
 import re
@@ -35,31 +23,14 @@ import pytest
 from jax.extend.mlir import ir
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.kernels.pallas.short_conv import (
-    ShortConvBlockSizes,
-    short_conv,
-    short_conv_reference,
-)
-from levanter.kernels.pallas.short_conv import triton_gpu
-from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+from levanter.kernels.triton.short_conv import api, short_conv, short_conv_reference, triton_gpu
+from levanter.kernels.triton.short_conv.reference import OOB_SEGMENT
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
 pytestmark = pytest.mark.skipif(
     jax.default_backend() == "tpu",
-    reason="Triton kernel: dx parity is defined against XLA's CPU/GPU transpose of the reference",
+    reason="dx parity is defined against XLA's CPU/GPU transpose of the reference",
 )
-
-# (batch, seq_len, channels, kernel_size, s_block, c_block)
-SHAPES = [
-    (1, 32, 8, 4, 8, 8),
-    (2, 32, 8, 4, 8, 4),
-    (3, 64, 16, 4, 16, 8),
-    (2, 64, 32, 4, 32, 16),
-    (2, 48, 8, 3, 16, 8),
-    (1, 64, 8, 2, 32, 8),
-    (1, 64, 8, 1, 32, 8),
-    (2, 128, 16, 4, 128, 16),  # a single sequence block: no neighbour view is in range
-]
 
 
 def _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=None):
@@ -76,39 +47,9 @@ def _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=None):
     return jnp.asarray(out)
 
 
-def _segment_start_mask(segment_ids, width):
-    """[B, S] mask over the first `width - 1` positions of every segment."""
-    seg = np.asarray(jax.device_get(segment_ids))
-    starts = np.ones_like(seg, dtype=bool)
-    starts[:, 1:] = seg[:, 1:] != seg[:, :-1]
-    mask = np.zeros_like(starts)
-    for offset in range(max(width - 1, 1)):
-        shifted = starts if offset == 0 else np.pad(starts[:, :-offset], ((0, 0), (offset, 0)))
-        mask |= shifted.astype(bool)
-    return mask
-
-
 def _bits(array):
     array = np.asarray(jax.device_get(array))
     return array.view({2: np.uint16, 4: np.uint32, 8: np.uint64}[array.dtype.itemsize])
-
-
-def _run_both(weight, x, segment_ids, cotangent, blocks):
-    def kernel_fn(w, xx):
-        return short_conv(w, xx, segment_ids, implementation="pallas_gpu", block_sizes=blocks)
-
-    def reference_fn(w, xx):
-        return short_conv_reference(w, xx, segment_ids)
-
-    with interpret_mode():
-        got = jax.jit(kernel_fn)(weight, x)
-        _, kernel_vjp = jax.vjp(kernel_fn, weight, x)
-        got_dw, got_dx = jax.jit(kernel_vjp)(cotangent)
-
-    want = jax.jit(reference_fn)(weight, x)
-    _, reference_vjp = jax.vjp(reference_fn, weight, x)
-    want_dw, want_dx = jax.jit(reference_vjp)(cotangent)
-    return (got, got_dx, got_dw), (want, want_dx, want_dw)
 
 
 def _dw_oracle(x, segment_ids, cotangent, width):
@@ -140,165 +81,6 @@ def _inputs(batch, seq_len, channels, width, seed, dtype, packed):
     return weight, x, segment_ids, cotangent
 
 
-@pytest.mark.parametrize("shape", SHAPES, ids=lambda s: "x".join(str(v) for v in s))
-@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
-def test_forward_and_dx_are_bitwise_identical_to_reference(shape, packed):
-    batch, seq_len, channels, width, s_block, c_block = shape
-    weight, x, segment_ids, cotangent = _inputs(
-        batch, seq_len, channels, width, seed=hash(shape) % 2**16, dtype=jnp.bfloat16, packed=packed
-    )
-    blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
-    (got, got_dx, _), (want, want_dx, _) = _run_both(weight, x, segment_ids, cotangent, blocks)
-
-    np.testing.assert_array_equal(_bits(got), _bits(want), err_msg="forward is not bit-identical")
-    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx), err_msg="dx is not bit-identical")
-
-
-@pytest.mark.parametrize("shape", SHAPES[:5], ids=lambda s: "x".join(str(v) for v in s))
-def test_segment_boundaries_and_segment_starts_match_exactly(shape):
-    """The first `kernel_size - 1` positions of every document are where taps get dropped.
-
-    Those positions are checked on their own so a regression there cannot hide inside a
-    whole-tensor max.
-    """
-    batch, seq_len, channels, width, s_block, c_block = shape
-    weight, x, segment_ids, cotangent = _inputs(
-        batch, seq_len, channels, width, seed=99, dtype=jnp.bfloat16, packed=True
-    )
-    blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
-    (got, got_dx, _), (want, want_dx, _) = _run_both(weight, x, segment_ids, cotangent, blocks)
-
-    mask = _segment_start_mask(segment_ids, width)
-    assert mask.any(), "test fixture produced no segment starts"
-    np.testing.assert_array_equal(_bits(got)[mask], _bits(want)[mask])
-    np.testing.assert_array_equal(_bits(got_dx)[mask], _bits(want_dx)[mask])
-
-    # And the taps really are being dropped: with a non-degenerate weight, masking must
-    # make the output differ from an unmasked convolution somewhere on the boundary.
-    unmasked = short_conv_reference(weight, x, None)
-    assert not np.array_equal(_bits(unmasked)[mask], _bits(want)[mask])
-
-
-@pytest.mark.parametrize("shape", SHAPES[:4], ids=lambda s: "x".join(str(v) for v in s))
-def test_dw_is_at_least_as_accurate_as_the_reference(shape):
-    """`dw` reduces 65,536 tokens in fp32; association order is not part of the contract.
-
-    Both implementations are compared against a float64 oracle. The kernel is required to
-    be no worse than the reference, which is the meaningful guarantee.
-    """
-    batch, seq_len, channels, width, s_block, c_block = shape
-    weight, x, segment_ids, cotangent = _inputs(
-        batch, seq_len, channels, width, seed=5, dtype=jnp.bfloat16, packed=True
-    )
-    blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
-    (_, _, got_dw), (_, _, want_dw) = _run_both(weight, x, segment_ids, cotangent, blocks)
-
-    oracle = _dw_oracle(x, segment_ids, cotangent, width)
-    got_err = np.max(np.abs(np.asarray(jax.device_get(got_dw), np.float64) - oracle))
-    want_err = np.max(np.abs(np.asarray(jax.device_get(want_dw), np.float64) - oracle))
-    scale = max(np.max(np.abs(oracle)), 1e-30)
-    assert got_err <= max(want_err * 1.5, 0.02 * scale), (
-        f"kernel dw error {got_err:.3e} materially worse than reference {want_err:.3e} " f"(oracle scale {scale:.3e})"
-    )
-
-
-def test_float32_gradients_match_to_float32_tolerance():
-    """fp32 inputs: the pad/shift chain and the kernel differ only by fp32 reassociation."""
-    weight, x, segment_ids, cotangent = _inputs(2, 64, 16, 4, seed=17, dtype=jnp.float32, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=16, c_block_size=8)
-    (got, got_dx, got_dw), (want, want_dx, want_dw) = _run_both(weight, x, segment_ids, cotangent, blocks)
-    for name, a, b in (("y", got, want), ("dx", got_dx, want_dx), ("dw", got_dw, want_dw)):
-        np.testing.assert_allclose(
-            jax.device_get(a), jax.device_get(b), rtol=1e-5, atol=1e-5, err_msg=f"{name} mismatch"
-        )
-
-
-def test_explicit_implementation_fails_fast_when_unsupported():
-    """An explicitly requested backend must raise, never silently fall back (api-patterns)."""
-    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=1, dtype=jnp.bfloat16, packed=True)
-    bad_blocks = ShortConvBlockSizes(s_block_size=7, c_block_size=8)  # 32 % 7 != 0
-    with interpret_mode():
-        with pytest.raises(RuntimeError, match="not divisible"):
-            short_conv(weight, x, segment_ids, implementation="pallas_gpu", block_sizes=bad_blocks)
-
-
-def test_ordered_implementation_sequence_falls_back_with_a_warning():
-    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=1, dtype=jnp.bfloat16, packed=True)
-    bad_blocks = ShortConvBlockSizes(s_block_size=7, c_block_size=8)
-    with interpret_mode():
-        with pytest.warns(UserWarning, match="falling back"):
-            got = short_conv(
-                weight, x, segment_ids, implementation=("pallas_gpu", "reference"), block_sizes=bad_blocks
-            )
-    np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
-
-
-def test_default_implementation_on_cpu_is_the_reference():
-    if jax.default_backend() == "gpu":
-        pytest.skip("this asserts the non-GPU default")
-    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=2, dtype=jnp.bfloat16, packed=True)
-    got = short_conv(weight, x, segment_ids)
-    np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
-
-
-def test_kernel_call_is_wrapped_in_a_shard_map_under_a_mesh():
-    """House rule: every Pallas call sits inside an explicit shard_map on a real mesh.
-
-    Checked on the lowered jaxpr rather than by inspection, so a refactor that drops the
-    manual region fails here. The mesh is abstract and nothing is executed, so a
-    single-device CPU runner is enough.
-    """
-    mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, 2, 1, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
-    )
-    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=3, dtype=jnp.bfloat16, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=8, c_block_size=8)
-
-    def fn(w, xx, seg):
-        return short_conv(w, xx, seg, implementation="pallas_gpu", block_sizes=blocks)
-
-    with interpret_mode(), jax.sharding.use_abstract_mesh(mesh):
-        jaxpr = jax.make_jaxpr(fn)(weight, x, segment_ids)
-    text = str(jaxpr)
-    assert "shard_map" in text, "kernel is not inside an explicit shard_map"
-    # ...and the manual region must not contain a collective: the op is shard-local.
-    for banned in ("all_gather", "all_reduce", "psum", "all_to_all", "reduce_scatter"):
-        assert banned not in text, f"short_conv lowered through an unexpected {banned}"
-
-
-def test_pallas_short_conv_matches_reference_on_gpu():
-    """The compiled kernel, not the interpreter. Only meaningful with a GPU present."""
-    if jax.default_backend() != "gpu":
-        pytest.skip("requires the JAX GPU backend")
-    weight, x, segment_ids, cotangent = _inputs(2, 512, 256, 4, seed=21, dtype=jnp.bfloat16, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=128, c_block_size=128)
-
-    def kernel_fn(w, xx):
-        return short_conv(w, xx, segment_ids, implementation="pallas_gpu", block_sizes=blocks)
-
-    def reference_fn(w, xx):
-        return short_conv_reference(w, xx, segment_ids)
-
-    got = jax.jit(kernel_fn)(weight, x)
-    _, kernel_vjp = jax.vjp(kernel_fn, weight, x)
-    got_dw, got_dx = jax.jit(kernel_vjp)(cotangent)
-
-    want = jax.jit(reference_fn)(weight, x)
-    _, reference_vjp = jax.vjp(reference_fn, weight, x)
-    want_dw, want_dx = jax.jit(reference_vjp)(cotangent)
-
-    np.testing.assert_array_equal(_bits(got), _bits(want))
-    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx))
-    np.testing.assert_allclose(
-        jax.device_get(got_dw).astype(np.float32),
-        jax.device_get(want_dw).astype(np.float32),
-        rtol=5e-2,
-        atol=5e-2,
-    )
-
-
 def _triton_segment_ids(kind, batch, seq_len, rng):
     if kind == "unpacked":
         return None
@@ -310,7 +92,7 @@ def _triton_segment_ids(kind, batch, seq_len, rng):
         return _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=3)
     if kind == "padded":
         # Two documents, then padding carrying the out-of-range segment id.
-        seg = np.full((batch, seq_len), triton_gpu.OOB_SEGMENT, np.int32)
+        seg = np.full((batch, seq_len), OOB_SEGMENT, np.int32)
         for b in range(batch):
             valid = int(rng.integers(seq_len // 2, seq_len))
             seg[b, : valid // 3] = 0
@@ -341,12 +123,15 @@ def _triton_programs(fn, *args) -> list[bytes]:
 
 @pytest.mark.parametrize("packed_bf16", [True, False], ids=["packed-bf16", "fp32-then-bf16"])
 @pytest.mark.parametrize("segments", ["unpacked", "packed", "short_runs", "padded"])
-@pytest.mark.parametrize("shape", [(2, 512, 256), (1, 256, 1536)], ids=lambda s: "x".join(str(v) for v in s))
+@pytest.mark.parametrize(
+    "shape", [(2, 512, 256), (1, 256, 1536), (2, 200, 256)], ids=lambda s: "x".join(str(v) for v in s)
+)
 def test_triton_short_conv_matches_reference_on_gpu(shape, segments, packed_bf16, monkeypatch):
     """Streaming Triton kernels: forward and ``dx`` bitwise, ``dw`` within fp32-accumulation error.
 
     512 rows span several of the kernel's sequence chunks, and 1536 channels span several
-    channel blocks, so chunk halos and block edges are both exercised. Unpacked inputs take
+    channel blocks, so chunk halos and block edges are both exercised. 200 rows are padded to the
+    kernel's sequence multiple. Unpacked inputs take
     the single-document steps only, short runs mostly the masked ones. Without packed bf16,
     the path GPUs older than SM90 take, the kernels round through fp32 and must give the same
     bits.
@@ -407,38 +192,115 @@ def test_triton_implementation_fails_fast_when_unsupported():
     np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
 
 
+def _requires_gpu():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires the JAX GPU backend")
+
+
+def _trace_kernel_off_gpu(monkeypatch):
+    """Let the dispatch pick the kernel on CPU, so tests can trace the wrapper around its call."""
+    monkeypatch.setattr(api, "triton_short_conv_available", lambda: True)
+
+
+def test_float32_matches_the_reference_on_gpu():
+    """Float32: forward and ``dx`` bitwise, ``dw`` within the error of an fp32 sum in any order."""
+    _requires_gpu()
+    batch, seq_len = 2, 384
+    weight, x, segment_ids, cotangent = _inputs(batch, seq_len, 256, 4, seed=17, dtype=jnp.float32, packed=True)
+
+    def kernel_fn(w, xx):
+        return short_conv(w, xx, segment_ids, implementation="triton_gpu")
+
+    def reference_fn(w, xx):
+        return short_conv_reference(w, xx, segment_ids)
+
+    got, kernel_vjp = jax.vjp(jax.jit(kernel_fn), weight, x)
+    got_dw, got_dx = kernel_vjp(cotangent)
+    want, reference_vjp = jax.vjp(jax.jit(reference_fn), weight, x)
+    _, want_dx = reference_vjp(cotangent)
+
+    np.testing.assert_array_equal(_bits(got), _bits(want), err_msg="forward is not bit-identical")
+    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx), err_msg="dx is not bit-identical")
+    oracle = _dw_oracle(x, segment_ids, cotangent, 4)
+    terms = batch * seq_len
+    # Each fp32 product rounds once (2^-24), then the sum adds at most gamma_n of the absolute sum.
+    gamma = (terms + 1) * 2.0**-24 / (1 - (terms + 1) * 2.0**-24)
+    bound = gamma * _dw_oracle(jnp.abs(x), segment_ids, jnp.abs(cotangent), 4)
+    error = np.abs(np.asarray(jax.device_get(got_dw), np.float64) - oracle)
+    assert np.all(error <= bound), f"dw error is up to {np.max(error / bound):.2f}x its bound"
+
+
+def test_default_implementation_on_gpu_is_the_kernel():
+    _requires_gpu()
+    weight, x, segment_ids, _ = _inputs(2, 256, 256, 4, seed=2, dtype=jnp.bfloat16, packed=True)
+    programs = _triton_programs(lambda w, xx: short_conv(w, xx, segment_ids), weight, x)
+    assert len(programs) == 1
+
+
+def test_default_implementation_on_cpu_is_the_reference():
+    if jax.default_backend() == "gpu":
+        pytest.skip("this asserts the non-GPU default")
+    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=2, dtype=jnp.bfloat16, packed=True)
+    got = short_conv(weight, x, segment_ids)
+    np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
+
+
+def test_kernel_call_is_wrapped_in_a_shard_map_under_a_mesh(monkeypatch):
+    """Every kernel call sits inside an explicit shard_map on a real mesh.
+
+    Checked on the traced jaxpr rather than by inspection, so a refactor that drops the manual
+    region fails here. The mesh is abstract and nothing is executed.
+    """
+    pytest.importorskip("jax_triton")
+    _trace_kernel_off_gpu(monkeypatch)
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(1, 2, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    weight, x, segment_ids, _ = _inputs(2, 128, 64, 4, seed=3, dtype=jnp.bfloat16, packed=True)
+
+    def fn(w, xx, seg):
+        return short_conv(w, xx, seg, implementation="triton_gpu")
+
+    with jax.sharding.use_abstract_mesh(mesh):
+        text = str(jax.make_jaxpr(fn)(weight, x, segment_ids))
+    assert "shard_map" in text, "kernel is not inside an explicit shard_map"
+    # ...and the manual region must not contain a collective: the op is shard-local.
+    for banned in ("all_gather", "all_reduce", "psum", "all_to_all", "reduce_scatter"):
+        assert banned not in text, f"short_conv lowered through an unexpected {banned}"
+
+
 @pytest.mark.parametrize(
     ("model_size", "should_reject"),
     [(1, False), (2, True)],
     ids=["size-1 model axis is a no-op", "size-2 model axis really shards"],
 )
-def test_channel_axis_gate_consults_the_mesh_not_just_the_spec(model_size, should_reject):
+def test_channel_axis_gate_consults_the_mesh_not_just_the_spec(model_size, should_reject, monkeypatch):
     """A spec entry naming a size-1 mesh axis shards nothing, and must not be rejected.
 
-    This is not hypothetical. The EP64 hero mesh is (replica_dcn=1, data=1, expert=64, model=1)
-    and the attention projections are `P(_FSDP_AXES, "model")`, so every k/v activation reaching
-    SConv carries "model" on its channel axis while being, in fact, unsharded there. Gating on
-    the name alone rejects the production shape -- and the reshard the gate guards is a no-op in
-    exactly that case, so there is nothing to guard.
-
-    The size-2 leg keeps the gate honest: a genuinely sharded channel axis must still raise,
-    because silently resharding it would hide a real all-gather inside the kernel wrapper.
+    The EP64 hero mesh is (replica_dcn=1, data=1, expert=64, model=1) and the attention projections
+    are `P(_FSDP_AXES, "model")`, so every k/v activation reaching SConv carries "model" on its
+    channel axis while being unsharded there. A genuinely sharded channel axis must still raise,
+    because silently resharding it would hide an all-gather inside the kernel wrapper.
     """
+    if not should_reject:
+        pytest.importorskip("jax_triton")
+    _trace_kernel_off_gpu(monkeypatch)
     mesh = jax.sharding.AbstractMesh(
         axis_sizes=(1, 2 // model_size, 2, model_size),
         axis_names=("replica_dcn", "data", "expert", "model"),
         axis_types=(jax.sharding.AxisType.Explicit,) * 4,
     )
-    weight, x, segment_ids, _ = _inputs(4, 32, 8, 4, seed=11, dtype=jnp.bfloat16, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=8, c_block_size=8)
+    weight, x, segment_ids, _ = _inputs(4, 128, 128, 4, seed=11, dtype=jnp.bfloat16, packed=True)
 
     def fn(w, xx, seg):
         # Reproduce the hero's k_flat sharding: batch over the FSDP pair, channel named "model".
         xx = jax.sharding.reshard(xx, jax.sharding.PartitionSpec(("data", "expert"), None, "model"))
         seg = jax.sharding.reshard(seg, jax.sharding.PartitionSpec(("data", "expert"), None))
-        return short_conv(w, xx, seg, implementation="pallas_gpu", block_sizes=blocks)
+        return short_conv(w, xx, seg, implementation="triton_gpu")
 
-    with interpret_mode(), jax.sharding.use_abstract_mesh(mesh):
+    with jax.sharding.use_abstract_mesh(mesh):
         if should_reject:
             with pytest.raises(ValueError, match="unsharded channel axis"):
                 jax.make_jaxpr(fn)(weight, x, segment_ids)
@@ -518,7 +380,7 @@ def test_context_axis_named_in_batch_axes_shards_only_the_sequence():
 
 def test_short_conv_rejects_mixed_dtypes():
     """Mixed weight/activation dtypes are rejected at the boundary. The reference promotes
-    (fp32) while the Pallas kernel outputs ``x.dtype``, so accepting mixed inputs would make
+    (fp32) while the kernel outputs ``x.dtype``, so accepting mixed inputs would make
     the same call backend-dependent; the dtype gate runs before dispatch on every backend."""
     weight = jnp.ones((4, 8), dtype=jnp.float32)
     x = jnp.ones((1, 16, 8), dtype=jnp.bfloat16)
@@ -534,10 +396,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, short_conv, short_conv_reference
-from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+from levanter.kernels.triton.short_conv import short_conv, short_conv_reference
 
-IMPLEMENTATION = "__IMPLEMENTATION__"
 BATCH, SEQ, CHANNELS = 2, 32, 8
 DEVICES = np.asarray(jax.devices())
 assert DEVICES.size == 8
@@ -562,17 +422,14 @@ def inputs(width, packed, dtype):
 
 def check(context, packed, width):
     # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
-    # the mesh. Blocks are small so the padded local block spans several sequence tiles with a
-    # ragged tail, and just wide enough for the kernel's `s_block_size >= kernel_size - 1` rule.
+    # the mesh.
     mesh = Mesh(
         DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
         ("data", "context", "spare"),
         axis_types=(AxisType.Explicit,) * 3,
     )
-    blocks = ShortConvBlockSizes(s_block_size=max(8, width - 1), c_block_size=8)
-
     def conv(w, xx, seg):
-        return short_conv(w, xx, seg, implementation=IMPLEMENTATION, block_sizes=blocks, batch_axes=("data",))
+        return short_conv(w, xx, seg, implementation="reference", batch_axes=("data",))
 
     def loss(w, xx, seg):
         return jnp.sum(conv(w, xx, seg) * cotangent)
@@ -582,7 +439,7 @@ def check(context, packed, width):
 
     for dtype in (jnp.bfloat16, jnp.float32):
         weight, x, cotangent, segment_ids = inputs(width, packed, dtype)
-        with jax.set_mesh(mesh), interpret_mode():
+        with jax.set_mesh(mesh):
             x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
             seg_sharded = None
             if segment_ids is not None:
@@ -625,17 +482,18 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, short_conv
-from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+from levanter.kernels.triton.short_conv import api, short_conv
 
+# The gate runs before the kernel call, so it can run on CPU with the dispatch forced to the kernel.
+api.triton_short_conv_available = lambda: True
 # A concrete array on an Auto-axis mesh shows its placement only on `array.sharding`; the
 # channel gate must still see it rather than reshard the axis away.
 mesh = Mesh(np.asarray(jax.devices()).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
-weight = jnp.ones((4, 8), jnp.bfloat16)
-x = jax.device_put(jnp.ones((2, 32, 8), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
-with jax.set_mesh(mesh), interpret_mode():
+weight = jnp.ones((4, 128), jnp.bfloat16)
+x = jax.device_put(jnp.ones((2, 128, 128), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
+with jax.set_mesh(mesh):
     try:
-        short_conv(weight, x, implementation="pallas_gpu", block_sizes=ShortConvBlockSizes(8, 8))
+        short_conv(weight, x, implementation="triton_gpu")
     except ValueError as error:
         assert "unsharded channel axis" in str(error), error
     else:
@@ -643,24 +501,20 @@ with jax.set_mesh(mesh), interpret_mode():
 """
 
 
-@pytest.mark.parametrize("implementation", ["reference", "pallas_gpu"])
-def test_context_parallel_halo_matches_the_unsharded_reference(implementation):
+def test_context_parallel_halo_matches_the_unsharded_reference():
     """Check packed/unpacked values and gradients across context shards and halo sizes."""
-    run_on_cpu_devices(_HALO_SCRIPT.replace("__IMPLEMENTATION__", implementation), device_count=8)
+    run_on_cpu_devices(_HALO_SCRIPT, device_count=8)
 
 
 def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
     run_on_cpu_devices(_AUTO_MESH_GATE_SCRIPT, device_count=8)
 
 
-@pytest.mark.parametrize("width", [1, 4])
-def test_context_parallel_pallas_matches_reference(width):
+def test_context_parallel_kernel_matches_reference_on_gpu():
     if jax.default_backend() != "gpu" or jax.device_count() < 4:
-        pytest.skip("requires four GPUs for context-parallel Pallas convolution")
+        pytest.skip("requires four GPUs for the context-parallel kernel")
     mesh = Mesh(np.asarray(jax.devices()[:4]), ("context",), axis_types=(AxisType.Explicit,))
-    weight, x, segment_ids, cotangent = _inputs(1, 256, 128, width, seed=17, dtype=jnp.float32, packed=True)
-    # local_seq 64 + halo rounds to 128: two sequence blocks, so the general programs run too.
-    blocks = ShortConvBlockSizes(s_block_size=64, c_block_size=128)
+    weight, x, segment_ids, cotangent = _inputs(1, 512, 128, 4, seed=17, dtype=jnp.float32, packed=True)
 
     def reference_loss(w, xx):
         return jnp.sum(short_conv_reference(w, xx, segment_ids) * cotangent)
@@ -672,7 +526,8 @@ def test_context_parallel_pallas_matches_reference(width):
         sharded_seg = jax.device_put(segment_ids, NamedSharding(mesh, P(None, "context")))
 
         def forward(w, xx):
-            return short_conv(w, xx, sharded_seg, implementation="pallas_gpu", block_sizes=blocks)
+            # Each shard's 128 rows plus the 3-row halo are padded to 256.
+            return short_conv(w, xx, sharded_seg, implementation="triton_gpu")
 
         def loss(w, xx):
             return jnp.sum(forward(w, xx) * cotangent)

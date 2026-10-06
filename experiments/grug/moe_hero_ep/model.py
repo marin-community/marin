@@ -59,8 +59,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
-from levanter.kernels.pallas.short_conv import Implementation as ShortConvImplementation
-from levanter.kernels.pallas.short_conv import short_conv
+from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -244,9 +243,6 @@ class GrugModelConfig:
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
-    sconv_implementation: ShortConvImplementation | None = None
-    """Kernel for the SConvs: None for `short_conv`'s default, or a name it accepts. Parameters are
-    the same either way."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
@@ -491,29 +487,26 @@ class ShortConv(eqx.Module):
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
     routed to Adam. Context shards exchange a left halo of ``W-1`` sequence positions.
 
-    The body dispatches to ``levanter.kernels.pallas.short_conv``: ``implementation`` names its kernel,
-    and None selects a fused Pallas kernel on GPU and the pad-and-shift weighted sum everywhere else.
+    The body dispatches to ``levanter.kernels.triton.short_conv``, which selects a streaming Triton
+    kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 
     weight: Float[Array, "W C"]
     kernel_size: int = eqx.field(static=True)
-    implementation: ShortConvImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(channels: int, kernel_size: int, implementation: ShortConvImplementation | None = None) -> "ShortConv":
+    def init(channels: int, kernel_size: int) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
         # FSDP-shard the channel dim so the grad reduce-scatters instead of all-reducing; the
         # forward gathers the weight back to replicated.
-        return ShortConv(
-            weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size, implementation=implementation
-        )
+        return ShortConv(weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # With segment_ids (packed documents), a tap that reaches into a previous document is
         # zeroed so the conv never mixes across a boundary; the lag-0 (current-token) tap is
         # always kept.
         weight = reshard(self.weight, P(None, None))
-        return short_conv(weight, x, segment_ids, implementation=self.implementation, batch_axes=_BATCH_AXES)
+        return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -535,11 +528,7 @@ class CausalSelfAttention(eqx.Module):
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
-            sconv_k=(
-                ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_implementation)
-                if cfg.sconv and "k" in cfg.sconv_sites
-                else None
-            ),
+            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             cfg=cfg,
         )
 
@@ -1168,14 +1157,10 @@ class Block(eqx.Module):
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_implementation)
-                if cfg.sconv and "attn" in cfg.sconv_sites
-                else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
             ),
             sconv_mlp=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_implementation)
-                if cfg.sconv and "mlp" in cfg.sconv_sites
-                else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
         )
 
