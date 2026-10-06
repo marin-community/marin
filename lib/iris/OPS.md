@@ -80,7 +80,19 @@ The restart preflight resolves operator-side controller secrets before taking a 
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
-If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
+If checkpoint times out, inspect controller logs for completed uploads and
+thread stacks for ongoing SQLite copies before retrying. The RPC
+timeout does not cancel the server-side copy, so retries can leave concurrent
+backups running. SQLite backups pin a read snapshot across page batches to
+avoid restarting under concurrent writes. Older controllers without this fix
+can fail to finish a backup under sustained writes. The read snapshot permits
+writes but delays WAL reclamation until the copy completes.
+
+`iris cluster controller restart --skip-checkpoint` bypasses the pre-restart
+backup. It can lose recent state if startup restores an older checkpoint.
+CoreWeave controllers using node-local storage can move nodes on restart; see
+[controller storage and placement](docs/coreweave.md#controller-state) before
+relying on the local DB.
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 

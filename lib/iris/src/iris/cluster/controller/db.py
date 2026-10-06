@@ -613,9 +613,10 @@ class ControllerDB:
         The backup runs through a dedicated read-only source connection,
         so writers on the write engine proceed concurrently under SQLite's
         WAL semantics -- no controller-level lock is held for the
-        duration of the copy.  Batched page copying (``pages=500``)
-        yields between steps so a sustained write stream cannot starve
-        the backup.
+        duration of the copy.  A read transaction pins the source snapshot
+        across page batches so concurrent commits cannot restart the copy.
+        It is released before destination cleanup so WAL reclamation can
+        resume as soon as the copy finishes.
         """
         destination.parent.mkdir(parents=True, exist_ok=True)
         src = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -628,7 +629,13 @@ class ControllerDB:
             src.execute("PRAGMA query_only = ON")
             dest = sqlite3.connect(str(destination))
             try:
-                src.backup(dest, pages=500, sleep=0)
+                src.execute("BEGIN")
+                try:
+                    # BEGIN is deferred; a read establishes the WAL snapshot.
+                    src.execute("SELECT rootpage FROM sqlite_schema LIMIT 1").fetchall()
+                    src.backup(dest, pages=500, sleep=0)
+                finally:
+                    src.rollback()
                 dest.execute("PRAGMA journal_mode = DELETE")
                 dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
                 dest.execute("PRAGMA incremental_vacuum")

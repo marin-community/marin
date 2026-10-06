@@ -404,9 +404,24 @@ JAX initialization. JAX's own compilation cache stays on object storage under
 the Marin prefix: JAX writes it only from process 0, so a node-local copy would
 leave every other node permanently cold.
 
+### Controller state
+
 `storage.local_state_dir` controls controller SQLite storage. When it is empty,
-Iris creates a controller state PVC. `storage.remote_state_dir` stores durable
-controller checkpoints in object storage.
+Iris creates a controller state PVC. When set, it mounts that directory from the
+node through `hostPath`. The controller selects its configured scale group, with
+no hostname pin, so a replacement Pod can land on a different node and restore
+from `storage.remote_state_dir`. Changes after the restored checkpoint can be
+lost. On the original node, startup reuses a healthy local DB only if its
+checkpoint marker matches the selected remote checkpoint (or no remote
+checkpoint exists). Startup selects the latest remote checkpoint unless
+`--checkpoint-path` supplies an explicit one.
+
+To retain the original node during a manual rollout, update the Kubernetes
+Deployment's Pod template with both a `kubernetes.io/hostname` node selector and
+the intended image in one patch, keeping the `Recreate` strategy. Adding the
+selector alone triggers a rollout, so a combined patch avoids an extra restart.
+`iris cluster controller restart` recreates the Deployment from configuration
+and removes manual placement changes.
 
 ## Credentials Summary
 

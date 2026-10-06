@@ -3,6 +3,8 @@
 
 """Tests for ControllerDB transactions and read snapshots."""
 
+import sqlite3
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -67,3 +69,44 @@ def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
     with db.read_snapshot() as q:
         all_rows = q.execute(text("SELECT key FROM kv ORDER BY key")).all()
     assert len(all_rows) == 2
+
+
+def test_backup_with_concurrent_commits_preserves_snapshot(db: ControllerDB, tmp_path: Path, monkeypatch) -> None:
+    _create_simple_table(db)
+    with db.transaction() as tx:
+        tx.execute(text("INSERT INTO kv VALUES ('version', 'original')"))
+        # Span multiple backup batches so writes land while the copy is in progress.
+        tx.execute(
+            text("INSERT INTO kv VALUES (:key, zeroblob(65536))"),
+            [{"key": str(i)} for i in range(64)],
+        )
+
+    commits = 0
+
+    def write_between_batches(status: int, remaining: int, total: int) -> None:
+        nonlocal commits
+        if status == sqlite3.SQLITE_DONE:
+            return
+        assert commits < 100, "Backup failed to finish under continuous writes"
+        with db.transaction() as tx:
+            tx.execute(text("UPDATE kv SET value = :value WHERE key = 'version'"), {"value": str(commits)})
+        commits += 1
+
+    class WritingConnection(sqlite3.Connection):
+        def backup(self, target, **kwargs):
+            # Keep real SQLite I/O; inject a committed write between its copy steps.
+            super().backup(target, **(kwargs | {"progress": write_between_batches}))
+
+    monkeypatch.setattr(sqlite3, "connect", partial(sqlite3.connect, factory=WritingConnection))
+    destination = tmp_path / "backup.sqlite3"
+    db.backup_to(destination)
+
+    assert commits > 0
+    with db.read_snapshot() as tx:
+        assert tx.execute(text("SELECT value FROM kv WHERE key = 'version'")).scalar_one() == str(commits - 1)
+    with sqlite3.connect(destination) as restored:
+        assert restored.execute("SELECT value FROM kv WHERE key = 'version'").fetchone() == ("original",)
+        assert restored.execute("SELECT COUNT(*) FROM kv").fetchone() == (65,)
+        assert restored.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    assert not destination.with_name(destination.name + "-wal").exists()
+    assert not destination.with_name(destination.name + "-shm").exists()
