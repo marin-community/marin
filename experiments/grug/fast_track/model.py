@@ -1462,6 +1462,8 @@ class GrugModelConfig:
     """MoE output projections: ``w_latent_up`` plus ``latent_up_count - 1`` more (``w_latent_up_extra``), each
     weighted per token by its own ``sigmoid(x W_g)`` (``x`` the router's input, ``W_g`` [D, count] zero-init so
     all start at 1/2) and summed. 1: the single ungated ``w_latent_up``."""
+    latent_up_renorm: bool = False
+    """With ``latent_up_count > 1``, divide each token's kept gate weights by their sum (they add to 1)."""
     latent_up_topk: int = 0
     """With ``latent_up_count > 1``, keep only each token's ``latent_up_topk`` largest gate logits (SwitchHead's
     output experts); ``W_g`` is then random-init so the top-k is not a tie. 0: sum every projection."""
@@ -4504,7 +4506,9 @@ class MoEMLP(eqx.Module):
             routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up_extra is not None and self.w_latent_up is not None and self.latent_up_gate is not None:
             count = len(self.w_latent_up_extra) + 1
-            up_gate = mixture_weights(x_flat, self.latent_up_gate, count, self.cfg.latent_up_topk or count)
+            up_gate = mixture_weights(
+                x_flat, self.latent_up_gate, count, self.cfg.latent_up_topk or count, renorm=self.cfg.latent_up_renorm
+            )
             projections = [self.w_latent_up, *self.w_latent_up_extra]
             up_out = 0
             for i, w in enumerate(projections):

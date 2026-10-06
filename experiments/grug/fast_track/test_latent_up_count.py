@@ -45,3 +45,11 @@ def test_top2_of_4_zeroes_the_unchosen_projections_per_token():
     with jax.set_mesh(mesh):
         loss = eqx.filter_jit(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))(model)
     assert np.isfinite(float(loss))
+
+
+def test_renormed_top2_weights_sum_to_one():
+    mesh, model = t._model(ngram_stat_rows=0, latent_up_count=4, latent_up_topk=2, latent_up_renorm=True)
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        loss = eqx.filter_jit(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))(model)
+    assert np.isfinite(float(loss))
