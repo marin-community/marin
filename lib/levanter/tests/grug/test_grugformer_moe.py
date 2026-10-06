@@ -34,6 +34,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.ep_ragged_all_to_all import (
     _accepted_assignments,
     _gather_dispatch_rows,
@@ -1720,6 +1721,91 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         assert relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
     assert int(overflow.dropped) == 0
     assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * topk
+
+
+def _filled_transport_buffer(fill: float):
+    """A `_transport_buffer` whose unspecified contents are ``fill`` everywhere."""
+
+    def transport_buffer(rows, hidden_dim, dtype, tie, site):
+        del tie, site
+        return jnp.full((rows, hidden_dim), fill, dtype)
+
+    return transport_buffer
+
+
+def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(monkeypatch: pytest.MonkeyPatch):
+    # The transport buffers start with unspecified contents, and every consumer must read only the
+    # rows a collective wrote. With drops and padding, many rows stay unwritten. Filling them with
+    # NaN instead of zero must change no output or gradient, in the forward, the backward, or a
+    # recompute, so a reader of an unwritten row anywhere in the layer fails here.
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None or jax.devices()[0].platform != "gpu":
+        pytest.skip("requires an even number of >=2 GPUs")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim, intermediate_dim, num_experts, topk = 16, 24, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(41),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    token_valid = jnp.arange(tokens) % 4 != 1
+    cotangent = jax.random.normal(jax.random.key(43), (tokens, hidden_dim), dtype=jnp.bfloat16)
+
+    batch = NamedSharding(mesh, P(("data", "expert"), None))
+    experts = NamedSharding(mesh, P("expert", None, None))
+    x, selected_experts, combine_weights, cotangent = (
+        jax.sharding.reshard(a, batch)
+        for a in (x.astype(jnp.bfloat16), selected_experts, combine_weights.astype(jnp.bfloat16), cotangent)
+    )
+    token_valid = jax.sharding.reshard(token_valid, NamedSharding(mesh, P(("data", "expert"))))
+    w_up_gate = jax.sharding.reshard(w_up_gate.astype(jnp.bfloat16), experts)
+    w_down = jax.sharding.reshard(w_down.astype(jnp.bfloat16), experts)
+
+    def layer(x, w_up_gate, w_down, combine_weights):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            token_valid=token_valid,
+            implementation="ragged_all_to_all",
+            mesh=mesh,
+            report_capacity_overflow=True,
+            capacity_factor=0.5,
+        )
+
+    def loss(*args):
+        # A fresh function for each fill: jax.checkpoint caches its trace by function, and a cached
+        # trace would keep the previous fill in the recompute and the backward.
+        out, _ = jax.checkpoint(lambda *operands: layer(*operands))(*args)
+        return jnp.sum(out * cotangent)
+
+    def run(*args):
+        out, counts = layer(*args)
+        return out, counts.dropped, jax.grad(loss, argnums=range(4))(*args)
+
+    def zero_and_nan(*args):
+        # One executable: each further program with ragged transports asks NCCL for another
+        # symmetric-memory window, which a preallocated test process may not have room for.
+        results = []
+        for fill in (0.0, jnp.nan):
+            monkeypatch.setattr(ep_ragged_all_to_all, "_transport_buffer", _filled_transport_buffer(fill))
+            results.append(run(*args))
+        return results
+
+    with jax.set_mesh(mesh):
+        zero_filled, nan_filled = jax.jit(zero_and_nan)(x, w_up_gate, w_down, combine_weights)
+
+    assert int(zero_filled[1]) > 0, "the inputs must drop assignments, or no row stays unwritten"
+    for zero, nan in zip(jax.tree.leaves(zero_filled), jax.tree.leaves(nan_filled), strict=True):
+        nan = np.asarray(nan, dtype=np.float32)
+        assert np.isfinite(nan).all()
+        np.testing.assert_array_equal(nan, np.asarray(zero, dtype=np.float32))
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
