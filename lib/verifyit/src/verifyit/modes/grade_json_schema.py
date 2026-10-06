@@ -139,4 +139,4 @@ def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
-    return grade_json_document(schema, spec.format, text)
+    return grade_json_schema_text(spec, schema, text)
