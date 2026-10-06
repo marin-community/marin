@@ -655,8 +655,19 @@ class KubernetesProviderConfig(_Config):
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
+    # Service ClusterIP range. Only needed when it lies outside the private,
+    # carrier-grade NAT and link-local ranges, which sandbox internet egress
+    # already excludes.
+    service_cidr: str = ""
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+
+    @field_validator("service_cidr")
+    @classmethod
+    def _valid_service_cidr(cls, value: str) -> str:
+        if value:
+            ipaddress.ip_network(value)  # ValueError on a malformed CIDR — fail at load
+        return value
 
     @field_validator("cache_max_age")
     @classmethod

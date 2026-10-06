@@ -1087,3 +1087,48 @@ def test_iris_priority_class_manifest_rejects_unknown_band():
 def _apply_stub(k8s: InMemoryK8sService, kind: str, name: str, namespace: str = "iris") -> None:
     """Apply a minimal stub resource into the in-memory K8s store."""
     k8s.apply_json({"kind": kind, "metadata": {"name": name, "namespace": namespace}, "spec": {}})
+
+
+# ============================================================================
+# Tests: egress NetworkPolicy
+# ============================================================================
+
+
+def _egress_policy_rules(k8s: InMemoryK8sService, mode: str) -> list[dict]:
+    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, f"iris-egress-{mode}")
+    assert policy is not None
+    spec = policy["spec"]
+    assert spec["podSelector"] == {"matchLabels": {"iris.egress": mode}}
+    assert set(spec["policyTypes"]) == {"Ingress", "Egress"}
+    assert spec["ingress"] == []
+    return spec["egress"]
+
+
+_DNS_RULE = {
+    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
+}
+_PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+
+
+@pytest.mark.parametrize(
+    ("service_cidr", "blocked"),
+    [
+        pytest.param("10.16.0.0/16", _PRIVATE_RANGES, id="service-range-already-private"),
+        pytest.param("198.18.0.0/15", [*_PRIVATE_RANGES, "198.18.0.0/15"], id="service-range-public"),
+    ],
+)
+def test_start_controller_creates_one_network_policy_per_egress_policy(service_cidr, blocked):
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.service_cidr = service_cidr
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    assert _egress_policy_rules(k8s, "none") == [_DNS_RULE]
+    assert _egress_policy_rules(k8s, "internet") == [
+        _DNS_RULE,
+        {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
+    ]
+    provider.shutdown()

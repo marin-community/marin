@@ -9,7 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from shellbox.backends.iris.machine import IrisMachine
+from iris.rpc import job_pb2
+from shellbox.backends.iris import machine as iris_machine
+from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
 
@@ -76,3 +78,37 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
         assert job.terminated
 
     asyncio.run(scenario())
+
+
+class _SubmitRejected(Exception):
+    pass
+
+
+class RecordingClient(LocalClient):
+    def __init__(self):
+        self.submitted: dict = {}
+
+    def submit(self, **kwargs):
+        self.submitted = kwargs
+        raise _SubmitRejected
+
+
+@pytest.mark.parametrize(
+    ("network", "egress"),
+    [
+        (NetworkPolicy.ALLOW, job_pb2.EGRESS_POLICY_INTERNET),
+        (NetworkPolicy.DENY, job_pb2.EGRESS_POLICY_NONE),
+    ],
+)
+def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
+    client = RecordingClient()
+    endpoint = SimpleNamespace(url="http://controller:10000", credentials=None, close=lambda: None)
+    monkeypatch.setattr(iris_machine, "connect_controller", lambda **_: endpoint)
+    monkeypatch.setattr(iris_machine.IrisClient, "remote", lambda *_, **__: client)
+
+    factory = IrisMachineFactory(controller_url="http://controller:10000")
+    with pytest.raises(_SubmitRejected):
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=network)))
+
+    assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert client.submitted["egress_policy"] == egress
