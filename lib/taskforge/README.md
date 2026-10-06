@@ -124,6 +124,17 @@ modules, each of which keeps its types beside the code that checks their invaria
 - `validate.controls.replay(lowered, controls, plan, settings, tokenize)`: replays each
   control as one `CONTROL` trial named by its id. `ControlPlan.first_attempts` maps a control id
   to its first attempt number (0 when absent), with the same re-entry contract as a trial.
+- `validate.run`, `validate.solver`, `validate.adversary`: one validation round of a `TaskDraft`
+  under a `ValidationPolicy` (every field required) at a `ValidationSite(item_id, round,
+  evidence_dir, ledger)`. `replay_controls` runs first; only when `controls_passed`, `run_solver`
+  (`k` trials) and `run_adversaries` (`adversary_k` trials per `AdversaryRole`) run concurrently.
+  Every trial runs under the draft's own convention. The evidence directory holds
+  `control/<id>/`, `solver/<index>/` and `adversary/<role>/<index>/` attempt files;
+  `load_validation(draft, evidence_dir)` reads a round back as `ValidationEvidence`.
+- `validate.calibration.summarize(evidence, policy) -> CalibrationSummary`: pure. It records the
+  policy digest and band, the solver's `RewardStats`, the control verdicts, `RoleStats` per role
+  and a closed set of `Finding`s (`FindingKind`; `DECISIVE` ones cannot improve by retrying).
+  `write_summary`/`load_summary` round-trip it as `calibration.json`.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -210,6 +221,31 @@ built or named that fails, a spec the backend refuses, and a deadline the progra
 `spec.machine(startup_timeout=...)`. Shellbox raises a bare
 `RuntimeError` for both a failed Docker build and an unreachable Docker daemon, so the daemon case
 is charged to the program until shellbox types it.
+
+Attempt files are the validation evidence. `validate.attempts.load_outcome` is the inverse of
+`trials.outcome_json`, so a round is rebuilt from its files and there is no second copy of the
+outcomes. A trial is settled when its last attempt is graded or ungraded for a cause outside
+`RERUNNABLE` (`RETRYABLE` plus `TOKEN_CONTRACT`). A re-entered round loads settled trials and
+re-runs the others with `TrialPlan.first_attempt` set to the attempt count on disk, so a crash at
+hundreds-wide repeats no settled rollout and no attempt file is overwritten. The evidence
+directory is keyed by `task_digest(task, execution, convention)`, so evidence is never read
+against a different draft.
+
+Controls run before any sampled trial: a violated control means the grader is wrong, and rollouts
+against it would measure the wrong grader. Adversaries are model wrappers, not task sessions:
+`RoleModel` puts a fixed role preamble in the system turn of every request and runs through the
+solver's engine path, task, grader, machine and convention. The preamble is the same bytes on every
+turn, so the served token prefix holds. Adversary rollouts are evidence, never training data. The
+engine installs verifier files only after the final response, so the leak role looks for answer
+keys in the instruction, the environment files and the build context rather than reading the
+grader. A shortcut or leak pass becomes a negative control (`reward_max = REJECTION_CEILING`) that
+the revised program must ship, so the next round's control replay proves the fix. Review consumes
+findings through rules; no model judges legitimacy.
+
+The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `validate.run` type
+those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
+`calibration.SummaryPolicy`, `calibration.RoundEvidence`), because `ValidationPolicy` holds a
+`CalibrationBand` and `AdversaryRole` and the modules defining those take the policy.
 
 ## Testing
 
