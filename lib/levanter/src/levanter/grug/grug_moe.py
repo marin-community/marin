@@ -599,8 +599,9 @@ def moe_mlp(
     `routing_weight_gradient` selects how `implementation="ragged_all_to_all"`
     differentiates the combine weights on an expert axis of size two or more;
     every other path differentiates them exactly. `EXACT` keeps the expert
-    outputs for the backward. `EXPERT_SIDE` keeps neither the outputs nor their
-    return transport, but its combine-weight gradient is zero or inexact
+    outputs for the backward. `EXPERT_SIDE` skips their return transport and,
+    with the QuACK expert MLP on SM100, keeps no expert outputs; the portable
+    `ragged_dot` expert MLP still keeps them. Its combine-weight gradient is zero or inexact
     wherever `w * dout` rounds to zero in the cotangent dtype: at a zero weight,
     and in float16 also for a normal weight times a small output cotangent.
     Choose it only for positive combine weights with bfloat16 or float32
