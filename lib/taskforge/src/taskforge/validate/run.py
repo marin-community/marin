@@ -183,7 +183,7 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
     """A round's evidence from its attempt files: each trial's last attempt.
 
     Controls pair by id with ``draft.controls``; solver trials order by index; adversary trials group
-    by role directory.
+    by role directory, in ``AdversaryRole`` order.
 
     Raises:
         ValueError: a control of ``draft`` has no attempt file.
@@ -203,7 +203,9 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
         controls=tuple(control_outcome(c, _last(controls[c.id].last)) for c in draft.controls),
         solver=tuple(_last(solver[name].last) for name in sorted(solver, key=int)),
         adversaries={
-            role: tuple(by_index[index] for index in sorted(by_index)) for role, by_index in adversaries.items()
+            role: tuple(adversaries[role][index] for index in sorted(adversaries[role]))
+            for role in AdversaryRole
+            if role in adversaries
         },
     )
 

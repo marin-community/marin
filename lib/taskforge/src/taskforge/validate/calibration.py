@@ -8,8 +8,10 @@
 adversary statistics and a closed set of ``Finding``s. Findings come from graded results even when
 the evidence is incomplete: a violated control, an adversary pass or a task defect is reported
 whatever else is ungraded. Band findings (``TOO_HARD``, ``TOO_EASY``) need complete evidence and at
-least ``k`` graded solver trials. A ``SHORTCUT`` or ``LEAK`` pass is also rendered as a negative
-control the revised program must ship, so the next round's control replay proves the fix.
+least ``k`` graded solver trials. An adversary pass that ends on its role's sentinel reply is no
+finding: the role concluded there was nothing to exploit, and a machine-state task graded the
+honest work it did first. A ``SHORTCUT`` or ``LEAK`` pass is also rendered as a negative control the
+revised program must ship, so the next round's control replay proves the fix.
 
 The summary records the policy digest and band, so a decision is reproducible from
 ``calibration.json`` alone and a policy change shows as a different summary.
@@ -357,9 +359,9 @@ CONTROL_ROLES = frozenset({AdversaryRole.SHORTCUT, AdversaryRole.LEAK})
 
 def _adversary_findings(adversaries: Mapping[AdversaryRole, Sequence[Outcome]], task_digest: str) -> list[Finding]:
     findings = []
-    for role, outcomes in adversaries.items():
+    for role, outcomes in _by_role(adversaries):
         for index, outcome in enumerate(outcomes):
-            if not (isinstance(outcome, Graded) and solved(outcome)):
+            if not (isinstance(outcome, Graded) and solved(outcome)) or _declared_nothing(role, outcome):
                 continue
             kind = PASS_KINDS[role]
             lines = [f"The {role} adversary was graded as passing.", *_trial_lines(f"adversary/{role}/{index}", outcome)]
@@ -373,13 +375,24 @@ def _adversary_findings(adversaries: Mapping[AdversaryRole, Sequence[Outcome]], 
     return findings
 
 
+def _by_role(adversaries: Mapping[AdversaryRole, Sequence[Outcome]]) -> list[tuple[AdversaryRole, Sequence[Outcome]]]:
+    """The roles' outcomes in ``AdversaryRole`` order, so findings do not depend on the mapping's order."""
+    return [(role, adversaries[role]) for role in AdversaryRole if role in adversaries]
+
+
+def _declared_nothing(role: AdversaryRole, outcome: Graded) -> bool:
+    """Whether the trial ended on its role's sentinel reply: a machine-state task can pass on the honest work
+    an adversary did before it concluded there was nothing to exploit, and that pass is no finding."""
+    return (final_reply(outcome.rollout) or "").strip() == SENTINEL_REPLIES[role]
+
+
 def _named_outcomes(evidence: RoundEvidence) -> list[tuple[str, Outcome]]:
     return [
         *((f"control/{c.control.id}", c.outcome) for c in evidence.controls),
         *((f"solver/{index}", outcome) for index, outcome in enumerate(evidence.solver)),
         *(
             (f"adversary/{role}/{index}", outcome)
-            for role, outcomes in evidence.adversaries.items()
+            for role, outcomes in _by_role(evidence.adversaries)
             for index, outcome in enumerate(outcomes)
         ),
     ]
@@ -430,7 +443,6 @@ def _band_findings(
 
 def _role_stats(role: AdversaryRole, outcomes: Sequence[Outcome], required: int) -> RoleStats:
     graded = [outcome for outcome in outcomes if isinstance(outcome, Graded)]
-    sentinel = SENTINEL_REPLIES.get(role)
     replies = Counter(
         (final_reply(outcome.rollout) or "").strip() for outcome in outcomes if outcome.rollout is not None
     )
@@ -438,5 +450,5 @@ def _role_stats(role: AdversaryRole, outcomes: Sequence[Outcome], required: int)
         required=required,
         graded=len(graded),
         passes=sum(solved(outcome) for outcome in graded),
-        sentinel_replies=0 if sentinel is None else replies[sentinel],
+        sentinel_replies=replies[SENTINEL_REPLIES[role]],
     )
