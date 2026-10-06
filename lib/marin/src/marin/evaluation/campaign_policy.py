@@ -51,6 +51,10 @@ class CampaignProfile(BaseModel):
 CAMPAIGN = CampaignProfile.model_validate_json(
     Path(__file__).with_name("policies").joinpath("october_05.json").read_text()
 )
+OCTOBER_5_ORIGINAL_HARBOR_COMMIT = CAMPAIGN.runtimes["harbor"]
+CAMPAIGN = CAMPAIGN.model_copy(
+    update={"runtimes": {**CAMPAIGN.runtimes, "harbor": "721215263368e3ff2b16806e01cb1d710a61e573"}}
+)
 CAMPAIGNS = {OCTOBER_5_VERSION: CAMPAIGN}
 
 

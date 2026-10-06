@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from marin.evaluation.campaign_policy import CAMPAIGNS, OCTOBER_5_VERSION
+from marin.evaluation.campaign_policy import CAMPAIGNS, OCTOBER_5_ORIGINAL_HARBOR_COMMIT, OCTOBER_5_VERSION
 from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.harbor import driver_config
@@ -159,3 +159,20 @@ def test_campaign_admits_only_its_pinned_runtime(mechanism):
     allowed = CAMPAIGN.runtimes[mechanism]
     assert runtime_violations(OCTOBER_5_VERSION, evaluation, mechanism + "@" + allowed) == ()
     assert runtime_violations(OCTOBER_5_VERSION, evaluation, mechanism + "@" + "0" * 40)
+
+
+@pytest.mark.parametrize("commit", [CAMPAIGN.runtimes["harbor"], OCTOBER_5_ORIGINAL_HARBOR_COMMIT])
+def test_october5_recovery_preserves_original_records_and_checks_preflight_pin(commit):
+    _, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
+    evaluation = evaluation.model_copy(
+        update={
+            "mechanism": "harbor",
+            "harbor": HarborRef(**CAMPAIGN.harbor["tb2-recovery"].identity.model_dump(), harbor_config_commit=commit),
+        }
+    )
+    assert runtime_violations(OCTOBER_5_VERSION, evaluation, "harbor@" + commit) == ()
+    assert evaluation.harbor is not None
+    mismatched = evaluation.model_copy(
+        update={"harbor": evaluation.harbor.model_copy(update={"harbor_config_commit": "0" * 40})}
+    )
+    assert runtime_violations(OCTOBER_5_VERSION, mismatched, "harbor@" + commit)
