@@ -14,29 +14,53 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
-from iris.client import IrisClient, Job
+from iris.client import IrisClient, Job, Task
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.timing import Duration
+from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSED
+from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    ExitReason,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    Result,
+    UnsupportedMachineSpec,
+)
 
-TRANSFER_CHUNK_BYTES = 128 * 1024
+# The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
+# argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
+# `sh -c` script, so 64 KiB of data (87,384 encoded bytes) leaves room for the target path.
+TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
+EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
 EGRESS_POLICIES = {
     NetworkPolicy.ALLOW: job_pb2.EGRESS_POLICY_INTERNET,
     NetworkPolicy.DENY: job_pb2.EGRESS_POLICY_NONE,
 }
+
+
+def _exec_was_shed(error: Exception) -> bool:
+    """The controller refused the exec before running it because its exec pool was full.
+
+    Only this refusal is retried: after any other error the command may already have run.
+    """
+    return isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED
 
 
 class IrisMachine:
@@ -48,14 +72,14 @@ class IrisMachine:
         client: IrisClient,
         rpc: ControllerServiceClientSync,
         job: Job,
-        task_id: str,
+        task: Task,
         spec: MachineSpec,
     ):
         self.endpoint = endpoint
         self.client = client
         self.rpc = rpc
         self.job = job
-        self.task_id = task_id
+        self.task = task
         self.spec = spec
         self._closed = False
 
@@ -65,15 +89,35 @@ class IrisMachine:
         if self._closed:
             raise RuntimeError("Machine is closed")
         seconds = math.ceil(timeout) if timeout is not None else -1
-        response = self.rpc.exec_in_container(
-            controller_pb2.Controller.ExecInContainerRequest(
-                task_id=self.task_id, command=argv, timeout_seconds=seconds
-            ),
-            timeout_ms=(seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000,
+        request = controller_pb2.Controller.ExecInContainerRequest(
+            task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
         )
+        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
+        try:
+            response = retry_with_backoff(
+                lambda: self.rpc.exec_in_container(request, timeout_ms=timeout_ms),
+                retryable=_exec_was_shed,
+                max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
+                max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
+                backoff=EXEC_SHED_BACKOFF,
+                operation=f"Iris exec in {self.task.task_id}",
+            )
+        except ConnectError as error:
+            self._raise_if_terminated(error)
+            raise
         if response.error:
-            raise RuntimeError(f"Iris exec failed: {response.error}")
+            error = RuntimeError(f"Iris exec failed: {response.error}")
+            self._raise_if_terminated(error)
+            raise error
         return response
+
+    def _raise_if_terminated(self, cause: Exception) -> None:
+        """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
+        status = self.task.status()
+        if status.state != TaskState.RUNNING:
+            raise MachineTerminated(
+                f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
+            ) from cause
 
     async def _script(
         self, script: str, timeout: float | None = None
@@ -256,7 +300,7 @@ class IrisMachineFactory:
                 if tasks:
                     status = tasks[0].status()
                     if status.state == job_pb2.TASK_STATE_RUNNING:
-                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0].task_id.to_wire(), spec)
+                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
                         created = machine._exec_sync(["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
