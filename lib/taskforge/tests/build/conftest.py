@@ -123,7 +123,7 @@ async def grader(b: Build, env: EnvironmentSpec) -> Grader:
         timeout=60,
         files=(spec.file("/grader/grade.py", GRADE),),
     )
-    reference = await b.try_grader(env, verifier, "question", "ANSWER = 42")
+    reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")
     b.check(reference.reward == 1.0, f"reference scored {reference.reward}")
     b.emit("grader/grade.py", GRADE.encode())
     return Grader(verifier=verifier, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")

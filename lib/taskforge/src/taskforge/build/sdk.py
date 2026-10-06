@@ -19,25 +19,21 @@ from types import ModuleType
 from typing import Any
 
 from pydantic import BaseModel
-
-# Private until RolloutEngine exports the task-machine lifecycle, its cleanup bound and in-machine
-# shell grading.
-from rolloutengine.cleanup import _Cleanup
-from rolloutengine.grading import _shell_grade
-from rolloutengine.machines import _task_machine
+from rolloutengine.cleanup import Cleanup
+from rolloutengine.contracts import ModelRequest, ModelTurn, SuppliedState
+from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.machines import task_machine
 from shellbox.machine import Machine, MachineFactory
-from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec, ShellVerifierSpec
+from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
 from taskcompendium.execution import TaskExecution
-from taskcompendium.grading import resolve_verifier
-from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention
-from verifyit.candidate import grade_text_candidate
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec
+from taskcompendium.grading_result import GradeResult
+from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec
+from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
 from taskforge.build import step as step_module
 from taskforge.build.step import (
     CURRENT_STEP,
+    SDK_VERSION,
     Blob,
     Resource,
     Step,
@@ -58,7 +54,10 @@ from taskforge.spec import draft as draft_module
 from taskforge.spec.controls import Control
 
 MACHINE_CLEANUP_TIMEOUT = 120.0
-"""Seconds ``Build.machine`` waits for a machine to close; a failed close is logged, not raised."""
+"""Seconds ``Build.machine`` and ``Build.try_grader`` wait for a machine to close; a failed close is
+logged, not raised."""
+TRY_GRADER_SOURCE = "taskforge.try_grader"
+"""``Source.dataset`` of the provisional task ``Build.try_grader`` grades against."""
 
 
 class BuildFailure(Exception):
@@ -290,8 +289,8 @@ class Build:
         prototype fixtures and graders; ``shell_tool(machine)`` gives ``llm.agent`` a shell in it.
         """
         self.check(environment.kind != EnvironmentKind.NULL, "a null environment has no machine")
-        cleanup = _Cleanup(MACHINE_CLEANUP_TIMEOUT)
-        async with _task_machine(environment, self._services.factories, cleanup) as machine:
+        cleanup = Cleanup(MACHINE_CLEANUP_TIMEOUT)
+        async with task_machine(environment, self._services.factories, cleanup) as machine:
             assert machine is not None
             yield machine
 
@@ -303,31 +302,71 @@ class Build:
         self,
         environment: EnvironmentSpec,
         verifier: VerifierSpec,
+        answer_type: AnswerType,
+        convention: SubmissionConvention,
         instruction: str,
         reply: str,
         workspace: Sequence[EnvironmentFile] = (),
     ) -> GradeResult:
         """Grade one candidate (a final ``reply`` plus ``workspace`` files) the way the engine would.
 
+        RolloutEngine prepares a machine for ``environment``, installs the ``workspace`` files at
+        their absolute paths (as root, after setup), and grades ``instruction`` and ``reply`` as a
+        two-message conversation with ``verifier`` under ``convention``: any verifier and answer type
+        ``spec.assemble`` accepts, with a reply in the form ``convention`` extracts (the final
+        assistant text). No model is called.
+
         This prototypes a grader while it is being written: on its reference answer, an empty
         answer, and wrong answers you invent for the purpose. Every graded candidate is recorded,
         and ``run_build`` fails a build whose controls include one (other than the reference and
         the empty answer): controls are written, not graded; ``validate`` replays them.
+
+        Raises:
+            BuildFailure: ``spec.assemble`` rejects the task these arguments describe, or
+                ``convention`` cannot carry ``answer_type`` to ``verifier``.
         """
         candidate = GradedCandidate(reply=reply, files=tuple(sorted(workspace, key=lambda f: f.path)))
         self.emit(f"{GRADED_RESOURCE_PREFIX}{digest(candidate)}.json", canonical_json(candidate).encode())
-        if verifier.kind != VerifierKind.SHELL:
-            answer = resolve_verifier(verifier)
-            self.check(not workspace, "an answer verifier cannot read workspace files")
-            if not isinstance(answer, ExactSpec | NumericSpec | McqSpec):
-                raise self.failure(f"try_grader grades exact, numeric and mcq text answers, not {verifier.kind!r}")
-            return GradeResult(Outcome.GRADED, grade_text_candidate(answer, reply).reward)
-        shell = ShellVerifierSpec.model_validate_json(verifier.parameters_json)
-        self.check(verifier.environment is None, "try_grader supports graders that run in the task machine")
-        messages = ({"role": "user", "content": instruction}, {"role": "assistant", "content": reply})
-        prepared = environment.model_copy(update={"files": (*environment.files, *workspace)})
-        async with self.machine(prepared) as machine:
-            return await _shell_grade(shell, messages, machine, verifier.files)
+        execution = TaskExecution()
+        try:
+            task = draft_module.assemble(
+                task_id=f"{self.item_id}.try_grader",
+                instruction=instruction,
+                answer_type=answer_type,
+                environment=environment,
+                verifier=verifier,
+                source=Source(
+                    dataset=TRY_GRADER_SOURCE,
+                    revision=self.proposal.digest,
+                    row=self.item_id,
+                    importer_revision=SDK_VERSION,
+                ),
+                execution=execution,
+            )
+        except ValueError as error:
+            raise self.failure(f"try_grader: {error}") from error
+        if answer_type not in draft_module.MACHINE_ANSWER_TYPES:
+            compatibility = submission_compatibility(task, convention)
+            self.check(
+                compatibility.compatible, f"try_grader: convention {convention.id!r}: {'; '.join(compatibility.reasons)}"
+            )
+        engine = ShellboxRolloutEngine(
+            _no_model,
+            self._services.factories,
+            max_turns=1,
+            command_timeout=MACHINE_CLEANUP_TIMEOUT,
+            cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
+            convention=convention,
+        )
+        state = SuppliedState(
+            messages=({"role": "user", "content": instruction}, {"role": "assistant", "content": reply}),
+            files=candidate.files,
+        )
+        return await engine.grade_state(task, state, execution=execution)
+
+
+async def _no_model(request: ModelRequest) -> ModelTurn:
+    raise AssertionError("ShellboxRolloutEngine.grade_state never calls the model")
 
 
 SDK_EXPORTS: dict[str, object] = {

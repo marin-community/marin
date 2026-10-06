@@ -359,6 +359,8 @@ async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: s
         reference = await b.try_grader(
             machine,
             verifier,
+            AnswerType.TEXT,
+            CONVENTION,
             "(instruction)",
             draft.reference_reply,
             [environment_file(f) for f in draft.reference_files],
@@ -368,7 +370,7 @@ async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: s
                 f"the reference answer was graded {reference.status} reward={reference.reward}: "
                 f"{_diagnostics(reference)}"
             )
-        empty = await b.try_grader(machine, verifier, "(instruction)", "")
+        empty = await b.try_grader(machine, verifier, AnswerType.TEXT, CONVENTION, "(instruction)", "")
         if empty.status == Outcome.GRADED and (empty.reward or 0.0) > REJECTION_CEILING:
             return f"an empty answer got reward {empty.reward}; it must get at most {REJECTION_CEILING}"
         return None

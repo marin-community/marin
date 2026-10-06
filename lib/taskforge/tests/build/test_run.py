@@ -138,13 +138,13 @@ async def test_output_that_breaks_a_library_rule_fails_the_build(
         await build_once(proposal, program, tmp_path, services)
 
 
-PROTOTYPE = '    reference = await b.try_grader(env, verifier, "question", "ANSWER = 42")\n'
+PROTOTYPE = '    reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")\n'
 
 
 def prototyping_on(program_source: str, candidate: str) -> str:
     """The test program with its grader step also grading ``candidate``."""
     extra = (
-        f'    wrong = await b.try_grader(env, verifier, "question", "{candidate}")\n'
+        f'    wrong = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "{candidate}")\n'
         '    b.check(wrong.reward == 0.0, "")\n'
     )
     assert PROTOTYPE in program_source
