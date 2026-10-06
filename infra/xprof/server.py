@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import lzma
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -18,7 +20,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from infra.xprof.config import BACKEND_HOST, ENDPOINT_NAME, PORT_NAME, PROXY_TIMEOUT_SECONDS, PUBLIC_PATH
 from infra.xprof.gateway import ProfileCache, ProfileStageManager, XprofGateway
-from infra.xprof.release import XPROF_RS_BINARY_PATH
+from infra.xprof.release import XPROF_RS_COMPRESSED_PATH
 from infra.xprof.rust_proxy import RustProxy
 
 logger = logging.getLogger(__name__)
@@ -51,8 +53,9 @@ def main() -> None:
     cache_dir = workdir / "xprof-cache"
     cache = ProfileCache(cache_dir)
     backend_port = find_free_port()
-    binary = Path.cwd() / XPROF_RS_BINARY_PATH
-    # Iris extracts workspace zips with zipfile, which drops executable permissions.
+    binary = workdir / "xprof-rs"
+    with lzma.open(Path.cwd() / XPROF_RS_COMPRESSED_PATH, "rb") as source, binary.open("wb") as target:
+        shutil.copyfileobj(source, target)
     binary.chmod(0o755)
     backend = subprocess.Popen(
         [

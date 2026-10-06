@@ -13,7 +13,8 @@ authenticates browser requests. The gateway stages profiles under its workdir
 and forwards viewer requests to an xprof-rs process bound to loopback. The
 viewer is pinned to [xprof-rs v0.1.1](https://github.com/Locamage/xprof-rs/releases/tag/v0.1.1)
 at source commit `133df8c837f5d19a4aef142dd735864df8592092`. The deploy
-downloads its x86_64 Linux archive and checks SHA-256 before bundling it.
+downloads its x86_64 Linux archive, checks SHA-256, and bundles a compressed
+executable that is unpacked when the service starts.
 
 The shared service disables `/capture_profile`, which otherwise connects to a
 request-supplied gRPC address. It serves existing `.xplane.pb` profiles.

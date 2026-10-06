@@ -5,13 +5,14 @@
 
 import hashlib
 import io
+import lzma
 import platform
 import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
 
-from infra.xprof.release import XPROF_RS_ARCH, XPROF_RS_BINARY_PATH, XPROF_RS_SHA256, XPROF_RS_VERSION
+from infra.xprof.release import XPROF_RS_ARCH, XPROF_RS_COMPRESSED_PATH, XPROF_RS_SHA256, XPROF_RS_VERSION
 
 
 def main() -> None:
@@ -34,12 +35,11 @@ def main() -> None:
         source = package.extractfile(member)
         if source is None:
             raise ValueError(f"xprof-rs release member is empty: {member_name}")
-        destination = Path(XPROF_RS_BINARY_PATH)
+        destination = Path(XPROF_RS_COMPRESSED_PATH)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
-            temporary.write(source.read())
+            temporary.write(lzma.compress(source.read(), preset=6))
             temporary_path = Path(temporary.name)
-        temporary_path.chmod(0o755)
         temporary_path.replace(destination)
 
 
