@@ -40,8 +40,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
-from rigging.timing import ExponentialBackoff
-
 from taskforge.build.author import PROGRAM_FILE, Revision, author, load_program
 from taskforge.build.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
 from taskforge.build.sdk import BuildFailure, BuildServices, record_completions
@@ -88,9 +86,9 @@ from taskforge.validate.calibration import final_reply, solved, summarize, write
 from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
-from taskforge.validate.run import backoff_config, load_validation, replay_controls
+from taskforge.validate.run import load_validation, replay_controls
 from taskforge.validate.solver import ValidationSite, run_solver
-from taskforge.validate.trials import EngineSettings, RolloutModel, task_digest
+from taskforge.validate.trials import EngineSettings, RetryBackoff, RolloutModel, task_digest
 
 logger = logging.getLogger(__name__)
 
@@ -573,9 +571,9 @@ async def _trials(item: _Item, state: ItemState) -> None:
             group.create_task(adversaries())
 
 
-def retry_wait(backoff: ExponentialBackoff, retry: int) -> float:
+def retry_wait(backoff: RetryBackoff, retry: int) -> float:
     """The ``retry``-th interval (from 1) of a fresh copy of ``backoff``."""
-    fresh = ExponentialBackoff(**backoff_config(backoff))
+    fresh = backoff.schedule()
     for _ in range(retry - 1):
         fresh.next_interval()
     return fresh.next_interval()

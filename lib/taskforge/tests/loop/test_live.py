@@ -20,7 +20,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from rigging.timing import ExponentialBackoff
 from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText
 
 from taskforge.build.run import item_id_for
@@ -46,7 +45,7 @@ from taskforge.validate.adversary import AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.controls import ServerTokenizer
 from taskforge.validate.run import ValidationPolicy
-from taskforge.validate.trials import Deadlines, EngineSettings
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
 
 DATA = Path(__file__).resolve().parent / "data"
 EVIDENCE = Path(__file__).resolve().parents[2] / ".evidence" / "loop" / "live-test"
@@ -63,7 +62,7 @@ POLICY_VALUES = LoopPolicy(
     max_build_revisions=3,
     max_repairs=1,
     max_validation_retries=2,
-    retry_backoff=ExponentialBackoff(initial=60.0, maximum=900.0, factor=2.0, jitter=0.1),
+    retry_backoff=RetryBackoff(initial=60.0, maximum=900.0, factor=2.0, jitter=0.1),
     output_token_budget=1_000_000,
     validation=ValidationPolicy(
         k=8,
@@ -74,7 +73,7 @@ POLICY_VALUES = LoopPolicy(
         deadlines=Deadlines(agent_timeout=1800.0, attempt_timeout=2400.0),
         max_retries=2,
         token_contract_retries=2,
-        retry_backoff=ExponentialBackoff(initial=1.0, maximum=30.0, factor=2.0, jitter=0.1),
+        retry_backoff=RetryBackoff(initial=1.0, maximum=30.0, factor=2.0, jitter=0.1),
     ),
 )
 

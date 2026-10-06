@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
@@ -43,12 +42,12 @@ from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, Triage
 from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
-from taskforge.validate.trials import Deadlines, EngineSettings
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
 
 CORRECT = "ANSWER = 42"
 WRONG = "ANSWER = 41"
 CONVENTION = PlainText(id="plain_text")
-FAST = ExponentialBackoff(initial=0.001, maximum=0.001)
+FAST = RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1)
 
 PROPOSAL = """---
 id: "d00.arithmetic.products/{slot}"
@@ -364,7 +363,7 @@ class Loop:
     async def services(self, width: int = 8) -> AsyncIterator[LoopServices]:
         endpoint = GlmEndpoint(base_url=self.fake_glm.base_url, token="test-token", pool=Pool.HIGH)
         ledger = JsonlLedger(self.root / LEDGER_DIR)
-        async with GlmClient(endpoint, backoff=FAST) as client:
+        async with GlmClient(endpoint, backoff=FAST.schedule()) as client:
             yield LoopServices(
                 client=client,
                 source=self.source,
