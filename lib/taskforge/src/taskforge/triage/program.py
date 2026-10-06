@@ -8,8 +8,8 @@ proposal (it describes no task to score). Otherwise the rubric program scores th
 axes with the structural results in context, in several independent samples. ``sample_decision``
 applies the accept rule ported from the capability pipeline's portfolio review to each sample
 (every axis at least 4, no critical failure, no required change) and ``rubric_decision`` takes the
-majority. One sample at temperature 0.7 agreed with a second run on only 31 of 43 proposals
-(``.evidence/triage/run-20261005-124546`` vs ``run-20261005-124952``), so the gate votes.
+majority. Two live runs of one sample each at temperature 0.7 agreed on only 31 of 43 proposals
+(2026-10-05), so the gate votes.
 ``GlmRubric.repair`` asks GLM for one rewrite of a REPAIR proposal; the caller re-evaluates it.
 """
 
@@ -47,7 +47,7 @@ class RubricReport(BaseModel):
     """The ``record_review`` tool's arguments: one integer score (1-5) per ``RubricAxis``, then findings.
 
     The scores are top-level fields because GLM-5.3 sent a nested ``scores`` object as a JSON string
-    on both the first call and the repair (evidence: ``.evidence/triage/run-20261005-124428``).
+    on both the first call and the repair in a live run on 2026-10-05.
     """
 
     model_config = ConfigDict(extra="forbid")
