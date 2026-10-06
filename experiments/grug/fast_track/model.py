@@ -410,6 +410,20 @@ class ValueEmbeds(StrEnum):
 
 
 _GATED_VALUE_EMBEDS = (ValueEmbeds.GATED, ValueEmbeds.GATED_LAMBDA)
+
+
+class LatentMixBalance(StrEnum):
+    """Load balancing of a mixture-of-latents gate."""
+
+    NONE = "none"
+    BIAS = "bias"
+    """Auxiliary-loss-free (DeepSeek-V3): a per-block bias on the selection logits only (the weights stay
+    ``sigmoid(logit)``), moved each step by ``-latent_mix_bias_rate * sign(load - mean load)``."""
+    ENTROPY = "entropy"
+    """sigma-MoE: the gradient of ``latent_mix_entropy_weight * -H(mean_t softmax(logits_t))`` is added to the
+    gate logits' gradient, pushing the token-averaged block distribution toward uniform."""
+
+
 LATENT_MIX_SITES = ("q", "k", "v", "o", "kv", "moe_in", "moe_out")
 
 
@@ -1434,6 +1448,10 @@ class GrugModelConfig:
     the MLA KV latent (``mla_kv_latent_dim``, the total over blocks)."""
     latent_mix_experts: int = 4
     latent_mix_topk: int = 2
+    latent_mix_balance: "LatentMixBalance" = dataclasses.field(default_factory=lambda: LatentMixBalance.NONE)
+    """Load balancing of the MLA KV-latent mixture's block selection (``kv`` in ``latent_mix_sites``)."""
+    latent_mix_entropy_weight: float = 0.01
+    """``LatentMixBalance.ENTROPY``: weight of the regularizer ``-H(mean over tokens of softmax(gate logits))``."""
     qk_mult_per_head: bool = False
     """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
     softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
@@ -1591,6 +1609,9 @@ class GrugModelConfig:
                 raise ValueError(f"latent_mix site {site} needs a latent divisible by latent_mix_experts, got {width}")
         if self.latent_mix_sites and not 1 <= self.latent_mix_topk <= self.latent_mix_experts:
             raise ValueError("latent_mix_topk must be in [1, latent_mix_experts]")
+        LatentMixBalance(self.latent_mix_balance)
+        if self.latent_mix_balance != LatentMixBalance.NONE and self.latent_mix_sites != ("kv",):
+            raise ValueError("latent_mix_balance is implemented for latent_mix_sites=('kv',) only")
         if "kv" in self.latent_mix_sites and (self.mla_share_kv_latent or self.attn_res_sum_inputs):
             raise ValueError(
                 "latent_mix site kv needs one KV latent per layer (no mla_share_kv_latent/attn_res_sum_inputs)"
@@ -2059,16 +2080,82 @@ class LatentProj(eqx.Module):
 
 
 def mixture_weights(
-    x: Float[Array, "... D"], gate: Float[Array, "D E"], experts: int, topk: int
+    x: Float[Array, "... D"],
+    gate: Float[Array, "D E"],
+    experts: int,
+    topk: int,
+    selection_bias: Float[Array, " E"] | None = None,
+    entropy_weight: float = 0.0,
 ) -> Float[Array, "... E"]:
     """SwitchHead's sigmoid top-k weights for one group of ``experts`` blocks, over any leading axes of ``x``
-    (computed in place, so the weights keep ``x``'s batch sharding)."""
+    (computed in place, so the weights keep ``x``'s batch sharding). ``selection_bias`` (``LatentMixBalance.BIAS``)
+    shifts only which blocks are picked; ``entropy_weight`` (``LatentMixBalance.ENTROPY``) adds the balance
+    regularizer's gradient to the logits."""
     logits = jnp.einsum("...d,de->...e", x, gate).astype(jnp.float32)
+    if entropy_weight:
+        logits = _entropy_balanced(logits, entropy_weight)
     weights = jax.nn.sigmoid(logits)
     if topk >= experts:
         return weights
-    threshold = jax.lax.top_k(logits, topk)[0][..., -1:]
-    return jnp.where(logits >= threshold, weights, 0.0)
+    select = logits if selection_bias is None else logits + jax.lax.stop_gradient(selection_bias)
+    threshold = jax.lax.top_k(select, topk)[0][..., -1:]
+    chosen = select >= threshold
+    if selection_bias is not None:
+        # The bias gets the load error as its gradient; the 0 * keeps its custom VJP on the backward path.
+        load = jnp.mean(chosen.astype(jnp.float32), axis=tuple(range(chosen.ndim - 1)))
+        weights = weights + 0.0 * _load_error_grad(selection_bias, jax.lax.stop_gradient(load))
+    return jnp.where(chosen, weights, 0.0)
+
+
+@jax.custom_vjp
+def _load_error_grad(bias: Float[Array, " E"], load: Float[Array, " E"]) -> Float[Array, " E"]:
+    """Identity on ``bias`` whose backward returns ``load - mean(load)``: a sign-SGD step on it is the
+    auxiliary-loss-free balance update (overloaded blocks' biases fall)."""
+    return bias
+
+
+def _load_error_grad_fwd(bias, load):
+    return bias, load
+
+
+def _load_error_grad_bwd(load, g):
+    del g
+    return load - jnp.mean(load), jnp.zeros_like(load)
+
+
+_load_error_grad.defvjp(_load_error_grad_fwd, _load_error_grad_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+def _entropy_balanced(logits: Float[Array, "... E"], weight: float) -> Float[Array, "... E"]:
+    """Identity on ``logits`` whose backward adds ``d(weight * -H(mean_t softmax(logits_t))) / d logits``."""
+    return logits
+
+
+def _entropy_balanced_fwd(logits, weight):
+    return logits, logits
+
+
+def _entropy_balanced_bwd(weight, logits, g):
+    def neg_entropy(lg):
+        mean_p = jnp.mean(jax.nn.softmax(lg, axis=-1).reshape(-1, lg.shape[-1]), axis=0)
+        return weight * jnp.sum(mean_p * jnp.log(mean_p + 1e-9))
+
+    return (g + jax.grad(neg_entropy)(logits),)
+
+
+_entropy_balanced.defvjp(_entropy_balanced_fwd, _entropy_balanced_bwd)
+
+
+def _mixture_load_stats(weights: Float[Array, "... E"]) -> dict[str, jax.Array]:
+    """Busiest and idlest block's selection share over the even share (1 = balanced)."""
+    chosen = jax.lax.stop_gradient(weights > 0).astype(jnp.float32)
+    load = jnp.mean(chosen, axis=tuple(range(chosen.ndim - 1)))
+    ratio = load / jnp.maximum(jnp.mean(load), 1e-9)
+    return {
+        f"{_LAYER_KNOB_PREFIX}kv_mix_load_max_ratio": jnp.max(ratio),
+        f"{_LAYER_KNOB_PREFIX}kv_mix_load_min_ratio": jnp.min(ratio),
+    }
 
 
 class CausalSelfAttention(eqx.Module):
@@ -2114,6 +2201,7 @@ class CausalSelfAttention(eqx.Module):
     switch_v_gate: Float[Array, "W ME"] | None  # SwitchHead value-expert gate, from the source token
     switch_o_gate: Float[Array, "D NE"] | None  # SwitchHead output-expert gate, from the destination token
     kv_mix_gate: Float[Array, "W E"] | None  # mixture of latents on the MLA KV latent ("kv" in cfg.latent_mix_sites)
+    kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
     latent_k: LatentProj | None
     latent_v: LatentProj | None
@@ -2180,6 +2268,11 @@ class CausalSelfAttention(eqx.Module):
                     _grouped_rms_norm(cfg, cfg.latent_mix_experts, kvl // cfg.latent_mix_experts)
                     if kv_mix
                     else _learned_rms_norm(cfg, kvl, cfg.layer_norm_eps, role="kv_latent")
+                ),
+                kv_mix_bias=(
+                    jnp.zeros((cfg.latent_mix_experts,), jnp.float32)
+                    if kv_mix and cfg.latent_mix_balance == LatentMixBalance.BIAS
+                    else None
                 ),
                 kv_mix_gate=(
                     reshard(
@@ -2316,11 +2409,20 @@ class CausalSelfAttention(eqx.Module):
             ),
             switch_o_gate=reshard(_init_weight(k_so, (d, n * switch_o), std), P(None, None)) if switch_o else None,
             kv_mix_gate=None,
+            kv_mix_bias=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
             latent_k=_latent("k", cfg.attn_latent_k, cfg.kv_in_dim, m * h, std),
             latent_v=_latent("v", cfg.attn_latent_v, cfg.kv_in_dim, m * h, std),
             latent_o=_latent("o", cfg.attn_latent_o, n * h, d, o_std),
             cfg=cfg,
+        )
+
+    def _kv_mix_weights(self, kv_in: Float[Array, "B S W"]) -> Float[Array, "B S E"]:
+        assert self.kv_mix_gate is not None
+        cfg = self.cfg
+        entropy = cfg.latent_mix_entropy_weight if cfg.latent_mix_balance == LatentMixBalance.ENTROPY else 0.0
+        return mixture_weights(
+            kv_in, self.kv_mix_gate, cfg.latent_mix_experts, cfg.latent_mix_topk, self.kv_mix_bias, entropy
         )
 
     def _mla_qkv(
@@ -2362,9 +2464,7 @@ class CausalSelfAttention(eqx.Module):
             else:
                 blocks = self.cfg.latent_mix_experts
                 normed = self.kv_latent_norm(rearrange(latent, "... (e r) -> ... e r", e=blocks))
-                weights = mixture_weights(
-                    x if kv_input is None else kv_input, self.kv_mix_gate, blocks, self.cfg.latent_mix_topk
-                )
+                weights = self._kv_mix_weights(x if kv_input is None else kv_input)
                 kv_latent = rearrange(normed * weights[..., None].astype(normed.dtype), "... e r -> ... (e r)")
             if share_latent:
                 kv_share["latent"] = kv_latent
@@ -2494,12 +2594,16 @@ class CausalSelfAttention(eqx.Module):
         second_qk = None
         if self.cfg.mla:
             q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
+            if self.kv_mix_gate is not None:
+                kv_stats = _mixture_load_stats(self._kv_mix_weights(x if kv_input is None else kv_input))
             if self.vres_lambda is not None:
                 assert kv_share is not None
                 v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global, kv_input)
         stats: dict[str, jax.Array] = {}
+        if self.kv_mix_gate is not None:
+            stats.update(kv_stats)
         if self.v_filter_w is not None and self.v_filter_b is not None:
             # Noise filter: each value read is kept by sigmoid(w_h . v_j + b_h).
             head_axis = _padded_spec(v)[2]

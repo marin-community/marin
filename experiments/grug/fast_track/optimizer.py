@@ -1542,6 +1542,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
+    latent_mix_bias_rate: float = 1e-3
+    """Sign-SGD step of the ``LatentMixBalance.BIAS`` selection biases (``kv_mix_bias``), in logit units."""
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 5
@@ -1983,6 +1985,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh": muonh_transform_at(learning_rate, 0),
                 "adamh": adamh_transform_at(learning_rate, self.lm_head_beta1),
                 "adam": adam_transform_at(adam_lr),
+                "mix_bias": optax.chain(optax.scale_by_sign(), optax.scale(-self.latent_mix_bias_rate)),
                 **{
                     f"adam_{category}": adam_transform_at(adam_lr, beta1)
                     for category, beta1 in self._adam_category_beta1().items()
@@ -2267,6 +2270,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return self.kda_beta_mlp_group
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
+            if path_lower.endswith(".kv_mix_bias"):
+                return "mix_bias"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if path_lower.endswith("attn_res_query_token"):
                 return "attn_res_token_query"
