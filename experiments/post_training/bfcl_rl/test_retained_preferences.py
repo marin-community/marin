@@ -673,7 +673,10 @@ def _native_pair_collection(
                 first_prompt = [1000, 1001] if model == "teacher" else [3, 4]
                 record["prompt"]["token_ids"] = first_prompt
                 tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
-                user = {"role": "user", "content": f"BFCL_USER_CONTEXT_{task.name}"}
+                user = {
+                    "role": "user",
+                    "content": f"BFCL_USER_CONTEXT_{task.name}\nCopied summary: </think>\nUSER_SUMMARY_FINAL",
+                }
                 if model == "student" and index == 0 and fault == "context":
                     user["content"] = "DIFFERENT_INITIAL_CONTEXT"
                 assistant = {
@@ -871,12 +874,15 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         assert "REASONING" in masked and "ARGUMENT" in masked and "FINAL" in masked
         assert "USER_CONTEXT" not in masked and "TOOL_OBSERVATION" not in masked
         assert "WEBFETCH_FINAL" not in masked
+        assert "USER_SUMMARY_FINAL" not in masked
         if fault == "malformed_calls" and role == "rejected":
             assert masked.count("RAW_LOOP") == 20
         targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
         assert "</think>\n\nWEBFETCH_FINAL" in tok.decode(ids.tolist())
+        if fault != "context" or role != "rejected":
+            assert "Copied summary: </think>\nUSER_SUMMARY_FINAL" in tok.decode(ids.tolist())
         if fault not in ("context", "infrastructure_error"):
             text = tok.decode(ids.tolist())
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text

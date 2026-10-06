@@ -127,11 +127,7 @@ def text_document(text: str, source: str) -> dict:
 
 def _check_source_markup(value: object) -> None:
     if isinstance(value, str):
-        if (
-            CHAT_CONTROL_TOKEN.search(value)
-            or REASONING_TOKEN.search(value)
-            or re.search(r"</?think>", value, re.IGNORECASE)
-        ):
+        if CHAT_CONTROL_TOKEN.search(value) or REASONING_TOKEN.search(value):
             raise ValueError(f"Source data contains unexpected control or reasoning tokens: {value!r}")
     elif isinstance(value, dict):
         for key, item in value.items():
@@ -281,6 +277,8 @@ def openai_chat_messages(
     """Normalize OpenAI-style source turns directly into Harmony messages.
 
     Interpret source role aliases, reasoning tags, and function calls here.
+    Source reasoning XML is interpreted only in assistant content; other roles
+    retain it as literal text, while target chat control tokens remain rejected.
     Source IDs link observations before being discarded; parallel observations
     are emitted in call order, including repeated calls to the same function.
     An explicit template prefill restores a reasoning opener absent from the
@@ -321,10 +319,7 @@ def openai_chat_messages(
             case Role.TOOL:
                 if content is None:
                     raise ValueError("Tool observations must contain text")
-                # Tool output can quote source reasoning tags. Target chat tokens
-                # could change the rendered conversation and remain forbidden.
-                if CHAT_CONTROL_TOKEN.search(content) or REASONING_TOKEN.search(content):
-                    raise ValueError(f"Tool observation contains target chat control tokens: {content!r}")
+                _check_source_markup(content)
                 if TOOL_WRAPPER.search(content):
                     raise ValueError("Tool observations must not contain chat protocol wrappers")
                 call_id = message.get("tool_call_id")
