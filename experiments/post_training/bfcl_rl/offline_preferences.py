@@ -53,6 +53,8 @@ from experiments.post_training.bfcl_rl.recovery_data import (
     write_recovery_cache,
 )
 
+NATIVE_PREFERENCE_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi")
+
 
 @dataclass(frozen=True)
 class NativePreferenceConfig:
@@ -388,11 +390,6 @@ def run_native_preference_cache(config: NativePreferenceConfig) -> RecoveryPrefe
     return build_native_preference_cache(config, load_audited_partition(config.data_root))
 
 
-def dispatch_native_preference_cache(config: NativePreferenceConfig) -> RecoveryPreferenceCache:
-    resources = ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi")
-    return remote(run_native_preference_cache, resources=resources)(config)
-
-
 def native_preference_step(
     teacher_collections: tuple[tuple[str, int], ...],
     student_collection_root: str,
@@ -457,7 +454,7 @@ def native_preference_step(
         name=name,
         version=resolve_version(name, None),
         artifact_type=RecoveryPreferenceCache,
-        run=dispatch_native_preference_cache,
+        run=remote(run_native_preference_cache, resources=NATIVE_PREFERENCE_RESOURCES),
         build_config=build_config,
         deps=(*teachers, student, policy.step, data),
         runtime_args={"execution": COLLECTION_EXECUTION},
