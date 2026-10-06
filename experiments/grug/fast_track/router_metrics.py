@@ -145,6 +145,9 @@ def summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, 
     return out
 
 
+_MAX_HISTOGRAM_BUCKETS = 512
+
+
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
     num_experts = counts.shape[0]
@@ -157,8 +160,12 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max()
     min_value = jnp.where(num > 0, min_value, 0.0)
     max_value = jnp.where(num > 0, max_value, 0.0)
-    bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
+    # W&B histograms take at most _MAX_HISTOGRAM_BUCKETS buckets: pool adjacent experts beyond that.
+    width = -(-num_experts // _MAX_HISTOGRAM_BUCKETS)
+    buckets = -(-num_experts // width)
+    pooled = jnp.pad(counts, (0, buckets * width - num_experts)).reshape(buckets, width).sum(axis=1)
+    bucket_limits = jnp.minimum(jnp.arange(buckets + 1, dtype=jnp.float32) * width, num_experts)
+    histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=pooled)
     return SummaryStats.from_reduced_values(
         min=min_value,
         max=max_value,
