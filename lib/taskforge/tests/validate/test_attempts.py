@@ -3,6 +3,8 @@
 
 """Attempt files read back: the inverse of outcome_json, and which trials are settled."""
 
+from dataclasses import replace
+
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import RolloutContractError
 from taskcompendium.environment import EnvironmentKind
@@ -69,7 +71,7 @@ async def test_trial_files_take_each_trials_last_attempt_and_tell_settled_from_r
     await run_trial(file_task, TaskExecution(), adversary, settings(factory), unavailable, "leak/0")
     diverged = fakes.raising_model(lambda: RolloutContractError("served prompt diverged"))
     await run_trial(file_task, TaskExecution(), adversary, settings(factory), diverged, "shortcut/1")
-    retried = TrialPlan(**{**vars(adversary), "first_attempt": 1})
+    retried = replace(adversary, first_attempt=1)
     await run_trial(file_task, TaskExecution(), retried, settings(factory), solved, "leak/0")
     broken = file_task.model_copy(
         update={"environment": file_task.environment.model_copy(update={"setup": (shell_command("exit 3", 10),)})}

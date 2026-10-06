@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adversary roles: the preamble in the system turn, the served prefix preserved, evidence per role."""
+"""Adversary roles: the same preamble bytes in the system turn of every request, evidence per role."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from rolloutengine.contracts import ModelRequest, ModelTurn
@@ -15,7 +15,7 @@ from taskcompendium.submission import PlainText
 from taskforge.ledger.jsonl import read_entries
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.validate.adversary import ROLE_PREAMBLES, AdversaryRole, run_adversaries
-from taskforge.validate.outcome import Cause, Graded, Ungraded
+from taskforge.validate.outcome import Graded
 from taskforge.validate.trials import EngineSettings
 
 PLAIN = PlainText(id="plain")
@@ -58,19 +58,6 @@ class TemplateModel:
         return ModelTurn(message, prompt, response, None, "tool_calls" if "tool_calls" in message else "stop")
 
 
-@dataclass
-class DriftingPreamble:
-    """A wrapper whose system turn changes on every request, which no served prefix survives."""
-
-    inner: TemplateModel
-    calls: int = 0
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        self.calls += 1
-        messages = ({"role": "system", "content": f"turn {self.calls}"}, *request.messages)
-        return await self.inner(ModelRequest(messages, request.options, request.prefix_token_ids, None))
-
-
 async def test_every_role_sees_its_preamble_as_the_one_system_turn_on_every_request(tmp_path, file_task, rounds, fakes):
     inner = TemplateModel([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
     draft = rounds.draft(file_task, (), PLAIN)
@@ -85,11 +72,12 @@ async def test_every_role_sees_its_preamble_as_the_one_system_turn_on_every_requ
     for request in inner.requests:
         systems = [m for m in request.messages if m["role"] == "system"]
         assert len(systems) == 1 and request.messages[0] is systems[0]
-    preambles = {
-        next(role for role in AdversaryRole if r.messages[0]["content"].startswith(ROLE_PREAMBLES[role]))
-        for r in inner.requests
-    }
-    assert preambles == set(AdversaryRole)
+    system_turns: dict[AdversaryRole, set[str]] = {}
+    for request in inner.requests:
+        role = next(r for r in AdversaryRole if request.messages[0]["content"].startswith(ROLE_PREAMBLES[r]))
+        system_turns.setdefault(role, set()).add(json.dumps(request.messages[0], sort_keys=True))
+    assert set(system_turns) == set(AdversaryRole)
+    assert all(len(turns) == 1 for turns in system_turns.values())
 
 
 async def test_a_task_system_prompt_follows_the_preamble_in_the_same_turn(tmp_path, file_task, rounds, fakes):
@@ -100,7 +88,7 @@ async def test_a_task_system_prompt_follows_the_preamble_in_the_same_turn(tmp_pa
 
     await run_adversaries(
         rounds.draft(task, (), PLAIN),
-        type(policy)(**{**vars(policy), "roles": (AdversaryRole.LEAK,)}),
+        replace(policy, roles=(AdversaryRole.LEAK,)),
         rounds.site(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
         inner,
@@ -110,22 +98,6 @@ async def test_a_task_system_prompt_follows_the_preamble_in_the_same_turn(tmp_pa
     assert first["role"] == "system"
     assert first["content"].startswith(ROLE_PREAMBLES[AdversaryRole.LEAK])
     assert first["content"].endswith("You are careful.")
-
-
-async def test_a_preamble_that_changed_between_turns_would_break_the_served_prefix(tmp_path, file_task, rounds, fakes):
-    inner = TemplateModel([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
-    policy = rounds.policy(adversary_k=1)
-
-    outcomes = await run_adversaries(
-        rounds.draft(file_task, (), PLAIN),
-        type(policy)(**{**vars(policy), "roles": (AdversaryRole.SHORTCUT,)}),
-        rounds.site(tmp_path),
-        settings(fakes.flaky_factory(0, RuntimeError)),
-        DriftingPreamble(inner),
-    )
-
-    (outcome,) = outcomes[AdversaryRole.SHORTCUT]
-    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.TOKEN_CONTRACT
 
 
 async def test_adversary_evidence_lands_per_role_and_index(tmp_path, file_task, rounds, fakes):

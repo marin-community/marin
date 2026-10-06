@@ -54,8 +54,9 @@ async def test_a_re_entered_solver_runs_only_the_unsettled_trials(tmp_path, math
     first = await run_solver(draft, policy, site, settings(fakes.flaky_factory(0, RuntimeError)), flaky)
 
     assert sorted(type(o).__name__ for o in first) == ["Graded", "Graded", "Ungraded"]
-    failed = next(str(i) for i, o in enumerate(first) if isinstance(o, Ungraded))
-    assert first[int(failed)].cause is Cause.MODEL_UNAVAILABLE
+    (failed_outcome,) = [o for o in first if isinstance(o, Ungraded)]
+    assert failed_outcome.cause is Cause.MODEL_UNAVAILABLE
+    failed = str(first.index(failed_outcome))
 
     resumed = fakes.script_model([fakes.text("395")])
     second = await run_solver(draft, policy, site, settings(fakes.flaky_factory(0, RuntimeError)), resumed)
