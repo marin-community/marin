@@ -1462,6 +1462,9 @@ class GrugModelConfig:
     """MoE output projections: ``w_latent_up`` plus ``latent_up_count - 1`` more (``w_latent_up_extra``), each
     weighted per token by its own ``sigmoid(x W_g)`` (``x`` the router's input, ``W_g`` [D, count] zero-init so
     all start at 1/2) and summed. 1: the single ungated ``w_latent_up``."""
+    latent_up_topk: int = 0
+    """With ``latent_up_count > 1``, keep only each token's ``latent_up_topk`` largest gate logits (SwitchHead's
+    output experts); ``W_g`` is then random-init so the top-k is not a tie. 0: sum every projection."""
     latent_mix_experts: int = 4
     latent_mix_topk: int = 2
     latent_mix_balance: "LatentMixBalance" = dataclasses.field(default_factory=lambda: LatentMixBalance.NONE)
@@ -1649,6 +1652,8 @@ class GrugModelConfig:
             )
         if "moe_in" in self.latent_mix_sites and (self.router_on_latent or self.latent_select):
             raise ValueError("latent_mix site moe_in needs a plain projected latent (no router_on_latent/latent_select)")
+        if self.latent_up_topk and not 1 <= self.latent_up_topk <= self.latent_up_count:
+            raise ValueError("latent_up_topk must be in [1, latent_up_count]")
         if self.latent_up_count > 1 and (
             not self.has_latent_up or "moe_out" in self.latent_mix_sites or self.router_on_latent
         ):
@@ -3935,7 +3940,16 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             latent_up_gate=(
-                reshard(jnp.zeros((d, cfg.latent_up_count)), P(None, None)) if cfg.latent_up_count > 1 else None
+                reshard(
+                    (
+                        _init_weight(random.fold_in(k_up, 1), (d, cfg.latent_up_count), cfg.initializer_std)
+                        if cfg.latent_up_topk
+                        else jnp.zeros((d, cfg.latent_up_count))
+                    ),
+                    P(None, None),
+                )
+                if cfg.latent_up_count > 1
+                else None
             ),
             latent_out_norm=(
                 _grouped_rms_norm(cfg, mix_e, out_width // mix_e)
@@ -4489,7 +4503,8 @@ class MoEMLP(eqx.Module):
         elif self.latent_out_norm is not None:
             routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up_extra is not None and self.w_latent_up is not None and self.latent_up_gate is not None:
-            up_gate = jax.nn.sigmoid(jnp.einsum("td,dc->tc", x_flat, self.latent_up_gate).astype(jnp.float32))
+            count = len(self.w_latent_up_extra) + 1
+            up_gate = mixture_weights(x_flat, self.latent_up_gate, count, self.cfg.latent_up_topk or count)
             projections = [self.w_latent_up, *self.w_latent_up_extra]
             up_out = 0
             for i, w in enumerate(projections):
