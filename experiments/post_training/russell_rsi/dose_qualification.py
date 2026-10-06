@@ -32,6 +32,7 @@ from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_lo
 from marinskyrl.hf_model import immutable_model_cache_key
 from marinskyrl.resource_locator import is_cloud_uri
 from marinskyrl.task_sources import DirectoryDataSource, data_source, data_source_dict
+MODEL_METADATA_ROOT = os.path.join("/tmp", "marinskyrl", "model_metadata")
 root = load_launch_config(Path(sys.argv[1]))
 for key in ("train_data", "validation_data"):
     sources = [data_source(item) for item in root.inputs[key]]
@@ -45,10 +46,10 @@ if not is_cloud_uri(str(model.uri)) or str(model.chat_template or ""):
 if root.skyrl.generator.get("speculative_decoding") is not None:
     raise ValueError("Dose source does not allow speculative decoding")
 model_path = os.path.join(
-    "/tmp", "marinskyrl", "model_metadata", immutable_model_cache_key(str(model.uri), str(model.identity))
+    MODEL_METADATA_ROOT, immutable_model_cache_key(str(model.uri), str(model.identity))
 )
 tokenizer_path = os.path.join(
-    "/tmp", "marinskyrl", "model_metadata",
+    MODEL_METADATA_ROOT,
     immutable_model_cache_key(str(model.tokenizer_uri), str(model.tokenizer_revision))
 )
 original_model_path = str(root.skyrl.trainer.policy.model.path)

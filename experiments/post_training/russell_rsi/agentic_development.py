@@ -37,6 +37,7 @@ from shellbox.mini_agent import MINI_VERSION, NativeMiniAgent
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal, EvaluationJournal
+from experiments.post_training.russell_rsi.settings import CONTEXT_TOKENS
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 TASK_IDS = (
@@ -52,7 +53,6 @@ TASK_IDS = (
 HARBOR_COMMIT = "2666d6526477ae3e46030a8dc4f3f2c68fd7a84f"
 TASK_COMMIT = "86723674f04e4209ac479d0fb75d9d9f44b4377e"
 CONCURRENCY = 4
-CONTEXT_TOKENS = 32768
 DISK_BYTES = 10 * 1024**3
 SCOPE = "adapted SWE-bench Verified DEVELOPMENT comparison"
 GUEST_MEMORY_MB = 4096
