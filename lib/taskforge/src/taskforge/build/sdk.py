@@ -20,15 +20,19 @@ from typing import Any
 
 from pydantic import BaseModel
 
-# Private until RolloutEngine exports the task-machine lifecycle and in-machine shell grading.
+# Private until RolloutEngine exports the task-machine lifecycle, its cleanup bound and in-machine
+# shell grading.
+from rolloutengine.cleanup import _Cleanup
 from rolloutengine.grading import _shell_grade
 from rolloutengine.machines import _task_machine
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec, ShellVerifierSpec
-from taskcompendium.grading import GradeResult, Outcome, resolve_verifier
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading import resolve_verifier
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
 from verifyit.candidate import grade_text_candidate
-from verifyit.spec import PredictedActionSpec
+from verifyit.spec import ExactSpec, McqSpec, NumericSpec
 
 from taskforge.build import step as step_module
 from taskforge.build.step import (
@@ -51,6 +55,9 @@ from taskforge.proposal.model import TaskProposal, render
 from taskforge.spec import controls as controls_module
 from taskforge.spec import draft as draft_module
 from taskforge.spec.controls import Control
+
+MACHINE_CLEANUP_TIMEOUT = 120.0
+"""Seconds ``Build.machine`` waits for a machine to close; a failed close is logged, not raised."""
 
 
 class BuildFailure(Exception):
@@ -96,9 +103,14 @@ class GradedCandidate:
 @dataclass(frozen=True)
 class BuildOutput:
     """What ``build(b)`` returns. The verifier must come from a GRADER step and the controls
-    from a CONTROLS step; ``run_build`` checks both."""
+    from a CONTROLS step; ``run_build`` checks both.
+
+    ``execution`` is the ``TaskExecution`` passed to ``spec.assemble`` for ``task``: deadlines,
+    the agent user, and each stage's files, setup and healthcheck. ``TaskExecution()`` sets none.
+    """
 
     task: TaskSpec
+    execution: TaskExecution
     controls: tuple[Control, ...]
 
 
@@ -270,7 +282,8 @@ class Build:
         prototype fixtures and graders; ``shell_tool(machine)`` gives ``llm.agent`` a shell in it.
         """
         self.check(environment.kind != EnvironmentKind.NULL, "a null environment has no machine")
-        async with _task_machine(environment, self._services.factories) as machine:
+        cleanup = _Cleanup(MACHINE_CLEANUP_TIMEOUT)
+        async with _task_machine(environment, self._services.factories, cleanup) as machine:
             assert machine is not None
             yield machine
 
@@ -298,20 +311,21 @@ class Build:
         if verifier.kind != VerifierKind.SHELL:
             answer = resolve_verifier(verifier)
             self.check(not workspace, "an answer verifier cannot read workspace files")
-            if isinstance(answer, PredictedActionSpec):
-                raise self.failure("try_grader grades text answers; a predicted_action verifier grades function calls")
+            if not isinstance(answer, ExactSpec | NumericSpec | McqSpec):
+                raise self.failure(f"try_grader grades exact, numeric and mcq text answers, not {verifier.kind!r}")
             return GradeResult(Outcome.GRADED, grade_text_candidate(answer, reply).reward)
         shell = ShellVerifierSpec.model_validate_json(verifier.parameters_json)
-        self.check(shell.environment is None, "try_grader supports graders that run in the task machine")
+        self.check(verifier.environment is None, "try_grader supports graders that run in the task machine")
         messages = ({"role": "user", "content": instruction}, {"role": "assistant", "content": reply})
         prepared = environment.model_copy(update={"files": (*environment.files, *workspace)})
         async with self.machine(prepared) as machine:
-            return await _shell_grade(shell, messages, machine)
+            return await _shell_grade(shell, messages, machine, verifier.files)
 
 
 SDK_EXPORTS: dict[str, object] = {
     "Build": Build,
     "BuildOutput": BuildOutput,
+    "TaskExecution": TaskExecution,
     "BuildFailure": BuildFailure,
     "Grader": Grader,
     "Blob": Blob,

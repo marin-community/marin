@@ -99,8 +99,11 @@ print(1.0 if final.strip().endswith("ANSWER = 42") else 0.0)
 
 PROGRAM = """
 from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, StdoutReward
-from taskcompendium.grading import Outcome
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
+
+EXECUTION = TaskExecution()
 
 GRADE = GRADE_SOURCE
 
@@ -133,6 +136,7 @@ async def assemble(b: Build, env: EnvironmentSpec, graded: Grader) -> TaskSpec:
         environment=env,
         verifier=graded.verifier,
         source=Source(dataset="test", revision="r1", row="0", importer_revision="test"),
+        execution=EXECUTION,
     )
 
 
@@ -164,7 +168,7 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    return BuildOutput(task=task, controls=await fixed_controls(b, task))
+    return BuildOutput(task=task, execution=EXECUTION, controls=await fixed_controls(b, task))
 """.replace(
     "GRADE_SOURCE", repr(GRADE)
 )

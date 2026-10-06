@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, MachineSpec, ShellSimBuiltins
-from taskcompendium.environment import EnvironmentKind, ShellVerifierSpec
+from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import VerifierKind
 
 from taskforge.build.author import compile_program
@@ -111,8 +111,7 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
     assert task.environment.kind == EnvironmentKind.SHELLSIM
     assert [f.path for f in task.environment.files] == ["/workspace/question.txt"]
     assert task.verifier.kind == VerifierKind.SHELL
-    grader = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
-    assert {f.path: f.content.decode() for f in grader.files} == {
+    assert {f.path: f.content.decode() for f in task.verifier.files} == {
         standard.GRADER_SCRIPT: GOOD_GRADER,
         "/grader/key.txt": "42",
     }

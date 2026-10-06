@@ -6,7 +6,7 @@ from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import Outcome
+from taskcompendium.grading_result import Outcome
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from taskforge.build.author import compile_program
@@ -43,9 +43,10 @@ async def test_program_builds_a_runnable_task_and_records_the_draft(proposal, pr
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
         max_turns=2,
         command_timeout=30,
+        cleanup_timeout=30,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
-    rollout = await engine.run(draft.task)
+    rollout = await engine.run(draft.task, execution=draft.execution)
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
 
 
@@ -97,28 +98,37 @@ async def test_failed_check_names_the_step(proposal, program_source, tmp_path, s
 
 
 @pytest.mark.parametrize(
-    ("old", "new"),
+    ("old", "new", "message"),
     [
         # The verifier is rebuilt outside the grader step.
-        ("verifier=graded.verifier,", 'verifier=spec.answer_verifier(ExactSpec(expected=("42",))),'),
+        ("verifier=graded.verifier,", 'verifier=spec.answer_verifier(ExactSpec(expected=("42",))),', "GRADER step"),
         # The program adds a control outside the CONTROLS step.
         (
             "controls=await fixed_controls(b, task))",
             "controls=(*await fixed_controls(b, task), "
             'control("late", K.POSITIVE, C.KNOWN_CORRECT, "42", reward_min=1.0)))',
+            "CONTROLS step",
         ),
+        # The execution settings prepare a stage the task does not have.
+        ("execution=EXECUTION, controls=", 'execution=TaskExecution(stages={"extra": {}}), controls=', "execution:"),
         # The control set lacks a shortcut or reward-hack control.
-        ('control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT', 'control("sum", K.NEGATIVE, C.PLAUSIBLE_WRONG'),
+        (
+            'control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT',
+            'control("sum", K.NEGATIVE, C.PLAUSIBLE_WRONG',
+            "controls:",
+        ),
     ],
 )
-async def test_output_that_breaks_a_library_rule_fails_the_build(proposal, program_source, tmp_path, services, old, new):
+async def test_output_that_breaks_a_library_rule_fails_the_build(
+    proposal, program_source, tmp_path, services, old, new, message
+):
     source = program_source.replace(old, new).replace(
-        "from taskcompendium.grading import Outcome",
-        "from taskcompendium.grading import Outcome\nfrom verifyit.spec import ExactSpec",
+        "from taskcompendium.grading_result import Outcome",
+        "from taskcompendium.grading_result import Outcome\nfrom verifyit.spec import ExactSpec",
     )
     assert source != program_source
     program = compile_program(source, proposal.digest)
-    with pytest.raises(BuildFailure):
+    with pytest.raises(BuildFailure, match=message):
         await build_once(proposal, program, tmp_path, services)
 
 

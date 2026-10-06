@@ -12,7 +12,7 @@ Steps, in order:
 4. ``grader`` (GRADER): a task-specific ``ShellVerifierSpec`` script, or a verifyit-backed answer
    verifier, prototyped with ``b.try_grader`` on its reference answer and on an empty answer.
 5. ``instructions``: the solver-facing prompt, checked to contain no graded answer.
-6. ``assemble``: the TaskSpec, through ``b.spec.assemble``.
+6. ``assemble``: the TaskSpec, through ``b.spec.assemble``, with ``EXECUTION``.
 7. ``controls`` (CONTROLS): fixed controls written for the assembled task, a separate step from
    the grader. They are not replayed here; ``validate`` replays them.
 
@@ -30,7 +30,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 from taskcompendium.environment import DockerBuild, EnvironmentFile, EnvironmentKind, EnvironmentSpec, StdoutReward
-from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec, format_conversation
 from verifyit.spec import ExactSpec, NumericSpec
 
@@ -58,6 +59,8 @@ GRADER_TIMEOUT = 300.0
 FULL_CREDIT = 0.99
 ATTEMPTS = 3
 RESEARCH_TURNS = 32
+EXECUTION = TaskExecution()
+"""Template tasks have one stage and set no deadlines or agent user."""
 SOURCE_DATASET = "taskforge"
 
 TASK_CONTEXT = """\
@@ -417,6 +420,7 @@ async def assemble(b: Build, machine: EnvironmentSpec, graded: Grader, text: Ins
         environment=machine,
         verifier=graded.verifier,
         source=Source(dataset=SOURCE_DATASET, revision=b.proposal.digest, row=header.id, importer_revision=SDK_VERSION),
+        execution=EXECUTION,
         system=text.system,
         metadata={"proposal_id": header.id, "environment": header.environment, "verification": header.verification},
         tags=(header.environment, header.verification),
@@ -485,4 +489,4 @@ async def build(b: Build) -> BuildOutput:
     text = await instructions(b, made, graded, "")
     task = await assemble(b, machine, graded, text)
     fixed = await controls(b, task, graded, "")
-    return BuildOutput(task=task, controls=fixed)
+    return BuildOutput(task=task, execution=EXECUTION, controls=fixed)
