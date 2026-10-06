@@ -58,6 +58,10 @@ from experiments.post_training.russell_rsi.retention_continuation import (
 from experiments.post_training.russell_rsi.retention_continuation import (
     PROTOCOL as RETENTION_CONTINUATION_PROTOCOL,
 )
+from experiments.post_training.russell_rsi.retention_grade_adoption import (
+    PROTOCOL as RETENTION_GRADE_SELECTION_PROTOCOL,
+)
+from experiments.post_training.russell_rsi.retention_grade_adoption import recovered_retention_selection_stages
 from experiments.post_training.russell_rsi.settings import IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.teacher_chat_study import chat_study_post_workflow
 
@@ -115,6 +119,7 @@ def foreground_build_options(fn: Callable[..., BuildResult]) -> Callable[..., No
             "select-completed",
             "extract-completed-coding",
             "analyze-completed-coding",
+            "select-recovered-retention",
         ]
     ),
     required=True,
@@ -133,6 +138,14 @@ def main(
         source = PinnedFile(**extraction["source_config"]).read_json()
         original = chat_study_post_workflow(source, "evaluate-interrupted")
         return [completed_coding_analysis_stages(config, PinnedFile(config_uri, config_sha256), original)["terminal"]]
+    if stage == "select-recovered-retention":
+        if resolve_version(RETENTION_GRADE_SELECTION_PROTOCOL, None) != config["version"]:
+            raise click.UsageError("Recovered retention selection version differs from its frozen configuration")
+        source = PinnedFile(**config["source_config"]).read_json()
+        original = chat_study_post_workflow(source, "evaluate-interrupted")
+        return [
+            recovered_retention_selection_stages(config, PinnedFile(config_uri, config_sha256), original)["terminal"]
+        ]
     if stage in {"select-completed", "extract-completed-coding"}:
         protocol = COMPLETED_SELECTION_PROTOCOL if stage == "select-completed" else EXTRACTION_PROTOCOL
         if resolve_version(protocol, None) != config["version"]:

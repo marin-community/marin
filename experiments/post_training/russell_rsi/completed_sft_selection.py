@@ -182,8 +182,17 @@ def normalized_worker_provenance(value: dict) -> dict:
     return {"modules": modules, "skyrl": value["skyrl"]}
 
 
-def retention_summary(producer: CompletedProducer, original_config: dict, task_ids: tuple[str, ...]) -> dict:
-    """Read all five completed attempts and reproduce the worker's summary and probe gate."""
+@dataclass(frozen=True)
+class CompletedRetention:
+    evaluation: dict
+    binding: dict
+    records: dict[tuple[str, str], dict]
+
+
+def completed_retention_records(
+    producer: CompletedProducer, original_config: dict, task_ids: tuple[str, ...]
+) -> CompletedRetention:
+    """Validate the frozen producer, all five journal records, and the token preflight."""
     config = producer.config
     evaluation = producer.record["config"]["evaluation"]
     binding = pinned_at(
@@ -247,12 +256,18 @@ def retention_summary(producer: CompletedProducer, original_config: dict, task_i
         )
     ):
         raise ValueError("Retention does not preserve the original token preflight gate")
+    return CompletedRetention(evaluation, binding, completed)
+
+
+def retention_result_summary(completed: CompletedRetention, task_ids: tuple[str, ...]) -> dict:
+    """Summarize the three valid canonical grades."""
+    evaluation = completed.evaluation
     rewards = {}
     categories: Counter = Counter()
     starts: Counter = Counter()
     failed = []
     for task_id in task_ids:
-        result = completed[("task", f"{task_id}/0")]
+        result = completed.records[("task", f"{task_id}/0")]
         record = result["record"]
         grade = record["grade"]
         if record["task_id"] != task_id:
@@ -265,7 +280,7 @@ def retention_summary(producer: CompletedProducer, original_config: dict, task_i
         categories["passed" if reward == 1 else "incorrect"] += 1
         if reward == 0:
             failed.append(task_id)
-    summary = {
+    return {
         "model_identity": evaluation["model_identity"],
         "tasks_path": evaluation["tasks_path"],
         "tasks_identity": evaluation["tasks_identity"],
@@ -278,6 +293,12 @@ def retention_summary(producer: CompletedProducer, original_config: dict, task_i
         "categories": dict(categories),
         "failed_task_ids": sorted(failed),
     }
+
+
+def retention_summary(producer: CompletedProducer, original_config: dict, task_ids: tuple[str, ...]) -> dict:
+    """Require all three canonical grades and reproduce the original completed summary."""
+    completed = completed_retention_records(producer, original_config, task_ids)
+    summary = retention_result_summary(completed, task_ids)
     if pinned_at(producer.pins["summary"], str(StoragePath(producer.output_path) / "failure_summary.json")) != summary:
         raise ValueError("Retention summary differs from its completed canonical results")
     return summary
