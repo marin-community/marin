@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from pydantic import TypeAdapter
-from rolloutengine.task_session import SHELL_TOOL_NAME
+from rolloutengine.shell_tool import SHELL_TOOL_NAME
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage, VerifierKind

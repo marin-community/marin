@@ -236,8 +236,9 @@ def _shell_verifier(spec: VerifierSpec) -> ShellVerifierSpec | None:
 def _artifact_needs_root(artifact: VerifierArtifact) -> bool:
     """Whether RolloutEngine inspects or archives ``artifact`` with a root command on the task machine.
 
-    Mirrors ``rolloutengine.grading._download_artifact``: AUTO kinds and SKIP policies probe the
-    source, and directories with excludes are tarred and removed, all as user ``0``.
+    Follows the grading commands that ``docs/references/task-rollouts.md`` says the engine runs as
+    user ``0`` in the agent machine: AUTO kinds and SKIP policies probe the source, and directories
+    with excludes are archived and the archive removed.
     """
     if artifact.kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
         return True
@@ -245,7 +246,10 @@ def _artifact_needs_root(artifact: VerifierArtifact) -> bool:
 
 
 def _stage_grader_removal_needs_root(spec: VerifierSpec, shell: ShellVerifierSpec) -> bool:
-    """Whether ``rolloutengine.grading._remove_stage_grader`` deletes this stage grader's files as root."""
+    """Whether the engine removes this stage grader's private and reward files as user ``0`` before the next stage.
+
+    ``docs/references/task-rollouts.md`` lists this removal among the grading commands run as user ``0``.
+    """
     return spec.environment is None and bool(spec.files or isinstance(shell.reward, FileReward))
 
 
