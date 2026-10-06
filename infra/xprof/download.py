@@ -11,15 +11,14 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-XPROF_RS_VERSION = "v0.1.1"
-XPROF_RS_SHA256 = "6c0fdfecfd890c66d5e6a7b1c1a6acfaacf2bc45ac668daa27e4b774cf0a5d9b"
+from infra.xprof.release import XPROF_RS_ARCH, XPROF_RS_BINARY_PATH, XPROF_RS_SHA256, XPROF_RS_VERSION
 
 
 def main() -> None:
-    if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise RuntimeError("The pinned xprof-rs release requires x86_64 Linux")
+    if platform.system() != "Linux" or platform.machine() != XPROF_RS_ARCH:
+        raise RuntimeError(f"The pinned xprof-rs release requires {XPROF_RS_ARCH} Linux")
 
-    archive_name = f"xprof-rs-{XPROF_RS_VERSION}-x86_64-linux.tar.gz"
+    archive_name = f"xprof-rs-{XPROF_RS_VERSION}-{XPROF_RS_ARCH}-linux.tar.gz"
     url = f"https://github.com/Locamage/xprof-rs/releases/download/{XPROF_RS_VERSION}/{archive_name}"
     with urllib.request.urlopen(url, timeout=60) as response:
         archive = response.read()
@@ -35,7 +34,7 @@ def main() -> None:
         source = package.extractfile(member)
         if source is None:
             raise ValueError(f"xprof-rs release member is empty: {member_name}")
-        destination = Path("infra/xprof/bin/xprof-rs")
+        destination = Path(XPROF_RS_BINARY_PATH)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
             temporary.write(source.read())

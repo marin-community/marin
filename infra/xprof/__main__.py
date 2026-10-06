@@ -5,6 +5,7 @@ import pulumi
 from config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME
 from iac.iris.service import IrisService, IrisServiceArgs
 from iris.cluster.types import ResourceSpec
+from release import XPROF_RS_BINARY_PATH
 
 
 def main() -> None:
@@ -29,7 +30,7 @@ def main() -> None:
             secret_env=dict(config.get_object("secret_env") or {}),
             sync_packages=("marin-iris", "marin-rigging"),
             build_commands=(".venv/bin/python -m infra.xprof.download",),
-            extra_bundle_includes=("infra/xprof/bin/xprof-rs",),
+            extra_bundle_includes=(XPROF_RS_BINARY_PATH,),
             deploy_generation=config.get_int("deploy_generation") or 0,
             code_paths=(
                 "infra/xprof",

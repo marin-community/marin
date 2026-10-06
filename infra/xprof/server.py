@@ -16,8 +16,10 @@ from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from infra.xprof.config import ENDPOINT_NAME, PORT_NAME, PROXY_TIMEOUT_SECONDS, PUBLIC_PATH
-from infra.xprof.gateway import ProfileCache, ProfileStageManager, RustProxy, XprofGateway
+from infra.xprof.config import BACKEND_HOST, ENDPOINT_NAME, PORT_NAME, PROXY_TIMEOUT_SECONDS, PUBLIC_PATH
+from infra.xprof.gateway import ProfileCache, ProfileStageManager, XprofGateway
+from infra.xprof.release import XPROF_RS_BINARY_PATH
+from infra.xprof.rust_proxy import RustProxy
 
 logger = logging.getLogger(__name__)
 STARTUP_TIMEOUT = 30
@@ -28,7 +30,7 @@ def _wait_for_backend(process: subprocess.Popen, port: int) -> None:
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"xprof-rs exited with status {process.returncode}")
-        connection = HTTPConnection("127.0.0.1", port, timeout=1)
+        connection = HTTPConnection(BACKEND_HOST, port, timeout=1)
         try:
             connection.request("GET", "/version")
             if connection.getresponse().status == 200:
@@ -49,7 +51,7 @@ def main() -> None:
     cache_dir = workdir / "xprof-cache"
     cache = ProfileCache(cache_dir)
     backend_port = find_free_port()
-    binary = Path.cwd() / "infra/xprof/bin/xprof-rs"
+    binary = Path.cwd() / XPROF_RS_BINARY_PATH
     # Iris extracts workspace zips with zipfile, which drops executable permissions.
     binary.chmod(0o755)
     backend = subprocess.Popen(
@@ -58,7 +60,7 @@ def main() -> None:
             "--logdir",
             str(cache_dir),
             "--host",
-            "127.0.0.1",
+            BACKEND_HOST,
             "--port",
             str(backend_port),
             "--hide_capture_profile_button",

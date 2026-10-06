@@ -15,9 +15,9 @@ from infra.xprof.gateway import (
     ProfileCache,
     ProfileSourceError,
     ProfileStageManager,
-    RustProxy,
     XprofGateway,
 )
+from infra.xprof.rust_proxy import RustProxy
 
 
 def _request(app, path: str, query: str = "", method: str = "GET"):
