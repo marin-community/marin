@@ -1488,8 +1488,10 @@ class GrugModelConfig:
     latent_mix_renorm: bool = False
     latent_mix_kv_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
     kv_shared_latent_dim: int = 0
-    """With the MLA KV-latent mixture: an always-on shared latent of this width (its own RMSNorm) is concatenated
-    in front of the mixture part, so ``w_uk`` / ``w_uv`` read ``kv_shared_latent_dim + mla_kv_latent_dim``."""
+    """With the MLA KV-latent mixture: an always-on shared down-projection of this width. ``latent_mix_kv_mode=sum``
+    adds it to the routed experts' weighted sum before the one RMSNorm (a shared expert; must equal
+    ``mla_kv_latent_dim``, so the latent stays that wide); ``concat`` puts it, with its own RMSNorm, in front of
+    the mixture part, so ``w_uk`` / ``w_uv`` read ``kv_shared_latent_dim + mla_kv_latent_dim``."""
     latent_mix_moe_in_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
     """``moe_in`` mixture: ``concat`` gates blocks of the latent; ``sum`` makes ``W_down`` a token-conditioned mixture
     of ``latent_mix_experts`` full-width basis projections, ``latent = norm(sum_j a_j(x) x W_j)``."""
@@ -1672,6 +1674,14 @@ class GrugModelConfig:
             raise ValueError("latent_mix_balance / latent_mix_renorm are implemented for latent_mix_sites=('kv',) only")
         if self.kv_shared_latent_dim and "kv" not in self.latent_mix_sites:
             raise ValueError("kv_shared_latent_dim needs the MLA KV-latent mixture (kv in latent_mix_sites)")
+        if (
+            self.kv_shared_latent_dim
+            and self.latent_mix_kv_mode == KvMixMode.SUM
+            and self.kv_shared_latent_dim != self.mla_kv_latent_dim
+        ):
+            raise ValueError(
+                "with latent_mix_kv_mode=sum the shared KV latent is summed in: it must be mla_kv_latent_dim"
+            )
         if "kv" in self.latent_mix_sites and (self.mla_share_kv_latent or self.attn_res_sum_inputs):
             raise ValueError(
                 "latent_mix site kv needs one KV latent per layer (no mla_share_kv_latent/attn_res_sum_inputs)"
@@ -2309,7 +2319,7 @@ class CausalSelfAttention(eqx.Module):
             kv_mix = "kv" in cfg.latent_mix_sites
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             shared_kvl = cfg.kv_shared_latent_dim
-            kvl = cfg.mla_kv_latent_dim + shared_kvl  # what w_uk / w_uv read
+            kvl = cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)  # what w_uk / w_uv read
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
             diff = cfg.mla_diff_attn
             group = cfg.mla_grouped_diff
@@ -2357,7 +2367,9 @@ class CausalSelfAttention(eqx.Module):
                     if kv_mix and not kv_sum
                     else _learned_rms_norm(cfg, cfg.mla_kv_latent_dim, cfg.layer_norm_eps, role="kv_latent")
                 ),
-                kv_shared_norm=_learned_rms_norm(cfg, shared_kvl, cfg.layer_norm_eps) if shared_kvl else None,
+                kv_shared_norm=(
+                    _learned_rms_norm(cfg, shared_kvl, cfg.layer_norm_eps) if shared_kvl and not kv_sum else None
+                ),
                 kv_mix_bias=(
                     jnp.zeros((cfg.latent_mix_experts,), jnp.float32)
                     if kv_mix and cfg.latent_mix_balance == LatentMixBalance.BIAS
@@ -2565,7 +2577,7 @@ class CausalSelfAttention(eqx.Module):
                 experts = rearrange(latent, "... (e r) -> ... e r", e=blocks)
                 if self.cfg.latent_mix_kv_mode == KvMixMode.SUM:
                     mixed = jnp.einsum("...er,...e->...r", experts, weights.astype(experts.dtype))
-                    kv_latent = self.kv_latent_norm(mixed)
+                    kv_latent = self.kv_latent_norm(mixed + shared if shared_kvl else mixed)
                 else:
                     normed = self.kv_latent_norm(experts)
                     kv_latent = rearrange(normed * weights[..., None].astype(normed.dtype), "... e r -> ... (e r)")
