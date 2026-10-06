@@ -83,7 +83,7 @@ def test_backup_with_concurrent_commits_preserves_snapshot(db: ControllerDB, tmp
 
     commits = 0
 
-    def write_between_batches(status: int, remaining: int, total: int) -> None:
+    def write_between_batches(status: int, _remaining: int, _total: int) -> None:
         nonlocal commits
         if status == sqlite3.SQLITE_DONE:
             return
