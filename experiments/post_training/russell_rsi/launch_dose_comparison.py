@@ -46,6 +46,7 @@ from experiments.post_training.russell_rsi.launch import (
     OptimizerStepConfig,
     SamplingMode,
     Scale,
+    adopted,
     development_step,
     evaluation_model,
     require_optimizer_updates,
@@ -394,11 +395,6 @@ def record_source_qualification(config: SourceQualificationConfig) -> None:
 def dose_workflow(config: dict, plan: RoundPlan, schedule: dict, panel: CodingPanel) -> dict[str, ArtifactStep]:
     """Bind training and each evaluation to both completed checkpoint exports."""
     version = config["version"]
-
-    def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
-        return ArtifactStep.adopt(
-            value["name"], value["version"], value["uri"], kind=kind, config=value["identity_config"]
-        )
 
     parent = adopted(config["parent"], LevanterCheckpoint)
     bank = adopted(config["bank"])

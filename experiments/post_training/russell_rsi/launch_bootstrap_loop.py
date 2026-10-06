@@ -33,6 +33,7 @@ from experiments.post_training.russell_rsi.launch import (
     MODEL_REVISION,
     LoopPredecessor,
     ReviewedConstructionInputs,
+    adopted,
     run_bootstrap_loop,
 )
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
@@ -63,11 +64,6 @@ def execute_loop(config: dict) -> None:
         if amendment_values is not None
         else None
     )
-
-    def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
-        return ArtifactStep.adopt(
-            value["name"], value["version"], value["uri"], kind=kind, config=value["identity_config"]
-        )
 
     seed = adopted(config["seed_bank"])
     parent = adopted(config["parent"], LevanterCheckpoint)

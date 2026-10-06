@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, replace
 
 import click
 from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, artifact_record_identity
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import remote
@@ -42,10 +42,11 @@ from experiments.post_training.russell_rsi.launch import (
     CLUSTER,
     MODEL,
     MODEL_REVISION,
+    adopted,
     development_step,
     evaluation_model,
 )
-from experiments.post_training.russell_rsi.launch_post_teacher_sft import RETENTION_TASKS, adopted, evaluated_score
+from experiments.post_training.russell_rsi.launch_post_teacher_sft import RETENTION_TASKS, evaluated_score
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.replay import (
     REPLAY_SEED,
@@ -69,7 +70,7 @@ BASELINE_RETENTION = 1 / 3
 
 def qualified_champion(record: dict, source: dict) -> str:
     """Return the qualified export of the original training artifact."""
-    identity = f"{source['name']}@{source['version']}:{source['fingerprint']}"
+    identity = artifact_record_identity(source)
     export = prefix_join(source["output_path"], "exports/global_step_8/policy")
     reload = record["serving_reload"]
     if (

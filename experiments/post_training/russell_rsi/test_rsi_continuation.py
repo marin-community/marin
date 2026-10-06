@@ -23,8 +23,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     RoundResult,
     seal_round,
 )
-from experiments.post_training.russell_rsi.launch import MODEL, MODEL_REVISION
-from experiments.post_training.russell_rsi.launch_post_teacher_sft import adopted
+from experiments.post_training.russell_rsi.launch import MODEL, MODEL_REVISION, adopted
 from experiments.post_training.russell_rsi.launch_rsi_continuation import (
     ContinuationSelectionConfig,
     continuation_schedule,

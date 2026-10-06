@@ -24,9 +24,9 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
+from experiments.post_training.russell_rsi.launch import adopted
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     StudyBaseline,
-    adopted,
     evaluated_score,
     post_sft_stages,
     qualified_four_update_sft,

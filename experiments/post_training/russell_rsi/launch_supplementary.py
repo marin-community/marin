@@ -17,7 +17,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
 from experiments.post_training.russell_rsi.bootstrap_loop import checkpoint_score, promotes, write_once
-from experiments.post_training.russell_rsi.launch import MODEL, MODEL_REVISION, development_step
+from experiments.post_training.russell_rsi.launch import MODEL, MODEL_REVISION, adopted, development_step
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.rollout_eval import (
     SUPPLEMENTARY_TASKS,
@@ -109,17 +109,9 @@ def supplementary_workflow(config: dict, selected: SelectedCheckpoint) -> Artifa
     """Build the matched pair with one durable request journal for each checkpoint."""
     version = config["evaluation_version"]
     panel_spec = config["panel"]
-    panel = ArtifactStep.adopt(
-        panel_spec["name"], panel_spec["version"], panel_spec["uri"], config=panel_spec["identity_config"]
-    )
+    panel = adopted(panel_spec)
     parent_spec = config["parent"]
-    parent = ArtifactStep.adopt(
-        parent_spec["name"],
-        parent_spec["version"],
-        parent_spec["uri"],
-        kind=LevanterCheckpoint,
-        config=parent_spec["identity_config"],
-    )
+    parent = adopted(parent_spec, LevanterCheckpoint)
     candidate = ArtifactStep.adopt(
         "checkpoints/russell-rsi-acceptance-candidate",
         version,

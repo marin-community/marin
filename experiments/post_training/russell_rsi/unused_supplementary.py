@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from marin.evaluation.records import record_path
+from marin.execution.artifact import artifact_record_identity
 from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.parquet import read_task_records, write_task_records
@@ -188,7 +189,7 @@ def promoted_study_checkpoint(config: dict) -> SelectedCheckpoint:
     incumbent_source = PinnedFile(**config["incumbent_producer"]).read_json()
     incumbent_qualification = PinnedFile(**config["incumbent_qualification"]).read_json()
     qualified_champion(incumbent_qualification, incumbent_source)
-    incumbent_identity = f"{incumbent_source['name']}@{incumbent_source['version']}:{incumbent_source['fingerprint']}"
+    incumbent_identity = artifact_record_identity(incumbent_source)
     if (
         incumbent.checkpoint_identity != incumbent_identity
         or checkpoint_score(decision["promoted"]) != selected
@@ -212,7 +213,7 @@ def promoted_study_checkpoint(config: dict) -> SelectedCheckpoint:
         raise ValueError("Comparator differs from the independent historical SFT parent")
     producer_pin = PinnedFile(**config["candidate_producer"])
     producer = completed_record(producer_pin, PinnedFile(**config["candidate_status"]))
-    identity = f"{producer['name']}@{producer['version']}:{producer['fingerprint']}"
+    identity = artifact_record_identity(producer)
     if identity != selected.checkpoint_identity:
         raise ValueError("Candidate producer does not identify the promoted checkpoint")
     return SelectedCheckpoint(
@@ -222,7 +223,7 @@ def promoted_study_checkpoint(config: dict) -> SelectedCheckpoint:
 
 def qualified_candidate_export(config: dict, producer: dict) -> str:
     """Return the selected producer export after its training and reload checks."""
-    identity = f"{producer['name']}@{producer['version']}:{producer['fingerprint']}"
+    identity = artifact_record_identity(producer)
     expected_reload_deps: list[str]
     reload_model_identity = identity
     if producer["result_type"] == "marin.training.training.LevanterCheckpoint":
@@ -231,7 +232,7 @@ def qualified_candidate_export(config: dict, producer: dict) -> str:
         training = completed_record(
             PinnedFile(**config["candidate_training_producer"]), PinnedFile(**config["candidate_training_status"])
         )
-        reload_model_identity = f"{training['name']}@{training['version']}:{training['fingerprint']}"
+        reload_model_identity = artifact_record_identity(training)
         expected_reload_deps = [f"{training['name']}@{training['version']}"]
         export = qualified_four_update_sft(qualification, identity=reload_model_identity, root=training["output_path"])
         if (

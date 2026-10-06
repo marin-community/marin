@@ -5,7 +5,7 @@
 
 from dataclasses import asdict
 
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, artifact_record_identity
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile
@@ -66,7 +66,7 @@ def completed_evidence_analysis_stages(
     expected_config = expected_evidence.build_config(StepContext.for_run(path, prefix, deps=expected_evidence.deps))
     provenance = producer["provenance"]
     if (
-        f"{producer['name']}@{producer['version']}:{producer['fingerprint']}" != identity
+        artifact_record_identity(producer) != identity
         or producer["output_path"] != path
         or canonical_json(producer["config"]) != canonical_json(asdict(expected_config))
         or len(provenance["base_commit"]) < 9

@@ -18,7 +18,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
-from experiments.post_training.russell_rsi.launch import development_step
+from experiments.post_training.russell_rsi.launch import adopted, development_step
 from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256, pinned_bytes
 from experiments.post_training.russell_rsi.rollout_eval import DevelopmentEvaluationConfig, run_development_evaluation
 
@@ -103,9 +103,7 @@ def main(config_uri: str, config_sha256: str) -> ArtifactStep[Artifact]:
         config={"tasks_sha256": config["tasks_sha256"], "original_line_sha256": config["original_line_sha256"]},
     )
     parent = config["parent"]
-    model = ArtifactStep.adopt(
-        parent["name"], parent["version"], parent["uri"], kind=LevanterCheckpoint, config=parent["identity_config"]
-    )
+    model = adopted(parent, LevanterCheckpoint)
     evaluation = development_step(
         data,
         model,

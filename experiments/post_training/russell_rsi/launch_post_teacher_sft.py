@@ -41,6 +41,7 @@ from experiments.post_training.russell_rsi.coding_eval_feedback import (
 from experiments.post_training.russell_rsi.launch import (
     CALIBRATION_TEMPERATURE,
     CLUSTER,
+    adopted,
     development_step,
     evaluation_model,
 )
@@ -261,10 +262,6 @@ def selection_record(config: SelectionConfig) -> dict:
 
 def seal_selection(config: SelectionConfig) -> None:
     write_once(StoragePath(prefix_join(config.output_path, "post-sft-selection.json")), selection_record(config))
-
-
-def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
-    return ArtifactStep.adopt(value["name"], value["version"], value["uri"], kind=kind, config=value["identity_config"])
 
 
 def validate_source_replay(source: dict, plan: RoundPlan) -> None:

@@ -52,7 +52,7 @@ def _flatten(metrics: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
 
 
 class JsonLoggerTracker(Tracker):
-    """Tracker that logs metrics to a Python logger as JSON lines."""
+    """Log JSON records to a Python logger and optionally store metric events."""
 
     name: str = "json_logger"
 

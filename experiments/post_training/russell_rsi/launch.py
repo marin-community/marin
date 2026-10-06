@@ -161,6 +161,11 @@ class SamplingMode(StrEnum):
     CALIBRATED_REPLAY = "calibrated_replay"
 
 
+def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
+    """Adopt the exact artifact recipe from a frozen source specification."""
+    return ArtifactStep.adopt(value["name"], value["version"], value["uri"], kind=kind, config=value["identity_config"])
+
+
 def recipe(
     scale: Scale,
     machine_config: dict | None = None,

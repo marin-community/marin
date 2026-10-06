@@ -39,7 +39,7 @@ from experiments.evaluation.pipeline import eval_step
 from experiments.post_training.glm import resolve_glm_base_url
 from experiments.post_training.russell_rsi.bootstrap_loop import checkpoint_score, promotes, write_once
 from experiments.post_training.russell_rsi.collection_recovery import CollectionRecovery, StudentContextAmendment
-from experiments.post_training.russell_rsi.launch import CLUSTER, evaluation_model
+from experiments.post_training.russell_rsi.launch import CLUSTER, adopted, evaluation_model
 from experiments.post_training.russell_rsi.launch_dose_comparison import selected_dose
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.rollout_eval import qemu_factory
@@ -244,17 +244,9 @@ def teacher_sft_steps(
 ) -> dict[str, ArtifactStep]:
     version = config["version"]
     parent_spec = config["parent"]
-    parent = ArtifactStep.adopt(
-        parent_spec["name"],
-        parent_spec["version"],
-        parent_spec["uri"],
-        kind=LevanterCheckpoint,
-        config=parent_spec["identity_config"],
-    )
+    parent = adopted(parent_spec, LevanterCheckpoint)
     bank_spec = config["bank"]
-    bank = ArtifactStep.adopt(
-        bank_spec["name"], bank_spec["version"], bank_spec["uri"], config=bank_spec["identity_config"]
-    )
+    bank = adopted(bank_spec)
 
     def collection_config(ctx: StepContext) -> CollectionConfig:
         base = TeacherCollectionConfig(

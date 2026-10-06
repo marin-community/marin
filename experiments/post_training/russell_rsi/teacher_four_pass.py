@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass, replace
 
+from marin.execution.artifact import artifact_record_identity
 from marin.execution.lazy import ArtifactStep, artifact_identity
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
@@ -23,9 +24,9 @@ from experiments.post_training.russell_rsi.interrupted_calibration import (
     interrupted_evaluation_stages,
     require_interruption,
 )
+from experiments.post_training.russell_rsi.launch import adopted
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     StudyBaseline,
-    adopted,
     evaluated_score,
     post_sft_stages,
     qualified_four_update_sft,
@@ -84,7 +85,7 @@ def require_four_pass_condition(config: dict) -> dict:
     if promotes(candidate, incumbent) or checkpoint_score(decision["selected"]) != incumbent:
         raise ValueError("Four-pass study requires a completed nonpromoted continuation")
     artifact = pinned_record(config, "candidate_artifact")
-    candidate_identity = f"{artifact['name']}@{artifact['version']}:{artifact['fingerprint']}"
+    candidate_identity = artifact_record_identity(artifact)
     if artifact["result_type"] != "marin.rl.skyrl.SkyRLRun" or candidate_identity != candidate.checkpoint_identity:
         raise ValueError("Teacher condition candidate differs from its completed artifact")
     if config["coding_panel_sha256"] != compact_json_sha256(pinned_record(source, "panel")):
