@@ -31,7 +31,10 @@ class TaskIsolation:
             The Kubernetes logship sidecar keeps it regardless.
         include_shared_caches: The node-shared download caches.
         include_service_account: On Kubernetes, the pod service account and its token.
-        allow_host_network: On Kubernetes, the cluster's host-network setting.
+        allow_host_network: Whether the task may share the node's network. On
+            Docker workers a task without it runs with no network at all, so
+            it cannot reach the VM network or the metadata server; on
+            Kubernetes it overrides the cluster's host-network setting.
     """
 
     include_cluster_env: bool

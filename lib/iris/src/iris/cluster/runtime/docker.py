@@ -43,6 +43,8 @@ from iris.cluster.runtime.profile import (
 )
 from iris.cluster.runtime.types import (
     ACCELERATOR_SHM_FALLBACK_BYTES,
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -706,8 +708,9 @@ exec {quoted_cmd}
             cmd.append("--add-host=host.docker.internal:host-gateway")
 
         # Network sysctl tuning for containers with own network namespace (#3066).
-        # Host-network containers inherit host settings from VM bootstrap.
-        if config.network_mode != "host":
+        # Host-network containers inherit host settings from VM bootstrap, and a
+        # container without a network has nothing to tune.
+        if config.network_mode not in (NETWORK_MODE_HOST, NETWORK_MODE_NONE):
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
 

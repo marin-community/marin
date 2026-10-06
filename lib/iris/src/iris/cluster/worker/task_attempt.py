@@ -38,6 +38,8 @@ from iris.cluster.runtime.env import (
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
 from iris.cluster.runtime.sandbox import task_isolation
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerHandle,
@@ -778,6 +780,7 @@ class TaskAttempt:
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
             mounts=list(isolation.mounts),
+            network_mode=NETWORK_MODE_HOST if isolation.allow_host_network else NETWORK_MODE_NONE,
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),

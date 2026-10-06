@@ -9,7 +9,7 @@ settings instead of exposing individual docker/k8s knobs. Six profiles exist
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
 | `CONTAINER_PROFILE_GVISOR` | `--container-profile CONTAINER_PROFILE_GVISOR` | Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). In-container root gets the docker default capability set (so `setuid`/`apt` work), while the intercepted guest kernel isolates the host. **Not elevated** — safe to grant without admin. Requires `runsc` installed on the worker/node; CPU-only (no GPU/TPU passthrough). |
-| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | `GVISOR` for model-controlled workloads. The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address; no node-shared caches; no Kubernetes service account token; no host network on Kubernetes (docker workers keep `--network host`). The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** See [Sandbox jobs](#sandbox-jobs). |
+| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | `GVISOR` for model-controlled workloads. The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address; no node-shared caches; no Kubernetes service account token; no host network, and no network at all on Docker workers. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** See [Sandbox jobs](#sandbox-jobs). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
@@ -51,7 +51,7 @@ whichever backend runs the task.
 | `RESTRICTED` | `--cap-drop ALL --security-opt no-new-privileges` (default seccomp applies; no `SYS_PTRACE`) |
 | `DEFAULT` | `--cap-drop ALL --cap-add SYS_PTRACE --security-opt no-new-privileges` |
 | `GVISOR` | `--runtime runsc` |
-| `SANDBOX` | `--runtime runsc`; the worker's `task_env` and controller address are withheld and cache bind mounts are omitted |
+| `SANDBOX` | `--runtime runsc --network none`; the worker's `task_env` and controller address are withheld and cache bind mounts are omitted |
 | `DOCKER_ACCESS` | DEFAULT **+** `-v /var/run/docker.sock:/var/run/docker.sock` |
 | `PRIVILEGED` | `--privileged --cap-add SYS_PTRACE` |
 
@@ -110,17 +110,23 @@ keeps its own controller address. The job cannot carry a workspace bundle, and
 the client rejects `extras`, `pip_packages` and `sync_packages`; setup scripts
 run verbatim and default to none.
 
-The profile does not isolate the task's network, so it is not sufficient on
-its own. Every production cluster lists the private address ranges in
-`auth.trusted_cidrs`, and the controller authenticates a caller from those
-ranges that presents no token as the anonymous admin (`CidrAuthenticator` in
-`rigging.server_auth`). A sandbox task's address falls in those ranges, so a
-task that connects to the controller directly can submit jobs with any
-container profile, including the elevated ones, and leave the sandbox.
-`ExecInContainer` has no owner check, so the same caller can run commands in
-any task on the cluster. Withholding the controller address does not stop
-this: the address is stable, and on Kubernetes the log sidecar holds it in the
-pod's shared network namespace.
+On Docker workers a sandbox container runs with no network (`--network none`).
+It has only loopback, so it cannot reach the VM network, other cluster
+services or the cloud metadata server, and setup scripts that download
+packages fail. Exec and file transfer go through `docker exec` and keep
+working.
+
+On Kubernetes the pod drops host networking but keeps the pod network, so
+there the profile is not sufficient on its own. Every production cluster lists
+the private address ranges in `auth.trusted_cidrs`, and the controller
+authenticates a caller from those ranges that presents no token as the
+anonymous admin (`CidrAuthenticator` in `rigging.server_auth`). A sandbox
+pod's address falls in those ranges, so a task that connects to the controller
+directly can submit jobs with any container profile, including the elevated
+ones, and leave the sandbox. `ExecInContainer` has no owner check, so the same
+caller can run commands in any task on the cluster. Withholding the controller
+address does not stop this: the address is stable, and the log sidecar holds
+it in the pod's shared network namespace.
 
 ## See also
 

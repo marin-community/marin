@@ -21,6 +21,8 @@ from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -838,6 +840,24 @@ def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_sto
     assert "MARIN_PREFIX" not in container_config.env
     assert "IRIS_CONTROLLER_ADDRESS" not in container_config.env
     assert not [m for m in container_config.mounts if m.kind is MountKind.CACHE]
+
+
+@pytest.mark.parametrize(
+    "profile, network_mode",
+    [
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, NETWORK_MODE_NONE),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, NETWORK_MODE_HOST),
+    ],
+)
+def test_only_sandbox_container_runs_without_host_network(mock_worker, mock_runtime, profile, network_mode):
+    """A SANDBOX task on a Docker worker gets no network, so it cannot reach the VM or metadata server."""
+    request = create_run_task_request()
+    request.container_profile = profile
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
