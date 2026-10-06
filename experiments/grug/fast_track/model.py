@@ -951,12 +951,15 @@ class GrugModelConfig:
     layer of the softmax tail stack, ``latent_out_full_layers``) write ``hidden_dim + W``: the first ``hidden_dim``
     go to the residual stream as usual, the last W skip it and, RMS-normed (``lm_head_extra_norm``), are
     concatenated to the final-normed stream before the lm_head (``output_proj`` is ``[hidden_dim + W, V]``)."""
+    lm_head_extra_source: str = "routed"
+    """Which part of the final MLP writes the ``lm_head_extra_dim`` slice: ``routed`` (the routed experts, which
+    widens their write and its all-to-all return) or ``shared`` (the shared expert only: no dispatch cost)."""
     final_write_extra: int = 0
+    """Internal: set on the final layer's config by ``lm_head_extra_dim``."""
     lm_head_prototypes: int = 1
     """K > 1: each vocabulary token has K lm_head vectors (``output_proj`` is ``[D, K V]``, token v's k-th at column
     ``k V + v``) and ``p(v) ∝ sum_k exp(logit_{v,k})``: a softmax over K V sub-tokens summed per token, which
     lifts the rank-D softmax bottleneck. Training and evals use it; ``logits`` returns the per-token logsumexp."""
-    """Internal: set on the final layer's config by ``lm_head_extra_dim``."""
     expert_private_dim: int = 0
     """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
     input, ``g = expert mod expert_private_groups`` (one ``[D, r]`` projection per group), appended to the expert's
@@ -1864,6 +1867,8 @@ class GrugModelConfig:
             or self.lm_head_unigram_bias
         ):
             raise ValueError("lm_head_prototypes needs no MTP, aux LM layer, output bigram prior or lm_head bias")
+        if self.lm_head_extra_source not in ("routed", "shared"):
+            raise ValueError(f"lm_head_extra_source must be routed or shared, got {self.lm_head_extra_source!r}")
         if self.lm_head_extra_dim and (
             not self.attn_res
             or self.num_layers - 1 not in self.latent_out_full_layers
@@ -2039,10 +2044,15 @@ class GrugModelConfig:
         return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim - self.expert_private_dim
 
     @property
+    def routed_write_extra(self) -> int:
+        """The lm_head-only slice the routed experts write (``final_write_extra`` with the routed source)."""
+        return self.final_write_extra if self.lm_head_extra_source == "routed" else 0
+
+    @property
     def has_latent_up(self) -> bool:
         """The MoE maps the experts' output to ``hidden_dim`` with ``w_latent_up``."""
         if self.latent_out_dim is not None:
-            return self.latent_out_dim != self.hidden_dim + self.final_write_extra
+            return self.latent_out_dim != self.hidden_dim + self.routed_write_extra
         return self.latent_dim is not None and not self.latent_write_select
 
     @property
@@ -4688,7 +4698,7 @@ class MoEMLP(eqx.Module):
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
-        if self.cfg.final_write_extra:
+        if self.cfg.routed_write_extra:
             # The lm_head-only slice: it never enters the residual stream.
             hidden_dim = self.cfg.hidden_dim
             router_stats[_LM_HEAD_EXTRA] = rearrange(routed_flat[:, hidden_dim:], "(b s) d -> b s d", b=b, s=s)
@@ -4874,6 +4884,11 @@ def moe_and_shared_fused(
         mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
     )
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
+    if mlp.cfg.final_write_extra and mlp.cfg.lm_head_extra_source == "shared":
+        # The shared expert's lm_head-only slice never enters the residual stream.
+        hidden_dim = mlp.cfg.hidden_dim
+        stats = {**stats, _LM_HEAD_EXTRA: shared_out[..., hidden_dim:]}
+        shared_out = shared_out[..., :hidden_dim]
     if shadow is not None or mlp.cfg.moe_compress != MoeCompress.NONE:
         shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
         # The transfer and gap terms read the shared expert on a stop-gradient input so they move only it.
@@ -5373,6 +5388,11 @@ class Block(eqx.Module):
                 )
                 if cfg.shared_ungated_relu2:
                     shared = tuple(eqx.tree_at(lambda m: m.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
+                if cfg.final_write_extra and cfg.lm_head_extra_source == "shared":
+                    extra_key = random.fold_in(shared_key, _LM_HEAD_EXTRA_SALT)
+                    shared = tuple(
+                        _widen_shared_down(e, cfg, random.fold_in(extra_key, i)) for i, e in enumerate(shared)
+                    )
         shadow = None
         if cfg.moe_shadow_width:
             shadow = DenseMLP.init(
@@ -8873,9 +8893,25 @@ def _tail_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
     return cfg.latent_out_full_layers or cfg.latent_free_layers or cfg.wide_expert_layers or cfg.topk_layers
 
 
+_LM_HEAD_EXTRA_SALT = 4419
+
+
+def _widen_shared_down(expert: "DenseMLP", cfg: GrugModelConfig, key: PRNGKeyArray) -> "DenseMLP":
+    """Append ``final_write_extra`` lm_head-only output columns to a shared expert's ``w_down``."""
+    spec = _partition_spec_of(expert.w_down)
+    extra = _init_weight(key, (expert.w_down.shape[0], cfg.final_write_extra), cfg.initializer_std)
+    extra = reshard(extra.astype(expert.w_down.dtype), spec)
+    w_down = jnp.concatenate([expert.w_down, extra], axis=-1)
+    return eqx.tree_at(lambda m: m.w_down, expert, reshard(w_down, spec))
+
+
 def _final_extra_config(tail_cfg: GrugModelConfig, extra: int) -> GrugModelConfig:
-    """The final layer's config under ``lm_head_extra_dim``: its experts also write the lm_head-only slice."""
-    return dataclasses.replace(tail_cfg, latent_out_dim=tail_cfg.hidden_dim + extra, final_write_extra=extra)
+    """The final layer's config under ``lm_head_extra_dim``: its routed or shared experts also write the
+    lm_head-only slice."""
+    routed = tail_cfg.lm_head_extra_source == "routed"
+    return dataclasses.replace(
+        tail_cfg, latent_out_dim=tail_cfg.hidden_dim + (extra if routed else 0), final_write_extra=extra
+    )
 
 
 def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:

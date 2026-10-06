@@ -28,3 +28,26 @@ def test_final_layer_writes_a_head_only_slice_read_by_a_wider_lm_head():
     extra_cols = grads.stacked_blocks_tail.stacked.mlp.expert_mlp.w_down[..., cfg.hidden_dim :]
     assert float(jnp.abs(extra_cols).max()) > 0
     assert float(jnp.abs(grads.lm_head_extra_norm.weight).max()) > 0
+
+
+def test_shared_source_widens_only_the_shared_expert():
+    mesh, model = t._model(
+        ngram_stat_rows=0,
+        mla=True,
+        num_layers=4,
+        latent_out_full_layers=(3,),
+        lm_head_extra_dim=16,
+        lm_head_extra_source="shared",
+    )
+    cfg = model.config
+    tail = model.stacked_blocks_tail.stacked
+    assert tail.mlp.expert_mlp.w_down.shape[-1] == cfg.hidden_dim
+    assert tail.shared[0].w_down.shape[-1] == cfg.hidden_dim + 16
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        loss, grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))
+        )(model)
+    assert np.isfinite(float(loss))
+    extra_cols = grads.stacked_blocks_tail.stacked.shared[0].w_down[..., cfg.hidden_dim :]
+    assert float(jnp.abs(extra_cols).max()) > 0
