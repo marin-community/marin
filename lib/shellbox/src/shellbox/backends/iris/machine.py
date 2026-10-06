@@ -32,6 +32,12 @@ DEFAULT_SCHEDULING_TIMEOUT = 600
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 
+# ALLOW reaches public internet addresses only; neither mode reaches the cluster.
+SANDBOX_EGRESS = {
+    NetworkPolicy.ALLOW: job_pb2.SANDBOX_EGRESS_INTERNET,
+    NetworkPolicy.DENY: job_pb2.SANDBOX_EGRESS_NONE,
+}
+
 
 class IrisMachine:
     """One Iris task container; file transfer uses bounded base64 exec calls."""
@@ -211,8 +217,6 @@ class IrisMachineFactory:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
-        if spec.network is NetworkPolicy.DENY:
-            raise UnsupportedMachineSpec("Iris does not provide per-job network denial; select NetworkPolicy.ALLOW")
         return await asyncio.to_thread(self._create_sync, spec)
 
     def _create_sync(self, spec: MachineSpec) -> IrisMachine:
@@ -240,6 +244,7 @@ class IrisMachineFactory:
                 ),
                 task_image=spec.source.reference,
                 container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
+                sandbox_egress=SANDBOX_EGRESS[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
                 timeout=Duration.from_seconds(self.job_ttl),
                 max_retries_failure=0,
