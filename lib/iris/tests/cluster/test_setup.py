@@ -3,9 +3,12 @@
 
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
+import fcntl
 import os
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -13,6 +16,8 @@ from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_comm
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
 from iris.rpc import job_pb2
+
+SETUP_TEST_LOCK = Path(tempfile.gettempdir()) / "iris-setup-test.lock"
 
 
 @pytest.mark.parametrize(
@@ -245,13 +250,16 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
             *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
         ]
     )
-    completed = subprocess.run(
-        ["bash", "-c", setup],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # Container setup uses shared /tmp paths. Serialize host-side executions during parallel tests.
+    with SETUP_TEST_LOCK.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        completed = subprocess.run(
+            ["bash", "-c", setup],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     assert completed.returncode == expected_status
     if expected_status == 0:
