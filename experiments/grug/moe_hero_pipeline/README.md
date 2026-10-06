@@ -4,14 +4,27 @@
 latent/shared experts, SConv, absolute local/global attention positions, and QB
 router updates. Standard 1F1B is the default. Each process initializes only its
 own stage. CPU tests compare sequential-stage hidden states, routing statistics,
-losses, and gradients against the unsplit model.
+losses, and gradients against the unsplit model. Run them with
+`uv run pytest experiments/grug/moe_hero_pipeline/test_pipeline.py`. The
+checkpoint continuation test compares two AdamW updates after restore with an
+uninterrupted run, including a changing learning rate and a changed stage split.
 
-The synthetic runner does not restore or save checkpoints. `--main-hero-recipe`
-uses FP32 parameters, BF16 compute and compute-scaled MuonH; it requires
-`--optimizer muonh` and an explicit `--processes-per-task` count.
-The legacy AdamW default is a bring-up configuration. The historical long-context
-recipe explicitly selects BF16 MuonH and both host offloads. Production
-continuation and long-run training stability remain unvalidated.
+The synthetic runner can save and resume complete pipeline checkpoints.
+`--main-hero-recipe` uses FP32 parameters, BF16 compute and compute-scaled
+MuonH; it requires `--optimizer muonh` and an explicit `--processes-per-task`
+count. The legacy AdamW default is a bring-up configuration. The historical
+long-context recipe explicitly selects BF16 MuonH and both host offloads.
+Production continuation and long-run training stability remain unvalidated.
+
+Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
+`--checkpoint-every-steps` to save at that interval and on the final step. Keep
+`--steps` at the same total update count when restarting: it sets the MuonH
+schedule as well as the stopping point. The checkpoint contains model weights,
+optimizer state, and pending QB router updates under global layer paths, so a
+run may resume with a different pipeline layer split. The checkpoint root must
+be shared by every worker. A checkpoint written by the standard Hero FSDP
+trainer has a different state tree, including optional master and EMA weights;
+loading that format into this pipeline has not been implemented or validated.
 
 The current optimizer normalizes each layer's routed expert bank together, matching
 the stacked EP model. Set `--expert-normalization per_expert` for a comparison;

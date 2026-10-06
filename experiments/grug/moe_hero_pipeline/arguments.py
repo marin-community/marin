@@ -53,6 +53,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--stop-after-step", type=int, help="End a bounded run before the configured total steps")
+    parser.add_argument("--checkpoint-root", help="Restore from and save under this checkpoint directory")
+    parser.add_argument("--checkpoint-every-steps", type=int, default=0)
     parser.add_argument(
         "--synchronize-devices-after-step",
         action="store_true",
@@ -95,6 +97,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("steps and expert-axis-size must be positive")
     if args.stop_after_step is not None and not 1 <= args.stop_after_step <= args.steps:
         parser.error("stop-after-step must be between 1 and steps")
+
+    if args.checkpoint_every_steps < 0 or (args.checkpoint_every_steps and not args.checkpoint_root):
+        parser.error("checkpoint-every-steps must be nonnegative and requires checkpoint-root when set")
 
     if (args.schedule == AutomaticPipelineSchedule.DUALPIPE_V) != (args.physical_stages is not None):
         raise ValueError("DualPipeV requires physical-stages; other schedules use one logical stage per physical stage")

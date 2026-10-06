@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded synthetic pipeline trial with main-recipe precision and optimizer controls."""
+"""Bounded synthetic Hero pipeline trial with recipe controls and checkpoint resume."""
 
 import argparse
 import dataclasses
@@ -38,6 +38,7 @@ from experiments.grug.moe_hero_ep.train import (
     verify_ragged_pjrt,
 )
 from experiments.grug.moe_hero_pipeline.arguments import parse_args
+from experiments.grug.moe_hero_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_hero_pipeline.pipeline import (
     _HOST_MEMORY_KIND,
     BATCH_AXES,
@@ -321,6 +322,13 @@ def main() -> None:
     peak_flops = device_flops_for_jax_device(jax.local_devices()[0].device_kind)
     assert peak_flops is not None
     optimizer, optimizer_contract = _optimizer_and_contract(args, model_config, batch_size)
+    checkpoint_contract = {
+        "model": dataclasses.asdict(model_config),
+        "mp_policy": mp_policy,
+        "optimizer": optimizer_contract,
+        "training_steps": args.steps,
+        "qb_bias_mode": args.qb_bias_mode,
+    }
     _log(
         "pipeline_init",
         model=dataclasses.asdict(model_config),
@@ -387,6 +395,14 @@ def main() -> None:
     batches = prepared.batches
     denominator = prepared.loss_denominator
     del prepared
+    start_step = 0
+    if args.checkpoint_root:
+        state, start_step = restore_checkpoint(
+            args.checkpoint_root, state, compiled_step.in_shardings[0][0], contract=checkpoint_contract
+        )
+        if args.offload_opt_state:
+            assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
+        _log("pipeline_checkpoint_restored", step=start_step, checkpoint_root=args.checkpoint_root)
     # The compiled function takes state as an argument; no real arrays are
     # donated to disposable warmup. Delete old aliases before parking buffers.
     del step
@@ -406,7 +422,7 @@ def main() -> None:
     _initialize_pipeline_communicators(mpmd_mesh, placements)
     _log("pipeline_communicators_initialized", elapsed_seconds=time.monotonic() - started)
     last_step = args.stop_after_step or args.steps
-    for completed_steps in range(1, last_step + 1):
+    for completed_steps in range(start_step + 1, last_step + 1):
         started = time.monotonic()
         state, metrics = compiled_step(state, batches, denominator)
         jax.block_until_ready((state, metrics))
@@ -429,6 +445,10 @@ def main() -> None:
             wandb.log(
                 {TRAIN_LOSS_KEY: loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps
             )
+        if args.checkpoint_root and args.checkpoint_every_steps:
+            if completed_steps % args.checkpoint_every_steps == 0 or completed_steps == last_step:
+                path = save_checkpoint(args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract)
+                _log("pipeline_checkpoint_saved", step=completed_steps, path=path)
     barrier_sync_named("hero_pipeline_smoke_complete", timeout=_MULTIHOST_TIMEOUT)
     _log("pipeline_complete", steps=last_step, full_hero=full_hero)
     if args.run_id and jax.process_index() == 0:
