@@ -4,17 +4,21 @@
 import hashlib
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 from marin.external_dependencies import MARIN_SKYRL
 
-from experiments.post_training.russell_rsi.dose_qualification import qualified_dose_source
+from experiments.post_training.russell_rsi.dose_qualification import QUALIFIED_RUNTIME_COMMIT, qualified_dose_source
+
+QUALIFIED_RUNTIME = replace(MARIN_SKYRL, commit=QUALIFIED_RUNTIME_COMMIT)
 
 
 @pytest.fixture
 def qualification(tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.post_training.russell_rsi.dose_qualification.MARIN_SKYRL", QUALIFIED_RUNTIME)
     files = {}
     roots = {role: tmp_path / role for role in ("rl", "optimizer", "reload")}
     for root in roots.values():
@@ -26,7 +30,7 @@ def qualification(tmp_path, monkeypatch):
     model = {"identity": "parent-pin", "tokenizer_uri": "tokenizer", "tokenizer_revision": "pin"}
     requested = {
         "run": {"id": "source", "attempt_id": "attempt"},
-        "runtime": {"launcher_commit": MARIN_SKYRL.commit, "profile": "megatron"},
+        "runtime": {"launcher_commit": QUALIFIED_RUNTIME.commit, "profile": "megatron"},
         "artifacts": {
             "terminal_manifest_uri": str(roots["rl"] / "terminal.json"),
             "resolved_config_uri": str(roots["rl"] / "resolved.yaml"),
@@ -96,7 +100,7 @@ def qualification(tmp_path, monkeypatch):
                 "state": "succeeded",
                 "iris_job_state": "succeeded",
                 "failure": None,
-                "launcher_commit": MARIN_SKYRL.commit,
+                "launcher_commit": QUALIFIED_RUNTIME.commit,
                 "runtime_profile": "megatron",
                 "run_id": "source",
                 "attempt_id": "attempt",
@@ -195,4 +199,11 @@ def test_resume_revalidates_source_hashes(qualification):
     qualified_dose_source(evidence)
     paths["resolved"].write_text("{}")
     with pytest.raises(ValueError):
+        qualified_dose_source(evidence)
+
+
+def test_historical_source_rejects_incompatible_current_runtime(qualification, monkeypatch):
+    evidence, _, _, _ = qualification
+    monkeypatch.setattr("experiments.post_training.russell_rsi.dose_qualification.MARIN_SKYRL", MARIN_SKYRL)
+    with pytest.raises(ValueError, match="declared runtime commit"):
         qualified_dose_source(evidence)
