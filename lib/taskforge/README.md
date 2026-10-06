@@ -73,7 +73,11 @@ Taskforge reaches a sandbox only through a `Machine` that the engine or a builde
 
 The agent loop is Taskforge's own: `llm.agent.run_agent` over `GlmClient`, with the shell tool
 running through `Machine.run` and Parallel search and extract from `llm.web`. Builder agents run
-on it. Solver and control rollouts run on RolloutEngine with the same `GlmClient`.
+on it. Solver and control rollouts run on RolloutEngine with the same `GlmClient`. `web_fetch`
+returns extracted page content that may be a cached copy, which is fine for most reference lookups.
+Its description tells the agent that when it needs current data from a fast-moving source, such as
+a PyPI release page, a direct network call from the sandbox shell (for example `curl`) is the better
+path; the choice is the agent's.
 
 Inference defaults are the model maximum. `max_tokens` starts at the model's output limit
 (131,072 for GLM-5.3) or the remaining context. On `finish_reason == "length"` the client keeps
