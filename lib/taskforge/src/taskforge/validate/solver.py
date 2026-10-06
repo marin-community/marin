@@ -17,14 +17,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
-from rigging.timing import ExponentialBackoff
-
 from taskforge.build.run import TaskDraft
 from taskforge.ledger.records import Ledger
 from taskforge.validate.attempts import trial_files
 from taskforge.validate.controls import ControlPlan
 from taskforge.validate.outcome import Outcome, TrialKind
-from taskforge.validate.trials import Deadlines, EngineSettings, RolloutModel, TrialPlan, run_trial
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, RolloutModel, TrialPlan, run_trial
 
 
 class TrialPolicy(Protocol):
@@ -43,7 +41,7 @@ class TrialPolicy(Protocol):
     def token_contract_retries(self) -> int: ...
 
     @property
-    def retry_backoff(self) -> ExponentialBackoff: ...
+    def retry_backoff(self) -> RetryBackoff: ...
 
 
 @dataclass(frozen=True)
@@ -64,7 +62,7 @@ class ValidationSite:
             deadlines=policy.deadlines,
             max_retries=policy.max_retries,
             token_contract_retries=policy.token_contract_retries,
-            retry_backoff=policy.retry_backoff,
+            retry_backoff=policy.retry_backoff.schedule(),
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,
             first_attempt=first_attempt,
@@ -76,7 +74,7 @@ class ValidationSite:
             round=self.round,
             deadlines=policy.deadlines,
             max_retries=policy.max_retries,
-            retry_backoff=policy.retry_backoff,
+            retry_backoff=policy.retry_backoff.schedule(),
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,
         )

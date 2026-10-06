@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -64,7 +63,7 @@ from taskforge.validate.adversary import AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.solver import ValidationSite
-from taskforge.validate.trials import Deadlines
+from taskforge.validate.trials import Deadlines, RetryBackoff
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 MATH_ANSWER = "395"
@@ -465,7 +464,7 @@ def validation_policy(
         deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
         max_retries=max_retries,
         token_contract_retries=token_contract_retries,
-        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+        retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1),
     )
 
 
