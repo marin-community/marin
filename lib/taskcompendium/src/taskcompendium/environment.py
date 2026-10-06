@@ -232,6 +232,20 @@ class FileReward(BaseModel):
     pass_above: float | None = Field(default=None, allow_inf_nan=False)
 
 
+class VerdictReward(BaseModel):
+    """A verifyit ``verdict.json`` with a status, a reward in [0, 1], and a JSON detail object."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["verdict"] = "verdict"
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def absolute_path(cls, value: str) -> str:
+        return EnvironmentFile.absolute_path(value)
+
+
 class ShellVerifierSpec(BaseModel):
     """A verifier command and its reward source.
 
@@ -244,7 +258,9 @@ class ShellVerifierSpec(BaseModel):
     timeout: float = Field(gt=0)
     env: dict[str, str] = Field(default_factory=dict)
     user: str | None = None
-    reward: Annotated[StdoutReward | FileReward | ExitCodeReward, Field(discriminator="kind")] = StdoutReward()
+    reward: Annotated[StdoutReward | FileReward | ExitCodeReward | VerdictReward, Field(discriminator="kind")] = (
+        StdoutReward()
+    )
     collect: tuple[EnvironmentCommand, ...] = ()
     artifacts: tuple[VerifierArtifact, ...] = ()
 

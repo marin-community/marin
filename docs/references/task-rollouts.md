@@ -141,6 +141,18 @@ A command timeout has no grade. This contract supports Harbor reward files with
 `ExitCodeReward` gives reward `1` for exit code zero and reward `0` for a nonzero
 exit code. A command timeout has no grade.
 
+`VerdictReward` reads the `verdict.json` file that `verifyit.grade.write_reward`
+writes: a reward in [0, 1], a status, and a JSON `detail` object. Status `scored`
+gives a `graded` result with that reward. Status `invalid_task` gives an
+`invalid_task` result and status `infra_error` gives an `infra_error` result;
+neither has a reward, and `grade.error` carries the detail's `error` text.
+Callers retry only `infra_error`; an `invalid_task` task needs repair. The
+verdict detail becomes `grade.detail`, so a caller can check partial credit, for
+example with `grade.detail["criteria"]`, while the command output stays in
+`grade.diagnostics`. A missing, empty, or malformed verdict is a verifier failure
+with the matching `GradeResult.failure`. As with reward files, the engine removes
+an existing verdict file before grading.
+
 The optional `VerifierSpec.environment` defines a fresh grading machine.
 The engine runs `collect` commands in the agent machine, then copies the declared
 `artifacts` to that grading machine. Each artifact identifies its source, target,

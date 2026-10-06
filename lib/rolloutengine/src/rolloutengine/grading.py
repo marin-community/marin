@@ -27,6 +27,7 @@ from taskcompendium.environment import (
     MissingArtifactPolicy,
     RewardFileFormat,
     ShellVerifierSpec,
+    VerdictReward,
     VerifierArtifact,
 )
 from taskcompendium.execution import TaskExecution
@@ -35,11 +36,13 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import SubmissionConvention
+from verifyit.grade import Status
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
 
 MISSING_FILE_EXIT = 44
+VERDICT_KEYS = frozenset({"reward", "status", "detail"})
 
 
 def _validate_task(task: TaskSpec, execution: TaskExecution) -> None:
@@ -180,14 +183,22 @@ async def _download_artifact(
     return True
 
 
+def _reward_paths(verifier: ShellVerifierSpec) -> tuple[str, ...]:
+    if isinstance(verifier.reward, FileReward):
+        return tuple(file.path for file in verifier.reward.files)
+    if isinstance(verifier.reward, VerdictReward):
+        return (verifier.reward.path,)
+    return ()
+
+
 async def _shell_grade(
     verifier: ShellVerifierSpec,
     messages: tuple[dict[str, Any], ...],
     machine: Machine,
     files: tuple[EnvironmentFile, ...],
 ) -> GradeResult:
-    if isinstance(verifier.reward, FileReward):
-        paths = tuple(file.path for file in verifier.reward.files)
+    paths = _reward_paths(verifier)
+    if paths:
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
         for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
             prepared = await machine.run(Command(argv=argv, timeout=verifier.timeout, user=verifier.user))
@@ -225,6 +236,8 @@ async def _shell_grade(
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if isinstance(verifier.reward, FileReward):
         return await _file_grade(machine, verifier.reward, verifier.timeout, diagnostics, verifier.user)
+    if isinstance(verifier.reward, VerdictReward):
+        return await _verdict_file_grade(machine, verifier.reward, verifier.timeout, diagnostics, verifier.user)
     if result.exit_code != 0 or result.stdout_truncated:
         return GradeResult(
             Outcome.INFRA_ERROR,
@@ -254,48 +267,112 @@ async def _shell_grade(
     return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
 
 
+async def _reward_file_content(
+    machine: Machine, path: str, timeout: float, diagnostics: dict[str, Any], user: str | None
+) -> bytes | GradeResult | None:
+    """Return a reward file's content, None when it is missing, or the grade for an unreadable or empty file."""
+    result = await machine.run(
+        Command(
+            argv=(
+                "sh",
+                "-c",
+                f'if [ -f "$1" ]; then cat "$1"; else exit {MISSING_FILE_EXIT}; fi',
+                "reward-file",
+                path,
+            ),
+            timeout=timeout,
+            user=user,
+        )
+    )
+    if result.exit_code == MISSING_FILE_EXIT:
+        return None
+    if result.exit_code != 0 or result.stdout_truncated:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Cannot read reward file: {path}",
+            diagnostics=diagnostics,
+            failure=GradingFailure.EXECUTION,
+        )
+    if not result.stdout.strip():
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Empty reward file: {path}",
+            diagnostics=diagnostics,
+            failure=GradingFailure.EMPTY_REWARD,
+        )
+    return result.stdout
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"Non-JSON numeric constant: {value}")
+
+
+def _parse_verdict(content: bytes) -> tuple[Status, float, dict[str, Any]]:
+    """Read a verdict written by ``verifyit.grade.write_reward`` and apply its reward contract."""
+    verdict = json.loads(content, parse_constant=_reject_json_constant)
+    if not isinstance(verdict, dict) or set(verdict) != VERDICT_KEYS:
+        raise ValueError("A verdict must be an object with exactly reward, status, and detail")
+    try:
+        status = Status(verdict["status"])
+    except ValueError as error:
+        raise ValueError(f"Unknown verdict status: {verdict['status']!r}") from error
+    reward = verdict["reward"]
+    if isinstance(reward, bool) or not isinstance(reward, int | float) or not 0.0 <= reward <= 1.0:
+        raise ValueError("A verdict reward must be a finite number in [0, 1]")
+    if status != Status.SCORED and reward != 0.0:
+        raise ValueError("An unscored verdict must have zero reward")
+    detail = verdict["detail"]
+    if not isinstance(detail, dict):
+        raise ValueError("A verdict detail must be a JSON object")
+    return status, float(reward), detail
+
+
+async def _verdict_file_grade(
+    machine: Machine, specification: VerdictReward, timeout: float, diagnostics: dict[str, Any], user: str | None
+) -> GradeResult:
+    """Grade from a verifyit verdict: its status selects the outcome and its detail becomes the grade detail."""
+    content = await _reward_file_content(machine, specification.path, timeout, diagnostics, user)
+    if content is None:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Grader did not write a verdict file: {specification.path}",
+            diagnostics=diagnostics,
+            failure=GradingFailure.MISSING_REWARD,
+        )
+    if isinstance(content, GradeResult):
+        return content
+    try:
+        status, reward, detail = _parse_verdict(content)
+    except (UnicodeError, ValueError) as error:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Invalid verdict file {specification.path}: {error}",
+            diagnostics=diagnostics,
+            failure=GradingFailure.INVALID_REWARD,
+        )
+    if status == Status.SCORED:
+        return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics, detail=detail)
+    outcome = Outcome.INVALID_TASK if status == Status.INVALID_TASK else Outcome.INFRA_ERROR
+    error = detail.get("error")
+    return GradeResult(outcome, None, error if isinstance(error, str) else None, diagnostics=diagnostics, detail=detail)
+
+
 async def _file_grade(
     machine: Machine, specification: FileReward, timeout: float, diagnostics: dict[str, Any], user: str | None
 ) -> GradeResult:
     for file in specification.files:
-        result = await machine.run(
-            Command(
-                argv=(
-                    "sh",
-                    "-c",
-                    f'if [ -f "$1" ]; then cat "$1"; else exit {MISSING_FILE_EXIT}; fi',
-                    "reward-file",
-                    file.path,
-                ),
-                timeout=timeout,
-                user=user,
-            )
-        )
-        if result.exit_code == MISSING_FILE_EXIT:
+        content = await _reward_file_content(machine, file.path, timeout, diagnostics, user)
+        if content is None:
             continue
-        if result.exit_code != 0 or result.stdout_truncated:
-            return GradeResult(
-                Outcome.INFRA_ERROR,
-                None,
-                f"Cannot read reward file: {file.path}",
-                diagnostics=diagnostics,
-                failure=GradingFailure.EXECUTION,
-            )
-        if not result.stdout.strip():
-            return GradeResult(
-                Outcome.INFRA_ERROR,
-                None,
-                f"Empty reward file: {file.path}",
-                diagnostics=diagnostics,
-                failure=GradingFailure.EMPTY_REWARD,
-            )
+        if isinstance(content, GradeResult):
+            return content
         try:
-            values = json.loads(result.stdout) if file.format == RewardFileFormat.JSON else None
-            value = (
-                values[file.key]
-                if isinstance(values, dict)
-                else values if values is not None else result.stdout.decode()
-            )
+            values = json.loads(content) if file.format == RewardFileFormat.JSON else None
+            value = values[file.key] if isinstance(values, dict) else values if values is not None else content.decode()
             if isinstance(value, bool):
                 raise ValueError("A boolean is not a numeric reward")
             reward = float(value)
@@ -340,9 +417,7 @@ async def _remove_stage_grader(stage: TaskStage, machine: Machine) -> None:
     verifier = ShellVerifierSpec.model_validate_json(stage.verifier.parameters_json)
     if stage.verifier.environment is not None:
         return
-    paths = [file.path for file in stage.verifier.files]
-    if isinstance(verifier.reward, FileReward):
-        paths.extend(file.path for file in verifier.reward.files)
+    paths = [*(file.path for file in stage.verifier.files), *_reward_paths(verifier)]
     if not paths:
         return
     result = await machine.run(Command(("rm", "-f", *paths), user="0", timeout=verifier.timeout))
