@@ -311,10 +311,11 @@ class RoutingWeightGradient(StrEnum):
     # <dout, y> for each assignment, read from the expert outputs, which the backward keeps.
     EXACT = auto()
     # <h, dh> / w for each expert row, from the expert MLP's own backward, where dh is the cotangent
-    # of the activation h and the row's output cotangent is w * dout. The backward needs neither the
-    # expert outputs nor their return transport, but the gradient is zero or inexact wherever
-    # w * dout rounds to zero in the cotangent dtype: at w = 0, and in float16 also for normal weights
-    # times small output cotangents.
+    # of the activation h and the row's output cotangent is w * dout. The backward needs no return
+    # transport and, with the QuACK expert MLP, no expert outputs; the portable ragged_dot expert MLP
+    # keeps its outputs for the row dot. The gradient is zero or inexact wherever w * dout rounds to
+    # zero in the cotangent dtype: at w = 0, and in float16 also for normal weights times small output
+    # cotangents.
     EXPERT_SIDE = auto()
 
 
@@ -503,10 +504,12 @@ def _routed_experts(
     keeps the returned expert outputs ``y`` for the backward and differentiates the combine. With
     EXPERT_SIDE, each output row is ``y = h @ W2`` and its cotangent there is ``dy = w * dout``, so
     ``<dout, y> = <h, dh> / w`` with ``dh = dy @ W2^T``, which the expert MLP backward computes
-    anyway. That backward reads neither ``y``, nor the return transport, nor the combined output,
-    and when the combined output is saved for the backward, a recompute for the backward runs only
-    the dispatch and the gate/up projection. But where ``w * dout`` rounds to zero in the cotangent
-    dtype, the row's cotangent carries no information, and the weight gradient is zero or inexact.
+    anyway. That backward reads neither the return transport nor the combined output. With the QuACK
+    expert MLP it does not read ``y`` either, and when the combined output is saved for the backward,
+    a recompute for the backward runs only the dispatch and the gate/up projection; the portable
+    ``ragged_dot`` expert MLP keeps ``y`` among its residuals for the row dot. But where
+    ``w * dout`` rounds to zero in the cotangent dtype, the row's cotangent carries no information,
+    and the weight gradient is zero or inexact.
     """
     out, _residuals, _returned = _routed_experts_forward(
         sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
