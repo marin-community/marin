@@ -672,11 +672,22 @@ enum ContainerProfile {
   // GVISOR for model-controlled workloads: the task receives only the job's own
   // env_vars and Iris task identity. No cluster task_env or injected secrets, no
   // controller address, no shared node cache mounts, and no Kubernetes service
-  // account token. Docker workers run it with --network none. On Kubernetes the
-  // pod gets no host network, and the iris-sandbox NetworkPolicy limits its
-  // egress to DNS and finelog. Exec and logs still work. The job must carry no
-  // workspace bundle. Not elevated.
+  // account token, and no host network. Its network egress is set by
+  // SandboxEgress. Exec and logs still work. The job must carry no workspace
+  // bundle. Not elevated.
   CONTAINER_PROFILE_SANDBOX = 6;
+}
+
+// Network egress of a CONTAINER_PROFILE_SANDBOX task. Every mode denies the
+// controller, workers, other pods and the cloud metadata server. Only valid
+// with the SANDBOX profile.
+enum SandboxEgress {
+  SANDBOX_EGRESS_UNSPECIFIED = 0;  // resolves to INTERNET
+  // No network. On Kubernetes, DNS and finelog only (for the log sidecar).
+  SANDBOX_EGRESS_NONE = 1;
+  // Public internet addresses only: private, carrier-grade NAT and link-local
+  // ranges are blocked. Kubernetes only; a Docker worker backend rejects it.
+  SANDBOX_EGRESS_INTERNET = 2;
 }
 
 // ============================================================================
@@ -727,4 +738,8 @@ message RunTaskRequest {
   // DEFAULT. Never set directly by a client — clients request a profile via
   // LaunchJobRequest.container_profile, which the controller authorizes.
   ContainerProfile container_profile = 15;
+
+  // Network egress for a SANDBOX task, resolved by the controller (never
+  // UNSPECIFIED for a sandbox). UNSPECIFIED for every other profile.
+  SandboxEgress sandbox_egress = 16;
 }

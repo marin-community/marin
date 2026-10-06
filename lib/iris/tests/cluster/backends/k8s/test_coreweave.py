@@ -1094,17 +1094,33 @@ def _apply_stub(k8s: InMemoryK8sService, kind: str, name: str, namespace: str = 
 # ============================================================================
 
 
-def _sandbox_policy_egress_peers(k8s: InMemoryK8sService) -> list[tuple[dict, list[dict]]]:
-    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, "iris-sandbox")
+def _sandbox_policy_egress(k8s: InMemoryK8sService, mode: str) -> list[dict]:
+    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, f"iris-sandbox-egress-{mode}")
     assert policy is not None
     spec = policy["spec"]
-    assert spec["podSelector"] == {"matchLabels": {"iris.sandbox": "true"}}
+    assert spec["podSelector"] == {"matchLabels": {"iris.sandbox-egress": mode}}
     assert set(spec["policyTypes"]) == {"Ingress", "Egress"}
     assert spec["ingress"] == []
-    return [(peer, rule["ports"]) for rule in spec["egress"] for peer in rule["to"]]
+    return spec["egress"]
 
 
-def test_start_controller_limits_sandbox_egress_to_dns_and_finelog(tmp_path):
+_DNS_RULE = {
+    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
+}
+_FINELOG_RULE = {
+    "to": [
+        {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "logs"}},
+            "podSelector": {"matchLabels": {"app": "finelog-test"}},
+        }
+    ],
+    "ports": [{"protocol": "TCP", "port": 10001}],
+}
+_PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+
+
+def _finelog_cluster_config(tmp_path, service_cidr: str = "") -> IrisClusterConfig:
     finelog_config = tmp_path / "finelog.yaml"
     finelog_config.write_text(
         "name: finelog-test\n"
@@ -1114,26 +1130,31 @@ def test_start_controller_limits_sandbox_egress_to_dns_and_finelog(tmp_path):
         "  k8s:\n"
         "    namespace: logs\n"
     )
-    provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     cluster_config.finelog.config = str(finelog_config)
+    cluster_config.kubernetes_provider.service_cidr = service_cidr
+    return cluster_config
+
+
+@pytest.mark.parametrize(
+    ("service_cidr", "blocked"),
+    [
+        pytest.param("10.16.0.0/16", _PRIVATE_RANGES, id="service-range-already-private"),
+        pytest.param("198.18.0.0/15", [*_PRIVATE_RANGES, "198.18.0.0/15"], id="service-range-public"),
+    ],
+)
+def test_start_controller_creates_one_sandbox_policy_per_egress_mode(tmp_path, service_cidr, blocked):
+    provider, k8s = _make_provider()
+    cluster_config = _finelog_cluster_config(tmp_path, service_cidr)
     _seed_prerequisites(k8s, cluster_config)
 
     provider.start_controller(cluster_config)
 
-    peers = _sandbox_policy_egress_peers(k8s)
-    assert peers == [
-        (
-            {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}},
-            [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
-        ),
-        (
-            {
-                "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "logs"}},
-                "podSelector": {"matchLabels": {"app": "finelog-test"}},
-            },
-            [{"protocol": "TCP", "port": 10001}],
-        ),
+    assert _sandbox_policy_egress(k8s, "none") == [_DNS_RULE, _FINELOG_RULE]
+    assert _sandbox_policy_egress(k8s, "internet") == [
+        _DNS_RULE,
+        _FINELOG_RULE,
+        {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
     ]
     provider.shutdown()
 
@@ -1145,8 +1166,5 @@ def test_sandbox_policy_without_external_finelog_allows_only_dns():
 
     provider.start_controller(cluster_config)
 
-    peers = _sandbox_policy_egress_peers(k8s)
-    assert [peer["namespaceSelector"]["matchLabels"] for peer, _ in peers] == [
-        {"kubernetes.io/metadata.name": "kube-system"}
-    ]
+    assert _sandbox_policy_egress(k8s, "none") == [_DNS_RULE]
     provider.shutdown()

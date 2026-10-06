@@ -36,7 +36,7 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
 )
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
-from iris.cluster.runtime.sandbox import task_isolation
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import (
     NETWORK_MODE_HOST,
     NETWORK_MODE_NONE,
@@ -144,6 +144,21 @@ class _TaskOutcome:
     state: TaskState
     error: str | None = None
     exit_code: int | None = None
+
+
+def docker_network_mode(network: TaskNetwork) -> str:
+    """The Docker network mode for a task's network.
+
+    A Docker worker cannot run INTERNET: a bridge container on a worker VM
+    reaches the VPC and the metadata server through the VM's routes, and the
+    worker container has no NET_ADMIN to filter them. The controller rejects
+    such jobs at submission; this refuses any that arrive anyway.
+    """
+    if network is TaskNetwork.CLUSTER:
+        return NETWORK_MODE_HOST
+    if network is TaskNetwork.NONE:
+        return NETWORK_MODE_NONE
+    raise ValueError("Sandbox egress internet is not supported on docker workers; request sandbox egress none")
 
 
 def build_iris_env(
@@ -736,7 +751,7 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
-        isolation = task_isolation(self.request.container_profile)
+        isolation = task_isolation(self.request.container_profile, self.request.sandbox_egress)
         iris_env = build_iris_env(
             self,
             self._worker_id,
@@ -780,7 +795,7 @@ class TaskAttempt:
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
             mounts=list(isolation.mounts),
-            network_mode=NETWORK_MODE_HOST if isolation.reach_cluster_network else NETWORK_MODE_NONE,
+            network_mode=docker_network_mode(isolation.network),
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),

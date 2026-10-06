@@ -39,6 +39,7 @@ class ClusterClient(Protocol):
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        sandbox_egress: job_pb2.SandboxEgress = job_pb2.SANDBOX_EGRESS_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName: ...
 

@@ -32,8 +32,8 @@ COREWEAVE_INTERRUPTABLE_TOLERATION: dict = {
     "effect": "NoExecute",
 }
 
-# Pods whose task may not reach cluster services carry this label. The
-# iris-sandbox NetworkPolicy, created at controller start, selects them and
-# allows egress only to cluster DNS and the finelog pods.
-SANDBOX_POD_LABEL = "iris.sandbox"
-SANDBOX_NETWORK_POLICY_NAME = "iris-sandbox"
+# A sandbox pod carries this label with its TaskNetwork value ("none" or
+# "internet"). Controller start creates one NetworkPolicy per value, named
+# SANDBOX_NETWORK_POLICY_PREFIX + value, that selects those pods.
+SANDBOX_EGRESS_LABEL = "iris.sandbox-egress"
+SANDBOX_NETWORK_POLICY_PREFIX = "iris-sandbox-egress-"

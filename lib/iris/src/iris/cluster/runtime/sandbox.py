@@ -9,6 +9,7 @@ profiles receive all of them.
 """
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind, MountSpec
@@ -18,6 +19,26 @@ from iris.rpc import job_pb2
 # they later install. The cache env still names these paths; without a mount
 # they land in the container's own layer.
 _UNSHARED_MOUNTS: tuple[MountSpec, ...] = tuple(m for m in STANDARD_MOUNTS if m.kind is not MountKind.CACHE)
+
+
+class TaskNetwork(StrEnum):
+    """What a task's network can reach.
+
+    CLUSTER is the cluster network: the node's host network where configured,
+    the controller, workers and other pods. A sandbox gets INTERNET (public
+    addresses only) or NONE; both exclude the controller, workers, other pods
+    and the metadata server.
+    """
+
+    CLUSTER = "cluster"
+    INTERNET = "internet"
+    NONE = "none"
+
+
+_SANDBOX_NETWORKS = {
+    job_pb2.SANDBOX_EGRESS_INTERNET: TaskNetwork.INTERNET,
+    job_pb2.SANDBOX_EGRESS_NONE: TaskNetwork.NONE,
+}
 
 
 @dataclass(frozen=True)
@@ -30,11 +51,10 @@ class TaskIsolation:
         include_controller_address: The controller address in the task env.
         include_shared_caches: The node-shared download caches.
         include_service_account: On Kubernetes, the pod service account and its token.
-        reach_cluster_network: Whether the task's network reaches cluster
-            services (controller, workers, metadata server). On Docker workers
-            a task without it runs with no network at all. On Kubernetes its pod
-            gets no host network and carries the label the sandbox
-            NetworkPolicy selects, and its log sidecar writes to finelog
+        network: What the task's network reaches. Outside CLUSTER, a Docker
+            worker runs the task with no network (it rejects INTERNET), and a
+            Kubernetes pod gets no host network, carries the label its
+            NetworkPolicy selects, and has its log sidecar write to finelog
             directly instead of resolving it through the controller.
     """
 
@@ -42,7 +62,7 @@ class TaskIsolation:
     include_controller_address: bool
     include_shared_caches: bool
     include_service_account: bool
-    reach_cluster_network: bool
+    network: TaskNetwork
 
     @property
     def mounts(self) -> tuple[MountSpec, ...]:
@@ -54,20 +74,25 @@ _CLUSTER_TASK = TaskIsolation(
     include_controller_address=True,
     include_shared_caches=True,
     include_service_account=True,
-    reach_cluster_network=True,
-)
-
-_SANDBOX_TASK = TaskIsolation(
-    include_cluster_env=False,
-    include_controller_address=False,
-    include_shared_caches=False,
-    include_service_account=False,
-    reach_cluster_network=False,
+    network=TaskNetwork.CLUSTER,
 )
 
 
-def task_isolation(profile: int) -> TaskIsolation:
-    """Isolation for a ``job_pb2.ContainerProfile`` value: SANDBOX withholds everything, others nothing."""
-    if profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
-        return _SANDBOX_TASK
-    return _CLUSTER_TASK
+def task_isolation(profile: int, sandbox_egress: int) -> TaskIsolation:
+    """Isolation for a ``job_pb2.ContainerProfile`` and its resolved ``job_pb2.SandboxEgress``.
+
+    SANDBOX withholds every cluster resource and gets the network its egress
+    names; every other profile receives everything.
+    """
+    if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        return _CLUSTER_TASK
+    network = _SANDBOX_NETWORKS.get(sandbox_egress)
+    if network is None:
+        raise ValueError(f"Sandbox task has unresolved egress {sandbox_egress}")
+    return TaskIsolation(
+        include_cluster_env=False,
+        include_controller_address=False,
+        include_shared_caches=False,
+        include_service_account=False,
+        network=network,
+    )

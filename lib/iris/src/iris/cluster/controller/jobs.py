@@ -619,6 +619,34 @@ def _validate_launch_profile(
             "Container profile sandbox runs a self-contained image and accepts no workspace bundle; "
             "submit without a workspace.",
         )
+    _resolve_sandbox_egress(dependencies, request)
+
+
+def _resolve_sandbox_egress(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+) -> None:
+    """Resolve UNSPECIFIED egress for a sandbox job in place, and reject what no backend here enforces."""
+    if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        if request.sandbox_egress != job_pb2.SANDBOX_EGRESS_UNSPECIFIED:
+            raise ConnectError(Code.INVALID_ARGUMENT, "sandbox_egress applies only to container profile sandbox")
+        return
+    if request.sandbox_egress == job_pb2.SANDBOX_EGRESS_UNSPECIFIED:
+        request.sandbox_egress = job_pb2.SANDBOX_EGRESS_INTERNET
+    if request.sandbox_egress not in (job_pb2.SANDBOX_EGRESS_NONE, job_pb2.SANDBOX_EGRESS_INTERNET):
+        raise ConnectError(
+            Code.INVALID_ARGUMENT, f"Unknown sandbox egress {request.sandbox_egress}; upgrade the controller"
+        )
+    if (
+        request.sandbox_egress == job_pb2.SANDBOX_EGRESS_INTERNET
+        and BackendCapability.WORKER_FLEET in dependencies.runtime.backend.descriptor.capabilities
+    ):
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "Sandbox egress internet is not available on docker worker backends: a bridge container "
+            "on a worker VM can reach the VPC and the metadata server, and the worker cannot install "
+            "the filter that blocks them. Request sandbox egress none, or submit to a Kubernetes cluster.",
+        )
 
 
 def _validate_launch_capacity(

@@ -64,7 +64,7 @@ from iris.cluster.platforms.k8s.constants import (
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
-    SANDBOX_POD_LABEL,
+    SANDBOX_EGRESS_LABEL,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -122,7 +122,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.sandbox import task_isolation
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
@@ -847,9 +847,9 @@ def _build_pod_manifest(
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     managed_label = config.managed_label
-    isolation = task_isolation(run_req.container_profile)
+    isolation = task_isolation(run_req.container_profile, run_req.sandbox_egress)
     service_account = config.service_account if isolation.include_service_account else ""
-    host_network = config.host_network and isolation.reach_cluster_network
+    host_network = config.host_network and isolation.network is TaskNetwork.CLUSTER
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -967,8 +967,8 @@ def _build_pod_manifest(
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
-    if not isolation.reach_cluster_network:
-        labels[SANDBOX_POD_LABEL] = "true"
+    if isolation.network is not TaskNetwork.CLUSTER:
+        labels[SANDBOX_EGRESS_LABEL] = isolation.network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1033,7 +1033,7 @@ def _build_pod_manifest(
     # excluded from pod-phase computation, so completion detection (which keys on
     # pod.status.phase) is unaffected. The hostPath volume gives it read-only
     # access to the node's pod log directory.
-    reaches_controller = isolation.reach_cluster_network
+    reaches_controller = isolation.network is TaskNetwork.CLUSTER
     logship = _build_logship_sidecar(
         iris_env["IRIS_TASK_ID"],
         config.controller_address if reaches_controller else None,

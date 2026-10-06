@@ -17,7 +17,7 @@ from iris.cluster.backends.k8s.tasks import (
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.platforms.k8s.constants import SANDBOX_POD_LABEL
+from iris.cluster.platforms.k8s.constants import SANDBOX_EGRESS_LABEL
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
@@ -1040,7 +1040,11 @@ def test_gvisor_profile_sets_runtime_class_and_benign_context():
     assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
 
 
-def test_sandbox_pod_carries_nothing_from_the_cluster():
+@pytest.mark.parametrize(
+    "egress, label",
+    [(job_pb2.SANDBOX_EGRESS_INTERNET, "internet"), (job_pb2.SANDBOX_EGRESS_NONE, "none")],
+)
+def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     """SANDBOX keeps the job's env and the log sidecar, and drops every cluster-held input.
 
     The pod carries the label the sandbox NetworkPolicy selects, and its log
@@ -1048,6 +1052,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster():
     """
     req = make_run_req("/my-job/task-0")
     req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.sandbox_egress = egress
     req.environment.env_vars["TASK_VAR"] = "1"
     config = pod_config(
         controller_address="http://ctrl:8080",
@@ -1075,7 +1080,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster():
     logship_env = {e["name"]: e.get("value") for e in logship["env"]}
     assert logship_env["IRIS_LOG_SERVER_ADDRESS"] == "http://finelog:10001"
     assert "IRIS_CONTROLLER_ADDRESS" not in logship_env
-    assert manifest["metadata"]["labels"][SANDBOX_POD_LABEL] == "true"
+    assert manifest["metadata"]["labels"][SANDBOX_EGRESS_LABEL] == label
 
 
 def test_cluster_pod_ships_logs_through_the_controller_and_is_not_sandboxed():
@@ -1086,7 +1091,7 @@ def test_cluster_pod_ships_logs_through_the_controller_and_is_not_sandboxed():
     logship_env = {e["name"]: e.get("value") for e in logship["env"]}
     assert logship_env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
     assert "IRIS_LOG_SERVER_ADDRESS" not in logship_env
-    assert SANDBOX_POD_LABEL not in manifest["metadata"]["labels"]
+    assert SANDBOX_EGRESS_LABEL not in manifest["metadata"]["labels"]
 
 
 # ---------------------------------------------------------------------------

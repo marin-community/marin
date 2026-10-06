@@ -930,6 +930,7 @@ class IrisClient:
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        sandbox_egress: job_pb2.SandboxEgress = job_pb2.SANDBOX_EGRESS_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
@@ -963,6 +964,9 @@ class IrisClient:
                 ``environment.env_vars`` and ``environment.setup_scripts``, no
                 workspace bundle, and skips parent env inheritance (see
                 ``EnvironmentSpec.to_sandbox_proto``).
+            sandbox_egress: Network egress of a SANDBOX job: INTERNET (public
+                addresses only; the default) or NONE. Kubernetes clusters
+                support both; docker worker clusters only NONE.
 
         Returns:
             Job handle for the submitted job
@@ -1075,6 +1079,7 @@ class IrisClient:
                 task_image=task_image,
                 priority_band=priority_band,
                 container_profile=container_profile,
+                sandbox_egress=sandbox_egress,
                 submit_argv=submit_argv,
             )
         except ConnectError as e:

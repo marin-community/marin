@@ -120,6 +120,10 @@ message Controller {
     // when auth is enabled; see service.LaunchJob.
     iris.job.ContainerProfile container_profile = 37;
 
+    // Network egress of a CONTAINER_PROFILE_SANDBOX job. UNSPECIFIED => INTERNET
+    // for a sandbox; any other value is rejected for a non-sandbox profile.
+    iris.job.SandboxEgress sandbox_egress = 39;
+
     // Set only when a federation parent hands a whole job off to this cluster as
     // a peer. Its presence marks the job as peer-owned: the receiving controller
     // records the handing-off cluster's ownership (so FederationSync reports the

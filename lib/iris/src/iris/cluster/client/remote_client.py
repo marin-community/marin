@@ -167,6 +167,7 @@ class RemoteClusterClient:
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        sandbox_egress: job_pb2.SandboxEgress = job_pb2.SANDBOX_EGRESS_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
@@ -197,6 +198,7 @@ class RemoteClusterClient:
             task_image=task_image or "",
             priority_band=priority_band,
             container_profile=container_profile,
+            sandbox_egress=sandbox_egress,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )

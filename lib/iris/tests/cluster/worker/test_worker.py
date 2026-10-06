@@ -830,6 +830,7 @@ def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_sto
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
     request = create_run_task_request()
     request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.sandbox_egress = job_pb2.SANDBOX_EGRESS_NONE
     request.environment.env_vars["TASK_VAR"] = "1"
 
     task = w.get_task(w.submit_task(request))
@@ -843,21 +844,36 @@ def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_sto
 
 
 @pytest.mark.parametrize(
-    "profile, network_mode",
+    "profile, egress, network_mode",
     [
-        (job_pb2.CONTAINER_PROFILE_SANDBOX, NETWORK_MODE_NONE),
-        (job_pb2.CONTAINER_PROFILE_DEFAULT, NETWORK_MODE_HOST),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.SANDBOX_EGRESS_NONE, NETWORK_MODE_NONE),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.SANDBOX_EGRESS_UNSPECIFIED, NETWORK_MODE_HOST),
     ],
 )
-def test_only_sandbox_container_runs_without_host_network(mock_worker, mock_runtime, profile, network_mode):
+def test_only_sandbox_container_runs_without_host_network(mock_worker, mock_runtime, profile, egress, network_mode):
     """A SANDBOX task on a Docker worker gets no network, so it cannot reach the VM or metadata server."""
     request = create_run_task_request()
     request.container_profile = profile
+    request.sandbox_egress = egress
 
     task = mock_worker.get_task(mock_worker.submit_task(request))
     task.thread.join(timeout=15.0)
 
     assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
+
+
+def test_docker_worker_refuses_sandbox_internet_egress(mock_worker, mock_runtime):
+    """A bridge container would reach the VPC and metadata server, so the task fails before any container starts."""
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.sandbox_egress = job_pb2.SANDBOX_EGRESS_INTERNET
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert task.status != job_pb2.TASK_STATE_SUCCEEDED
+    assert "internet" in (task.error or "")
+    mock_runtime.create_container.assert_not_called()
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):

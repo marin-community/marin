@@ -292,6 +292,7 @@ def insert_job_and_config(
         priority_band=priority_band,
         task_image=request.task_image,
         container_profile=int(request.container_profile),
+        sandbox_egress=int(request.sandbox_egress),
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
     )

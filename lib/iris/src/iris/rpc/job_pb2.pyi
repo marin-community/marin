@@ -92,6 +92,12 @@ class ContainerProfile(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONTAINER_PROFILE_PRIVILEGED: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_GVISOR: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_SANDBOX: _ClassVar[ContainerProfile]
+
+class SandboxEgress(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SANDBOX_EGRESS_UNSPECIFIED: _ClassVar[SandboxEgress]
+    SANDBOX_EGRESS_NONE: _ClassVar[SandboxEgress]
+    SANDBOX_EGRESS_INTERNET: _ClassVar[SandboxEgress]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -149,6 +155,9 @@ CONTAINER_PROFILE_DOCKER_ACCESS: ContainerProfile
 CONTAINER_PROFILE_PRIVILEGED: ContainerProfile
 CONTAINER_PROFILE_GVISOR: ContainerProfile
 CONTAINER_PROFILE_SANDBOX: ContainerProfile
+SANDBOX_EGRESS_UNSPECIFIED: SandboxEgress
+SANDBOX_EGRESS_NONE: SandboxEgress
+SANDBOX_EGRESS_INTERNET: SandboxEgress
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -732,7 +741,7 @@ class WorkerMetadata(_message.Message):
     def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class RunTaskRequest(_message.Message):
-    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile")
+    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile", "sandbox_egress")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     NUM_TASKS_FIELD_NUMBER: _ClassVar[int]
     ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
@@ -748,6 +757,7 @@ class RunTaskRequest(_message.Message):
     COSCHEDULING_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
     CONTAINER_PROFILE_FIELD_NUMBER: _ClassVar[int]
+    SANDBOX_EGRESS_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     num_tasks: int
     entrypoint: RuntimeEntrypoint
@@ -763,4 +773,5 @@ class RunTaskRequest(_message.Message):
     coscheduling: CoschedulingConfig
     priority: PriorityBand
     container_profile: ContainerProfile
-    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ..., container_profile: _Optional[_Union[ContainerProfile, str]] = ...) -> None: ...
+    sandbox_egress: SandboxEgress
+    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ..., container_profile: _Optional[_Union[ContainerProfile, str]] = ..., sandbox_egress: _Optional[_Union[SandboxEgress, str]] = ...) -> None: ...

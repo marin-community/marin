@@ -10,6 +10,7 @@ Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -37,8 +38,8 @@ from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     NVIDIA_GPU_TOLERATION,
-    SANDBOX_NETWORK_POLICY_NAME,
-    SANDBOX_POD_LABEL,
+    SANDBOX_EGRESS_LABEL,
+    SANDBOX_NETWORK_POLICY_PREFIX,
 )
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
@@ -56,6 +57,7 @@ from iris.cluster.platforms.k8s.types import (
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
 from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
+from iris.cluster.runtime.sandbox import TaskNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -424,16 +426,42 @@ def _namespace_pods(namespace: str, pod_labels: dict[str, str] | None = None) ->
     return peer
 
 
-def build_sandbox_network_policy(namespace: str, finelog: FinelogConfig | None) -> dict:
-    """Build the NetworkPolicy that cuts sandbox pods off from cluster services.
+# Destinations a sandbox with internet egress may not reach: private networks
+# (pods, nodes, the controller, VPC peers), carrier-grade NAT, and link-local
+# (the cloud metadata server).
+SANDBOX_BLOCKED_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "169.254.0.0/16",
+)
 
-    Selects pods labeled ``SANDBOX_POD_LABEL``, denies all ingress, and allows
-    egress only to DNS in kube-system and, when the cluster runs an in-cluster
-    finelog, to its pods on the finelog port. The task container shares the
-    pod's network with the log sidecar, so this is also all the task can reach:
-    not the controller, worker RPC ports, other pods, or the metadata server.
-    ``kubectl exec`` goes through the kubelet and is unaffected.
+
+def _internet_except(service_cidr: str) -> list[str]:
+    blocked = [ipaddress.ip_network(cidr) for cidr in SANDBOX_BLOCKED_CIDRS]
+    if service_cidr:
+        services = ipaddress.ip_network(service_cidr)
+        if not any(services.subnet_of(network) for network in blocked if network.version == services.version):
+            blocked.append(services)
+    return [str(network) for network in blocked]
+
+
+def build_sandbox_network_policy(
+    namespace: str, network: TaskNetwork, finelog: FinelogConfig | None, service_cidr: str = ""
+) -> dict:
+    """Build the NetworkPolicy for sandbox pods whose egress label is ``network``.
+
+    Both policies deny all ingress and allow egress to DNS in kube-system and,
+    when the cluster runs an in-cluster finelog, to its pods on the finelog
+    port. INTERNET adds every IPv4 address outside ``SANDBOX_BLOCKED_CIDRS``
+    and ``service_cidr``. The task container shares the pod's network with the
+    log sidecar, so neither mode reaches the controller, worker RPC ports,
+    other pods, or the metadata server. ``kubectl exec`` goes through the
+    kubelet and is unaffected.
     """
+    if network is TaskNetwork.CLUSTER:
+        raise ValueError("cluster-network pods carry no sandbox NetworkPolicy")
     egress: list[dict] = [
         {
             "to": [_namespace_pods(_DNS_NAMESPACE)],
@@ -452,12 +480,14 @@ def build_sandbox_network_policy(namespace: str, finelog: FinelogConfig | None) 
                 "ports": [{"protocol": "TCP", "port": finelog.port}],
             }
         )
+    if network is TaskNetwork.INTERNET:
+        egress.append({"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": _internet_except(service_cidr)}}]})
     return {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
-        "metadata": {"name": SANDBOX_NETWORK_POLICY_NAME, "namespace": namespace},
+        "metadata": {"name": f"{SANDBOX_NETWORK_POLICY_PREFIX}{network.value}", "namespace": namespace},
         "spec": {
-            "podSelector": {"matchLabels": {SANDBOX_POD_LABEL: "true"}},
+            "podSelector": {"matchLabels": {SANDBOX_EGRESS_LABEL: network.value}},
             "policyTypes": ["Ingress", "Egress"],
             "ingress": [],
             "egress": egress,
@@ -972,15 +1002,17 @@ class K8sControllerProvider:
         )
 
     def ensure_sandbox_network_policy(self, config: IrisClusterConfig) -> None:
-        """Create the NetworkPolicy that isolates sandbox pods.
+        """Create the NetworkPolicies that isolate sandbox pods, one per egress mode.
 
-        Never deleted on stop: it selects only sandbox pods, and removing it
-        while one runs would reconnect that pod to the controller.
+        Never deleted on stop: they select only sandbox pods, and removing one
+        while such a pod runs would reconnect it to the controller.
         """
         finelog = load_finelog_config(config.finelog.config) if config.finelog.config else None
         if finelog is None:
             logger.warning("No finelog.config: the log server runs inside the controller, and sandbox pods ship no logs")
-        self._kubectl.apply_json(build_sandbox_network_policy(self._namespace, finelog))
+        service_cidr = config.kubernetes_provider.service_cidr
+        for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
+            self._kubectl.apply_json(build_sandbox_network_policy(self._namespace, network, finelog, service_cidr))
 
     def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
         """Create the iris-controller-env Secret holding the controller's own credentials.

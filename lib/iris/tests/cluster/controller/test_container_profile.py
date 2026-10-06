@@ -68,7 +68,12 @@ def _as(role: str, user_id: str, fn, *args, **kwargs):
         _verified_identity.reset(reset)
 
 
-def _launch(name: str, profile: int) -> controller_pb2.Controller.LaunchJobRequest:
+def _launch(
+    name: str, profile: int, egress: int = job_pb2.SANDBOX_EGRESS_UNSPECIFIED
+) -> controller_pb2.Controller.LaunchJobRequest:
+    if profile == SANDBOX and egress == job_pb2.SANDBOX_EGRESS_UNSPECIFIED:
+        # The mock backend is a docker worker fleet, which supports only NONE.
+        egress = job_pb2.SANDBOX_EGRESS_NONE
     return controller_pb2.Controller.LaunchJobRequest(
         name=name,
         entrypoint=make_test_entrypoint(),
@@ -76,6 +81,7 @@ def _launch(name: str, profile: int) -> controller_pb2.Controller.LaunchJobReque
         replicas=1,
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         container_profile=profile,
+        sandbox_egress=egress,
     )
 
 
@@ -162,3 +168,39 @@ def test_profile_persisted_and_stamped_on_run_request(service, state):
         template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     assert template.container_profile == PRIVILEGED
+
+
+def _stored_egress(state, job_id: JobName) -> tuple[int, int]:
+    with state._db.read_snapshot() as snap:
+        detail = reads.get_job_detail(snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
+    assert detail is not None and template is not None
+    return detail.sandbox_egress, template.sandbox_egress
+
+
+def test_sandbox_egress_defaults_to_internet_on_kubernetes(service, state):
+    service._controller.backend.descriptor = k8s_backend_descriptor()
+    request = _launch("/alice/job", SANDBOX)
+    request.sandbox_egress = job_pb2.SANDBOX_EGRESS_UNSPECIFIED
+
+    _as("user", "alice", service.launch_job, request, None)
+
+    assert _stored_egress(state, JobName.from_wire("/alice/job")) == (
+        job_pb2.SANDBOX_EGRESS_INTERNET,
+        job_pb2.SANDBOX_EGRESS_INTERNET,
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "egress", "message"),
+    [
+        pytest.param(SANDBOX, job_pb2.SANDBOX_EGRESS_INTERNET, "docker worker", id="internet-on-docker-workers"),
+        pytest.param(DEFAULT, job_pb2.SANDBOX_EGRESS_NONE, "only to container profile sandbox", id="non-sandbox"),
+        pytest.param(SANDBOX, 99, "Unknown sandbox egress", id="unknown"),
+    ],
+)
+def test_sandbox_egress_rejected(service, profile, egress, message):
+    with pytest.raises(ConnectError) as exc:
+        _as("user", "alice", service.launch_job, _launch("/alice/job", profile, egress), None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert message in str(exc.value.message)
