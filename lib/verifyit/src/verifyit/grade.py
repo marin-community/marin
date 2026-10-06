@@ -13,12 +13,14 @@ import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from harbor_config.errors import ErrorCategory
 
 from verifyit.file_ops.read import read_text
+from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
     RUBRIC_REFERENCE,
@@ -210,17 +212,17 @@ def finalize_preparation_failure(
     )
 
 
-def numeric_tolerance(spec: NumericSpec) -> float:
-    """Return the finite effective tolerance for a valid numeric grading spec."""
-    if not math.isfinite(spec.expected):
-        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
-    for name, value in (("tolerance_abs", spec.tolerance_abs), ("tolerance_rel", spec.tolerance_rel)):
-        if not math.isfinite(value) or value < 0:
-            raise InvalidTask(f"numeric {name} must be a finite nonnegative number, got {value}")
-    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
-    if not math.isfinite(tolerance):
-        raise InvalidTask(f"numeric effective tolerance must be finite, got {tolerance}")
-    return tolerance
+def numeric_tolerance(spec: NumericSpec) -> Fraction:
+    """Validate exact private literals and return the effective tolerance."""
+    try:
+        expected = numeric_literal(spec.expected)
+        absolute = numeric_literal(spec.tolerance_abs)
+        relative = numeric_literal(spec.tolerance_rel)
+    except ValueError as error:
+        raise InvalidTask(f"invalid numeric contract: {error}") from error
+    if absolute < 0 or relative < 0:
+        raise InvalidTask("numeric tolerances must be nonnegative")
+    return max(absolute, relative * abs(expected))
 
 
 def infra_error(message: str) -> Reward:
@@ -297,11 +299,12 @@ def negative_candidate(spec: Spec) -> str | None:
             tolerance = numeric_tolerance(spec)
         except InvalidTask:
             return None
-        offset = max(2 * tolerance, 1.0)
-        for candidate in (spec.expected + offset, spec.expected - offset):
-            if math.isfinite(candidate) and abs(candidate - spec.expected) > tolerance:
-                return f"\\boxed{{{candidate}}}"
-        return "not a number"
+        expected = numeric_literal(spec.expected)
+        candidate = expected + max(2 * tolerance, 1)
+        limit = 10**MAX_NUMERIC_DIGITS
+        if abs(candidate.numerator) >= limit or candidate.denominator >= limit:
+            return None
+        return f"\\boxed{{{candidate}}}"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None

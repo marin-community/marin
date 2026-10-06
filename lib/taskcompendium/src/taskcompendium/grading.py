@@ -15,6 +15,7 @@ from verifyit.candidate import (
 )
 from verifyit.grade import InvalidTask
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
+from verifyit.numeric import NumericCandidateError
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
 from verifyit.spec import FunctionCall as CandidateCall
 
@@ -93,7 +94,11 @@ def grade_answer(specification: TaskSpec, convention: Submission, conversation: 
         letter = candidate.strip()
         if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
             return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
-    return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, candidate).reward)
+    try:
+        reward = grade_text_candidate(verifier, candidate).reward
+    except NumericCandidateError:
+        reward = 0.0
+    return GradeResult(Outcome.GRADED, reward)
 
 
 def verifier_descriptor(spec: Spec) -> VerifierSpec:
@@ -111,5 +116,5 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
     )
 
 
-def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
+def numeric_answer(expected: str, tolerance_abs: str, tolerance_rel: str) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))

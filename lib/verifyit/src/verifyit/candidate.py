@@ -13,6 +13,7 @@ from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.modes.grade_math import grade_numeric_candidate
 from verifyit.modes.grade_mcq import grade_mcq_candidate
 from verifyit.modes.grade_predicted_action import validate_predicted_action
+from verifyit.numeric import extract_numeric_candidate
 from verifyit.spec import ExactSpec, McqSpec, Mode, NumericSpec, PredictedActionSpec, spec_from_table
 
 TextSpec = ExactSpec | NumericSpec | McqSpec
@@ -50,8 +51,5 @@ def grade_text_candidate(spec: TextSpec, candidate: str) -> Reward:
         return grade_exact_candidate(spec, candidate)
     if isinstance(spec, McqSpec):
         return grade_mcq_candidate(spec, candidate)
-    try:
-        value = float(candidate.strip())
-    except ValueError:
-        value = float("nan")
-    return grade_numeric_candidate(spec, value)
+    numeric_tolerance(spec)
+    return grade_numeric_candidate(spec, extract_numeric_candidate(candidate))

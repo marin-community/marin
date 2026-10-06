@@ -42,10 +42,17 @@ process exit after a verdict has been written.
 For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
 candidate when the output contains a box marker. Its braces must be balanced and its content must be
 nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
-expected answer. Without a box marker, `math` grades the last nonempty line and `numeric` grades the
-last number. Numeric expected values and absolute and relative tolerances must be finite. Tolerances
-must also be nonnegative. The effective tolerance,
-`max(tolerance_abs, tolerance_rel * abs(expected))`, must be finite.
+expected answer. Without a box marker, both modes read the last nonempty line. Numeric answers
+require one integer, decimal, scientific-notation value or integer fraction, optionally preceded
+by `Answer:` or `The answer is`. Thousands separators require groups of three digits. Alternatives
+such as `12 or 13`, arithmetic expressions and nonfinite values are malformed submissions.
+
+Numeric private `expected`, `tolerance_abs` and `tolerance_rel` are required literal strings.
+For example, `expected = "1/2"`, `tolerance_abs = "0"`, `tolerance_rel = "0"` accepts both `1/2`
+and `0.5`. Comparison uses exact rational arithmetic with
+`max(tolerance_abs, tolerance_rel * abs(expected))`; tolerances must be nonnegative.
+Native float configuration is rejected because rounding may already have changed its meaning.
+Literal components and expanded decimal powers are limited to 4096 digits before parsing.
 
 [`spec.py`](src/verifyit/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`

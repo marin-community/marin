@@ -29,7 +29,7 @@ from verifyit.spec import ExactSpec, FunctionCall, Mode, PredictedActionSpec, sp
             "answer",
         ),
         (Mode.EXACT, {"expected": [""], "empty_output": "grade"}, "", "answer"),
-        (Mode.NUMERIC, {"expected": 10.0, "tolerance_abs": 0.01, "tolerance_rel": 0.0}, "10.005", "10.02"),
+        (Mode.NUMERIC, {"expected": "10", "tolerance_abs": "0.01", "tolerance_rel": "0"}, "10.005", "10.02"),
         (Mode.MCQ, {"expected": "C", "options": 4}, "c", "E"),
     ],
 )
