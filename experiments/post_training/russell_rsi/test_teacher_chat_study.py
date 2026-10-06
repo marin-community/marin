@@ -13,6 +13,7 @@ import pytest
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
 from marin.execution.lazy import StepContext, artifact_identity
+from marin.experiment.cli import graph_handles
 from marin.external_dependencies import MARIN_SKYRL
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.contracts import RolloutContractError
@@ -178,8 +179,8 @@ def test_admitted_serialized_task_survives_new_schema_defaults(tmp_path, student
     assert calls == [] and not (tmp_path / "changed" / "plan.json").exists()
 
 
-def test_actual_mixture_repeats_four_rows_eight_times_in_built_four_batches(study_inputs, tmp_path, monkeypatch):
-    original, _ = study_inputs
+def test_chat_sft_dose_and_calibration_preserve_exported_checkpoint(study_inputs, tmp_path, monkeypatch):
+    original, pin = study_inputs
     original["student_context_amendment"] = {"context_tokens": 16384}
     original["runtime_commit"] = MARIN_SKYRL.commit
     dummy = {"uri": str(tmp_path / "not-read"), "sha256": "0" * 64}
@@ -236,6 +237,29 @@ def test_actual_mixture_repeats_four_rows_eight_times_in_built_four_batches(stud
         Counter(rows[start : start + built.trainer.train_batch_size]) == {"a": 2, "b": 2, "c": 2, "d": 2}
         for start in range(0, count, built.trainer.train_batch_size)
     )
+    post = {
+        **original,
+        "protocol": study.PROTOCOL,
+        "version": "2026.10.06.3",
+        "sft_uri": trained.path(str(tmp_path / "artifacts")),
+    }
+    pin(post, "sft_config", config)
+    qualification = test_teacher_four_pass.four_update_qualification(reload.model.identity, post["sft_uri"])
+    qualification["source_config_sha256"] = post["sft_config_sha256"]
+    pin(post, "qualification", qualification)
+    calibrated = study.chat_study_post_workflow(post, "calibrate")
+    assert artifact_identity(trained) not in {
+        artifact_identity(step) for step in graph_handles([calibrated["terminal"]])
+    }
+    bound = calibrated["calibration"].build_config(
+        StepContext.for_run(
+            str(tmp_path / "calibration"),
+            str(tmp_path / "artifacts"),
+            deps=calibrated["calibration"].deps,
+            runtime_args=calibrated["calibration"].runtime_args,
+        )
+    )
+    assert bound.model_uri == reload.model.location
 
 
 @pytest.mark.parametrize("defect", ["reservation", "second_identity", "decision_budget"])

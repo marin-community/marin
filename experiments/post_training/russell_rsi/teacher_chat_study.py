@@ -510,4 +510,6 @@ def chat_study_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep
     if config["protocol"] != PROTOCOL or sft_config["protocol"] != PROTOCOL:
         raise ValueError("Chat post-SFT requires the separate prospective protocol")
     original = source_study(parse_study(sft_config))
-    return validated_study_post_workflow(config, stage, study=original, study_protocol=PROTOCOL)
+    # Reconstruct the producer identity without executing its training graph.
+    sft = chat_study_workflow(sft_config)["train"]
+    return validated_study_post_workflow(config, stage, study=original, study_protocol=PROTOCOL, sft=sft)

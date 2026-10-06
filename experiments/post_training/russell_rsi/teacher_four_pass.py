@@ -301,11 +301,13 @@ def four_pass_teacher_workflow(config: dict) -> dict[str, ArtifactStep]:
 def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     """Use the fixed continuation bank after a qualified four-update SFT export."""
     study = pinned_record(config, "sft_config")
-    return validated_study_post_workflow(config, stage, study=study, study_protocol=PROTOCOL)
+    # Reconstruct the producer identity without executing its training graph.
+    sft = four_pass_teacher_workflow(study)["train"]
+    return validated_study_post_workflow(config, stage, study=study, study_protocol=PROTOCOL, sft=sft)
 
 
 def validated_study_post_workflow(
-    config: dict, stage: str, *, study: dict, study_protocol: str
+    config: dict, stage: str, *, study: dict, study_protocol: str, sft: ArtifactStep[LevanterCheckpoint]
 ) -> dict[str, ArtifactStep]:
     """Bind a separately validated SFT study to unchanged continuation gates."""
     decision = require_four_pass_condition(study)
@@ -342,11 +344,10 @@ def validated_study_post_workflow(
     ):
         raise ValueError("Teacher study source calibration differs from the sealed continuation bank")
     source_plan = replace(completed.plan, task_bank=tasks, bank_identity=artifact_identity(bank))
-    sft = adopted(config["sft"], LevanterCheckpoint)
     qualification = pinned_record(config, "qualification")
     if qualification["source_config_sha256"] != config["sft_config_sha256"]:
         raise ValueError("Teacher study qualification identifies different SFT configuration")
-    export = qualified_four_update_sft(qualification, identity=artifact_identity(sft), root=config["sft"]["uri"])
+    export = qualified_four_update_sft(qualification, identity=artifact_identity(sft), root=config["sft_uri"])
     model = ArtifactStep.adopt(
         f"checkpoints/russell-rsi-{study_protocol}-qualified-hf",
         config["version"],

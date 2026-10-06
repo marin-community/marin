@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from levanter.tracker.json_logger import JsonLoggerConfig
 from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import StepContext, artifact_identity
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
 from marin.training.training import LevanterCheckpoint
 
@@ -24,7 +24,6 @@ from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, C
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     SelectionConfig,
     StudySelectionConfig,
-    adopted,
     qualified_four_update_sft,
     qualified_sft,
     seal_study_calibration,
@@ -366,21 +365,15 @@ def test_four_pass_calibration_is_fresh_and_all_evaluations_wait_for_rl(study_in
     proof["binding"]["family_map_sha256"] = compact_json_sha256(bank["family_by_task"])
     proof["additions"] = proof["additions"][:additions]
     pin(study, "bank_expansion", proof)
-    config = {
-        **study,
-        "sft": {
-            "name": "four-pass-sft",
-            "version": study["version"],
-            "uri": str(tmp_path / "sft"),
-            "identity_config": {},
-        },
-    }
+    producer = four_pass_teacher_workflow(study)["train"]
+    config = {**study, "sft_uri": producer.path(str(tmp_path / "artifacts"))}
     pin(config, "sft_config", study)
-    sft_identity = artifact_identity(adopted(config["sft"], LevanterCheckpoint))
-    record = four_update_qualification(sft_identity, config["sft"]["uri"])
+    sft_identity = artifact_identity(producer)
+    record = four_update_qualification(sft_identity, config["sft_uri"])
     record["source_config_sha256"] = config["sft_config_sha256"]
     pin(config, "qualification", record)
     outputs = four_pass_post_workflow(config, "calibrate")
+    assert sft_identity not in {artifact_identity(step) for step in graph_handles([outputs["terminal"]])}
     bound = outputs["decision"].build_config(
         StepContext.for_run(str(tmp_path / "decision"), str(tmp_path / "artifacts"), deps=outputs["decision"].deps)
     )
@@ -416,6 +409,37 @@ def test_four_pass_calibration_is_fresh_and_all_evaluations_wait_for_rl(study_in
     else:
         assert "rl" not in evaluated
         assert "coding-sft-rl" not in evaluated
+
+
+@pytest.mark.parametrize(
+    "defect, message",
+    [
+        ("adoption_identity", "4-update export"),
+        ("source_config", "different SFT configuration"),
+        ("reload_model", "reload identifies a different SFT model"),
+        ("export_root", "4-update export"),
+    ],
+)
+def test_post_sft_rejects_evidence_from_another_checkpoint(study_inputs, tmp_path, defect, message):
+    study, pin = study_inputs
+    producer = four_pass_teacher_workflow(study)["train"]
+    root = producer.path(str(tmp_path / "artifacts"))
+    config = {**study, "sft_uri": root}
+    pin(config, "sft_config", study)
+    record = four_update_qualification(artifact_identity(producer), root)
+    record["source_config_sha256"] = config["sft_config_sha256"]
+    if defect == "adoption_identity":
+        alias = ArtifactStep.adopt(producer.name, producer.version, root, kind=LevanterCheckpoint)
+        record["sft_identity"] = record["serving_reload"]["model_identity"] = artifact_identity(alias)
+    elif defect == "source_config":
+        pin(config, "sft_config", {**study, "version": "2026.10.06.99"})
+    elif defect == "reload_model":
+        record["serving_reload"]["model_identity"] = "another-checkpoint"
+    else:
+        config["sft_uri"] = str(tmp_path / "another-export")
+    pin(config, "qualification", record)
+    with pytest.raises(ValueError, match=message):
+        four_pass_post_workflow(config, "calibrate")
 
 
 @pytest.mark.parametrize(
