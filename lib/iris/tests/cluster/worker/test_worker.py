@@ -896,6 +896,7 @@ def test_task_token_reaches_every_task_but_a_sandbox(mock_worker, mock_runtime, 
     request.container_profile = profile
     request.egress_policy = egress
     request.task_token = "task-token"
+    request.environment.env_vars["IRIS_TASK_TOKEN"] = "stale-token"
 
     task = mock_worker.get_task(mock_worker.submit_task(request))
     task.thread.join(timeout=15.0)

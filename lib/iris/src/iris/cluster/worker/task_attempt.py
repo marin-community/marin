@@ -30,6 +30,7 @@ from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerContainerHandle
 from iris.cluster.runtime.env import (
     IRIS_ATTEMPT_UID_ENV,
+    IRIS_TASK_TOKEN_ENV,
     IRIS_WORKER_REGION_ENV,
     TASK_OUTPUT_FINALIZING_STATUS,
     UV_LINK_MODE_ENV,
@@ -774,11 +775,12 @@ class TaskAttempt:
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"
-        # The controller owns the process-incarnation identity. User and cluster
-        # env cannot replace it with a value shared by two attempts.
-        env.pop(IRIS_ATTEMPT_UID_ENV, None)
-        if attempt_uid := iris_env.get(IRIS_ATTEMPT_UID_ENV):
-            env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
+        # The controller owns the process-incarnation identity and the task's
+        # credential. User and cluster env cannot replace either.
+        for controller_owned in (IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV):
+            env.pop(controller_owned, None)
+            if value := iris_env.get(controller_owned):
+                env[controller_owned] = value
 
         # The worker's physical location is authoritative over task-provided env.
         region = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
