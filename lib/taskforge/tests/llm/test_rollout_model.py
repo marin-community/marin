@@ -21,7 +21,6 @@ from rolloutengine.contracts import GenerationLimitReached, ModelRequest, Rollou
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind, ExitCodeReward
-from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskcompendium.submission import PlainText
@@ -29,10 +28,10 @@ from taskcompendium.submission import PlainText
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_tokens
-from taskforge.spec.draft import assemble, environment, file, shell_verifier
+from taskforge.spec.draft import assemble, environment, file, shell_verifier, task_execution
 
 POLICY = LLMPolicy(max_continuations=0)
-EXECUTION = TaskExecution()
+EXECUTION = task_execution()
 CONTEXT_ERROR = "This model's maximum context length is 262144 tokens. However, you requested 300000 tokens."
 # ShellSim cannot expand a command substitution inside a test argument, so assign it first.
 COUNT_CHECK = 'v=$(tr -d " \\n" < /workspace/count.txt)\n[ "$v" = 15 ]\n'
