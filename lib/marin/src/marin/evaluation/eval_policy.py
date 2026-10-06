@@ -13,7 +13,12 @@ from types import MappingProxyType
 
 import yaml
 
-from marin.evaluation.campaign_policy import CAMPAIGNS, campaign_policy_violations
+from marin.evaluation.campaign_policy import (
+    CAMPAIGNS,
+    OCTOBER_5_ORIGINAL_HARBOR_COMMIT,
+    OCTOBER_5_VERSION,
+    campaign_policy_violations,
+)
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
@@ -257,7 +262,7 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
 
 
 def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -> tuple[str, ...]:
-    """Keep evaluator versions fixed within a verified cohort."""
+    """Require approved evaluator pins, including the October 5 disk-full recovery."""
     if version not in POLICIES:
         return ()
     commits = RUNTIME_COMMITS.get(version)
@@ -266,10 +271,13 @@ def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -
     commit = commits.get(evaluation.mechanism)
     if commit is None:
         return (f"missing {evaluation.mechanism} evaluator pin for {version}",)
+    # This campaign explicitly permits the disk-full fix alongside its original runtime.
+    if version == OCTOBER_5_VERSION and evaluation.mechanism == "harbor" and OCTOBER_5_ORIGINAL_HARBOR_COMMIT in runtime:
+        commit = OCTOBER_5_ORIGINAL_HARBOR_COMMIT
     if commit not in runtime:
         return (f"evaluator runtime must use commit {commit}",)
     if evaluation.harbor is not None:
-        harbor_commit = commits.get("harbor")
+        harbor_commit = commit
         if harbor_commit is None:
             return (f"missing harbor evaluator pin for {version}",)
         if evaluation.harbor.harbor_config_commit != harbor_commit:
