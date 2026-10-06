@@ -120,8 +120,8 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             spec = grader_package(
                 NumericSpec(
                     _numeric_reference(data["expected_value"]),
-                    _numeric_reference(data["tolerance_abs"]),
-                    _numeric_reference(data["tolerance_rel"]),
+                    data["tolerance_abs"],
+                    data["tolerance_rel"],
                 )
             )
         elif name in {"knowledge_mcqa", "web_search_mcqa"}:

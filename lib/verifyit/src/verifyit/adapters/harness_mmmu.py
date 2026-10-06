@@ -15,6 +15,7 @@ from verifyit.adapters import harness_validation as validation
 from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import InvalidTask, Reward, scored
 from verifyit.modes.grade_exact import grade_exact_candidate
+from verifyit.modes.grade_math import grade_numeric_candidate_float
 from verifyit.modes.grade_mcq import grade_mcq_candidate
 from verifyit.spec import ExactSpec, McqSpec
 
@@ -167,7 +168,7 @@ def grade_mmmu_open(references, candidates) -> Reward:
                     candidate,
                 )
             elif type(candidate) is float and type(reference) is float:
-                result = scored(float(candidate == reference), extracted=candidate, expected=reference)
+                result = grade_numeric_candidate_float(reference, candidate, tolerance_abs=0.0)
             else:
                 continue
             if result.reward:

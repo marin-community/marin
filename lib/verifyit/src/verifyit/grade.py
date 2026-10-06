@@ -221,15 +221,16 @@ def finalize_preparation_failure(
 
 
 def numeric_tolerance(spec: NumericSpec) -> Fraction:
-    """Validate exact private literals and return the effective tolerance."""
+    """Validate the reference and compare using the decimal spelling of float tolerances."""
     try:
         expected = numeric_literal(spec.expected)
-        absolute = numeric_literal(spec.tolerance_abs)
-        relative = numeric_literal(spec.tolerance_rel)
-    except ValueError as error:
+        for tolerance in (spec.tolerance_abs, spec.tolerance_rel):
+            if type(tolerance) not in (int, float) or not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError("numeric tolerances must be finite nonnegative numbers")
+        absolute = Fraction(str(spec.tolerance_abs))
+        relative = Fraction(str(spec.tolerance_rel))
+    except (ValueError, OverflowError) as error:
         raise InvalidTask(f"invalid numeric contract: {error}") from error
-    if absolute < 0 or relative < 0:
-        raise InvalidTask("numeric tolerances must be nonnegative")
     return max(absolute, relative * abs(expected))
 
 

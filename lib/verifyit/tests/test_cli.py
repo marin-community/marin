@@ -14,14 +14,14 @@ from verifyit.spec import FunctionCall, Mode, NumericSpec, PredictedActionSpec, 
 @pytest.mark.parametrize(
     "invalid_contract",
     [
-        'expected = 0.30000000000000004\ntolerance_abs = "0"\ntolerance_rel = "0"',
-        'expected = "0.3"\ntolerance_abs = 0.01\ntolerance_rel = "0"',
-        'expected = "0.3"\ntolerance_abs = "0"',
+        "expected = 0.30000000000000004\ntolerance_abs = 0.0\ntolerance_rel = 0.0",
+        'expected = "0.3"\ntolerance_abs = "0.01"\ntolerance_rel = 0.0',
+        'expected = "0.3"\ntolerance_abs = 0.0',
     ],
 )
-def test_numeric_private_literals_are_explicit_and_clear_previous_rewards(tmp_path, invalid_contract):
+def test_numeric_private_contract_clears_previous_rewards(tmp_path, invalid_contract):
     config = tmp_path / "verifier.toml"
-    config.write_text(render_spec(NumericSpec("0.3", tolerance_abs="0", tolerance_rel="0")))
+    config.write_text(render_spec(NumericSpec("0.3", tolerance_abs=0.0, tolerance_rel=0.0)))
     (tmp_path / "answer.txt").write_text("0.3")
     logs = tmp_path / "logs"
     arguments = [str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]

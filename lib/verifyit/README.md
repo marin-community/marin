@@ -49,11 +49,15 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
-Numeric private `expected`, `tolerance_abs` and `tolerance_rel` are required literal strings.
-For example, `expected = "1/2"`, `tolerance_abs = "0"`, `tolerance_rel = "0"` accepts both `1/2`
-and `0.5`. Comparison uses exact rational arithmetic with
-`max(tolerance_abs, tolerance_rel * abs(expected))`; tolerances must be nonnegative.
-Native float configuration is rejected because rounding may already have changed its meaning.
+Numeric private `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
+are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
+`tolerance_rel = 0.0` accepts both `1/2` and `0.5` without losing integer or decimal precision.
+The effective tolerance is `max(tolerance_abs, tolerance_rel * abs(expected))`. Float tolerances
+are converted to exact rational values through their decimal spelling before comparison;
+`0.01` permits an exact difference of `1/100`. Native float expected values are rejected
+because rounding may already have changed their meaning. `grade_numeric_candidate_float`
+compares already parsed floats directly with an explicit absolute tolerance; MMMU uses
+`0.0` and JEEBench uses `0.01` to retain their source scoring rules.
 Literal components and expanded decimal powers are limited to 4096 digits before parsing.
 
 [`spec.py`](src/verifyit/spec.py) owns the frozen mode dataclasses plus `parse_spec` and

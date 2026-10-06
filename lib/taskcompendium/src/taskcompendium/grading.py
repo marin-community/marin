@@ -277,7 +277,7 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
     )
 
 
-def numeric_answer(expected: str, tolerance_abs: str, tolerance_rel: str) -> VerifierSpec:
+def numeric_answer(expected: str, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
 
 

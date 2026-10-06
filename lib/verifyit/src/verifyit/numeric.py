@@ -60,6 +60,7 @@ def extract_numeric_candidate(text: str) -> Fraction:
         if not candidate:
             raise NumericCandidateError("final numeric box is empty or malformed")
     else:
+        # Surrounding prose is ignored, including whether the sentence negates the number.
         matches = list(NUMERIC_TOKEN.finditer(last_line(text) or ""))
         if len(matches) != 1:
             raise NumericCandidateError("final numeric line requires exactly one literal")

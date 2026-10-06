@@ -100,7 +100,7 @@ def specification() -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer("12", tolerance_abs="0", tolerance_rel="0"),
+        verifier=numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     )
 
@@ -162,7 +162,7 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
 )
 def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
     specification = specification.model_copy(
-        update={"verifier": numeric_answer("12", tolerance_abs="0.1", tolerance_rel="0")}
+        update={"verifier": numeric_answer("12", tolerance_abs=0.1, tolerance_rel=0.0)}
     )
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
@@ -237,7 +237,7 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     "answer_type,verifier,response",
     [
         (AnswerType.TEXT, exact_answer("12"), "12"),
-        (AnswerType.NUMBER, numeric_answer("12", tolerance_abs="0", tolerance_rel="0"), "12.0"),
+        (AnswerType.NUMBER, numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0), "12.0"),
     ],
 )
 async def test_answer_call_grades_semantic_answers_through_harbor(

@@ -120,8 +120,8 @@ class MathSpec:
 @dataclass(frozen=True)
 class NumericSpec:
     expected: str
-    tolerance_abs: str
-    tolerance_rel: str
+    tolerance_abs: float
+    tolerance_rel: float
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
