@@ -39,7 +39,6 @@ task those factories cannot run (``task_refusals``) is not started: each of its 
 import asyncio
 import copy
 import dataclasses
-import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -56,6 +55,7 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
+from taskforge.canonical import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import FactoryCapabilities, Refusal, task_refusals
 from taskforge.spec.draft import MACHINE_ANSWER_TYPES
@@ -240,7 +240,7 @@ def task_digest(task: TaskSpec, execution: TaskExecution, convention: Submission
     with (``None`` when no convention can carry it)."""
     presented = "null" if convention is None else f"{type(convention).__name__} {convention.model_dump_json()}"
     payload = f"{task.model_dump_json()}\n{execution.model_dump_json()}\n{presented}"
-    return hashlib.sha256(payload.encode()).hexdigest()
+    return sha256_hex(payload.encode())
 
 
 def _refuse(
@@ -306,7 +306,7 @@ def _record(fields: SpanFields, outcome: Outcome, plan: TrialPlan, trial: str, a
     if isinstance(outcome, Ungraded):
         fields.cause = str(outcome.cause)
     payload = outcome_json(outcome)
-    fields.output_hash = hashlib.sha256(payload).hexdigest()
+    fields.output_hash = sha256_hex(payload)
     write_evidence(plan.evidence_dir / str(plan.kind) / trial / f"attempt-{attempt}.json", payload)
 
 
