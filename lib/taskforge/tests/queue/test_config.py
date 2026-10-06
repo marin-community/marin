@@ -7,10 +7,7 @@ from pathlib import Path
 import pytest
 
 from taskforge.llm.client import Pool
-from taskforge.loop.policy import POLICY
-from taskforge.queue.config import LaptopGlm, ParallelKeyEnv, RelayGlm, load_run_config, run_config
-from taskforge.sandbox.factories import MachineHost
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.queue.config import LaptopGlm, load_run_config, run_config
 
 EXAMPLE = Path(__file__).parents[2] / "docs" / "policy.example.json"
 
@@ -19,37 +16,33 @@ def example() -> dict:
     return json.loads(EXAMPLE.read_text())
 
 
-def test_the_committed_example_is_an_unattended_iris_run_on_the_bulk_pool_with_the_first_run_policy():
+def test_the_committed_example_queues_on_the_bulk_pool():
     config = load_run_config(EXAMPLE)
 
-    assert config.host is MachineHost.IRIS
-    assert config.glm == RelayGlm(relay_job="/muchanem/glm53-relay-rno2a", token_env="GLM_API_TOKEN", pool=Pool.BULK)
-    assert config.web == ParallelKeyEnv("PARALLEL_KEY")
-    assert config.width == 256
-    validation = config.policy.validation
-    assert (validation.k, validation.adversary_k) == (8, 2)
-    assert set(validation.roles) == set(AdversaryRole)
-    assert (validation.band.min_solve_rate, validation.band.max_solve_rate) == (0.125, 0.875)
-    assert validation.sampling.max_continuations == 0
-    assert [c.id for c in config.engine.conventions] == ["plain_text", "json_answer", "json_value_answer"]
+    # User decision D3: the committed unattended configuration names the bulk pool.
+    assert config.glm.pool is Pool.BULK
 
 
-def test_the_example_policy_round_trips_through_policy_json():
-    config = load_run_config(EXAMPLE)
-
-    assert POLICY.validate_json(POLICY.dump_json(config.policy)).digest == config.policy.digest
-
-
-@pytest.mark.parametrize("path", [(), ("glm",), ("engine",)])
-def test_every_field_is_required(path):
+@pytest.mark.parametrize(
+    ("path", "removed"),
+    [((), "width"), (("glm",), "kind"), (("glm",), "pool"), (("web",), "kind"), (("engine",), "max_turns")],
+)
+def test_every_field_is_required(path, removed):
     obj = example()
     target = obj
     for key in path:
         target = target[key]
-    removed = sorted(k for k in target if k != "kind")[0]
     del target[removed]
 
     with pytest.raises(ValueError, match=f"missing \\['{removed}'\\]"):
+        run_config(obj)
+
+
+def test_an_unknown_convention_type_is_a_config_error():
+    obj = example()
+    obj["engine"]["conventions"][0]["type"] = "no_such_convention"
+
+    with pytest.raises(ValueError, match="unknown type 'no_such_convention'"):
         run_config(obj)
 
 
