@@ -28,8 +28,8 @@ from experiments.post_training.russell_rsi.rollout_eval import run_calibration_e
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_chat_study import (
     collect_chat_rows,
-    collect_remaining_rows,
     qualified_row,
+    remaining_chat_plan,
 )
 from experiments.post_training.russell_rsi.teacher_collection import TeacherTask
 from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_INSTRUCTION, preflight_task
@@ -104,7 +104,16 @@ def test_frozen_remaining_order_retains_seeds_and_never_reissues_slots(tmp_path,
         calls.append(slot.name)
         return rollout("answer-" + slot.name, reward=0 if slot.name == "05-1" else 1)
 
-    first = asyncio.run(collect_remaining_rows(original, persisted_tasks(tasks), retained, student_tokenizer, root, run))
+    first = asyncio.run(
+        collect_chat_rows(
+            remaining_chat_plan(original, retained),
+            persisted_tasks(tasks),
+            student_tokenizer,
+            root,
+            run,
+            required_rows=4,
+        )
+    )
     assert calls == (["06-0", "07-0"] if interrupted else ["05-1", "06-0", "07-0"])
     assert first["status"] == "passed"
     assert [row["slot"] for row in first["accepted"]] == ["00-1", "02-0", "06-0", "07-0"]
@@ -112,7 +121,14 @@ def test_frozen_remaining_order_retains_seeds_and_never_reissues_slots(tmp_path,
     assert first["new_trajectories"] == 3 and first["cumulative_trajectories"] == 13
     assert not (root / "trajectories/06-1").exists()
     second = asyncio.run(
-        collect_remaining_rows(original, persisted_tasks(tasks), retained, student_tokenizer, root, run)
+        collect_chat_rows(
+            remaining_chat_plan(original, retained),
+            persisted_tasks(tasks),
+            student_tokenizer,
+            root,
+            run,
+            required_rows=4,
+        )
     )
     assert second == first
     assert len(calls) == (2 if interrupted else 3)
@@ -128,8 +144,13 @@ def test_exhausted_budget_does_not_train_or_replace_seed_rows(tmp_path, student_
         return rollout("failed", reward=0)
 
     result = asyncio.run(
-        collect_remaining_rows(
-            original, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path)), run
+        collect_chat_rows(
+            remaining_chat_plan(original, retained),
+            persisted_tasks(tasks),
+            student_tokenizer,
+            StoragePath(str(tmp_path)),
+            run,
+            required_rows=4,
         )
     )
     assert calls == ["05-1", "06-0", "06-1", "07-0", "07-1", "08-0", "08-1", "09-0", "09-1"]
@@ -199,16 +220,26 @@ def test_changed_task_and_fatal_resume_fail_before_provider(tmp_path, student_to
     broken["selection"]["selected"][9]["task_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="frozen admission"):
         asyncio.run(
-            collect_remaining_rows(
-                broken, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path)), run
+            collect_chat_rows(
+                remaining_chat_plan(broken, retained),
+                persisted_tasks(tasks),
+                student_tokenizer,
+                StoragePath(str(tmp_path)),
+                run,
+                required_rows=4,
             )
         )
     assert calls == []
     for _ in range(2):
         with pytest.raises(RolloutContractError):
             asyncio.run(
-                collect_remaining_rows(
-                    original, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path)), run
+                collect_chat_rows(
+                    remaining_chat_plan(original, retained),
+                    persisted_tasks(tasks),
+                    student_tokenizer,
+                    StoragePath(str(tmp_path)),
+                    run,
+                    required_rows=4,
                 )
             )
     assert calls == ["05-1"]
@@ -231,8 +262,13 @@ def test_admitted_serialized_task_survives_new_schema_defaults(tmp_path, student
         return rollout("not accepted", reward=0)
 
     result = asyncio.run(
-        collect_remaining_rows(
-            original, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path / "valid")), run
+        collect_chat_rows(
+            remaining_chat_plan(original, retained),
+            persisted_tasks(tasks),
+            student_tokenizer,
+            StoragePath(str(tmp_path / "valid")),
+            run,
+            required_rows=4,
         )
     )
     assert result["new_trajectories"] == 9 and calls[0] == "05-1"
@@ -243,13 +279,13 @@ def test_admitted_serialized_task_survives_new_schema_defaults(tmp_path, student
     tasks[changed.id] = TaskSpec.model_validate_json(json.dumps(changed_payload))
     with pytest.raises(ValueError, match="frozen admission"):
         asyncio.run(
-            collect_remaining_rows(
-                original,
+            collect_chat_rows(
+                remaining_chat_plan(original, retained),
                 persisted_tasks(tasks),
-                retained,
                 student_tokenizer,
                 StoragePath(str(tmp_path / "changed")),
                 run,
+                required_rows=4,
             )
         )
     assert calls == [] and not (tmp_path / "changed" / "plan.json").exists()

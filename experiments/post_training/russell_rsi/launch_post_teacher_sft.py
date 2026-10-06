@@ -362,11 +362,15 @@ def post_sft_stages(
     source: dict,
     export_uri: str,
     study: StudyBaseline | None = None,
+    calibration_runner: Callable[[DevelopmentEvaluationConfig], None] | None = None,
 ) -> dict[str, ArtifactStep]:
     """Use the already qualified model and validated bank, replay and baseline."""
     protocol = PROTOCOL if study is None else study.protocol
     version = config["version"]
     runtime = RuntimeBundle(**config["runtime_bundle"])
+    runner = run_development_evaluation if study is None else run_calibration_evaluation
+    if calibration_runner is not None:
+        runner = calibration_runner
     calibration = development_step(
         bank,
         model,
@@ -379,7 +383,7 @@ def post_sft_stages(
         require_reward_variation=False,
         limit=len(source_plan.task_bank),
         startup_attempts=CALIBRATION_STARTUP_ATTEMPTS,
-        evaluation_runner=run_development_evaluation if study is None else run_calibration_evaluation,
+        evaluation_runner=runner,
     )
     plan = post_sft_plan(
         source_plan, model=artifact_identity(model), calibration=artifact_identity(calibration), protocol=protocol

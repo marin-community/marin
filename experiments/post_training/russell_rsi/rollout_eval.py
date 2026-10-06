@@ -168,7 +168,7 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
 
 
 def calibration_evaluation_journal(config: DevelopmentEvaluationConfig) -> EvaluationJournal:
-    """Bind the complete 32-task, eight-sample calibration before inference."""
+    """Bind every task and all eight samples before calibration inference."""
     from taskcompendium.parquet import read_tasks  # noqa: PLC0415
 
     from experiments.post_training.russell_rsi.token_preflight import (  # noqa: PLC0415
@@ -180,15 +180,14 @@ def calibration_evaluation_journal(config: DevelopmentEvaluationConfig) -> Evalu
     parquet = StoragePath(config.tasks_path).read_bytes()
     tasks = list(read_tasks(config.tasks_path))
     if (
-        len(tasks) != CALIBRATION_TASKS
-        or len({task.id for task in tasks}) != CALIBRATION_TASKS
-        or config.limit != CALIBRATION_TASKS
+        len(tasks) != config.limit
+        or len({task.id for task in tasks}) != config.limit
         or config.samples_per_task != CALIBRATION_SAMPLES
         or config.temperature != 1.0
         or config.startup_attempts != CALIBRATION_STARTUP_ATTEMPTS
         or config.require_reward_variation
     ):
-        raise ValueError("Calibration differs from the frozen 256-slot protocol")
+        raise ValueError("Calibration differs from its frozen complete eight-sample bank")
     for task in tasks:
         require_journal_submission(task)
     probes = [
@@ -231,6 +230,8 @@ def calibration_evaluation_journal(config: DevelopmentEvaluationConfig) -> Evalu
 
 
 def run_calibration_evaluation(config: DevelopmentEvaluationConfig) -> None:
+    if config.limit != CALIBRATION_TASKS:
+        raise ValueError("Original calibration requires its frozen 32-task bank")
     journal = calibration_evaluation_journal(config)
     run_development_evaluation(config, journal=journal)
 

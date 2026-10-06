@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
@@ -39,6 +40,7 @@ from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.launch_teacher_sft import (
     TEACHER_PIP_PACKAGES,
     CollectionBinding,
+    StudentTrainingTemplate,
     TeacherCollectionConfig,
     teacher_sft_steps,
 )
@@ -62,7 +64,6 @@ CONTEXT_TOKENS = 16384
 CHAT_ROWS = 4
 BATCH_SIZE = 8
 SFT_PASSES = 8
-EXAMPLE_EXPOSURES = 32
 SOURCE_FAMILIES = 10
 TRAJECTORY_CEILING = 20
 CONSUMED_TRAJECTORIES = 10
@@ -160,7 +161,7 @@ def source_study(study: ChatStudy) -> dict:
         or decision["sft"]["optimizer_updates"] != SFT_UPDATES
         or decision["sft"]["passes"] != SFT_PASSES
         or decision["sft"]["context_tokens"] != CONTEXT_TOKENS
-        or decision["sft"]["example_exposures"] != EXAMPLE_EXPOSURES
+        or decision["sft"]["example_exposures"] != CHAT_ROWS * SFT_PASSES
         or decision["sft"]["assistant_only_loss"] is not True
         or decision["sft"]["teacher_reasoning_in_student"] is not False
         or decision["sft"]["truncate"] is not False
@@ -291,25 +292,17 @@ def retained_rows(study: ChatStudy, original: dict, tasks: dict[str, TaskSpec], 
     return rows
 
 
-async def collect_remaining_rows(
-    original: dict,
-    task_records: dict[str, str],
-    retained: list[dict],
-    tokenizer: MarinTokenizer,
-    directory: StoragePath,
-    run_slot: Callable[[TaskSpec, StoragePath, TeacherModelConfig], Awaitable[dict]],
-) -> dict:
+def remaining_chat_plan(original: dict, retained: list[dict]) -> dict:
     selected = original["selection"]["selected"]
     if len(selected) != SOURCE_FAMILIES or len({entry["family"] for entry in selected}) != SOURCE_FAMILIES:
         raise ValueError("Chat study requires the exact ten-family source selection")
-    plan = {
+    return {
         "protocol": PROTOCOL,
         "selection": original["selection"],
         "permitted_slots": list(PERMITTED_SLOTS),
         "consumed_trajectories": CONSUMED_TRAJECTORIES,
         "retained": retained,
     }
-    return await collect_chat_rows(plan, task_records, tokenizer, directory, run_slot, required_rows=CHAT_ROWS)
 
 
 async def collect_chat_rows(
@@ -408,67 +401,105 @@ def run_chat_study_collection(config: ChatCollectionConfig) -> None:
         raise ValueError("Chat collection inputs differ from original frozen scientific settings")
     output = StoragePath(base.output_path)
     write_once(output / "study.json", asdict(config.study))
-    train_bytes = PinnedFile(
-        str(StoragePath(base.bank_path) / "train.parquet"), original["selection"]["train_sha256"]
-    ).read_bytes()
+
+    def prepare(records: dict[str, str], tokenizer: MarinTokenizer) -> dict:
+        tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in records.items()}
+        return remaining_chat_plan(original, retained_rows(config.study, original, tasks, tokenizer))
+
+    collect_chat_dataset(
+        base,
+        train_sha256=original["selection"]["train_sha256"],
+        template=StudentTrainingTemplate(
+            original["student_training_template_uri"], original["student_training_template_sha256"]
+        ),
+        plan=prepare,
+        required_rows=CHAT_ROWS,
+        passes=SFT_PASSES,
+        batch_size=BATCH_SIZE,
+        updates=SFT_UPDATES,
+    )
+
+
+def collect_chat_dataset(
+    base: TeacherCollectionConfig,
+    *,
+    train_sha256: str,
+    template: StudentTrainingTemplate,
+    plan: Callable[[dict[str, str], MarinTokenizer], dict],
+    required_rows: int,
+    passes: int,
+    batch_size: int,
+    updates: int,
+) -> None:
+    """Write qualified full rows; completed or fatal slots require no provider access."""
+    if required_rows * passes != batch_size * updates:
+        raise ValueError("Teacher row exposures differ from optimizer geometry")
+    output = StoragePath(base.output_path)
+    train_bytes = PinnedFile(str(StoragePath(base.bank_path) / "train.parquet"), train_sha256).read_bytes()
     with tempfile.TemporaryDirectory(prefix="russell-chat-study-") as temporary:
         root = Path(temporary)
         (root / "train.parquet").write_bytes(train_bytes)
         task_records = {json.loads(row)["id"]: row for row in read_task_records(str(root / "train.parquet"))}
-        tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in task_records.items()}
         for name, expected in base.tokenizer_files.items():
             if Path(name).name != name:
                 raise ValueError("Tokenizer input must be a filename")
             (root / name).write_bytes(PinnedFile(str(StoragePath(base.parent_path) / name), expected).read_bytes())
-        template = PinnedFile(
-            original["student_training_template_uri"], original["student_training_template_sha256"]
-        ).read_bytes()
-        if template.decode() != MARIN_CHAT_TEMPLATE:
+        template_bytes = PinnedFile(template.uri, template.sha256).read_bytes()
+        if template_bytes.decode() != MARIN_CHAT_TEMPLATE:
             raise ValueError("Chat student template differs from parent training")
-        (root / "training_chat_template.jinja").write_bytes(template)
+        (root / "training_chat_template.jinja").write_bytes(template_bytes)
         tokenizer = load_tokenizer(str(root))
-        seeds = retained_rows(config.study, original, tasks, tokenizer)
-        runtime = install_runtime_bundle(base.runtime_bundle)
-        factories = {
-            EnvironmentKind.SHELLSIM: ShellSimMachineFactory(),
-            EnvironmentKind.DOCKER: qemu_factory(runtime, base.runtime_bundle),
-        }
+        prepared = plan(task_records, tokenizer)
 
         async def collect() -> dict:
-            async with httpx.AsyncClient(
-                timeout=600,
-                headers={"Authorization": f"Bearer {os.environ[GLM_TOKEN_ENV]}"},
-                transport=httpx.AsyncHTTPTransport(retries=0),
-            ) as client:
+            async with AsyncExitStack() as stack:
+                client = None
+                factories = {}
 
                 async def run_slot(task: TaskSpec, slot: StoragePath, model: TeacherModelConfig) -> dict:
+                    nonlocal client, factories
+                    if client is None:
+                        runtime = install_runtime_bundle(base.runtime_bundle)
+                        factories = {
+                            EnvironmentKind.SHELLSIM: ShellSimMachineFactory(),
+                            EnvironmentKind.DOCKER: qemu_factory(runtime, base.runtime_bundle),
+                        }
+                        client = await stack.enter_async_context(
+                            httpx.AsyncClient(
+                                timeout=600,
+                                headers={"Authorization": f"Bearer {os.environ[GLM_TOKEN_ENV]}"},
+                                transport=httpx.AsyncHTTPTransport(retries=0),
+                            )
+                        )
                     result = await run_teacher_chat(
                         task, slot, model, client, lambda: resolve_glm_base_url(base.relay_job), factories
                     )
                     return chat_teacher_evidence(result)
 
-                return await collect_remaining_rows(original, task_records, seeds, tokenizer, output, run_slot)
+                return await collect_chat_rows(
+                    prepared, task_records, tokenizer, output, run_slot, required_rows=required_rows
+                )
 
         result = asyncio.run(collect())
     if result["status"] != "passed":
-        raise ValueError("The bounded chat study did not produce four qualified families")
+        raise ValueError("The bounded chat study did not produce its required qualified families")
     content = "".join(json.dumps(entry["row"], sort_keys=True) + "\n" for entry in result["accepted"])
     train = output / "train.jsonl"
     if train.exists():
         if train.read_text() != content:
-            raise ValueError("Four-family training bytes differ from saved rows")
+            raise ValueError("Training bytes differ from saved rows")
     else:
         train.write_text(content)
     write_once(
         output / "dataset.json",
         {
-            "rows": CHAT_ROWS,
+            "rows": required_rows,
             "sha256": hashlib.sha256(content.encode()).hexdigest(),
             "collection_sha256": compact_json_sha256(result),
-            "passes": SFT_PASSES,
-            "batch_size": BATCH_SIZE,
-            "optimizer_updates": SFT_UPDATES,
-            "example_exposures": EXAMPLE_EXPOSURES,
+            "passes": passes,
+            "batch_size": batch_size,
+            "optimizer_updates": updates,
+            "example_exposures": required_rows * passes,
         },
     )
 

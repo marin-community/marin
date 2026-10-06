@@ -56,3 +56,12 @@ A single CW02 CPU worker runs with two CPUs, 8 GB RAM, 16 GB disk, a 20-minute d
 Use `--stage select-recovered-retention --version 2026.10.06.13` only with a completed saved-submission grade recovery. Its input pins the original coding and retention producers, the CPU recovery amendment, manifest, worker, request, launch, terminal record, and grade records. The validator checks the exact saved patch and private verifier, one completed grade call, and zero model or tokenizer calls. It requires the two original valid grades and preserves the original unavailable result and failure summary.
 
 The stage writes a separate derived retention summary and uses the unchanged promotion gate. It adopts completed coding evidence and schedules no evaluation, grading, serving, or training worker. Its selection record retains the original and derived retention producer identities. Calibration remains incomplete, with a null signal gate and no RL authorization.
+## Next teacher diversity study
+
+Use `experiments.post_training.russell_rsi.launch_teacher_diversity_study` with protocol `champion-rsi-teacher-eight-family-diversity-v1`. The stages are `collect`, `sft`, `reload`, `calibrate`, `rl`, and `evaluate`. Run the artifact main without `--run` to inspect the graph.
+
+The configuration pins the unchanged original study for lineage, the completed current coding evidence and selection, and a new canonical capability release and review. The selection must retain incumbent update8. Four retained qualified rows stay unchanged. Six additional eligible families must be distinct from those four and from acceptance and final families. The plan records their previous attempts.
+
+Collection permits at most two new trajectories per family, stops at the first four qualified new families, and refuses replay of incomplete reservations. The dataset has eight full rows and four passes: 32 exposures, batch size 8, and four updates. It retains the 16K context, assistant-only loss, 1e-6 learning rate, tokenizer, training template, and update8 initialization.
+
+Post-SFT requires durable evidence for all optimizer steps 0 through 3 and the strict export and serving qualification. It binds all eight calibration samples for each of the 32 to 36 admitted tasks. The existing completeness and signal gates, conditional four-update GRPO trial, and coding and retention barriers stay unchanged. Missing early metrics cannot use the previous export-recovery amendment.
