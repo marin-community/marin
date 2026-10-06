@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
+from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -27,6 +28,7 @@ from rolloutengine.contracts import (
     RolloutOperation,
     RolloutStep,
     TaskSession,
+    TokenContract,
     Transition,
 )
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
@@ -49,7 +51,7 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks."""
+    """Generate rollouts under a token contract from lowered single-stage tasks."""
 
     def __init__(
         self,
@@ -57,10 +59,17 @@ class ShellboxRolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
+        token_contract: TokenContract = TokenContract.EXACT,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
+        self.token_contract = token_contract
+
+    def _record_metrics(self, metrics: dict[str, Any]) -> dict[str, Any]:
+        if self.token_contract == TokenContract.EXACT:
+            return metrics
+        return {**metrics, "token_contract": self.token_contract.value}
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
@@ -179,15 +188,20 @@ class ShellboxRolloutEngine:
                     if assistant_index is None:
                         prompt = turn.prompt_token_ids
                         tokens = prompt
-                    if turn.prompt_token_ids[: len(tokens)] != tokens:
-                        raise RolloutContractError("Model transport changed the served token prefix")
-                    observation_count = len(turn.prompt_token_ids) - len(tokens)
-                    masks += (0,) * observation_count + (1,) * len(turn.response_token_ids)
-                    if logprobs is not None:
-                        logprobs = (
-                            None if turn.logprobs is None else logprobs + (0.0,) * observation_count + turn.logprobs
-                        )
+                    if self.token_contract == TokenContract.EXACT:
+                        if turn.prompt_token_ids[: len(tokens)] != tokens:
+                            raise RolloutContractError("Model transport changed the served token prefix")
+                        observation_count = len(turn.prompt_token_ids) - len(tokens)
+                        masks += (0,) * observation_count + (1,) * len(turn.response_token_ids)
+                        if logprobs is not None:
+                            logprobs = (
+                                None if turn.logprobs is None else logprobs + (0.0,) * observation_count + turn.logprobs
+                            )
                     tokens = turn.prompt_token_ids + turn.response_token_ids
+                    if self.token_contract == TokenContract.TEXT:
+                        # Re-tokenized prompts do not extend the earlier sequence, so no position is trainable.
+                        masks = (0,) * (len(tokens) - len(prompt))
+                        logprobs = None
                     assistant_index = len(messages)
                     messages.append(turn.message)
                     pending = RolloutStep(
@@ -207,7 +221,7 @@ class ShellboxRolloutEngine:
                         completed.grade,
                         turn.stop_reason,
                         (*steps, pending),
-                        pending.transition.metrics,
+                        self._record_metrics(pending.transition.metrics),
                     )
                     try:
                         async with asyncio.timeout(limits.tool_turn_timeout):
@@ -241,7 +255,7 @@ class ShellboxRolloutEngine:
                         continue
                     steps.append(replace(pending, transition=transition))
                     completed = replace(
-                        completed, steps=tuple(steps), stop_reason=stop_reason, metrics=transition.metrics
+                        completed, steps=tuple(steps), stop_reason=stop_reason, metrics=self._record_metrics(transition.metrics)
                     )
                     if transition.done or stop_reason == LENGTH_STOP_REASON:
                         break
