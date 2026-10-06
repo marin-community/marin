@@ -35,6 +35,7 @@ from experiments.post_training.bfcl_rl.retained_preferences import (
 )
 
 STUDENT_REASONING_MODE = "/think"
+CAPTURED_ASSISTANT_PLACEHOLDER = "Captured assistant completion"
 
 
 class NativeAssistantCaptureError(ValueError):
@@ -201,8 +202,6 @@ def native_model_trace(
 
 def native_chat_document(trace: NativeModelTrace) -> dict:
     """Adapt a native model branch using the shared OpenAI-to-Harmony conversion."""
-    final = trace.messages[-1]
-    messages = trace.messages
     tokenizer = load_tokenizer(trace.model_tokenizer)
     turn_end_id = tokenizer.get_vocab().get("<|eot_id|>")
     terminal_ids = {tokenizer.eos_token_id}
@@ -231,10 +230,20 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
                 normalize_reasoning_delimiters(text), calls, source_format=trace.tool_call_format
             )
         )
-    if not any(final.get(field) for field in ("content", "reasoning_content", "tool_calls", "function_call")):
-        # The structural placeholder supplies a final Harmony turn; its text is
-        # replaced by the captured literal during shared rendering/tokenization.
-        messages = [*messages[:-1], {**final, "unparsed_content": "Captured assistant completion"}]
+    messages = []
+    for message in trace.messages:
+        if message["role"] != "assistant":
+            messages.append(message)
+            continue
+        structural = {
+            key: value
+            for key, value in message.items()
+            if key not in {"content", "reasoning_content", "unparsed_content"}
+        }
+        structural["content"] = None
+        if not structural.get("tool_calls") and not structural.get("function_call"):
+            structural["unparsed_content"] = CAPTURED_ASSISTANT_PLACEHOLDER
+        messages.append(structural)
     document = openai_chat_document(
         messages,
         f"bfcl-complement/{trace.identity.harness}",

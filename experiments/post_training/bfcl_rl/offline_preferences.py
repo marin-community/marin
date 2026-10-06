@@ -84,6 +84,9 @@ def mark_conversion_failure(
     failures.append(
         {
             "source_id": source_id,
+            "task_source_id": evidence.retained.rollout.task_source_id,
+            "task_name": evidence.record["trajectory"]["instance_id"],
+            "harness": evidence.identity.harness,
             "verifier_outcome": evidence.retained.rollout.outcome.value,
             "retained_uri": evidence.retained_uri,
             "native_trace_uri": evidence.native_uri,

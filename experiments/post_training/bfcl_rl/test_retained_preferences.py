@@ -709,6 +709,12 @@ def _native_pair_collection(
                         "name": "hallucinated_tool",
                         "arguments": '{"key": "STUDENT_ARGUMENT',
                     }
+                if model == "student" and index == 0 and fault == "malformed_reasoning":
+                    final["content"] = "STUDENT_FINAL <think> nested <think>"
+                if model == "student" and index == 0 and fault == "inline_tool_text":
+                    final["content"] = "STUDENT_FINAL <tool_call>QUOTED_INLINE_CALL</tool_call>"
+                if model == "student" and index == 0 and fault == "assistant_control_text":
+                    final["content"] = "STUDENT_FINAL <|start_header_id|>assistant<|end_header_id|>"
                 messages = [user, assistant, observation, final]
                 if profile["name"] == "opencode":
                     identity_line = (
@@ -832,6 +838,9 @@ def _native_pair_tokenizer(path: Path) -> None:
         "agent_error",
         "infrastructure_error",
         "malformed_calls",
+        "malformed_reasoning",
+        "inline_tool_text",
+        "assistant_control_text",
         "protocol_wrappers",
     ],
 )
@@ -852,6 +861,9 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         assert len(failures) == 2
         assert all("differ from retained trainable" in failure["error"] for failure in failures)
         assert len({failure["source_id"] for failure in failures}) == 2
+        assert {failure["task_name"] for failure in failures} == {tasks[0].name, tasks[1].name}
+        assert {failure["task_source_id"] for failure in failures} == {tasks[0].source_id, tasks[1].source_id}
+        assert all(failure["harness"] for failure in failures)
         assert not (tmp_path / "cache/train").exists()
         return
     with set_current_client(LocalClient()):
@@ -907,6 +919,12 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         assert "USER_SUMMARY_FINAL" not in masked
         if fault == "malformed_calls" and role == "rejected":
             assert masked.count("RAW_LOOP") == 20
+        if fault == "malformed_reasoning" and role == "rejected":
+            assert "STUDENT_FINAL <|start_think|> nested <|start_think|>" in masked
+        if fault == "inline_tool_text" and role == "rejected":
+            assert "<tool_call>QUOTED_INLINE_CALL</tool_call>" in masked
+        if fault == "assistant_control_text" and role == "rejected":
+            assert "<|start_header_id|>assistant<|end_header_id|>" in masked
         targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
