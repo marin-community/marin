@@ -78,3 +78,15 @@ def test_final_shared_only_layer_runs_no_routed_experts(extra):
     g = grads.stacked_blocks_tail.stacked
     assert float(jnp.abs(g.mlp.expert_mlp.w_up).max()) == 0.0  # the routed path never runs
     assert float(jnp.abs(g.shared[0].w_up).max()) > 0
+
+
+def test_final_intermediate_dim_widens_only_the_final_layers_experts():
+    mesh, model = t._model(
+        ngram_stat_rows=0, mla=True, num_layers=4, latent_out_full_layers=(3,), final_intermediate_dim=32
+    )
+    assert model.stacked_blocks_tail.stacked.mlp.expert_mlp.w_up.shape[-1] == 32
+    assert model.stacked_blocks.stacked.mlp.expert_mlp.w_up.shape[-1] == model.config.intermediate_dim
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        loss = eqx.filter_jit(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))(model)
+    assert np.isfinite(float(loss))
