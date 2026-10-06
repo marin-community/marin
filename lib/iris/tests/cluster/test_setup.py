@@ -73,6 +73,34 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
+def test_default_setup_rust_dev_without_maturin_members_succeeds(tmp_path):
+    workdir = tmp_path / "workdir"
+    member = workdir / "lib" / "python-member"
+    member.mkdir(parents=True)
+    (workdir / "pyproject.toml").write_text("[tool.uv.sources]\npython-member = { workspace = true, editable = true }\n")
+    (member / "pyproject.toml").write_text('[build-system]\nbuild-backend = "hatchling.build"\n')
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text("#!/bin/sh\nexit 0\n")
+    uv.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", "-c", default_setup_script()],
+        env={
+            **os.environ,
+            "IRIS_VENV": str(tmp_path / "venv"),
+            "IRIS_WORKDIR": str(workdir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize("link_mode", ["copy", "symlink"])
 def test_default_setup_sync_uses_host_link_mode_for_cached_wheel(tmp_path, link_mode):
     workdir = tmp_path / "workdir"
