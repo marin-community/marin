@@ -66,7 +66,7 @@ from taskcompendium.environment import EnvironmentKind, RegistryImage, StdoutRew
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, Source, TaskSpec
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import entry_to_json
@@ -86,7 +86,7 @@ SUBMITTER_KEYS = ("HF_TOKEN", "WANDB_API_KEY")
 IRIS_JOB_ENV = "IRIS_JOB_ENV"
 IMAGE = "docker.io/library/python@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d"
 IMAGE_TAG = "python:3.12-slim (OCI index digest, resolved 2026-10-05)"
-MATH_ANSWER = 395
+MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
 CHECK_SCRIPT = f'v=$(tr -d " \\n" < /workspace/sum.txt)\nif [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
@@ -286,7 +286,7 @@ async def run_phase(
         max_turns=MAX_TURNS,
         command_timeout=COMMAND_TIMEOUT,
         cleanup_timeout=CLEANUP_TIMEOUT,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     plan = TrialPlan(
         item_id=task.id,

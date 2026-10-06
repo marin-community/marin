@@ -4,7 +4,7 @@
 """Typed trial outcomes: a trial either produced a grade or failed for a classified ``Cause``.
 
 ``Graded`` holds a rollout whose grade is a judgment of the submission: ``GRADED``, or
-``EXTRACTION_ERROR`` (the model gave no extractable answer, which scores zero). An agent that runs
+``SUBMISSION_FAILURE`` (the model ended without a valid submission, which scores zero). An agent that runs
 out of ``TaskExecution.agent_timeout`` is a budget stop like running out of turns, so it is
 ``Graded`` too (``classify.trial_outcome``). Everything else is ``Ungraded``: task setup,
 infrastructure, grader and contract failures that say nothing about the submission. Statistics use graded outcomes
@@ -83,7 +83,7 @@ RETRYABLE = frozenset(
 )
 """Causes a fresh attempt can fix. The rest are properties of the task, the grader or the model."""
 
-GRADED_STATUSES = frozenset({GradeStatus.GRADED, GradeStatus.EXTRACTION_ERROR})
+GRADED_STATUSES = frozenset({GradeStatus.GRADED, GradeStatus.SUBMISSION_FAILURE})
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ class Graded:
 
     @property
     def reward(self) -> float:
-        """The reward, with an extraction error scored as zero."""
+        """The reward; a graded result always has one, and a submission failure scores zero."""
         return 0.0 if self.grade.reward is None else self.grade.reward
 
 

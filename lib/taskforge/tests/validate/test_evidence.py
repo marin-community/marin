@@ -28,7 +28,7 @@ def test_statistics_use_graded_outcomes_only_and_ungraded_ones_make_evidence_inc
             TrialKind.SOLVER: (
                 graded(1.0),
                 graded(0.5),
-                graded(None, Outcome.EXTRACTION_ERROR),
+                graded(None, Outcome.SUBMISSION_FAILURE),
                 ungraded(Cause.MACHINE_START),
                 ungraded(Cause.UNCLASSIFIED),
             ),

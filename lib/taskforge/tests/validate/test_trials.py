@@ -9,7 +9,7 @@ import json
 from rigging.timing import ExponentialBackoff
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import TaskExecution
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.llm.client import GlmRequestRejected
@@ -28,7 +28,7 @@ def settings(factory, capabilities=None) -> EngineSettings:
         max_turns=4,
         command_timeout=10,
         cleanup_timeout=10,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
 
 
