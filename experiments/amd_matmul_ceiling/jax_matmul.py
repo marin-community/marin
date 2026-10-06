@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import statistics
 import time
 from pathlib import Path
 
@@ -108,14 +109,13 @@ def time_shape(shape: Shape, dtype: str, *, warmup_seconds: float, window_second
         elapsed = time.perf_counter() - start
         window_tflops.append(shape.flops * iterations / elapsed / 1e12)
 
-    ordered = sorted(window_tflops)
     return ShapeResult(
         shape=str(shape),
         dtype=dtype,
         iterations_per_window=iterations,
         window_tflops=window_tflops,
-        median_tflops=ordered[len(ordered) // 2],
-        max_tflops=ordered[-1],
+        median_tflops=statistics.median(window_tflops),
+        max_tflops=max(window_tflops),
     )
 
 
