@@ -12,6 +12,28 @@ from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine,
 from shellbox.machine import Command, DockerImage, MachineSpec
 
 
+def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_leader(monkeypatch):
+    async def docker_exec(*args, stdin=b"", timeout=None):
+        process = await asyncio.create_subprocess_exec(
+            *args[args.index("fixture") + 1 :],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(stdin), timeout=timeout)
+        return DockerCommandResult(process.returncode, stdout, stderr)
+
+    monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker_exec)
+    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
+    result = asyncio.run(
+        machine.run(
+            Command(("sh", "-c", 'read -r value; printf "%s\\n" "$value"; exit 23'), stdin=b"answer\n", timeout=5)
+        )
+    )
+    assert (result.exit_code, result.stdout, result.reason) == (23, b"answer\n", ExitReason.EXITED)
+
+
 def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_path, monkeypatch):
     container = tmp_path / "container"
     container.mkdir()
