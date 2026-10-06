@@ -1702,7 +1702,7 @@ requires-dist = [
     { name = "marin-rigging", marker = "extra == 'daytona'", specifier = ">=0.2.0" },
     { name = "marin-rigging", marker = "extra == 'shellsim'", specifier = ">=0.2.0" },
     { name = "quicksand-qemu", marker = "extra == 'qemu'", specifier = ">=0.5.12,<0.6" },
-    { name = "shellsim", marker = "extra == 'shellsim'", specifier = ">=0.1.20,<0.2" },
+    { name = "shellsim", marker = "extra == 'shellsim'", specifier = ">=0.1.29,<0.2" },
 ]
 provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
 
