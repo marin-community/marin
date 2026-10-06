@@ -635,7 +635,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     catalog_rows = []
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", catalog_rows.append)
 
-    with pytest.raises(RuntimeError, match="1 of 2 evals failed"):
+    with pytest.raises(RuntimeError, match="1 step"):
         evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
 
     failed = read_record(str(records / "run-failure" / "record.json"))
@@ -687,7 +687,7 @@ def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, 
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
 
     if expected_status is RunStatus.INFRA_FAILED:
-        with pytest.raises(RuntimeError, match="1 of 1 evals failed"):
+        with pytest.raises(RuntimeError, match="1 step"):
             evaluate_batch(batch, _remote_session(), orchestrator_job_id="/orchestrator", env_vars={})
     else:
         evaluate_batch(batch, _remote_session(), orchestrator_job_id="/orchestrator", env_vars={})

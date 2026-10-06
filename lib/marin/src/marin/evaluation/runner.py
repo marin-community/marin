@@ -4,10 +4,10 @@
 """Serve one model and run a batch of endpoint-oriented evaluations."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
-from typing import Protocol
+from typing import NoReturn, Protocol
 
 from fray.client import JobHandle
 from iris.client.client import IrisClient, Job, iris_ctx
@@ -41,7 +41,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_runner import run_step, step_is_built
+from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
@@ -297,41 +297,6 @@ def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tupl
     return {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
 
 
-def _record_unstarted(
-    batch: EvaluationBatch,
-    evaluations: tuple[Evaluation, ...],
-    error: Exception,
-    jobs: dict[str, str],
-    tails: dict[str, tuple[str, ...]],
-    paths: list[str],
-) -> None:
-    message = f"{type(error).__name__}: {error}"
-    for evaluation in evaluations:
-
-        def record_failure_step(_output_path: str, *, evaluation: Evaluation = evaluation) -> None:
-            _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, message, {}, jobs, tails)
-            raise _EvaluationStepFailed(message)
-
-        try:
-            run_step(replace(evaluation.step, fn=record_failure_step))
-        except _EvaluationStepFailed:
-            pass  # Keep recording the remaining unstarted evals.
-        paths.append(record_path(batch.records_prefix, evaluation.identity.run_id))
-
-
-@dataclass(frozen=True)
-class _EvaluationExecution:
-    record_path: str
-    failure: str | None
-    inference_failure: Exception | None
-    jobs: dict[str, str]
-    log_tails: dict[str, tuple[str, ...]]
-
-
-class _EvaluationStepFailed(RuntimeError):
-    """An evaluation wrote a failure record, so its StepSpec must remain retryable."""
-
-
 def _run_one_evaluation(
     batch: EvaluationBatch,
     evaluation: Evaluation,
@@ -339,7 +304,7 @@ def _run_one_evaluation(
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
     judge: RemoteInferenceSession | None,
-) -> _EvaluationExecution:
+) -> str:
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
     jobs.update(_session_job_ids(session, _INFERENCE_ROLE))
     if judge is not None:
@@ -351,7 +316,6 @@ def _run_one_evaluation(
     tasks: tuple[EvalTaskRef, ...] | None = None
     status = RunStatus.SUCCEEDED
     error: str | None = None
-    inference_failure: Exception | None = None
     inference_metrics: InferenceMetrics | None = None
     metric_window: InferenceMetricWindow | None = None
     try:
@@ -417,7 +381,6 @@ def _run_one_evaluation(
             status = RunStatus.INFRA_FAILED
             error = f"{error}; inference failed: {serve_exc}"
             tails |= _session_tails(session, _INFERENCE_ROLE)
-            inference_failure = serve_exc
         if judge is not None:
             try:
                 judge.check_alive()
@@ -425,7 +388,6 @@ def _run_one_evaluation(
                 status = RunStatus.INFRA_FAILED
                 error = f"{error}; judge inference failed: {serve_exc}"
                 tails |= _session_tails(judge, _JUDGE_ROLE)
-                inference_failure = serve_exc
 
     if metric_window is not None:
         try:
@@ -471,14 +433,9 @@ def _run_one_evaluation(
             },
         )
     )
-    failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None else None
-    return _EvaluationExecution(
-        record_path=path,
-        failure=failure,
-        inference_failure=inference_failure,
-        jobs=jobs,
-        log_tails=tails,
-    )
+    if error is not None:
+        raise RuntimeError(f"{evaluation.identity.eval_ref.name} ({status.value}): {error}")
+    return path
 
 
 def evaluate_batch(
@@ -490,48 +447,18 @@ def evaluate_batch(
     judge: RemoteInferenceSession | None = None,
 ) -> list[str]:
     """Run unfinished evaluations against one inference context and return every record path."""
-    paths: list[str] = []
-    failed: list[str] = []
 
-    for index, evaluation in enumerate(batch.evaluations):
-        path = record_path(batch.records_prefix, evaluation.identity.run_id)
-        execution: _EvaluationExecution | None = None
+    def steps() -> Iterator[StepSpec]:
+        for evaluation in batch.evaluations:
 
-        def run_eval_step(_output_path: str, *, path: str = path, evaluation: Evaluation = evaluation) -> dict[str, str]:
-            nonlocal execution
-            execution = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars, judge)
-            if execution.failure is not None:
-                raise _EvaluationStepFailed(execution.failure)
-            return {"record_path": execution.record_path}
+            def run_eval_step(_output_path: str, *, evaluation: Evaluation = evaluation) -> dict[str, str]:
+                path = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars, judge)
+                return {"record_path": path}
 
-        try:
-            run_step(replace(evaluation.step, fn=run_eval_step))
-        except _EvaluationStepFailed:
-            assert execution is not None
-        if execution is None:
-            logger.info("skipping completed eval %s", evaluation.identity.run_id)
-            paths.append(path)
-            continue
-        paths.append(execution.record_path)
-        if execution.failure is not None:
-            failed.append(execution.failure)
-        if execution.inference_failure is None:
-            continue
-        remaining = batch.evaluations[index + 1 :]
-        _record_unstarted(
-            batch,
-            remaining,
-            execution.inference_failure,
-            execution.jobs,
-            execution.log_tails,
-            paths,
-        )
-        failed.extend(f"{rest.identity.eval_ref.name} ({RunStatus.INFRA_FAILED.value})" for rest in remaining)
-        break
+            yield replace(evaluation.step, fn=run_eval_step)
 
-    if failed:
-        raise RuntimeError(f"{len(failed)} of {len(batch.evaluations)} evals failed: {', '.join(failed)}")
-    return paths
+    StepRunner().run(steps(), max_concurrent=1)
+    return [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
 
 
 def _record_startup_failure(
@@ -540,11 +467,26 @@ def _record_startup_failure(
     exc: RemoteInferenceStartupError,
     role: str,
     existing_jobs: Mapping[str, str] | None = None,
-) -> None:
+) -> NoReturn:
     failed_jobs, tails = _job_diagnostics(exc.jobs, role)
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
-    paths: list[str] = []
-    _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
+    error = f"{type(exc).__name__}: {exc}"
+
+    def steps() -> Iterator[StepSpec]:
+        for evaluation in batch.evaluations:
+
+            def record_failure_step(_output_path: str, *, evaluation: Evaluation = evaluation) -> None:
+                _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
+                raise exc
+
+            yield replace(evaluation.step, fn=record_failure_step)
+
+    subject = "judge inference" if role == _JUDGE_ROLE else "inference"
+    try:
+        StepRunner().run(steps(), max_concurrent=1)
+    except RuntimeError as step_failure:
+        raise RuntimeError(f"evaluation batch {subject} failed: {exc}") from step_failure
+    raise RuntimeError(f"evaluation batch {subject} failed: {exc}") from exc
 
 
 def _evaluate_with_hosted_judge(
@@ -586,7 +528,6 @@ def _evaluate_with_hosted_judge(
             _JUDGE_ROLE,
             _session_job_ids(session, _INFERENCE_ROLE),
         )
-        raise RuntimeError(f"evaluation batch judge inference failed: {exc}") from exc
 
 
 def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
@@ -626,7 +567,6 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
             return paths
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(batch, orchestrator_job_id, exc, _INFERENCE_ROLE)
-        raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc
 
 
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
