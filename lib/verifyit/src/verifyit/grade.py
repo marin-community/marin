@@ -299,7 +299,7 @@ def positive_candidate(spec: Spec) -> str | None:
 
 
 def negative_candidate(spec: Spec) -> str | None:
-    """Return a candidate that must score zero, when a safe perturbation exists."""
+    """Return a zero-scoring negative control when available."""
     if isinstance(spec, McqSpec):
         other = "B" if spec.expected.upper() != "B" else "A"
         return f"Answer: {other}"
@@ -309,11 +309,13 @@ def negative_candidate(spec: Spec) -> str | None:
         except InvalidTask:
             return None
         expected = numeric_literal(spec.expected)
-        candidate = expected + max(2 * tolerance, 1)
+        step = max(2 * tolerance, 1)
         limit = 10**MAX_NUMERIC_DIGITS
-        if abs(candidate.numerator) >= limit or candidate.denominator >= limit:
-            return None
-        return f"\\boxed{{{candidate}}}"
+        for candidate in (expected + step, expected - step):
+            if abs(candidate.numerator) < limit and candidate.denominator < limit:
+                return f"\\boxed{{{candidate}}}"
+        # If both perturbations exceed literal bounds, use a malformed submission as the negative control.
+        return r"\boxed{not a number}"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None

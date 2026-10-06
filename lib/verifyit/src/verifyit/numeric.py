@@ -9,12 +9,13 @@ from fractions import Fraction
 from verifyit.modes.extract import BOXED, extract_boxed, last_line, strip_math_delimiters
 
 MAX_NUMERIC_DIGITS = 4096
-MAX_LITERAL_LENGTH = 2 * MAX_NUMERIC_DIGITS + 32
+MAX_LITERAL_LENGTH = 2 * (MAX_NUMERIC_DIGITS + (MAX_NUMERIC_DIGITS - 1) // 3) + 32
 INTEGER = r"[+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)"
 DECIMAL = rf"(?:{INTEGER}(?:\.[0-9]*)?|[+-]?\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
 LITERAL = re.compile(rf"(?:{INTEGER}\s*/\s*{INTEGER}|{DECIMAL})")
 # Boundaries keep malformed numbers and numbers embedded in words from yielding partial literals.
 NUMERIC_TOKEN = re.compile(rf"(?<![\w.,/]){LITERAL.pattern}(?![\w/]|[.,][\w.,])")
+NUMERIC_START = re.compile(r"(?<!\w)(?:[0-9]|\.[0-9])")
 
 
 class NumericCandidateError(ValueError):
@@ -61,10 +62,14 @@ def extract_numeric_candidate(text: str) -> Fraction:
             raise NumericCandidateError("final numeric box is empty or malformed")
     else:
         # Surrounding prose is ignored, including whether the sentence negates the number.
-        matches = list(NUMERIC_TOKEN.finditer(last_line(text) or ""))
+        line = last_line(text) or ""
+        matches = list(NUMERIC_TOKEN.finditer(line))
         if len(matches) != 1:
             raise NumericCandidateError("final numeric line requires exactly one literal")
-        candidate = matches[0].group()
+        match = matches[0]
+        if any(NUMERIC_START.search(part) for part in (line[: match.start()], line[match.end() :])):
+            raise NumericCandidateError("final numeric line contains another or malformed number")
+        candidate = match.group()
     candidate = strip_math_delimiters(candidate)
     try:
         return numeric_literal(candidate)
