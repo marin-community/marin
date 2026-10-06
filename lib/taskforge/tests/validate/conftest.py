@@ -36,7 +36,7 @@ from taskforge.spec.controls import (
 )
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
 
-MATH_ANSWER = 395
+MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
 CHECK_SCRIPT = 'v=$(tr -d " \\n" < /workspace/sum.txt)\n' f'if [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
@@ -81,7 +81,7 @@ def control(name: str, kind: ControlKind, category: ControlCategory, payload, ex
 
 CORRECT = Expectation(status=Outcome.GRADED, reward_min=1.0)
 WRONG = Expectation(status=Outcome.GRADED, reward_max=0.0)
-EXTRACTION = Expectation(status=Outcome.EXTRACTION_ERROR)
+NO_SUBMISSION = Expectation(status=Outcome.SUBMISSION_FAILURE)
 
 
 @pytest.fixture
@@ -90,14 +90,14 @@ def math_controls() -> tuple[Control, ...]:
         control("correct", ControlKind.POSITIVE, ControlCategory.KNOWN_CORRECT, Transcript((reply("395"),)), CORRECT),
         control("wrong", ControlKind.NEGATIVE, ControlCategory.PLAUSIBLE_WRONG, Transcript((reply("391"),)), WRONG),
         control(
-            "two-answers",
+            "last-operand",
             ControlKind.NEGATIVE,
             ControlCategory.TASK_SPECIFIC_SHORTCUT,
-            Transcript((reply("395 or 391"),)),
+            Transcript((reply("4"),)),
             WRONG,
         ),
         control(
-            "empty", ControlKind.MALFORMED, ControlCategory.EMPTY_OR_MALFORMED, Transcript((reply(""),)), EXTRACTION
+            "empty", ControlKind.MALFORMED, ControlCategory.EMPTY_OR_MALFORMED, Transcript((reply(""),)), NO_SUBMISSION
         ),
     )
 

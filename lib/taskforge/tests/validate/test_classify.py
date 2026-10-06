@@ -11,7 +11,7 @@ from taskcompendium.environment import EnvironmentKind, HealthcheckSpec, StdoutR
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading import skipped_verifier
 from taskcompendium.grading_result import Outcome
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.llm.client import GlmRequestRejected, GlmUnavailable
 from taskforge.spec.draft import file, shell_command, shell_verifier
@@ -26,7 +26,7 @@ def engine(model, factory=None) -> ShellboxRolloutEngine:
         max_turns=4,
         command_timeout=10,
         cleanup_timeout=10,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
 
 
@@ -171,7 +171,7 @@ async def test_skipped_verifier(math_task, fakes):
     assert isinstance(outcome, Ungraded) and outcome.cause is Cause.VERIFIER_SKIPPED
 
 
-@pytest.mark.parametrize("answer,status,reward", [("395", Outcome.GRADED, 1.0), ("", Outcome.EXTRACTION_ERROR, 0.0)])
+@pytest.mark.parametrize("answer,status,reward", [("395", Outcome.GRADED, 1.0), ("", Outcome.SUBMISSION_FAILURE, 0.0)])
 async def test_judged_submissions_are_graded(math_task, fakes, answer, status, reward):
     outcome = await outcome_of(math_task, fakes.script_model([fakes.text(answer)]))
 

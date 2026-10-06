@@ -22,7 +22,7 @@ from shellbox.machine import MachineFactory, UnsupportedMachineSpec
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
@@ -52,7 +52,7 @@ def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings
         max_turns=12,
         command_timeout=60,
         cleanup_timeout=60,
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
 
 

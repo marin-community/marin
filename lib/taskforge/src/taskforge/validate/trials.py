@@ -34,7 +34,7 @@ from shellbox.machine import MachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
-from taskcompendium.submission import Submission
+from taskcompendium.submission import SubmissionConvention
 
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import FactoryCapabilities, Refusal, task_refusals
@@ -57,7 +57,7 @@ class EngineSettings:
     max_turns: int
     command_timeout: float
     cleanup_timeout: float
-    convention: Submission
+    convention: SubmissionConvention
 
     def engine(self, model: RolloutModel) -> ShellboxRolloutEngine:
         return ShellboxRolloutEngine(
