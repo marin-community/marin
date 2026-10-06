@@ -375,7 +375,7 @@ def native_preference_step(
 @click.option("--recovery-version", required=True)
 @click.option("--policy-export-version", required=True)
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
-@click.option("--collection-scope", type=click.Choice(list(NativeCollectionScope)), required=True)
+@click.option("--collection-scope", type=click.Choice([scope.value for scope in NativeCollectionScope]), required=True)
 @rl_build_options
 def main(
     teacher_collections: tuple[tuple[str, int], ...],
