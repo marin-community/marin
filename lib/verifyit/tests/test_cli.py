@@ -14,22 +14,39 @@ from verifyit.spec import FunctionCall, Mode, NumericSpec, PredictedActionSpec, 
 
 
 @pytest.mark.parametrize(
-    "invalid_contract",
+    "spec,candidate,invalid_contract",
     [
-        'expected = 0.30000000000000004\ntolerance_abs = "0"\ntolerance_rel = "0"',
-        'expected = "0.3"\ntolerance_abs = 0.01\ntolerance_rel = "0"',
-        'expected = "0.3"\ntolerance_abs = "0"',
+        *[
+            (
+                NumericSpec("0.3", tolerance_abs="0", tolerance_rel="0"),
+                "0.3",
+                'mode = "numeric"\n' + invalid_fields + "\n",
+            )
+            for invalid_fields in (
+                'expected = 0.30000000000000004\ntolerance_abs = "0"\ntolerance_rel = "0"',
+                'expected = "0.3"\ntolerance_abs = 0.01\ntolerance_rel = "0"',
+                'expected = "0.3"\ntolerance_abs = "0"',
+            )
+        ],
+        *[
+            (
+                StructuredExactSpec(expected={"answer": 12}),
+                '{"answer":12}',
+                f'mode = "structured_exact"\nexpected = {malformed_expected}\n',
+            )
+            for malformed_expected in ("true", "42", "[]")
+        ],
     ],
 )
-def test_numeric_private_literals_are_explicit_and_clear_previous_rewards(tmp_path, invalid_contract):
+def test_invalid_private_contract_clears_previous_rewards(tmp_path, spec, candidate, invalid_contract):
     config = tmp_path / "verifier.toml"
-    config.write_text(render_spec(NumericSpec("0.3", tolerance_abs="0", tolerance_rel="0")))
-    (tmp_path / "answer.txt").write_text("0.3")
+    config.write_text(render_spec(replace(spec, output=str(tmp_path / "answer.txt"))))
+    (tmp_path / "answer.txt").write_text(candidate)
     logs = tmp_path / "logs"
     arguments = [str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]
     assert main(arguments) == 0
     assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
-    config.write_text('mode = "numeric"\n' + invalid_contract + "\n")
+    config.write_text(invalid_contract)
     assert main(arguments) == 0
     assert _verdict(logs)["status"] == Status.INVALID_TASK
     assert not (logs / "reward.json").exists()
@@ -214,20 +231,3 @@ def test_json_file_grading_preserves_contract_from_toml(tmp_path, spec, candidat
     assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
     assert _verdict(logs)["status"] == Status.SCORED
     assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
-
-
-@pytest.mark.parametrize("malformed_expected", ["true", "42", "[]"])
-def test_structured_exact_malformed_contract_clears_prior_reward(tmp_path, malformed_expected):
-    config = tmp_path / "verifier.toml"
-    spec = StructuredExactSpec(expected={"answer": 12}, output=str(tmp_path / "answer.json"))
-    config.write_text(render_spec(spec))
-    (tmp_path / "answer.json").write_text('{"answer":12}')
-    logs = tmp_path / "logs"
-    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
-    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
-
-    config.write_text(f'mode = "structured_exact"\nexpected = {malformed_expected}\n')
-    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
-    assert _verdict(logs)["status"] == Status.INVALID_TASK
-    assert not (logs / "reward.json").exists()
-    assert not (logs / "reward.txt").exists()
