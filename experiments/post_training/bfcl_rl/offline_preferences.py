@@ -284,9 +284,7 @@ def run_native_preference_cache(config: NativePreferenceConfig) -> RecoveryPrefe
 
 
 def dispatch_native_preference_cache(config: NativePreferenceConfig) -> RecoveryPreferenceCache:
-    resources = ResourceConfig.with_cpu(
-        cpu=4, ram="32Gi", disk="64Gi", target_cluster=COLLECTION_EXECUTION.target_cluster
-    )
+    resources = ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi")
     return remote(run_native_preference_cache, resources=resources)(config)
 
 
