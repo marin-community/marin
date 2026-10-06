@@ -2,6 +2,7 @@
 # Build the JAX and PyTorch ROCm venvs and fetch MAMF-finder for the AMD matmul ceiling runs.
 # Run once on the AMD HPC Fund login node from the synced checkout. Everything lands in
 # $WORK/agents/<checkout folder name>/, because /home1 is too small for two ROCm venvs.
+# --no-config keeps the repo's [tool.uv] settings, which route torch to the CPU index, out of these venvs.
 set -euo pipefail
 
 ROCM_INDEX=https://stable.repo.amd.com/rocm/whl-next/
@@ -17,20 +18,20 @@ checkout=$(cd "$(dirname "$0")/../.." && pwd)
 agent_work="$WORK/agents/$(basename "$checkout")"
 mkdir -p "$agent_work"/{logs,results,mamf}
 
-uv venv --allow-existing -p 3.12 "$agent_work/venv-jax"
-uv pip install --python "$agent_work/venv-jax/bin/python" --index-url "$ROCM_INDEX" \
+uv venv --no-config --allow-existing -p 3.12 "$agent_work/venv-jax"
+uv pip install --no-config --python "$agent_work/venv-jax/bin/python" --index-url "$ROCM_INDEX" \
   "rocm[libraries,device-gfx942,device-gfx950]==$ROCM_VERSION" \
   "jax_rocm10_plugin==$JAX_VERSION+rocm$ROCM_VERSION" \
   "jax_rocm10_pjrt==$JAX_VERSION+rocm$ROCM_VERSION"
-uv pip install --python "$agent_work/venv-jax/bin/python" "jax==$JAX_VERSION" "jaxlib==$JAX_VERSION" numpy
+uv pip install --no-config --python "$agent_work/venv-jax/bin/python" "jax==$JAX_VERSION" "jaxlib==$JAX_VERSION" numpy
 
-uv venv --allow-existing -p 3.12 "$agent_work/venv-torch"
-uv pip install --python "$agent_work/venv-torch/bin/python" --index-url "$ROCM_INDEX" \
+uv venv --no-config --allow-existing -p 3.12 "$agent_work/venv-torch"
+uv pip install --no-config --python "$agent_work/venv-torch/bin/python" --index-url "$ROCM_INDEX" \
   "torch==$TORCH_VERSION+rocm$ROCM_VERSION" \
   "amd-torch-device-gfx942==$TORCH_VERSION+rocm$ROCM_VERSION" \
   "amd-torch-device-gfx950==$TORCH_VERSION+rocm$ROCM_VERSION" \
   numpy
-uv pip install --python "$agent_work/venv-torch/bin/python" packaging "$AMD_SMI_DIR"
+uv pip install --no-config --python "$agent_work/venv-torch/bin/python" packaging "$AMD_SMI_DIR"
 
 curl -fsSL -o "$agent_work/mamf/mamf-finder.py" "$MAMF_URL"
 echo "$MAMF_SHA" >"$agent_work/mamf/SOURCE_SHA"
