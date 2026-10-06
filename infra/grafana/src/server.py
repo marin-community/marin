@@ -221,6 +221,9 @@ _K8S_FINELOG_CACHE_KEY = "finelog"
 _DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
+_GPU_LIVE_STEP_MS = 60_000
+_GPU_LIVE_CACHE_SECONDS = 120
+_GPU_LIVE_CACHE_KEY = "gpu-allocation-live"
 
 
 def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
@@ -730,7 +733,7 @@ def create_app(
                     now_ms=time.time_ns() // 1_000_000,
                 )
                 now_ms = time.time_ns() // 1_000_000
-                if k8s_fleet is not None and round(end.timestamp() * 1000) >= now_ms - 60_000:
+                if k8s_fleet is not None and round(end.timestamp() * 1000) >= now_ms - _GPU_LIVE_STEP_MS:
 
                     def read_live() -> list[dict]:
                         began = time.time_ns() // 1_000_000
@@ -739,12 +742,14 @@ def create_app(
                         finished = time.time_ns() // 1_000_000
                         return live_rows(nodes, workloads, clusters, (began + finished) // 2)
 
-                    minute = (now_ms // 60_000) * 60_000
-                    k8s_cache.get_or_compute(("gpu-allocation-live", clusters, minute), read_live, ttl=120)
+                    minute = (now_ms // _GPU_LIVE_STEP_MS) * _GPU_LIVE_STEP_MS
+                    k8s_cache.get_or_compute(
+                        (_GPU_LIVE_CACHE_KEY, clusters, minute), read_live, ttl=_GPU_LIVE_CACHE_SECONDS
+                    )
                     # Retain only short-lived reads already sampled inside the range.
                     # These never write Finelog or become durable history.
-                    for bucket in range(minute - 120_000, minute + 1, 60_000):
-                        sampled = k8s_cache.get_if_present(("gpu-allocation-live", clusters, bucket))
+                    for bucket in range(minute - _GPU_LIVE_CACHE_SECONDS * 1000, minute + 1, _GPU_LIVE_STEP_MS):
+                        sampled = k8s_cache.get_if_present((_GPU_LIVE_CACHE_KEY, clusters, bucket))
                         if sampled is not None:
                             rows.extend(
                                 row

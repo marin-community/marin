@@ -19,9 +19,9 @@ import server
 from config import BridgeConfig, ClusterTarget
 from finelog.deploy.config import load_finelog_config
 from finelog.deploy.connect import open_client
+from iris.rpc import job_pb2
 from starlette.testclient import TestClient
 
-PRIORITIES = {0: "INHERIT", 1: "PRODUCTION", 2: "INTERACTIVE", 3: "BATCH", 4: "SYSTEM"}
 CLUSTERS = ("cw-rno2a", "cw-us-east-02a", "cw-us-east-08a")
 
 
@@ -57,8 +57,8 @@ class ReplayRegistry:
                 "taskId": row["task_id"],
                 "gpuCount": row["gpus"],
                 "gpuVariant": row["variant"] or "",
-                "requestedPriority": "PRIORITY_BAND_" + PRIORITIES[row["requested"]],
-                "currentAppliedPriority": "PRIORITY_BAND_" + PRIORITIES[row["applied"]],
+                "requestedPriority": job_pb2.PriorityBand.Name(row["requested"]),
+                "currentAppliedPriority": job_pb2.PriorityBand.Name(row["applied"]),
                 "currentAttemptId": row["current_attempt_id"],
                 "attemptId": row["attempt_id"] if row["attempt_id"] is not None else -1,
             }

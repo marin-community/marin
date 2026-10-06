@@ -47,7 +47,7 @@ class TtlCache(Generic[V]):
         get_size: Callable[[V], int] = sys.getsizeof,
     ) -> None:
         self._ttl = ttl
-        self._max_size = max_size
+        self.max_size = max_size
         self._get_size = get_size
         self._entries: dict[Hashable, _Entry[V] | _Failure] = {}
         self._key_locks: dict[Hashable, threading.Lock] = {}
@@ -79,7 +79,7 @@ class TtlCache(Generic[V]):
                 self._key_locks.pop(k, None)
 
             size = sum(entry.size for entry in self._entries.values() if isinstance(entry, _Entry))
-            while size > self._max_size:
+            while size > self.max_size:
                 oldest = next(iter(self._entries))
                 removed = self._entries.pop(oldest)
                 if isinstance(removed, _Entry):
@@ -122,11 +122,6 @@ class TtlCache(Generic[V]):
     def __len__(self) -> int:
         with self._guard:
             return len(self._entries)
-
-    @property
-    def max_size(self) -> int:
-        """The byte budget shared by entries in this cache."""
-        return self._max_size
 
     def get_if_present(self, key: Hashable) -> V | None:
         """Read a live cached outcome without starting upstream work."""

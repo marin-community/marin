@@ -381,7 +381,7 @@ def allocation_history(
     cache_ttl: float,
     now_ms: int,
 ) -> list[dict]:
-    """Share bounded daily inputs across both model panels and refreshes."""
+    """Return sampled GPU requests and explicit gaps within the existing budget."""
     step = sampling_step(start_ms, end_ms)
     if not clusters or any(c not in CLUSTER_NAMES for c in clusters):
         raise ValueError("GPU allocation history requires configured CoreWeave clusters")
