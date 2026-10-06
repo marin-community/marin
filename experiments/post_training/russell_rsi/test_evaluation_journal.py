@@ -23,7 +23,7 @@ from taskcompendium.environment import (
     VerifierArtifact,
 )
 from taskcompendium.models import VerifierKind, VerifierSpec
-from taskcompendium.parquet import write_tasks
+from taskcompendium.parquet import write_task_records, write_tasks
 
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal, EvaluationJournal
@@ -162,7 +162,11 @@ def frozen_comparison(tmp_path):
     pytest.importorskip("skyrl_train.inference_engines.chat_continuation")
     tasks = [preflight_task(index, PREFLIGHT_INSTRUCTION, 23) for index in range(101, 105)]
     path = tmp_path / "tasks.parquet"
-    write_tasks(str(path), tasks)
+    raw = [task.model_dump(mode="json") for task in tasks]
+    for record in raw:
+        record.pop("interaction_tools")
+        record.pop("output_paths")
+    write_task_records(str(path), [json.dumps(record) for record in raw])
     runtime_dir = tmp_path / "runtime/unused"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "image.json").write_text(
@@ -184,7 +188,7 @@ def frozen_comparison(tmp_path):
     manifest = {
         "parquet_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "runtime_bundle": asdict(runtime),
-        "tasks": [{"task_sha256": digest(task.model_dump(mode="json"))} for task in tasks],
+        "tasks": [{"task_sha256": digest(record)} for record in raw],
     }
     manifest_path = tmp_path / "panel-manifest.json"
     manifest_path.write_text(json.dumps(manifest))

@@ -97,7 +97,7 @@ class SupplementaryEvaluationConfig:
 
 def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> EvaluationJournal:
     """Bind one owner per checkpoint to the fixed two-checkpoint comparison."""
-    from taskcompendium.parquet import read_tasks  # noqa: PLC0415
+    from taskcompendium.parquet import read_task_records  # noqa: PLC0415
 
     from experiments.post_training.russell_rsi.token_preflight import (  # noqa: PLC0415
         PREFLIGHT_PROBES,
@@ -107,7 +107,8 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
     evaluation = config.evaluation
     manifest = json.loads(pinned_bytes(config.panel_manifest_path, config.panel_manifest_sha256))
     parquet = StoragePath(evaluation.tasks_path).read_bytes()
-    tasks = list(read_tasks(evaluation.tasks_path))
+    records = list(read_task_records(evaluation.tasks_path))
+    tasks = [TaskSpec.model_validate_json(record) for record in records]
     if (
         config.checkpoint_index not in (0, 1)
         or len(config.model_identities) != 2
@@ -120,7 +121,7 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
         or evaluation.temperature != 0.0
         or evaluation.startup_attempts != 3
         or manifest["parquet_sha256"] != hashlib.sha256(parquet).hexdigest()
-        or [row["task_sha256"] for row in manifest["tasks"]] != [digest(task.model_dump(mode="json")) for task in tasks]
+        or [row["task_sha256"] for row in manifest["tasks"]] != [digest(json.loads(record)) for record in records]
         or manifest["runtime_bundle"] != asdict(evaluation.runtime_bundle)
     ):
         raise ValueError("Supplementary evaluation differs from the frozen panel or matched attempt protocol")
@@ -128,6 +129,16 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
         require_journal_submission(task)
     root = StoragePath(config.journal_path)
     comparison = {
+        # Admission uses persisted fields; execution uses the current TaskSpec defaults.
+        # Both forms come from the same hash-pinned Parquet rows.
+        "task_bindings": [
+            {
+                "task_id": task.id,
+                "admission_sha256": digest(json.loads(raw)),
+                "runtime_sha256": digest(task.model_dump(mode="json")),
+            }
+            for task, raw in zip(tasks, records, strict=True)
+        ],
         "model_identities": list(config.model_identities),
         "panel_manifest_sha256": config.panel_manifest_sha256,
         "tasks_identity": evaluation.tasks_identity,
