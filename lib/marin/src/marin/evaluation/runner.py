@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve one model and run a batch of endpoint-oriented evaluations."""
+"""Run endpoint-oriented evaluations as independent steps."""
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import NoReturn, Protocol
@@ -41,7 +41,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_runner import StepRunner, step_is_built
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
@@ -121,13 +121,19 @@ class LaunchProvenance:
     launch_host: str
 
 
-@dataclass(frozen=True)
-class Evaluation:
+@dataclass(frozen=True, kw_only=True)
+class EvaluationWork:
+    """Inputs captured by one step without a reference back to its StepSpec."""
+
     identity: EvaluationIdentity
     executor: EvalExecutor
     endpoint_route: EndpointRoute
-    step: StepSpec
     secret_env_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Evaluation(EvaluationWork):
+    step: StepSpec
 
 
 @dataclass(frozen=True)
@@ -299,7 +305,7 @@ def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tupl
 
 def _run_one_evaluation(
     batch: EvaluationBatch,
-    evaluation: Evaluation,
+    evaluation: EvaluationWork,
     session: RemoteInferenceSession,
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
@@ -438,31 +444,9 @@ def _run_one_evaluation(
     return path
 
 
-def evaluate_batch(
-    batch: EvaluationBatch,
-    session: RemoteInferenceSession,
-    *,
-    orchestrator_job_id: str,
-    env_vars: Mapping[str, str],
-    judge: RemoteInferenceSession | None = None,
-) -> list[str]:
-    """Run unfinished evaluations against one inference context and return every record path."""
-
-    def steps() -> Iterator[StepSpec]:
-        for evaluation in batch.evaluations:
-
-            def run_eval_step(_output_path: str, *, evaluation: Evaluation = evaluation) -> dict[str, str]:
-                path = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars, judge)
-                return {"record_path": path}
-
-            yield replace(evaluation.step, fn=run_eval_step)
-
-    StepRunner().run(steps(), max_concurrent=1)
-    return [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
-
-
 def _record_startup_failure(
     batch: EvaluationBatch,
+    evaluation: EvaluationWork,
     orchestrator_job_id: str,
     exc: RemoteInferenceStartupError,
     role: str,
@@ -471,38 +455,21 @@ def _record_startup_failure(
     failed_jobs, tails = _job_diagnostics(exc.jobs, role)
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
     error = f"{type(exc).__name__}: {exc}"
-
-    def steps() -> Iterator[StepSpec]:
-        for evaluation in batch.evaluations:
-
-            def record_failure_step(_output_path: str, *, evaluation: Evaluation = evaluation) -> None:
-                _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
-                raise exc
-
-            yield replace(evaluation.step, fn=record_failure_step)
-
+    _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
     subject = "judge inference" if role == _JUDGE_ROLE else "inference"
-    try:
-        StepRunner().run(steps(), max_concurrent=1)
-    except RuntimeError as step_failure:
-        raise RuntimeError(f"evaluation batch {subject} failed: {exc}") from step_failure
-    raise RuntimeError(f"evaluation batch {subject} failed: {exc}") from exc
+    raise RuntimeError(f"{evaluation.identity.eval_ref.name} {subject} failed: {exc}") from exc
 
 
 def _evaluate_with_hosted_judge(
     batch: EvaluationBatch,
+    evaluation: EvaluationWork,
     session: RemoteInferenceSession,
     orchestrator_job_id: str,
     runtime_env: Mapping[str, str],
     evaluation_env: Mapping[str, str],
-) -> list[str]:
+) -> str:
     if batch.judge is None:
-        return evaluate_batch(
-            batch,
-            session,
-            orchestrator_job_id=orchestrator_job_id,
-            env_vars=evaluation_env,
-        )
+        return _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, evaluation_env, None)
     judge_inference = inference_config_for_model(
         batch.judge.model,
         batch.judge.accelerator,
@@ -513,16 +480,11 @@ def _evaluate_with_hosted_judge(
     )
     try:
         with remote_inference(judge_inference) as judge:
-            return evaluate_batch(
-                batch,
-                session,
-                orchestrator_job_id=orchestrator_job_id,
-                env_vars=evaluation_env,
-                judge=judge,
-            )
+            return _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, evaluation_env, judge)
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(
             batch,
+            evaluation,
             orchestrator_job_id,
             exc,
             _JUDGE_ROLE,
@@ -530,17 +492,9 @@ def _evaluate_with_hosted_judge(
         )
 
 
-def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
-    """Serve once for unfinished evaluations, preserving completed records on restart."""
+def run_evaluation_step(batch: EvaluationBatch, evaluation: EvaluationWork, _output_path: str) -> dict[str, str]:
+    """Serve one evaluation inside its StepSpec and write its result record."""
     configure_coreweave_s3()
-    if not batch.evaluations:
-        raise ValueError("an evaluation batch requires at least one evaluation")
-    paths = [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
-    pending = tuple(evaluation for evaluation in batch.evaluations if not step_is_built(evaluation.step))
-    if not pending:
-        logger.info("all %d evals in batch %s already succeeded", len(batch.evaluations), batch.group_id)
-        return paths
-    batch = replace(batch, evaluations=pending)
     orchestrator_job_id = str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
     evaluation_env = {
@@ -557,16 +511,25 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     )
     try:
         with remote_inference(inference) as session:
-            _evaluate_with_hosted_judge(
+            path = _evaluate_with_hosted_judge(
                 batch,
+                evaluation,
                 session,
                 orchestrator_job_id,
                 runtime_env,
                 evaluation_env,
             )
-            return paths
     except RemoteInferenceStartupError as exc:
-        _record_startup_failure(batch, orchestrator_job_id, exc, _INFERENCE_ROLE)
+        _record_startup_failure(batch, evaluation, orchestrator_job_id, exc, _INFERENCE_ROLE)
+    return {"record_path": path}
+
+
+def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
+    """Run each independent evaluation step, skipping successful steps on restart."""
+    if not batch.evaluations:
+        raise ValueError("an evaluation batch requires at least one evaluation")
+    StepRunner().run(evaluation.step for evaluation in batch.evaluations)
+    return [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
 
 
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:

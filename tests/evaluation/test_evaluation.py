@@ -9,8 +9,10 @@ import logging
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import click
 import pytest
@@ -59,11 +61,14 @@ from marin.evaluation.runner import (
     EvaluationError,
     EvaluationIdentity,
     EvaluationOutcome,
+    EvaluationWork,
     HostedJudge,
     LaunchProvenance,
-    evaluate_batch,
-    run_evaluation_batch,
+    run_evaluation_step,
     submit_evaluation_batch,
+)
+from marin.evaluation.runner import (
+    run_evaluation_batch as _run_evaluation_batch,
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_spec import StepSpec
@@ -318,7 +323,46 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
     )
 
 
-def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_path, monkeypatch):
+def _runnable_batch(batch: EvaluationBatch) -> EvaluationBatch:
+    context = replace(batch, evaluations=())
+    evaluations = []
+    for evaluation in batch.evaluations:
+        work = EvaluationWork(
+            identity=evaluation.identity,
+            executor=evaluation.executor,
+            endpoint_route=evaluation.endpoint_route,
+            secret_env_keys=evaluation.secret_env_keys,
+        )
+        evaluations.append(
+            replace(evaluation, step=replace(evaluation.step, fn=partial(run_evaluation_step, context, work)))
+        )
+    return replace(batch, evaluations=tuple(evaluations))
+
+
+def _run_test_batch(batch: EvaluationBatch) -> list[str]:
+    return _run_evaluation_batch(_runnable_batch(batch))
+
+
+def _evaluate_with_session(
+    batch: EvaluationBatch, session: RemoteInferenceSession, orchestrator_job_id: str
+) -> list[str]:
+    context = SimpleNamespace(
+        job_id=orchestrator_job_id,
+        client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
+    )
+    with (
+        patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
+        patch("marin.evaluation.runner.iris_ctx", lambda: context),
+        patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
+        patch(
+            "marin.evaluation.runner.inference_config_for_model",
+            lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+        ),
+    ):
+        return _run_test_batch(batch)
+
+
+def test_run_evaluation_batch_serves_each_evaluation_with_its_judge(tmp_path, monkeypatch):
     opened_models: list[str] = []
     observed_candidates: list[RemoteInferenceSession] = []
     observed_judges: list[RemoteInferenceSession | None] = []
@@ -355,12 +399,13 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
         (_evaluation(tmp_path, "one", executor), _evaluation(tmp_path, "two", executor)),
     )
 
-    run_evaluation_batch(batch)
+    _run_test_batch(batch)
 
-    assert opened_models == ["candidate", "judge"]
+    assert sorted(opened_models) == ["candidate", "candidate", "judge", "judge"]
     assert all(candidate.model.endpoint.base_url == "https://candidate.example/v1" for candidate in observed_candidates)
+    assert observed_candidates[0] is not observed_candidates[1]
     assert len(observed_judges) == 2
-    assert observed_judges[0] is observed_judges[1]
+    assert observed_judges[0] is not observed_judges[1]
     assert observed_judges[0] is not None
     assert observed_judges[0].model.endpoint.base_url == "https://judge.example/v1"
     record = read_record(str(tmp_path / "records" / "run-one" / "record.json"))
@@ -373,17 +418,17 @@ def test_run_evaluation_batch_restart_skips_completed_step_without_serving(tmp_p
     evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
     batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-    path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
+    path = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")[0]
     original = Path(path).read_bytes()
 
     _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("completed eval started serving again"))
 
-    assert run_evaluation_batch(batch) == [path]
+    assert _run_test_batch(batch) == [path]
     assert Path(path).read_bytes() == original
     assert StatusFile(evaluation.step.output_path, worker_id="test").status == STATUS_SUCCESS
 
 
-def test_evaluate_batch_step_cache_skips_completed_eval(tmp_path, monkeypatch):
+def test_step_cache_skips_completed_eval(tmp_path, monkeypatch):
     executions = 0
 
     def executor(_session, _output_dir, _env_vars, *, judge=None):
@@ -395,8 +440,8 @@ def test_evaluate_batch_step_cache_skips_completed_eval(tmp_path, monkeypatch):
     batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
 
-    first = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})
-    second = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/retry", env_vars={})
+    first = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")
+    second = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/retry")
 
     assert first == second
     assert executions == 1
@@ -415,11 +460,11 @@ def test_run_evaluation_batch_restart_only_runs_unfinished_evals(tmp_path, monke
     pending = _evaluation(tmp_path, "pending", executor)
     batch = replace(_hosted_judge_batch(tmp_path, (finished, pending)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-    evaluate_batch(replace(batch, evaluations=(finished,)), _remote_session(), orchestrator_job_id="/first", env_vars={})
+    _evaluate_with_session(replace(batch, evaluations=(finished,)), _remote_session(), orchestrator_job_id="/first")
     executed.clear()
     _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
 
-    paths = run_evaluation_batch(batch)
+    paths = _run_test_batch(batch)
 
     assert executed == [pending.identity.output_dir]
     assert paths == [
@@ -430,27 +475,6 @@ def test_run_evaluation_batch_restart_only_runs_unfinished_evals(tmp_path, monke
     assert read_record(paths[1]).jobs["orchestrator"] == "/orchestrator"
     assert StatusFile(finished.step.output_path, worker_id="test").status == STATUS_SUCCESS
     assert StatusFile(pending.step.output_path, worker_id="test").status == STATUS_SUCCESS
-
-
-def test_run_evaluation_batch_startup_failure_preserves_success_from_other_attempt(tmp_path, monkeypatch):
-    evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-
-    def remote(_config):
-        path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
-        original.append(Path(path).read_bytes())
-        raise RemoteInferenceStartupError("duplicate inference did not become ready", jobs=())
-
-    original: list[bytes] = []
-    _patch_inference_runtime(monkeypatch, remote)
-
-    with pytest.raises(RuntimeError, match="inference failed"):
-        run_evaluation_batch(batch)
-
-    path = tmp_path / "records" / "run-finished" / "record.json"
-    assert path.read_bytes() == original[0]
-    assert read_record(str(path)).status is RunStatus.SUCCEEDED
 
 
 def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_path, monkeypatch):
@@ -486,9 +510,9 @@ def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_
         judge=None,
     )
 
-    run_evaluation_batch(batch)
+    _run_test_batch(batch)
 
-    assert observed_urls == ["http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"]
+    assert set(observed_urls) == {"http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"}
 
 
 def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
@@ -511,8 +535,8 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
     batch = _hosted_judge_batch(tmp_path, evaluations)
     _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
 
-    with pytest.raises(RuntimeError, match="judge inference failed"):
-        run_evaluation_batch(batch)
+    with pytest.raises(RuntimeError, match=r"2 step\(s\) failed"):
+        _run_test_batch(batch)
 
     for evaluation in evaluations:
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
@@ -523,7 +547,7 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
 
     _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-    run_evaluation_batch(batch)
+    _run_test_batch(batch)
 
     for evaluation in evaluations:
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
@@ -604,7 +628,7 @@ def _write_evalchemy_output(
         store.close()
 
 
-def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path, monkeypatch):
+def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path, monkeypatch):
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
     session = _remote_session(endpoint)
@@ -636,7 +660,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", catalog_rows.append)
 
     with pytest.raises(RuntimeError, match="1 step"):
-        evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
+        _evaluate_with_session(batch, session, orchestrator_job_id="/orchestrator")
 
     failed = read_record(str(records / "run-failure" / "record.json"))
     succeeded = read_record(str(records / "run-success" / "record.json"))
@@ -664,7 +688,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
 
 
 @pytest.mark.parametrize("n_scored, expected_status", [(9, RunStatus.SUCCEEDED), (8, RunStatus.INFRA_FAILED)])
-def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, n_scored, expected_status):
+def test_evaluation_step_gates_transport_failure_coverage(tmp_path, monkeypatch, n_scored, expected_status):
     def executor(
         _session: RemoteInferenceSession,
         _output_dir: str,
@@ -688,9 +712,9 @@ def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, 
 
     if expected_status is RunStatus.INFRA_FAILED:
         with pytest.raises(RuntimeError, match="1 step"):
-            evaluate_batch(batch, _remote_session(), orchestrator_job_id="/orchestrator", env_vars={})
+            _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/orchestrator")
     else:
-        evaluate_batch(batch, _remote_session(), orchestrator_job_id="/orchestrator", env_vars={})
+        _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/orchestrator")
 
     record = read_record(str(tmp_path / "records" / "run-math500" / "record.json"))
     assert record.status is expected_status
@@ -698,7 +722,7 @@ def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, 
     assert record.coverage["math500"].n_scored == n_scored
 
 
-def test_evaluate_batch_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
+def test_evaluation_step_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
     def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
         return tuple(
             text_string_to_metric_families(
@@ -760,7 +784,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     )
     session = replace(_remote_session(), metrics_url="https://inference.example/metrics")
 
-    evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
+    _evaluate_with_session(batch, session, orchestrator_job_id="/orchestrator")
 
     record = read_record(str(tmp_path / "records" / "run-measured" / "record.json"))
     assert record.model.config is not None
@@ -2146,3 +2170,36 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     evaluation = batch.evaluations[0]
     assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"
     assert evaluation.step.output_path == f"{batch.records_prefix}/{evaluation.identity.run_id}"
+
+
+def test_built_evaluation_step_runs_without_rebinding(tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    monkeypatch.setattr(
+        EvalchemyExecutor,
+        "__call__",
+        lambda _self, _session, _output_dir, _env_vars, *, judge=None: EvaluationOutcome(
+            metrics={"task": {"accuracy": 0.5}}
+        ),
+    )
+    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("mmlu-smoke",),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    paths = _run_evaluation_batch(batch)
+
+    assert len(paths) == 1
+    assert read_record(paths[0]).status is RunStatus.SUCCEEDED
+    assert StatusFile(batch.evaluations[0].step.output_path, worker_id="test").status == STATUS_SUCCESS

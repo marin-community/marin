@@ -2,22 +2,20 @@
 
 A one-command path from "model + eval suite" to recorded results. Pick a registered model or supply a
 catalog-schema model file, then select registered or file-backed evaluations. The launcher sizes a
-serving slice and submits one CPU orchestrator job for the whole launch. The orchestrator serves the
-model once, runs every selected eval against that endpoint in order, and writes one durable
-`record.json` per eval as it finishes -- so a suite fills in progressively, each eval independently
-inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
-scans those records into its Postgres query index.
+serving slice and submits one CPU orchestrator job for the whole launch. Each selected eval runs as
+an independent `StepSpec` with its own model server and durable `record.json`. StepRunner starts up
+to eight evals at once, so a suite fills in as results finish. Each eval has its own record, child
+jobs, logs, and parquet; the launch shares a `group_id`. Evaldash scans those records and step
+statuses into its Postgres query index.
 
-Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id}/`; the group can
-still share one serving session for its unfinished evals.
+Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id}/`.
 
-`marin.evaluation.runner` opens one candidate `remote_inference` session and optionally one shared
-hosted-judge session. Evalchemy resolves the serving endpoint's direct address on its Iris cluster
-before each evaluation. Harbor keeps the minted capability URLs because its sandboxes reach the
+`marin.evaluation.runner` opens one candidate `remote_inference` session per eval and optionally
+one hosted-judge session for that eval. Evalchemy resolves the serving endpoint's direct address
+on its Iris cluster. Harbor keeps the minted capability URLs because its sandboxes reach the
 candidate and hosted judge from outside Iris. The orchestrator scrapes vLLM metrics through the
-direct address. An evaluation failure is recorded and later evaluations continue. If inference fails,
-the current and remaining evaluations are recorded as infrastructure failures. This directory holds
-the model and suite catalogs, Marin fleet policy, and CLI choices.
+direct address. Each step records its own evaluation or inference failure; other steps continue.
+This directory holds the model and suite catalogs, Marin fleet policy, and CLI choices.
 
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
 commands, suite constraints, launch controls, and result locations.
@@ -52,7 +50,7 @@ uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8
 uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke \
   --federated_cluster cw-rno2a --priority interactive
 
-# Co-host one judge for every Harbor verifier in this batch.
+# Use a hosted judge for every Harbor verifier in this launch.
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
   --platform gpu \
@@ -76,7 +74,7 @@ launcher always submits through the `marin` Iris controller.
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,
 winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus humaneval and
-math500): one model boot, eleven evals against the shared endpoint, eleven records — the dashboard
+math500): eleven independently served evals and eleven records — the dashboard
 shows the full model x task grid of runs.
 
 Before upgrading a store, run the non-destructive smoke command on its platform. This CoreWeave
@@ -150,13 +148,13 @@ selector for the others.
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). It contains
 the evaluator's result: normalized model configuration, hardware, status (`succeeded` / `failed` /
 `artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
-the `group_id` shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
-orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
+the `group_id` shared by every eval in the launch, and the Iris job paths of every job behind the run (`jobs`:
+orchestrator, inference child, this eval's child). The orchestrator writes it on success
 and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
-When Iris restarts an orchestrator, it checks each eval's StepSpec status before serving. A
+When Iris restarts an orchestrator, StepRunner checks each eval's StepSpec status before serving. A
 completed batch returns without starting another server; a mixed batch runs only unfinished evals.
 Normal results and startup failure records are written under each eval's step lock. Successful steps
 are cached, while failed steps remain retryable. A record written before the step reaches `SUCCESS`
@@ -166,8 +164,8 @@ Each new launch gets a new run directory, including repeat launches of the same 
 step identity records the model configuration digest, resolved evaluator configuration, runtime
 revision, and policy label; those settings remain visible when diagnosing a cached step.
 
-For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
-on the shared server. It includes prompt tokens, generation tokens, elapsed time, and generation
+For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's server.
+It includes prompt tokens, generation tokens, elapsed time, and generation
 tokens per second. A speculative run also includes draft count, proposed and accepted token counts,
 mean acceptance length, and draft acceptance rate. The normalized model configuration in the same
 record pins the target identity, tokenizer identity, and optional draft identity.
@@ -291,8 +289,8 @@ uv run python -m experiments.evaluation.cli launch \
   --limit 2
 ```
 
-`--harbor-config` is repeatable and additive with `--evals`, so one served model can run registry
-entries and file-backed Harbor policies in the same launch. When neither option is supplied, the
+`--harbor-config` is repeatable and additive with `--evals`, so one launch can run registry
+entries and file-backed Harbor policies. When neither option is supplied, the
 launcher uses the `smoke` suite; a file-only launch does not add that default. The launcher validates
 all selected YAML and JSON files against Marin's pinned Harbor `JobConfig` before opening an Iris client.
 File-backed launches support one agent and one dataset; multiple agents, multiple datasets, and

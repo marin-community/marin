@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve experiment catalogs into shared evaluation batches."""
+"""Resolve experiment catalogs into per-evaluation StepSpecs."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import subprocess
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient
@@ -43,9 +44,11 @@ from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
     EvaluationIdentity,
+    EvaluationWork,
     HostedJudge,
     LaunchProvenance,
     SubmittedEvaluationBatch,
+    run_evaluation_step,
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import resolved_serve_config
@@ -287,29 +290,58 @@ def build_evaluation_batch(
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = _group_id(model.name)
     created_at = datetime.now(UTC).isoformat()
-    evaluations: list[Evaluation] = []
     secret_env: dict[str, SecretSpec] = {}
-    for eval_key, definition in definitions:
+    for _, definition in definitions:
         for name, spec_value in definition.secret_env.items():
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
+
+    endpoint_cluster = accelerator.target_cluster or spec.submission_cluster
+    batch_context = EvaluationBatch(
+        group_id=group_id,
+        user=user,
+        version=spec.version,
+        description=spec.description,
+        records_prefix=records_prefix,
+        model=model,
+        accelerator=accelerator,
+        priority_band=spec.priority_band,
+        capability_origin=_capability_origin(endpoint_cluster),
+        api_model=canonical_served_name(model.name),
+        evaluations=(),
+        provenance=provenance,
+        submission_cluster=spec.submission_cluster,
+        judge=judge,
+        secret_env=secret_env,
+        source_model_config=source_model_config,
+    )
+    evaluations: list[Evaluation] = []
+    for eval_key, definition in definitions:
         run_id = _run_id(model.name, eval_key)
         output_dir = prefix_join(records_prefix, f"{run_id}/results")
+        work = EvaluationWork(
+            identity=EvaluationIdentity(
+                run_id=run_id,
+                created_at=created_at,
+                output_dir=output_dir,
+                eval_ref=definition.record_ref,
+                eval_runtime=definition.runtime_descriptor,
+            ),
+            executor=definition.executor,
+            endpoint_route=definition.endpoint_route,
+            secret_env_keys=tuple(definition.secret_env),
+        )
         evaluations.append(
             Evaluation(
-                identity=EvaluationIdentity(
-                    run_id=run_id,
-                    created_at=created_at,
-                    output_dir=output_dir,
-                    eval_ref=definition.record_ref,
-                    eval_runtime=definition.runtime_descriptor,
-                ),
-                executor=definition.executor,
-                endpoint_route=definition.endpoint_route,
+                identity=work.identity,
+                executor=work.executor,
+                endpoint_route=work.endpoint_route,
+                secret_env_keys=work.secret_env_keys,
                 step=StepSpec(
                     name=f"eval/{model.name}/{eval_key}",
                     override_output_path=prefix_join(records_prefix, run_id),
+                    fn=partial(run_evaluation_step, batch_context, work),
                     hash_attrs={
                         "run_id": run_id,
                         "group_id": group_id,
@@ -324,29 +356,9 @@ def build_evaluation_batch(
                         ),
                     },
                 ),
-                secret_env_keys=tuple(definition.secret_env),
             )
         )
-
-    endpoint_cluster = accelerator.target_cluster or spec.submission_cluster
-    return EvaluationBatch(
-        group_id=group_id,
-        user=user,
-        version=spec.version,
-        description=spec.description,
-        records_prefix=records_prefix,
-        model=model,
-        accelerator=accelerator,
-        priority_band=spec.priority_band,
-        capability_origin=_capability_origin(endpoint_cluster),
-        api_model=canonical_served_name(model.name),
-        evaluations=tuple(evaluations),
-        provenance=provenance,
-        submission_cluster=spec.submission_cluster,
-        judge=judge,
-        secret_env=secret_env,
-        source_model_config=source_model_config,
-    )
+    return replace(batch_context, evaluations=tuple(evaluations))
 
 
 def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:

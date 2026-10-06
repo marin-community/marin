@@ -228,7 +228,7 @@ def launch(
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
+    """Submit one group of independently served evaluations for MODEL."""
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
@@ -280,7 +280,7 @@ def launch(
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(
-            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) "
+            f"submitted group {group.group_id} ({len(group.evaluations)} independent evals) "
             f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
         for evaluation in group.evaluations:
