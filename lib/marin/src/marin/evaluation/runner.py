@@ -171,22 +171,27 @@ class SubmittedEvaluationBatch:
     evaluations: tuple[SubmittedEvaluation, ...]
 
 
+class _RecordPublication(StrEnum):
+    WRITTEN = "written"
+    PRESERVED_SUCCESS = "preserved_success"
+
+
 def _read_record_if_exists(path: str) -> EvalRunRecord | None:
     current = conditional_object(path).read()
     return EvalRunRecord.model_validate_json(current.data) if current is not None else None
 
 
-def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> bool:
-    """Publish a record atomically, leaving the first successful record intact."""
+def _write_record_preserving_success(record: EvalRunRecord, prefix: str) -> _RecordPublication:
+    """Publish a record atomically and report whether a prior success was preserved."""
     destination = conditional_object(record_path(prefix, record.run_id))
     payload = record.model_dump_json(indent=2, by_alias=True).encode()
     while True:
         current = destination.read()
         if current is not None and EvalRunRecord.model_validate_json(current.data).status is RunStatus.SUCCEEDED:
-            return False
+            return _RecordPublication.PRESERVED_SUCCESS
         try:
             destination.write(payload, expected_version=current.version if current is not None else None)
-            return True
+            return _RecordPublication.WRITTEN
         except ConditionalWriteError:
             continue
 
@@ -204,7 +209,8 @@ def _record(
     tasks: tuple[EvalTaskRef, ...] | None = None,
     serving: ServingParams | None = None,
     inference_metrics: InferenceMetrics | None = None,
-) -> tuple[str, bool]:
+) -> tuple[str, _RecordPublication]:
+    """Return the record path and whether this attempt published or preserved a prior success."""
     evaluation = identity.eval_ref
     if tasks is not None:
         evaluation = evaluation.model_copy(update={"tasks": tasks})
@@ -284,12 +290,12 @@ def _record(
         log_tails=log_tails,
     )
     path = record_path(batch.records_prefix, identity.run_id)
-    written = _write_record_preserving_success(record, batch.records_prefix)
-    if written:
+    publication = _write_record_preserving_success(record, batch.records_prefix)
+    if publication is _RecordPublication.WRITTEN:
         logger.info("wrote eval record %s (status=%s)", path, status.value)
     else:
         logger.info("preserved successful eval record %s", path)
-    return path, written
+    return path, publication
 
 
 def _job_role(role: str, index: int) -> str:
@@ -456,7 +462,7 @@ def _run_one_evaluation(
 
     effective = session.effective_serving
     serving = ServingParams(**asdict(effective), effective=True) if effective is not None else None
-    path, written = _record(
+    path, publication = _record(
         batch,
         evaluation.identity,
         status,
@@ -470,7 +476,7 @@ def _run_one_evaluation(
         serving=serving,
         inference_metrics=inference_metrics,
     )
-    if written:
+    if publication is _RecordPublication.WRITTEN:
         record_rollout_run(
             rollout_run_record(
                 run_id=evaluation.identity.run_id,
@@ -489,7 +495,11 @@ def _run_one_evaluation(
                 },
             )
         )
-    failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None and written else None
+    failure = (
+        f"{evaluation.identity.eval_ref.name} ({status.value})"
+        if error is not None and publication is _RecordPublication.WRITTEN
+        else None
+    )
     return _EvaluationExecution(
         record_path=path,
         failure=failure,
@@ -507,7 +517,7 @@ def evaluate_batch(
     env_vars: Mapping[str, str],
     judge: RemoteInferenceSession | None = None,
 ) -> list[str]:
-    """Run a batch against one inference context and persist a record per evaluation."""
+    """Run unfinished evaluations against one inference context and return every record path."""
     paths: list[str] = []
     failed: list[str] = []
 
@@ -597,7 +607,7 @@ def _evaluate_with_hosted_judge(
 
 
 def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
-    """Serve once, run every evaluation, and write each record as it finishes."""
+    """Serve once for unfinished evaluations, preserving completed records on restart."""
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
