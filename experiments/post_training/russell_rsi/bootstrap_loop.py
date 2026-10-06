@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256, pinned_bytes
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
@@ -422,19 +423,19 @@ class FrozenRoundConfig:
 
 def freeze_round_dataset(config: FrozenRoundConfig) -> None:
     """Write exactly sixteen distinct qualified tasks in deterministic order."""
-    from taskcompendium.parquet import read_tasks, write_tasks  # noqa: PLC0415
+    from taskcompendium.parquet import read_task_records, write_task_records  # noqa: PLC0415
 
     selected = {task.task_id: task for task in config.plan.selected_tasks}
     if len(selected) != MINIMUM_TASKS:
         raise ValueError("A frozen round requires sixteen unique tasks")
-    rows = list(read_tasks(prefix_join(config.bank_path, "train.parquet")))
-    by_id = {task.id: task for task in rows}
+    rows = list(read_task_records(prefix_join(config.bank_path, "train.parquet")))
+    by_id = {json.loads(row)["id"]: row for row in rows}
     if len(by_id) != len(rows):
         raise ValueError("The qualified bank contains duplicate task IDs")
     tasks = []
     for identifier, record in sorted(selected.items()):
         task = by_id[identifier]
-        if canonical_sha256(task.model_dump(mode="json")) != record.task_sha256:
+        if canonical_sha256(json.loads(task)) != record.task_sha256:
             raise ValueError("Selected TaskSpec content differs from its sealed bank")
         admission = StoragePath(
             prefix_join(config.bank_path, f"evidence/{record.admission_sha256}/proposal.json")
@@ -445,7 +446,7 @@ def freeze_round_dataset(config: FrozenRoundConfig) -> None:
         if report["task_sha256"] != record.task_sha256 or report["source_group"] != record.source_id:
             raise ValueError("Selected task differs from its sealed evidence")
         tasks.append(task)
-    write_tasks(prefix_join(config.output_path, "train.parquet"), tasks)
+    write_task_records(prefix_join(config.output_path, "train.parquet"), tasks)
     StoragePath(prefix_join(config.output_path, "round-plan.json")).write_text(json.dumps(asdict(config.plan)) + "\n")
 
 
@@ -463,7 +464,7 @@ class BankExportConfig:
 
 def export_qualified_bank(config: BankExportConfig) -> None:
     """Export a separate semantic selection with actual original admission evidence."""
-    from taskcompendium.parquet import read_tasks, write_tasks  # noqa: PLC0415
+    from taskcompendium.parquet import read_task_records, write_task_records  # noqa: PLC0415
 
     audit_bytes = pinned_bytes(config.audit_path, config.audit_sha256)
     selection_bytes = pinned_bytes(config.selection_path, config.selection_sha256)
@@ -490,10 +491,13 @@ def export_qualified_bank(config: BankExportConfig) -> None:
         parquet_bytes = pinned_bytes(proposal["parquet_path"], proposal["parquet_sha256"])
         if not parquet_bytes:
             raise ValueError("Qualified source parquet is empty")
-        task = next(task for task in read_tasks(proposal["parquet_path"]) if task.id == proposal["task_id"])
-        if canonical_sha256(task.model_dump(mode="json")) != proposal["task_sha256"]:
+        task = next(
+            row for row in read_task_records(proposal["parquet_path"]) if json.loads(row)["id"] == proposal["task_id"]
+        )
+        task_value = json.loads(task)
+        if canonical_sha256(task_value) != proposal["task_sha256"]:
             raise ValueError("Qualified TaskSpec changed after the semantic audit")
-        if task.metadata["split"] != "train":
+        if task_value["metadata"]["split"] != "train":
             raise ValueError("Evaluation tasks cannot enter the qualified bank")
         root = proposal["local"] if "local" in proposal else proposal["local_evidence"]
         originals: dict[str, bytes] = {}
@@ -512,10 +516,10 @@ def export_qualified_bank(config: BankExportConfig) -> None:
             originals["admission-identity.json"] = StoragePath(prefix_join(root, "admission-identity.json")).read_bytes()
             if json.loads(originals["admission-identity.json"]) != identity:
                 raise ValueError("Recorded admission identity changed")
-            metadata = dict(task.metadata)
+            metadata = dict(task_value["metadata"])
             metadata.pop("family")
-            before_partition = task.model_copy(update={"metadata": metadata})
-            pre_hash = hashlib.sha256(before_partition.model_dump_json().encode()).hexdigest()
+            before_partition = TaskSpec.model_validate_json(task).model_copy(update={"metadata": metadata})
+            pre_hash = hashlib.sha256(before_partition.model_dump_json(exclude_unset=True).encode()).hexdigest()
             if (
                 pre_hash != proposal["pre_partition_task_spec_sha256"]
                 or pre_hash != identity["inputs"]["task_spec_sha256"]
@@ -530,7 +534,7 @@ def export_qualified_bank(config: BankExportConfig) -> None:
             StoragePath(prefix_join(proof_root, filename)).write_bytes(content)
         bank.append(
             QualifiedTask(
-                task.id,
+                task_value["id"],
                 proposal["task_sha256"],
                 proof_hash,
                 proposal["source_group"],
@@ -541,7 +545,9 @@ def export_qualified_bank(config: BankExportConfig) -> None:
         )
         tasks.append(task)
     qualified = qualified_bank(tuple(bank))
-    write_tasks(prefix_join(config.output_path, "train.parquet"), sorted(tasks, key=lambda task: task.id))
+    write_task_records(
+        prefix_join(config.output_path, "train.parquet"), sorted(tasks, key=lambda task: json.loads(task)["id"])
+    )
     StoragePath(prefix_join(config.output_path, "source-audit.json")).write_bytes(audit_bytes)
     StoragePath(prefix_join(config.output_path, "semantic-selection.json")).write_bytes(selection_bytes)
     StoragePath(prefix_join(config.output_path, "contract-registry.json")).write_bytes(registry_bytes)

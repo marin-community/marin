@@ -621,7 +621,7 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
     from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle  # noqa: PLC0415
     from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory  # noqa: PLC0415
     from taskcompendium.models import TaskSpec  # noqa: PLC0415
-    from taskcompendium.parquet import read_tasks, write_tasks  # noqa: PLC0415
+    from taskcompendium.parquet import read_task_records, write_task_records  # noqa: PLC0415
 
     from experiments.post_training.russell_rsi.repair_tasks import (  # noqa: PLC0415
         download_evidence,
@@ -713,16 +713,17 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 has_families = True
             elif family != row["contract_id"]:
                 raise ValueError("A task from an existing family cannot be exported as an independent contract")
-        tasks = list(read_tasks(str(evidence / "train.parquet")))
-        if {task.id for task in tasks} != {row["task_id"] for row in bank["tasks"]}:
+        tasks = list(read_task_records(str(evidence / "train.parquet")))
+        if {json.loads(task)["id"] for task in tasks} != {row["task_id"] for row in bank["tasks"]}:
             raise ValueError("Prior bank rows do not match their index")
         indexed_rows = {row["task_id"]: row for row in bank["tasks"]}
         if len(indexed_rows) != len(bank["tasks"]) or len(tasks) != len(indexed_rows):
             raise ValueError("Prior bank repeats task rows")
         for task in tasks:
-            if digest(task.model_dump(mode="json")) != indexed_rows[task.id]["task_sha256"]:
+            task_value = json.loads(task)
+            row = indexed_rows[task_value["id"]]
+            if digest(task_value) != row["task_sha256"]:
                 raise ValueError("Prior bank task content changed")
-            row = indexed_rows[task.id]
             proof_bytes = (evidence / "evidence" / row["admission_sha256"] / "proposal.json").read_bytes()
             proof = json.loads(proof_bytes)
             if (
@@ -972,8 +973,9 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 )
                 task = None
                 if result.get("accepted"):
-                    task = TaskSpec.model_validate_json((directory / "task.json").read_bytes())
-                if task is not None and digest(task.model_dump(mode="json")) != result["task_sha256"]:
+                    task = (directory / "task.json").read_text()
+                    TaskSpec.model_validate_json(task)
+                if task is not None and digest(json.loads(task)) != result["task_sha256"]:
                     raise ValueError("Completed task no longer matches its admission evidence")
                 return row, result, task
 
@@ -991,8 +993,9 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             results.append(result)
             if task is None:
                 continue
+            task_value = json.loads(task)
             proof = {
-                "task_sha256": digest(task.model_dump(mode="json")),
+                "task_sha256": digest(task_value),
                 "source_group": row["source_id"],
                 "contract_id": row["contract_id"],
                 "manifest_sha256": config.manifest_sha256,
@@ -1010,7 +1013,7 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             tasks.append(task)
             bank["tasks"].append(
                 {
-                    "task_id": task.id,
+                    "task_id": task_value["id"],
                     "task_sha256": proof["task_sha256"],
                     "source_id": row["source_id"],
                     "admission_sha256": proof_hash,
@@ -1019,13 +1022,13 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                     "relation": row.get("relation", "new_contract"),
                 }
             )
-            family_by_task[task.id] = row.get("original_family_id", row["contract_id"])
+            family_by_task[task_value["id"]] = row.get("original_family_id", row["contract_id"])
         if has_families:
             bank["family_by_task"] = family_by_task
         bank["feedback_identity"] = config.capabilities_sha256
         parquet_name = "train.partial.parquet" if errors else "train.parquet"
         bank_name = "bank.partial.json" if errors else "bank.json"
-        write_tasks(str(work / parquet_name), sorted(tasks, key=lambda task: task.id))
+        write_task_records(str(work / parquet_name), sorted(tasks, key=lambda task: json.loads(task)["id"]))
         (work / bank_name).write_text(json.dumps(bank, sort_keys=True))
         (work / "summary.json").write_text(
             json.dumps(

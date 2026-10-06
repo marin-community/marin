@@ -11,7 +11,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
 from taskcompendium.grading import exact_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
-from taskcompendium.parquet import read_tasks, write_tasks
+from taskcompendium.parquet import read_task_records, read_tasks, write_task_records, write_tasks
 
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     CheckpointScore,
@@ -228,10 +228,11 @@ def test_adaptive_round_cannot_count_a_variant_as_a_new_capability_contract(rela
         plan(state, variant)
 
 
-def test_frozen_round_writes_selected_unique_tasks_and_rejects_changed_bank_content(tmp_path):
+@pytest.mark.parametrize("changed_field", ["instruction", "verifier", "added_default_field"])
+def test_frozen_round_writes_selected_unique_tasks_and_rejects_changed_bank_content(tmp_path, changed_field):
     bank = tmp_path / "bank"
     bank.mkdir()
-    task_specs, records = [], []
+    records, raw_records = [], []
     for index in range(20):
         task = TaskSpec(
             id=str(index),
@@ -242,15 +243,19 @@ def test_frozen_round_writes_selected_unique_tasks_and_rejects_changed_bank_cont
             source=Source(dataset="source", revision="pin", row=str(index), importer_revision="1"),
             metadata={"split": "train"},
         )
-        task_hash = hashlib.sha256(json.dumps(task.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+        value = task.model_dump(mode="json")
+        value.pop("interaction_tools")
+        value.pop("output_paths")
+        raw = json.dumps(value, indent=2)
+        raw_records.append(raw)
+        task_hash = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
         proof = json.dumps({"task_sha256": task_hash, "source_group": f"source-{index}"}).encode()
         proof_hash = hashlib.sha256(proof).hexdigest()
         proof_path = bank / "evidence" / proof_hash
         proof_path.mkdir(parents=True)
         (proof_path / "proposal.json").write_bytes(proof)
         records.append(QualifiedTask(str(index), task_hash, proof_hash, f"source-{index}", "types", f"contract-{index}"))
-        task_specs.append(task)
-    write_tasks(str(bank / "train.parquet"), task_specs)
+    write_task_records(str(bank / "train.parquet"), raw_records)
     frozen = plan(replace(initial_state(), bank=tuple(records)))
     destination = tmp_path / "round"
     destination.mkdir()
@@ -259,12 +264,20 @@ def test_frozen_round_writes_selected_unique_tasks_and_rejects_changed_bank_cont
     assert len(exported) == 16
     assert {task.id for task in exported} == {task.task_id for task in frozen.selected_tasks}
     assert exported == sorted(exported, key=lambda task: task.id)
-    selected_id = frozen.selected_tasks[0].task_id
-    altered = [
-        task.model_copy(update={"metadata": {"split": "test"}}) if task.id == selected_id else task
-        for task in task_specs
+    assert list(read_task_records(str(destination / "train.parquet"))) == [
+        raw_records[int(task.id)] for task in exported
     ]
-    write_tasks(str(bank / "train.parquet"), altered)
+    selected_id = frozen.selected_tasks[0].task_id
+    changed = json.loads(raw_records[int(selected_id)])
+    if changed_field == "instruction":
+        changed["context"]["events"][0]["content"] = "Changed instruction"
+    elif changed_field == "verifier":
+        changed["verifier"] = exact_answer("different").model_dump(mode="json")
+    else:
+        changed["output_paths"] = []
+    altered = list(raw_records)
+    altered[int(selected_id)] = json.dumps(changed)
+    write_task_records(str(bank / "train.parquet"), altered)
     with pytest.raises(ValueError, match="content differs"):
         freeze_round_dataset(FrozenRoundConfig(str(bank), frozen, str(tmp_path / "bad-round")))
 

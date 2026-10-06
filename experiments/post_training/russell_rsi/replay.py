@@ -373,14 +373,14 @@ class ReplayDatasetConfig:
 
 def freeze_sampled_replay_dataset(config: ReplayDatasetConfig, *, rows_required: int) -> None:
     """Write unchanged task rows in sealed schedule order, including replay duplicates."""
-    from taskcompendium.parquet import read_tasks, write_tasks  # noqa: PLC0415
+    from taskcompendium.parquet import read_task_records, write_task_records  # noqa: PLC0415
 
     plan_value = dict(config.replay_plan)
     plan_sha256 = plan_value.pop("schedule_sha256")
     if plan_sha256 != compact_json_sha256(plan_value):
         raise ValueError("Replay schedule digest mismatch")
-    rows = list(read_tasks(prefix_join(config.bank_path, "train.parquet")))
-    by_id = {task.id: task for task in rows}
+    rows = list(read_task_records(prefix_join(config.bank_path, "train.parquet")))
+    by_id = {json.loads(row)["id"]: row for row in rows}
     if len(by_id) != len(rows):
         raise ValueError("The qualified bank contains duplicate task IDs")
     evidence_by_id = {task.task_id: task for task in config.tasks}
@@ -395,7 +395,7 @@ def freeze_sampled_replay_dataset(config: ReplayDatasetConfig, *, rows_required:
             raise ValueError("Replay schedule task is absent from the qualified bank")
         if task_record.task_sha256 != entry["task_sha256"] or task_record.admission_sha256 != entry["admission_sha256"]:
             raise ValueError("Replay schedule identity differs from the qualified bank")
-        if canonical_sha256(task.model_dump(mode="json")) != task_record.task_sha256:
+        if canonical_sha256(json.loads(task)) != task_record.task_sha256:
             raise ValueError("Replay TaskSpec content differs from its sealed bank")
         admission = StoragePath(
             prefix_join(config.bank_path, f"evidence/{task_record.admission_sha256}/proposal.json")
@@ -406,7 +406,7 @@ def freeze_sampled_replay_dataset(config: ReplayDatasetConfig, *, rows_required:
         if report["task_sha256"] != task_record.task_sha256 or report["source_group"] != task_record.source_id:
             raise ValueError("Replay task differs from its sealed admission evidence")
         if families is not None and (
-            families[task.id] != report.get("original_family_id", task_record.contract_id)
+            families[json.loads(task)["id"]] != report.get("original_family_id", task_record.contract_id)
             or report.get("relation", task_record.relation) != task_record.relation
         ):
             raise ValueError("Replay task family differs from its sealed admission evidence")
@@ -414,7 +414,7 @@ def freeze_sampled_replay_dataset(config: ReplayDatasetConfig, *, rows_required:
     occurrences = config.replay_plan["schedule"]
     if len(output) != rows_required or len({entry["occurrence_id"] for entry in occurrences}) != rows_required:
         raise ValueError(f"Replay artifact requires {rows_required} distinct occurrences")
-    write_tasks(prefix_join(config.output_path, "train.parquet"), output)
+    write_task_records(prefix_join(config.output_path, "train.parquet"), output)
     StoragePath(prefix_join(config.output_path, "replay-plan.json")).write_text(
         json.dumps(config.replay_plan, sort_keys=True, indent=2) + "\n"
     )

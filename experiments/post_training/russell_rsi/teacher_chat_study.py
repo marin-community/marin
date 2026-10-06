@@ -29,7 +29,7 @@ from rolloutengine.task_session import session_start
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import TaskSpec
-from taskcompendium.parquet import read_tasks
+from taskcompendium.parquet import read_task_records
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.glm import resolve_glm_base_url
@@ -293,17 +293,18 @@ def retained_rows(study: ChatStudy, original: dict, tasks: dict[str, TaskSpec], 
 
 async def collect_remaining_rows(
     original: dict,
-    tasks: dict[str, TaskSpec],
+    task_records: dict[str, str],
     retained: list[dict],
     tokenizer: MarinTokenizer,
     directory: StoragePath,
     run_slot: Callable[[TaskSpec, StoragePath, TeacherModelConfig], Awaitable[dict]],
 ) -> dict:
+    tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in task_records.items()}
     selected = original["selection"]["selected"]
     if len(selected) != SOURCE_FAMILIES or len({entry["family"] for entry in selected}) != SOURCE_FAMILIES:
         raise ValueError("Chat study requires the exact ten-family source selection")
     for entry in selected:
-        if digest(tasks[entry["task_id"]].model_dump(mode="json", exclude_unset=True)) != entry["task_sha256"]:
+        if digest(json.loads(task_records[entry["task_id"]])) != entry["task_sha256"]:
             raise ValueError("Chat task differs from frozen admission")
     plan = {
         "protocol": PROTOCOL,
@@ -400,7 +401,8 @@ def run_chat_study_collection(config: ChatCollectionConfig) -> None:
     with tempfile.TemporaryDirectory(prefix="russell-chat-study-") as temporary:
         root = Path(temporary)
         (root / "train.parquet").write_bytes(train_bytes)
-        tasks = {task.id: task for task in read_tasks(str(root / "train.parquet"))}
+        task_records = {json.loads(row)["id"]: row for row in read_task_records(str(root / "train.parquet"))}
+        tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in task_records.items()}
         for name, expected in base.tokenizer_files.items():
             if Path(name).name != name:
                 raise ValueError("Tokenizer input must be a filename")
@@ -432,7 +434,7 @@ def run_chat_study_collection(config: ChatCollectionConfig) -> None:
                     )
                     return chat_teacher_evidence(result)
 
-                return await collect_remaining_rows(original, tasks, seeds, tokenizer, output, run_slot)
+                return await collect_remaining_rows(original, task_records, seeds, tokenizer, output, run_slot)
 
         result = asyncio.run(collect())
     if result["status"] != "passed":

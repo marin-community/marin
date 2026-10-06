@@ -227,7 +227,7 @@ async def teacher_preflight(
 
 async def collect_teacher_rows(
     selected: tuple[TeacherTask, ...],
-    tasks: Mapping[str, TaskSpec],
+    task_records: Mapping[str, str],
     capabilities: dict,
     tokenizer: MarinTokenizer,
     tokenizer_identity: str,
@@ -241,10 +241,11 @@ async def collect_teacher_rows(
 ) -> dict:
     """Collect at most two trajectories per frozen family and retain eight full rows.
 
-    The caller supplies verified admitted tasks and a pinned student tokenizer.
+    The caller supplies persisted admitted records and a pinned student tokenizer.
     A single process owns this directory. Resume consumes incomplete trajectory
     reservations without replaying their VM state or issuing replacement calls.
     """
+    tasks = {identifier: TaskSpec.model_validate_json(row) for identifier, row in task_records.items()}
     labels = {skill["label"] for skill in capabilities["skills"]}
     families = [entry.family for entry in selected]
     if not STUDENT_ROWS <= len(selected) <= TEACHER_FAMILY_LIMIT or len(set(families)) != len(families):
@@ -254,7 +255,7 @@ async def collect_teacher_rows(
     for entry in selected:
         if entry.capability not in labels:
             raise ValueError("Teacher task is not bound to an accepted canonical capability")
-        if digest(tasks[entry.task_id].model_dump(mode="json")) != entry.task_sha256:
+        if digest(json.loads(task_records[entry.task_id])) != entry.task_sha256:
             raise ValueError("Teacher task differs from the frozen admitted task")
     plan = {
         "selected": [asdict(entry) for entry in selected],

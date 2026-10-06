@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 from taskcompendium.grading import exact_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
-from taskcompendium.parquet import read_tasks, write_tasks
+from taskcompendium.parquet import read_task_records, read_tasks, write_task_records
 
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     CheckpointScore,
@@ -35,6 +35,7 @@ def test_replay_artifact_preserves_source_tasks_and_seals_four_update_schedules(
     bank_path = tmp_path / "bank"
     bank_path.mkdir()
     task_specs = []
+    raw_records = []
     records = []
     for index in range(20):
         task = TaskSpec(
@@ -46,7 +47,13 @@ def test_replay_artifact_preserves_source_tasks_and_seals_four_update_schedules(
             source=Source(dataset="source", revision="pin", row=str(index), importer_revision="1"),
             metadata={"split": "train"},
         )
-        task_hash = canonical_sha256(task.model_dump(mode="json"))
+        value = task.model_dump(mode="json")
+        value.pop("interaction_tools")
+        value.pop("output_paths")
+        raw = json.dumps(value, indent=2)
+        raw_records.append(raw)
+        task = TaskSpec.model_validate_json(raw)
+        task_hash = canonical_sha256(value)
         proof = json.dumps({"task_sha256": task_hash, "source_group": f"source-{index}"}).encode()
         proof_hash = hashlib.sha256(proof).hexdigest()
         proof_path = bank_path / "evidence" / proof_hash
@@ -54,7 +61,7 @@ def test_replay_artifact_preserves_source_tasks_and_seals_four_update_schedules(
         (proof_path / "proposal.json").write_bytes(proof)
         task_specs.append(task)
         records.append(QualifiedTask(str(index), task_hash, proof_hash, f"source-{index}", "types", f"contract-{index}"))
-    write_tasks(str(bank_path / "train.parquet"), task_specs)
+    write_task_records(str(bank_path / "train.parquet"), raw_records)
 
     parent = CheckpointScore("parent", (0.5, 0.5), 0.8)
     state = LoopState(parent, parent, parent, tuple(records[:16]), completed_pilots=1)
@@ -95,6 +102,9 @@ def test_replay_artifact_preserves_source_tasks_and_seals_four_update_schedules(
     exported = list(read_tasks(str(output / "train.parquet")))
     schedule = sealed["schedule"]
     assert len(exported) == 64
+    assert list(read_task_records(str(output / "train.parquet"))) == [
+        raw_records[int(item["task_id"])] for item in schedule
+    ]
     assert [task.id for task in exported] == [item["task_id"] for item in schedule]
     assert len({item["occurrence_id"] for item in schedule}) == 64
     assert [item["row_index"] for item in schedule] == list(range(64))
@@ -125,6 +135,9 @@ def test_replay_artifact_preserves_source_tasks_and_seals_four_update_schedules(
     freeze_dose_dataset(ReplayDatasetConfig(str(bank_path), str(dose_path), tuple(records), extended))
     dose_rows = list(read_tasks(str(dose_path / "train.parquet")))
     assert len(dose_rows) == 128
+    assert list(read_task_records(str(dose_path / "train.parquet"))) == [
+        raw_records[int(item["task_id"])] for item in extended["schedule"]
+    ]
     assert extended["schedule"][:64] == family_source["schedule"]
     assert [task.id for task in dose_rows] == [entry["task_id"] for entry in extended["schedule"]]
     for update in range(1, 9):

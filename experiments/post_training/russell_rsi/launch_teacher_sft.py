@@ -33,7 +33,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.parquet import read_tasks
+from taskcompendium.parquet import read_task_records
 
 from experiments.evaluation.pipeline import eval_step
 from experiments.post_training.glm import resolve_glm_base_url
@@ -119,7 +119,7 @@ def collect_teacher_dataset(
         root = Path(temporary)
         tasks_path = root / "train.parquet"
         tasks_path.write_bytes(train_bytes)
-        tasks = {task.id: task for task in read_tasks(str(tasks_path))}
+        task_records = {json.loads(row)["id"]: row for row in read_task_records(str(tasks_path))}
         for name, digest in config.tokenizer_files.items():
             if Path(name).name != name:
                 raise ValueError("Tokenizer inputs must be files at the parent export root")
@@ -161,7 +161,7 @@ def collect_teacher_dataset(
             ) as client:
                 return await collect_teacher_rows(
                     selected,
-                    tasks,
+                    task_records,
                     selection["capabilities"],
                     tokenizer,
                     tokenizer_identity,

@@ -81,6 +81,10 @@ def rollout(value, reward=1):
     }
 
 
+def persisted_tasks(tasks):
+    return {key: task.model_dump_json(exclude_unset=True) for key, task in tasks.items()}
+
+
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_frozen_remaining_order_retains_seeds_and_never_reissues_slots(tmp_path, student_tokenizer, interrupted):
     original, tasks, retained = inputs(student_tokenizer)
@@ -96,14 +100,16 @@ def test_frozen_remaining_order_retains_seeds_and_never_reissues_slots(tmp_path,
         calls.append(slot.name)
         return rollout("answer-" + slot.name, reward=0 if slot.name == "05-1" else 1)
 
-    first = asyncio.run(collect_remaining_rows(original, tasks, retained, student_tokenizer, root, run))
+    first = asyncio.run(collect_remaining_rows(original, persisted_tasks(tasks), retained, student_tokenizer, root, run))
     assert calls == (["06-0", "07-0"] if interrupted else ["05-1", "06-0", "07-0"])
     assert first["status"] == "passed"
     assert [row["slot"] for row in first["accepted"]] == ["00-1", "02-0", "06-0", "07-0"]
     assert first["accepted"][:2] == retained
     assert first["new_trajectories"] == 3 and first["cumulative_trajectories"] == 13
     assert not (root / "trajectories/05-0").exists() and not (root / "trajectories/06-1").exists()
-    second = asyncio.run(collect_remaining_rows(original, tasks, retained, student_tokenizer, root, run))
+    second = asyncio.run(
+        collect_remaining_rows(original, persisted_tasks(tasks), retained, student_tokenizer, root, run)
+    )
     assert second == first
     assert len(calls) == (2 if interrupted else 3)
     assert all("reasoning" not in message for row in first["accepted"] for message in row["row"]["messages"])
@@ -118,7 +124,9 @@ def test_exhausted_budget_does_not_train_or_replace_seed_rows(tmp_path, student_
         return rollout("failed", reward=0)
 
     result = asyncio.run(
-        collect_remaining_rows(original, tasks, retained, student_tokenizer, StoragePath(str(tmp_path)), run)
+        collect_remaining_rows(
+            original, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path)), run
+        )
     )
     assert calls == ["05-1", "06-0", "06-1", "07-0", "07-1", "08-0", "08-1", "09-0", "09-1"]
     assert result["status"] == "insufficient_rows" and result["accepted"] == retained
@@ -136,12 +144,18 @@ def test_changed_task_and_fatal_resume_fail_before_provider(tmp_path, student_to
     broken = json.loads(json.dumps(original))
     broken["selection"]["selected"][9]["task_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="frozen admission"):
-        asyncio.run(collect_remaining_rows(broken, tasks, retained, student_tokenizer, StoragePath(str(tmp_path)), run))
+        asyncio.run(
+            collect_remaining_rows(
+                broken, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path)), run
+            )
+        )
     assert calls == []
     for _ in range(2):
         with pytest.raises(RolloutContractError):
             asyncio.run(
-                collect_remaining_rows(original, tasks, retained, student_tokenizer, StoragePath(str(tmp_path)), run)
+                collect_remaining_rows(
+                    original, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path)), run
+                )
             )
     assert calls == ["05-1"]
     marker = json.loads((tmp_path / "contract-failure.json").read_text())
@@ -163,7 +177,9 @@ def test_admitted_serialized_task_survives_new_schema_defaults(tmp_path, student
         return rollout("not accepted", reward=0)
 
     result = asyncio.run(
-        collect_remaining_rows(original, tasks, retained, student_tokenizer, StoragePath(str(tmp_path / "valid")), run)
+        collect_remaining_rows(
+            original, persisted_tasks(tasks), retained, student_tokenizer, StoragePath(str(tmp_path / "valid")), run
+        )
     )
     assert result["new_trajectories"] == 9 and calls[0] == "05-1"
     calls.clear()
@@ -174,7 +190,12 @@ def test_admitted_serialized_task_survives_new_schema_defaults(tmp_path, student
     with pytest.raises(ValueError, match="frozen admission"):
         asyncio.run(
             collect_remaining_rows(
-                original, tasks, retained, student_tokenizer, StoragePath(str(tmp_path / "changed")), run
+                original,
+                persisted_tasks(tasks),
+                retained,
+                student_tokenizer,
+                StoragePath(str(tmp_path / "changed")),
+                run,
             )
         )
     assert calls == [] and not (tmp_path / "changed" / "plan.json").exists()

@@ -409,16 +409,21 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
                 {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
                 directory,
             )
+
+            async def collect():
+                records = {key: task.model_dump_json() for key, task in tasks.items()}
+                return await collect_teacher_rows(args[0], records, *args[2:])
+
             admitted_task = tasks[selected[0].task_id]
             tasks[admitted_task.id] = admitted_task.model_copy(update={"tags": ("changed-task",)})
             with pytest.raises(ValueError, match="differs from the frozen admitted task"):
-                await collect_teacher_rows(*args)
+                await collect()
             assert sent == []
             assert not (tmp_path / "collection/plan.json").exists()
             tasks[admitted_task.id] = admitted_task
             if contract_failure:
                 with pytest.raises(RolloutContractError, match="exact prompt and response token IDs"):
-                    await collect_teacher_rows(*args)
+                    await collect()
                 marker_path = tmp_path / "collection/contract-failure.json"
                 marker = json.loads(marker_path.read_text())
                 assert marker["task"] == asdict(selected[1])
@@ -433,13 +438,13 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
                 count = len(sent)
                 saved_marker = marker_path.read_bytes()
                 with pytest.raises(RolloutContractError, match=marker["exception_message"]):
-                    await collect_teacher_rows(*args)
+                    await collect()
                 assert len(sent) == count
                 assert marker_path.read_bytes() == saved_marker
                 return None
-            result = await collect_teacher_rows(*args)
+            result = await collect()
             assert len(sent) == 22  # Four preflight requests, eight successes, and one failed two-turn attempt.
-            assert await collect_teacher_rows(*args) == result
+            assert await collect() == result
             assert len(sent) == 22
             return result
 
@@ -679,7 +684,7 @@ def test_counted_recovery_retires_first_slot_and_reuses_exact_preflight(tmp_path
         async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
             return await collect_teacher_rows(
                 tuple(selected),
-                tasks,
+                {key: task.model_dump_json() for key, task in tasks.items()},
                 capabilities,
                 student_tokenizer,
                 "test-tokenizer-identity",
