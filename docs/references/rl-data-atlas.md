@@ -209,23 +209,22 @@ and drawn differently. Three judges assess each attempt; their opinions are not
 additional solver attempts. Historical dataset releases and rollout settings remain
 separate from current measurements.
 
-The catalog's Difficulty column shows each measured model's solve rate as a bar
-with solved/verified counts. Longer bars mean more tasks solved. Current comparisons
+The catalog's Difficulty column shows each measured model's solve rate as a bar.
+The detail page reports the solve counts. Longer bars mean more tasks solved. Current comparisons
 use the same task sample for three fixed models:
 
 | Role | Model | Reasoning setting |
 | --- | --- | --- |
 | Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
-| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
+| Large | Qwen/Qwen3.5-122B-A10B | Thinking disabled |
 | Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
 
-The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
+The current matched protocols give each model 65,536 total context
 tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
-reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
-repetition penalty 1, and presence and frequency penalties 0. These explicit
-settings prevent checkpoint generation defaults from changing the comparison.
-Models retain their native reasoning controls; the shared token budget does not
-make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
+reasoning. Small and Hosted use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
+repetition penalty 1, and presence and frequency penalties 0. Large uses the
+same settings with top-p 0.8 and presence penalty 1.5. These explicit settings
+prevent checkpoint generation defaults from changing the comparison. Nemotron's learned verifiers use Hosted GLM-5.3
 with Low reasoning effort across all three arms. Their native output budgets
 and saved critic requests and responses appear with the run evidence.
 
@@ -287,11 +286,16 @@ and synthesizes the opinions. Each Harbor attempt uses a distinct session name.
 Add `--resume` to the first command to reuse completed task outcomes, judge outputs, and syntheses with matching inputs,
 configuration, and native code. The publisher validates the collection and
 uploads its cited evidence into the applet schema using Marina authentication.
+Captured verifyit commits must match the selected MarinSkyRL dependency pin and the live Atlas pin.
+Harbor reviews must record a clean checkout whose verifier tree matches the live Harbor verifier;
+a newer commit that leaves this tree unchanged remains eligible. A mismatch stops publication
+before any review or quality update.
 Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
 
 Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release
 repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
-when the MarinSkyRL head is unchanged. The public page reads the latest saved
+when the MarinSkyRL head is unchanged. It also checks Harbor verifier changes before reusing the
+cached registry, so a Harbor-only update invalidates the affected evidence. The public page reads the latest saved
 catalog and shows its last upstream check time; it does not refresh upstream sources.
 When the MarinSkyRL repository head
 changes, the applet reloads verifier commit history; **Refresh sources** also

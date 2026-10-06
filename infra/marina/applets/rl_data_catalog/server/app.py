@@ -20,6 +20,8 @@ from .catalog import (
     SKYRL_ORIGIN,
     TASKTROVE,
     TASKTROVE_CLASSIFICATION,
+    TASKTROVE_FAMILY_OVERRIDE_BASIS,
+    TASKTROVE_FAMILY_OVERRIDES,
     TASKTROVE_ORIGIN,
     Snapshot,
     annotate_source,
@@ -35,6 +37,7 @@ logger = logging.getLogger(__name__)
 DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
 JUDGE_VERIFIER_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-judge-verifier-nonthinking"
 CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-checklist-judge"
+VERIFYIT_REVERIFICATION_DIFFICULTY_PROTOCOL = "atlas-difficulty-v6-current-verifyit-reverification"
 CHECKLIST_JUDGE_SOURCES = {
     "Task Trove:laion__nemotron-gym-safety-v3",
     "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -54,7 +57,7 @@ DIFFICULTY_GENERATION = {
     "repetition_penalty": 1,
     "presence_penalty": 0,
     "frequency_penalty": 0,
-    "max_tokens": 16384,
+    "max_tokens": DIFFICULTY_LIMITS["max_output_tokens"],
 }
 
 
@@ -66,8 +69,17 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
         DIFFICULTY_PROTOCOL,
         JUDGE_VERIFIER_DIFFICULTY_PROTOCOL,
         CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL,
+        VERIFYIT_REVERIFICATION_DIFFICULTY_PROTOCOL,
     ):
         return "historical", "Earlier model identities or generation budgets; retained as historical evidence."
+    if protocol_id == VERIFYIT_REVERIFICATION_DIFFICULTY_PROTOCOL:
+        verifier = report.get("verifier_configuration") or {}
+        if (
+            verifier.get("verifyit_enabled") is not True
+            or not verifier.get("verifyit_commit")
+            or not verifier.get("native_code_sha")
+        ):
+            return "invalid", "The verifier refresh lacks its pinned MarinSkyRL and verifyit provenance."
     if protocol_id == JUDGE_VERIFIER_DIFFICULTY_PROTOCOL:
         judge = (report.get("verifier_configuration") or {}).get("tasktrove_judge") or {}
         if (
@@ -115,6 +127,8 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
         note += " The native TaskTrove verifier used Qwen3.5-9B with thinking disabled."
     if protocol_id == CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL:
         note += " The native TaskTrove checklist verifier used DeepSeek-V4-Pro through Together."
+    if protocol_id == VERIFYIT_REVERIFICATION_DIFFICULTY_PROTOCOL:
+        note += " Preserved model responses were replayed through the pinned current MarinSkyRL and verifyit code."
     return "current", note
 
 
@@ -174,7 +188,6 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
             for key in (
                 "difficulty",
                 "quality",
-                "traces",
                 "review_date",
                 "review_id",
                 "review_source_revision",
@@ -223,7 +236,7 @@ def migrate(connection: Connection) -> None:
         CREATE TABLE IF NOT EXISTS catalog_sources (
             id TEXT PRIMARY KEY, origin TEXT NOT NULL, payload JSONB NOT NULL,
             active BOOLEAN NOT NULL DEFAULT TRUE,
-            difficulty TEXT, quality TEXT, traces BIGINT
+            difficulty TEXT, quality TEXT
         )
     """
         )
@@ -236,6 +249,18 @@ def migrate(connection: Connection) -> None:
         "review_verifier_revision TEXT",
     ):
         connection.execute(text(f"ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS {definition}"))
+    for source_name, family in TASKTROVE_FAMILY_OVERRIDES.items():
+        connection.execute(
+            text(
+                """UPDATE catalog_sources
+                SET payload = payload || CAST(:classification AS JSONB)
+                WHERE id = :source_id"""
+            ),
+            {
+                "source_id": f"{TASKTROVE_ORIGIN}:{source_name}",
+                "classification": json.dumps({"family": family, "family_basis": TASKTROVE_FAMILY_OVERRIDE_BASIS}),
+            },
+        )
     connection.execute(
         text(
             """

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from make_review import validate_collection
-from native_revision_attestation import revision_attestation
+from native_revision_attestation import revision_attestation, validate_harbor_verifier_revision
 
 ROOT = Path(__file__).parent
 MARIN = ROOT.parents[1]
@@ -135,6 +135,12 @@ def validated_publication(root: Path, atlas_id: str) -> ReviewPublication:
         raise ValueError("Review subject does not identify the requested Atlas population")
     if subjects[0]["dataset_revision"] != (payload.get("dataset_revision") or payload.get("revision")):
         raise ValueError("Reviewed data revision differs from the current Atlas source")
+    if payload.get("verifier_mode") == "verifyit":
+        package = provenance.get("verifyit")
+        if not package or package["source_commit"] != payload["verifyit_revision"]:
+            raise ValueError("Executed verifyit revision differs from the current Atlas verifier")
+    if payload.get("verifier_mode") == "harbor":
+        validate_harbor_verifier_revision(root, provenance["harbor_commit"], payload["harbor_verifier_revision"])
     attestation_path = None
     if payload["origin"] == "MarinSkyRL" and payload["revision"] != provenance["marinskyrl_commit"]:
         attestation = revision_attestation(root, payload["revision"], payload["verifier_path"])
@@ -191,17 +197,15 @@ def publish_review(root: Path, atlas_id: str) -> dict:
         {"id": review_id, "source": atlas_id, "collection": json.dumps(collection), "date": updated},
     )
     archive_evidence(publication, review_id)
-    native = [review for review in collection["reviews"] if review["method"] == "runtime_execution"]
     sql(
         """UPDATE catalog_sources SET quality=:quality,review_id=:review,review_date=:date,
-        review_source_revision=:revision,review_verifier_revision=:verifier,traces=:traces WHERE id=:source""",
+        review_source_revision=:revision,review_verifier_revision=:verifier WHERE id=:source""",
         {
             "quality": rating,
             "review": review_id,
             "date": updated,
             "revision": publication.subject["dataset_revision"],
             "verifier": payload.get("verifier_revision"),
-            "traces": len(native),
             "source": atlas_id,
         },
     )
