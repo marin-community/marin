@@ -27,4 +27,4 @@ cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -t
   --dtype bfloat16 --shapes-file experiments/amd_matmul_ceiling/snowball_shapes.txt"
 ```
 
-To see what XLA's GEMM autotuning contributes, rerun the JAX job with `XLA_FLAGS=--xla_gpu_autotune_level=0` exported.
+Keep XLA's GEMM autotuning on. With `--xla_gpu_autotune_level=0`, bf16 matmuls on MI350X ran at 15-17 TFLOP/s, about 1% of the autotuned rate (job 453316), so level 0 does not isolate hipBLASLt's default kernel choice from XLA's tuning.
