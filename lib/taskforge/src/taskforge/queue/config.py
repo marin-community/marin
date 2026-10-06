@@ -175,8 +175,14 @@ def _fields(obj: Mapping[str, Any], names: frozenset[str], where: str) -> None:
         raise ValueError(f"{where}: missing {missing}, unknown {unknown}")
 
 
+def _kind(obj: Mapping[str, Any], where: str) -> str:
+    if "kind" not in obj:
+        raise ValueError(f"{where}: missing ['kind']")
+    return obj["kind"]
+
+
 def glm_config(obj: Mapping[str, Any]) -> GlmConfig:
-    if GlmKind(obj["kind"]) is GlmKind.LAPTOP:
+    if GlmKind(_kind(obj, "glm")) is GlmKind.LAPTOP:
         _fields(obj, frozenset({"kind", "base_url", "token_file", "pool"}), "glm")
         return LaptopGlm(obj["base_url"], Path(obj["token_file"]).expanduser(), Pool(obj["pool"]))
     _fields(obj, frozenset({"kind", "relay_job", "token_env", "pool"}), "glm")
@@ -186,7 +192,7 @@ def glm_config(obj: Mapping[str, Any]) -> GlmConfig:
 def web_config(obj: Mapping[str, Any] | None) -> WebConfig | None:
     if obj is None:
         return None
-    if WebKind(obj["kind"]) is WebKind.KEY_FILE:
+    if WebKind(_kind(obj, "web")) is WebKind.KEY_FILE:
         _fields(obj, frozenset({"kind", "path"}), "web")
         return ParallelKeyFile(Path(obj["path"]).expanduser())
     _fields(obj, frozenset({"kind", "env"}), "web")
@@ -199,8 +205,15 @@ def engine_config(obj: Mapping[str, Any]) -> EngineConfig:
         max_turns=obj["max_turns"],
         command_timeout=obj["command_timeout"],
         cleanup_timeout=obj["cleanup_timeout"],
-        conventions=tuple(CONVENTION_TYPES[c["type"]].model_validate(c["convention"]) for c in obj["conventions"]),
+        conventions=tuple(convention(c) for c in obj["conventions"]),
     )
+
+
+def convention(obj: Mapping[str, Any]) -> SubmissionConvention:
+    _fields(obj, frozenset({"type", "convention"}), "convention")
+    if obj["type"] not in CONVENTION_TYPES:
+        raise ValueError(f"convention: unknown type {obj['type']!r}, known {sorted(CONVENTION_TYPES)}")
+    return CONVENTION_TYPES[obj["type"]].model_validate(obj["convention"])
 
 
 def run_config(obj: Mapping[str, Any]) -> RunConfig:
