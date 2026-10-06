@@ -688,7 +688,7 @@ def _native_pair_collection(
                 observation = {
                     "role": "tool",
                     "tool_call_id": "lookup-call",
-                    "content": f"{model.upper()}_TOOL_OBSERVATION",
+                    "content": f"{model.upper()}_TOOL_OBSERVATION\n</think>\n\nWEBFETCH_FINAL",
                 }
                 final = {"role": "assistant", "content": f"{model.upper()}_FINAL_{index}"}
                 if model == "student" and index == 0 and fault == "malformed_calls":
@@ -861,11 +861,13 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         masked = tok.decode(ids[masks].tolist())
         assert "REASONING" in masked and "ARGUMENT" in masked and "FINAL" in masked
         assert "USER_CONTEXT" not in masked and "TOOL_OBSERVATION" not in masked
+        assert "WEBFETCH_FINAL" not in masked
         if fault == "malformed_calls" and role == "rejected":
             assert masked.count("RAW_LOOP") == 20
         targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
+        assert "</think>\n\nWEBFETCH_FINAL" in tok.decode(ids.tolist())
         if fault not in ("context", "infrastructure_error"):
             text = tok.decode(ids.tolist())
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text

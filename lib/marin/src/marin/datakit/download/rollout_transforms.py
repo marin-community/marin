@@ -321,7 +321,10 @@ def openai_chat_messages(
             case Role.TOOL:
                 if content is None:
                     raise ValueError("Tool observations must contain text")
-                _check_source_markup(content)
+                # Tool output can quote source reasoning tags. Target chat tokens
+                # could change the rendered conversation and remain forbidden.
+                if CHAT_CONTROL_TOKEN.search(content) or REASONING_TOKEN.search(content):
+                    raise ValueError(f"Tool observation contains target chat control tokens: {content!r}")
                 if TOOL_WRAPPER.search(content):
                     raise ValueError("Tool observations must not contain chat protocol wrappers")
                 call_id = message.get("tool_call_id")
