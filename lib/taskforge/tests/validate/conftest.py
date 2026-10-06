@@ -8,7 +8,8 @@ null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose
 grader runs in a verifier machine from the grader-base image and checks the captured file the agent
 must create. Each is lowered for a laptop (``lowered``) onto ``FACTORIES``: ShellSim, and for the
 verifier machine the ShellSim-backed ``FixtureImageFactory`` registered as Docker; ``relower`` lowers
-a variant the same way.
+a variant the same way. ``rounds`` builds validation-round inputs: a ``TaskDraft`` around a task, a
+``ValidationPolicy`` and a ``ValidationSite``.
 
 ``TemplateTokenizer`` stands in for the server's chat template in control replay; the loop and queue
 tests import it.
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -30,7 +32,10 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, JsonValueAnswer, PlainText, Source, TaskSpec
 from verifyit.spec import NumericSpec, StructuredExactSpec
 
+from taskforge.builder.run import Provenance, TaskDraft
+from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
+from taskforge.llm.policy import LLMPolicy
 from taskforge.sandbox.factories import MachineHost, grading_environment
 from taskforge.spec.controls import (
     Control,
@@ -55,6 +60,11 @@ from taskforge.spec.draft import (
     requirements,
     session,
 )
+from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.calibration import CalibrationBand
+from taskforge.validate.run import ValidationPolicy
+from taskforge.validate.solver import ValidationSite
+from taskforge.validate.trials import Deadlines
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 MATH_ANSWER = "395"
@@ -425,3 +435,53 @@ class TemplateTokenizer:
         self.calls += 1
         if self.calls <= self.failures:
             raise GlmUnavailable("router drained", ())
+
+
+def draft_of(task: TaskSpec, controls: tuple[Control, ...], convention: SubmissionConvention) -> TaskDraft:
+    """``task`` as a built draft; the provenance names no real program."""
+    provenance = Provenance(
+        item_id=task.id,
+        proposal_digest="proposal",
+        program_digest="program",
+        sdk_version="tests",
+        model="tests",
+        policy_digest="policy",
+        round=0,
+        steps=(),
+        resources=(),
+    )
+    return TaskDraft(task, TaskExecution(), convention, controls, provenance)
+
+
+def validation_policy(
+    k: int = 3, adversary_k: int = 2, max_retries: int = 0, token_contract_retries: int = 0
+) -> ValidationPolicy:
+    return ValidationPolicy(
+        k=k,
+        adversary_k=adversary_k,
+        roles=tuple(AdversaryRole),
+        band=CalibrationBand(0.125, 0.875),
+        sampling=LLMPolicy(max_continuations=0),
+        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        max_retries=max_retries,
+        token_contract_retries=token_contract_retries,
+        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+    )
+
+
+def validation_site(directory: Path) -> ValidationSite:
+    return ValidationSite("item", 0, directory / "evidence", JsonlLedger(directory / "ledger"))
+
+
+@dataclass(frozen=True)
+class Rounds:
+    """Builders for validation-round inputs, handed to tests through the ``rounds`` fixture."""
+
+    draft: Callable[..., TaskDraft] = draft_of
+    policy: Callable[..., ValidationPolicy] = validation_policy
+    site: Callable[[Path], ValidationSite] = validation_site
+
+
+@pytest.fixture
+def rounds() -> Rounds:
+    return Rounds()
