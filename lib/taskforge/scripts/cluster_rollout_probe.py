@@ -4,13 +4,14 @@
 """Run TaskSpecs through RolloutEngine inside an Iris task, with GLM-5.3 resolved in-task.
 
 Submit from the worktree root as one CPU job federated to a cluster that hosts a GLM relay and
-starts gVisor pods (``cw-rno2a``: relay ``/muchanem/glm53-relay-rno2a``)::
+starts gVisor pods (``cw-rno2a``). ``--relay-job`` names the Iris job that registers the glm-5.3
+endpoint on that cluster; it has no default::
 
     lib/taskforge/.venv/bin/iris --cluster=marin job run --no-wait --no-sync \
       --job-name taskforge-cluster-rollout-probe-NN --target-cluster cw-rno2a --priority interactive \
       --cpu 2 --memory 3GB --timeout 5400 -e GLM_API_TOKEN "$GLM_API_TOKEN" -- \
       bash -c 'cd lib/taskforge && uv run --frozen python scripts/cluster_rollout_probe.py \
-        --relay-job /muchanem/glm53-relay-rno2a'
+        --relay-job <relay-job>'
 
 ``GLM_API_TOKEN`` travels in the job's environment (``-e``), so the controller stores it with the
 job and the task's ``IRIS_JOB_ENV`` carries it. Iris copies ``IRIS_JOB_ENV`` into every child job,
