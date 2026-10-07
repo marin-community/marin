@@ -393,7 +393,7 @@ _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
 )
 _TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
 # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
-# expert shapes; gfx942 reuses them untuned.
+# expert shapes.
 _TILE_MAP_AMD_INSTINCT_CONFIGS = {
     RaggedLayout.FWD: TritonBlockConfig(
         block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=2
@@ -406,7 +406,18 @@ _TILE_MAP_AMD_INSTINCT_CONFIGS = {
     ),
 }
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
-    _GpuFamily.AMD_INSTINCT_GFX942: _TILE_MAP_AMD_INSTINCT_CONFIGS,
+    # Swept on MI300X at the June expert shapes, G=32, M of 16384 and 131072. gfx942 has 64 KiB of LDS per CU,
+    # against 160 KiB on gfx950. The forward pass keeps the MI350X blocks: 128x256x32 is 16% faster at
+    # M=16384 but 15-22% slower at the Mixtral-like shape.
+    _GpuFamily.AMD_INSTINCT_GFX942: {
+        RaggedLayout.FWD: _TILE_MAP_AMD_INSTINCT_CONFIGS[RaggedLayout.FWD],
+        RaggedLayout.DLHS: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=32, num_warps=4, num_stages=2, num_xcds=8, group_m=2
+        ),
+        RaggedLayout.DRHS: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=32, num_warps=4, num_stages=1, num_xcds=8, group_m=2
+        ),
+    },
     _GpuFamily.AMD_INSTINCT: _TILE_MAP_AMD_INSTINCT_CONFIGS,
     _GpuFamily.NVIDIA_BLACKWELL: {
         RaggedLayout.FWD: _TILE_MAP_BLACKWELL_ROW_CONFIG,
