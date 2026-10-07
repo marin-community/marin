@@ -71,11 +71,12 @@ class EventKind(StrEnum):
     SOLVED = "solved"
     """attrs: graded, solved, timed_out, ungraded."""
     ADVERSARIES_RUN = "adversaries_run"
-    """attrs: ``<role>_graded``, ``<role>_passes``, ``<role>_sentinel`` per role."""
+    """attrs: ``<role>_graded``, ``<role>_passes`` and ``<role>_sentinel`` (trials that gave up) per role."""
     DECIDED = "decided"
-    """input_hash: the task digest. attrs: decision (a ``DecisionKind``), repairs_used, retries_used;
-    kind (a ``RejectKind``) and reasons for reject; findings and invalidate for repair; cause, count,
-    abandon and not_before for retry."""
+    """input_hash: the task digest. attrs: decision (a ``DecisionKind``), repairs_used, retries_used and
+    notes (the kinds of the noted adversary passes, comma-separated; empty when staged or none); kind
+    (a ``RejectKind``) and reasons for reject; findings and invalidate for repair; cause, count, abandon
+    and not_before for retry."""
     TERMINAL = "terminal"
     """attrs: terminal (a ``Terminal``), reason, kind (a ``RejectKind``) when rejected, and causes
     (``cause:count`` pairs, comma-separated) when abandoned."""
