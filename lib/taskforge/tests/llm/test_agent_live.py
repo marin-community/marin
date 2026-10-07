@@ -28,7 +28,6 @@ from shellbox.machine import Command, MachineSpec, ShellSimBuiltins
 
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.agent import (
-    AgentLedger,
     AgentRun,
     AgentStop,
     AgentTool,
@@ -39,6 +38,7 @@ from taskforge.llm.agent import (
 )
 from taskforge.llm.client import FinishReason, GlmClient, GlmEndpoint, GlmRequestRejected, Pool, request_body
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
+from taskforge.llm.recording import CallLedger
 from taskforge.llm.web import web_tools
 
 EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".evidence" / "llm" / "agent"
@@ -62,8 +62,8 @@ def endpoint(glm_settings, base_url: str | None = None) -> GlmEndpoint:
     return GlmEndpoint(base_url=base_url or glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
 
 
-def ledger_record(check: str, item_id: str) -> AgentLedger:
-    return AgentLedger(ledger=JsonlLedger(EVIDENCE_DIR / "ledger" / check), item_id=item_id, round=0, step=check)
+def ledger_record(check: str, item_id: str) -> CallLedger:
+    return CallLedger(ledger=JsonlLedger(EVIDENCE_DIR / "ledger" / check), item_id=item_id, round=0, step=check)
 
 
 async def shellsim() -> ShellSimMachine:
