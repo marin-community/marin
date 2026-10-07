@@ -1,7 +1,7 @@
 {
   "uid": "marin-accel",
   "title": "Fleet accelerators",
-  "description": "Where the fleet's power goes and whether it is doing work. Sourced from each CoreWeave node's dcgm-exporter via the iris-node-agent telemetry stream, so it covers GPU clusters only -- TPU hosts report no power. Keep the window short because longer ranges scan proportionally more node telemetry.",
+  "description": "Where the fleet's power goes and whether it is doing work. Sourced from each CoreWeave node's dcgm-exporter via the iris-node-agent telemetry stream, so it covers GPU clusters only -- TPU hosts report no power. Keep the window short because longer ranges scan proportionally more node telemetry. Allocation charts retain whole snapshots over seven days, with incomplete history and unavailable idle shown explicitly.",
   "tags": [
     "marin",
     "generated"
@@ -1964,6 +1964,1016 @@
       ],
       "interval": "1m",
       "maxDataPoints": 100
+    },
+    {
+      "id": 400,
+      "type": "timeseries",
+      "title": "H100 allocation by requested priority · incomplete history",
+      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with an unavailable requested band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals. Priority groups use each child job’s requested band; dispatch budget downgrades do not change that group.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "timeFrom": "7d",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 65,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisLabel": "GPUs"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "System"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d45b69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Production"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#986bdb"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Interactive"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#4596df"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batch"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#45aa82"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unknown priority"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#dfab42"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Idle"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#999999"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Incomplete (1 = yes)"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes per sample"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Known setup GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Missing task metadata"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet unresolved-model GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Setup tasks (fleet)"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/gpu/allocation",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "model",
+                "value": "H100"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "time",
+              "text": "Time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "system",
+              "text": "System",
+              "type": "number"
+            },
+            {
+              "selector": "production",
+              "text": "Production",
+              "type": "number"
+            },
+            {
+              "selector": "interactive",
+              "text": "Interactive",
+              "type": "number"
+            },
+            {
+              "selector": "batch",
+              "text": "Batch",
+              "type": "number"
+            },
+            {
+              "selector": "unknown_priority",
+              "text": "Unknown priority",
+              "type": "number"
+            },
+            {
+              "selector": "idle",
+              "text": "Idle",
+              "type": "number"
+            },
+            {
+              "selector": "incomplete",
+              "text": "Incomplete (1 = yes)",
+              "type": "number"
+            },
+            {
+              "selector": "resolution_minutes",
+              "text": "Minutes per sample",
+              "type": "number"
+            },
+            {
+              "selector": "setup_gpu_requests",
+              "text": "Known setup GPU requests",
+              "type": "number"
+            },
+            {
+              "selector": "missing_task_metadata",
+              "text": "Missing task metadata",
+              "type": "number"
+            },
+            {
+              "selector": "unknown_model_gpu_requests",
+              "text": "Fleet unresolved-model GPU requests",
+              "type": "number"
+            },
+            {
+              "selector": "setup_tasks",
+              "text": "Setup tasks (fleet)",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 401,
+      "type": "timeseries",
+      "title": "Blackwell (GB200) allocation by requested priority · incomplete history",
+      "description": "Recorded Running GPU requests at one instant, using child-job shapes and attempt lifetimes. All historical points are incomplete: node-bound setup, pod cleanup and historical allocatable capacity are not fully retained. Unknown priority covers recovered requests with an unavailable requested band; it does not include missing allocation. Idle is blank when capacity or allocation is unverified. Defaults to seven days; zoom an absolute range for finer samples. See coverage below. Missing regional reads appear as blank spans, not reduced fleet totals. Priority groups use each child job’s requested band; dispatch budget downgrades do not change that group.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "timeFrom": "7d",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 65,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisLabel": "GPUs"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "System"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d45b69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Production"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#986bdb"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Interactive"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#4596df"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batch"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#45aa82"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unknown priority"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#dfab42"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Idle"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#999999"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Incomplete (1 = yes)"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes per sample"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Known setup GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Missing task metadata"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet unresolved-model GPU requests"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Setup tasks (fleet)"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": true,
+                  "tooltip": false
+                }
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/gpu/allocation",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "model",
+                "value": "GB200"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "time",
+              "text": "Time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "system",
+              "text": "System",
+              "type": "number"
+            },
+            {
+              "selector": "production",
+              "text": "Production",
+              "type": "number"
+            },
+            {
+              "selector": "interactive",
+              "text": "Interactive",
+              "type": "number"
+            },
+            {
+              "selector": "batch",
+              "text": "Batch",
+              "type": "number"
+            },
+            {
+              "selector": "unknown_priority",
+              "text": "Unknown priority",
+              "type": "number"
+            },
+            {
+              "selector": "idle",
+              "text": "Idle",
+              "type": "number"
+            },
+            {
+              "selector": "incomplete",
+              "text": "Incomplete (1 = yes)",
+              "type": "number"
+            },
+            {
+              "selector": "resolution_minutes",
+              "text": "Minutes per sample",
+              "type": "number"
+            },
+            {
+              "selector": "setup_gpu_requests",
+              "text": "Known setup GPU requests",
+              "type": "number"
+            },
+            {
+              "selector": "missing_task_metadata",
+              "text": "Missing task metadata",
+              "type": "number"
+            },
+            {
+              "selector": "unknown_model_gpu_requests",
+              "text": "Fleet unresolved-model GPU requests",
+              "type": "number"
+            },
+            {
+              "selector": "setup_tasks",
+              "text": "Setup tasks (fleet)",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 402,
+      "type": "table",
+      "title": "Allocation history coverage",
+      "description": "Incomplete samples include unverified historical capacity and pod setup/cleanup lifetimes. Setup requests are possible additional allocation, not allocated GPU counts. Metadata gaps may contain CPU or GPU tasks. Missing regional sources remain explicit. Fleet model gaps report requests whose GPU family cannot be resolved. They appear on both rows as the same fleet-wide gap, not as allocation assigned to either model. Setup samples count fleet-wide assigned/building tasks, including CPU tasks; GPU quantities stay blank where assignment timestamps are unavailable.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      },
+      "timeFrom": "7d",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "GPU"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Samples"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes/sample"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Incomplete"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Setup (fleet)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet metadata gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet model gaps"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fleet gap GPUs (max)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Missing clusters"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "History status"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/gpu/allocation",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "coverage"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "model",
+              "text": "GPU",
+              "type": "string"
+            },
+            {
+              "selector": "samples",
+              "text": "Samples",
+              "type": "number"
+            },
+            {
+              "selector": "resolution_minutes",
+              "text": "Minutes/sample",
+              "type": "number"
+            },
+            {
+              "selector": "incomplete_samples",
+              "text": "Incomplete",
+              "type": "number"
+            },
+            {
+              "selector": "setup_gap_samples",
+              "text": "Setup (fleet)",
+              "type": "number"
+            },
+            {
+              "selector": "metadata_gap_samples",
+              "text": "Fleet metadata gaps",
+              "type": "number"
+            },
+            {
+              "selector": "missing_source_samples",
+              "text": "Source gaps",
+              "type": "number"
+            },
+            {
+              "selector": "unknown_model_gap_samples",
+              "text": "Fleet model gaps",
+              "type": "number"
+            },
+            {
+              "selector": "max_unknown_model_gpu_requests",
+              "text": "Fleet gap GPUs (max)",
+              "type": "number"
+            },
+            {
+              "selector": "missing_clusters",
+              "text": "Missing clusters",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "History status",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "GPU": 0,
+              "Samples": 1,
+              "Minutes/sample": 2,
+              "Incomplete": 3,
+              "Setup (fleet)": 4,
+              "Fleet metadata gaps": 5,
+              "Source gaps": 6,
+              "Fleet model gaps": 7,
+              "Fleet gap GPUs (max)": 8,
+              "Missing clusters": 9,
+              "History status": 10
+            },
+            "renameByName": {}
+          }
+        }
+      ]
+    },
+    {
+      "id": 403,
+      "type": "text",
+      "title": "Allocation history is incomplete",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Counts are recovered Running GPU requests grouped by requested priority; budget downgrades do not change the group. Setup/binding, cleanup, metadata and capacity gaps leave all historical points incomplete, with idle blank. Unknown priority means the requested band is unavailable. Production regional metadata access is pending. See coverage below."
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     }
   ]
 }

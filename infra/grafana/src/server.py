@@ -116,6 +116,9 @@ from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
+from gpu_allocation_history import CLUSTER_NAMES as GPU_CLUSTERS
+from gpu_allocation_history import MODELS as GPU_MODELS
+from gpu_allocation_history import AllocationMetadataSource, allocation_history
 from hero_health import (
     EVAL_HISTORY_LENGTH,
     EvalHistory,
@@ -591,6 +594,8 @@ def create_app(
     wandb_source: WandbSource,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    *,
+    allocation_metadata_source: AllocationMetadataSource | None = None,
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
@@ -685,6 +690,84 @@ def create_app(
                 int(_require(params, "bucket_ms")),
             ),
         )
+
+    def gpu_allocation(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            metadata_source = allocation_metadata_source
+            if metadata_source is None:
+                return JSONResponse(
+                    {"error": "Regional GPU history metadata read access is not configured"}, status_code=503
+                )
+            params = request.query_params
+            start = _require_time(params, "from")
+            end = _require_time(params, "to")
+            selected = params.get("clusters", "")
+            requested_clusters = set(selected.split(",")) if selected and selected != "$__all" else set(GPU_CLUSTERS)
+            if requested_clusters - (set(GPU_CLUSTERS) | {target.name for target in CLUSTERS}):
+                raise _BadRequest("GPU allocation history contains an unknown cluster")
+            clusters = (
+                GPU_CLUSTERS
+                if not selected or selected == "$__all"
+                else tuple(sorted(requested_clusters & set(GPU_CLUSTERS)))
+            )
+            model = params.get("model")
+            if model is not None and model not in GPU_MODELS:
+                raise _BadRequest("GPU model must be H100 or GB200")
+            key = (
+                "gpu-allocation",
+                target.name,
+                clusters,
+                _bucket(start, config.cache_ttl),
+                _bucket(end, config.cache_ttl),
+            )
+
+            def run() -> list[dict]:
+                rows = allocation_history(
+                    finelog_sources[target.name],
+                    metadata_source,
+                    dataset_source_cache,
+                    round(start.timestamp() * 1000),
+                    round(end.timestamp() * 1000),
+                    clusters=clusters,
+                    max_rows=config.max_rows,
+                    cache_ttl=config.cache_ttl,
+                    now_ms=time.time_ns() // 1_000_000,
+                )
+                return sorted(rows, key=lambda row: (row["model"], row["time"]))
+
+            rows = finelog_cache.get_or_compute(key, run)
+            if params.get("view") == "coverage":
+                summaries = []
+                for family in GPU_MODELS:
+                    points = [r for r in rows if r["model"] == family]
+                    summaries.append(
+                        {
+                            "model": family,
+                            "samples": len(points),
+                            "incomplete_samples": sum(r["incomplete"] for r in points),
+                            "resolution_minutes": points[0]["resolution_minutes"] if points else None,
+                            "setup_gap_samples": sum(r["setup_tasks"] > 0 for r in points),
+                            "metadata_gap_samples": sum(r["missing_task_metadata"] > 0 for r in points),
+                            "missing_source_samples": sum(bool(r["missing_clusters"]) for r in points),
+                            "unknown_model_gap_samples": sum(r["unknown_model_gpu_requests"] > 0 for r in points),
+                            "max_unknown_model_gpu_requests": max(
+                                (r["unknown_model_gpu_requests"] for r in points), default=0
+                            ),
+                            "missing_clusters": ",".join(
+                                sorted({c for r in points for c in r["missing_clusters"].split(",") if c})
+                            ),
+                            "status": points[-1]["status"] if points else "No samples in the requested range",
+                        }
+                    )
+                return JSONResponse(summaries)
+            if params.get("view") not in (None, "history"):
+                raise _BadRequest("GPU allocation view must be history or coverage")
+            return JSONResponse([r for r in rows if model is None or r["model"] == model])
+        except (ValueError, _BadRequest) as error:
+            return JSONResponse({"error": str(error)}, status_code=400)
+        except QueryResultTooLargeError as error:
+            return JSONResponse({"error": str(error)}, status_code=400)
 
     def zephyr_overview(request: Request) -> JSONResponse:
         return dashboard_dataset_response(
@@ -1407,6 +1490,7 @@ def create_app(
             Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
             Route("/finelog/{cluster}/v1/node/overview", node_overview),
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
+            Route("/finelog/{cluster}/v1/gpu/allocation", gpu_allocation),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
             Route("/finelog/{cluster}/v1/async-rl/overview", async_rl_overview),

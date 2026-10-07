@@ -47,7 +47,7 @@ class TtlCache(Generic[V]):
         get_size: Callable[[V], int] = sys.getsizeof,
     ) -> None:
         self._ttl = ttl
-        self._max_size = max_size
+        self.max_size = max_size
         self._get_size = get_size
         self._entries: dict[Hashable, _Entry[V] | _Failure] = {}
         self._key_locks: dict[Hashable, threading.Lock] = {}
@@ -79,7 +79,7 @@ class TtlCache(Generic[V]):
                 self._key_locks.pop(k, None)
 
             size = sum(entry.size for entry in self._entries.values() if isinstance(entry, _Entry))
-            while size > self._max_size:
+            while size > self.max_size:
                 oldest = next(iter(self._entries))
                 removed = self._entries.pop(oldest)
                 if isinstance(removed, _Entry):
@@ -92,8 +92,9 @@ class TtlCache(Generic[V]):
             raise copy.copy(entry.error).with_traceback(None) from None
         return entry.value
 
-    def get_or_compute(self, key: Hashable, compute: Callable[[], V]) -> V:
+    def get_or_compute(self, key: Hashable, compute: Callable[[], V], *, ttl: float | None = None) -> V:
         """Return the cached outcome for ``key``, computing it if absent or stale."""
+        lifetime = self._ttl if ttl is None else ttl
         entry = self._live(key)
         if entry is not None:
             return self._resolve(entry)
@@ -112,7 +113,7 @@ class TtlCache(Generic[V]):
                 key,
                 _Entry(
                     value=value,
-                    expires_at=time.monotonic() + self._ttl,
+                    expires_at=time.monotonic() + lifetime,
                     size=self._get_size(value),
                 ),
             )

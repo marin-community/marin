@@ -392,6 +392,38 @@ target, missing, and off-target counts across the selected clusters. The table k
 each pool's scaling work, bounds, policy, conditions, and problem reasons visible.
 GCE clusters have no CoreWeave NodePool objects and return no rows.
 
+![GPU allocation history with explicit gaps](../../docs/images/grafana-gpu-allocation.png)
+
+The H100 and Blackwell (GB200) allocation panels on Fleet accelerators default to
+seven days. They sample retained Running GPU requests at common instants: every
+minute for ranges up to six hours, five minutes up to two days, and fifteen
+minutes up to seven days. Each request uses the owning child job's GPU shape and
+its attempt interval. Priority groups use the owning child job's requested band.
+An Interactive request dispatched as Batch remains in the Interactive group.
+Requests whose requested band is unavailable use unknown priority. There is no
+requested/applied toggle or applied-priority lookup.
+
+Historical points are incomplete. Retained metadata does not establish exact
+node binding during setup, pod cleanup after an attempt ends, or historical
+Kubernetes allocatable capacity. The coverage table quantifies setup and metadata
+gaps and names unavailable regional sources. Setup task counts are fleet-wide and
+include CPU tasks. Setup GPU quantities remain blank when assignment times are
+unavailable through the read APIs. Missing allocation does not become
+unknown priority or idle. A missing regional source leaves a blank span instead of
+a reduced fleet total. Cluster Capacity remains the live allocation reference.
+
+`/finelog/marin/v1/gpu/allocation` shares daily inputs across both panels. Closed
+days cache for one hour and the current day follows the normal bridge TTL, within
+the existing shared Arrow-cache budget. Both the aggregate input rows and each
+upstream query retain the configured row limit. A moving window refreshes the
+current day instead of rescanning the full week.
+
+Regional metadata read access is unresolved. The bridge returns HTTP 503 for
+allocation history when no metadata reader is configured; it does not call an
+Iris metadata RPC. The benchmark supplies captured request/attempt records to
+exercise the projection and caching with live Finelog. Existing Iris and Finelog
+server code, persisted schemas, retention and writes remain unchanged.
+
 `jobs.json` reads the `iris.task_state` finelog namespace on the marin hub — one
 row per active root job every 30s per cluster-view (CoreWeave) controller,
 carrying waiting/running task counts and the oldest PENDING and stuck-in-BUILDING
