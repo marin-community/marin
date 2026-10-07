@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Self-contained Python implementation tasks graded by one pytest file."""
+"""Implementation tasks with Python tests, including the misclassified JavaScript todo contract."""
 
 import ast
 
@@ -14,6 +14,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
+from experiments.post_training.tasktrove.converters.todo_list import convert_todo_list, matches_todo_contract
 from experiments.post_training.tasktrove.task_format import TESTS_MOUNT
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TaskFiles
 
@@ -70,7 +71,9 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
 
 
 def convert(task: TaskFiles) -> ConvertedTask | Rejected:
-    """Convert one self-contained Python task without preserving its legacy shell grader."""
+    """Convert an implementation task without preserving its legacy shell grader."""
+    if matches_todo_contract(task):
+        return convert_todo_list(task)
     test_file = _test_file(task)
     if isinstance(test_file, Rejected):
         return test_file
