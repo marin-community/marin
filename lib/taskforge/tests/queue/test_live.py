@@ -160,9 +160,18 @@ async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_c
     assert {"author", EventKind.BUILT, EventKind.CONTROLS_REPLAYED, EventKind.DECIDED} <= steps, sorted(steps)
     assert sum(entry.tokens_out or 0 for entry in recorded if entry.kind is EntryKind.LLM_CALL) > 0
     assert any(entry.kind is EntryKind.TRIAL for entry in recorded)
-    assert json.loads((root / SUMMARY_FILE).read_text())["items"] == {item: str(first.items[item])}
+    written = json.loads((root / SUMMARY_FILE).read_text())
+    assert written["items"] == {item: str(first.items[item])}
+    if first.items[item] is Terminal.ACCEPTED:
+        accepted = first.accepted[item]
+        assert accepted.k == config.policy.validation.k
+        assert accepted.solve_rate == accepted.solved / accepted.k
+        assert written["accepted"][item]["solved"] == accepted.solved
+    else:
+        assert first.accepted == {}
 
     second = await run_job(config, inputs, FailedItems.SKIP)
 
     assert second.items == first.items
+    assert (second.accepted, second.noted) == (first.accepted, first.noted)
     assert len(entries(root)) == len(recorded)
