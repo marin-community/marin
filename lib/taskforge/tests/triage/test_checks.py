@@ -16,6 +16,7 @@ from taskforge.triage.checks import (
 )
 
 CTX = CheckContext(allowed_combinations=ALL_COMBINATIONS)
+PROSE = "The task asks for a concrete deliverable with stated inputs, outputs, and a checked format. " * 6
 
 
 def status(name, p, ctx=CTX):
@@ -89,6 +90,19 @@ def test_required_sections_flags_thin_and_placeholder_sections(proposal, section
 def test_answer_format_in_angle_brackets_is_not_a_placeholder(proposal, section_replaced):
     p = section_replaced(proposal, "Task", "Answer with `injective: <yes|no>` and `rate: <...>` per row. " * 10)
     assert status("required_sections", p)[0] is CheckStatus.PASS
+
+
+def test_fenced_heading_example_does_not_end_the_section(proposal, section_replaced):
+    task = "The deliverable looks like:\n```markdown\n## Build plan\n```\n" + PROSE
+    assert status("required_sections", section_replaced(proposal, "Task", task))[0] is CheckStatus.PASS
+
+
+def test_fenced_heading_example_cannot_fill_an_empty_section(proposal, section_replaced):
+    p = section_replaced(proposal, "Risks and null conditions", "")
+    example = "## Task\n```markdown\n## Risks and null conditions\n" + PROSE + "\n```\n"
+    p = replace(p, body=p.body.replace("## Task\n", example, 1))
+    result, reason = status("required_sections", p)
+    assert result is CheckStatus.FAIL and "'## Risks and null conditions' has 0 words" in reason
 
 
 def test_research_purpose_must_be_substantive(proposal):
