@@ -5,8 +5,9 @@
 
 The only per-task file is ``tests/test_data.json``: parallel ``inputs``/``outputs`` string lists.
 The old grader ran ``python3 /app/solution.py`` once per case with the case's input on stdin and
-compared stdout to the expected output line for line. This maps onto ``stdio``; prompts with an
-explicit numeric-error tolerance use float comparison so the grader honors the task contract.
+compared stdout to the expected output line for line after stripping outer whitespace from both.
+A source-specific stdio checker preserves that comparison; prompts with an explicit numeric-error
+tolerance use float comparison so the grader honors the task contract.
 """
 
 import json
@@ -31,6 +32,15 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 TEST_DATA = "tests/test_data.json"
 PER_CASE_TIMEOUT = 30.0
 """The old grader's SOLUTION_TIMEOUT_SEC, uniform across the source."""
+OUTPUT_CHECKER = "compare_output.py"
+OUTPUT_CHECKER_PY = """import sys
+from pathlib import Path
+
+_, _, expected_path, actual_path = sys.argv
+expected = Path(expected_path).read_text().strip().split("\\n")
+actual = Path(actual_path).read_text().strip().split("\\n")
+print(int(actual == expected))
+"""
 
 
 def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -47,6 +57,10 @@ def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
     if rejection is not None:
         return rejection
     compare, float_tolerance = comparison_from_instruction(instruction, Compare.EXACT)
+    special_judge = None
+    if compare == Compare.EXACT:
+        special_judge = OUTPUT_CHECKER
+        cases[f"tests/{OUTPUT_CHECKER}"] = OUTPUT_CHECKER_PY.encode()
     return ConvertedTask(
         instruction=instruction,
         spec=StdioSpec(
@@ -54,6 +68,7 @@ def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
             compare=compare,
             per_case_timeout=PER_CASE_TIMEOUT,
             float_tolerance=float_tolerance,
+            special_judge=special_judge,
         ),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "code-contests"),

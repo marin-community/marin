@@ -4,8 +4,12 @@
 """Converter behaviour on the ``code_contests`` exemplar."""
 
 import json
+import sys
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+from verifyit.modes import grade_stdio
 from verifyit.spec import Compare, StdioSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
@@ -78,6 +82,39 @@ def test_numeric_tolerance_in_instruction_uses_float_comparison():
     assert isinstance(spec, StdioSpec)
     assert spec.compare == Compare.FLOAT
     assert spec.float_tolerance == 1e-4
+    assert spec.special_judge is None
+
+
+@pytest.mark.parametrize(
+    ("expected", "produced", "score"),
+    [
+        (" " * 62 + "-1", "-1\n", 1.0),
+        (" " * 62 + "-1", " " * 62 + "-1\n", 1.0),
+        (" " * 62 + "-1", "42\n", 0.0),
+        (" " * 62 + "-1", "-1\n9999\n", 0.0),
+        ("7  1\n8", "7 1\n8\n", 0.0),
+        ("7\n  8", "7\n8\n", 0.0),
+    ],
+)
+def test_converted_grader_preserves_outer_whitespace_policy(tmp_path, expected, produced, score):
+    task = read_task_binary(_fixture())
+    task.files["tests/test_data.json"] = json.dumps(
+        {"inputs": ["hidden-input-a", "hidden-input-b"], "outputs": [expected, expected]}
+    ).encode()
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    assert record.status == ConvertStatus.CONVERTED
+    converted = read_task_binary(record.task_binary)
+    for name, content in converted.under("tests/").items():
+        destination = tmp_path / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "solution.py").write_text(f"import sys\nsys.stdout.write({produced!r})\n")
+    spec = parse_spec(converted.text(VERIFIER_TOML))
+    spec = replace(spec, command=f"{sys.executable} solution.py", workspace=str(workspace))
+    reward = grade_stdio.grade(spec, tmp_path / "tests", workspace)
+    assert reward.reward == score
 
 
 def test_two_hidden_cases_still_convert():
