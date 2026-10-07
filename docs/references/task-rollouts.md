@@ -33,8 +33,11 @@ Lowering preserves the task definition and adds these deployment settings:
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `TaskRuntimeSpec` | Optional `task_machine` and `verifier_machine` selections |
-| `TaskSessionSpec` | `task_session`, `max_turns`, `model_turn_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
+| `TaskSessionSpec` | `task_session`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
+
+`rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=...)` constructs and validates the lowered record.
+The engine validates a directly constructed `LoweredTaskSpec` before execution.
 
 All runtime fields require explicit values. Optional fields accept `None`.
 `TaskSessionSpec.cleanup_timeout` requires a finite, positive value.
@@ -46,7 +49,8 @@ The reserved session identifier `shellbox` selects the engine's shell-tool sessi
 Custom factories receive `(lowered, machine)` and return a fresh session for each attempt.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
-`verifier_machine=None` uses the task machine for shell grading or host execution for supported answer graders.
+`verifier_machine=None` selects host execution for supported answer graders.
+Shell grading requires a separate verifier machine.
 A verifier-machine selection creates a fresh private grader.
 
 The engine validates factory identifiers and supported requirements before machine acquisition.
@@ -61,8 +65,7 @@ An explicit `working_directory` overrides that selection.
 Machine setup commands run as trusted root before task operations.
 `MachineRuntimeSpec.user` supplies the default user for session commands.
 An explicit command user overrides that default.
-The shared shell verifier runs as trusted root after inference.
-A separate verifier uses its own machine user.
+The verifier uses its own machine user.
 
 ## Session lifecycle and private files
 
@@ -84,7 +87,7 @@ Native interaction tools and tool-provider contracts require a registered custom
 
 The model receives only public context, submission instructions, tool definitions, and task observations.
 The serialized task and lowered record contain private grading inputs. Do not send them to the model.
-Private verifier resources enter `/tests` only after the last model response.
+The Shellbox session installs private verifier resources in `/tests` on the verifier machine after the turn loop.
 Oracle resources contain private control inputs for task-curation checks. They do not enter a rollout.
 
 A separate shell verifier receives `resources.all` and the declared artifacts from the task machine.
@@ -101,6 +104,7 @@ Worker-only resources do not enter a separate verifier.
 | --- | --- |
 | Machine `startup_timeout` | Machine creation, resource upload, and setup commands |
 | `model_turn_timeout` | One model request |
+| `command_timeout` | Each shell-tool command, including separate calls within one model turn |
 | `tool_turn_timeout` | One `advance` call, including its tool operations |
 | `total_turn_timeout` | The cumulative model-and-tool loop across all turns in one attempt |
 | `attempt_timeout` | Task startup, session preparation, turns, and final verification |
@@ -112,6 +116,11 @@ The total-turn deadline excludes startup, session preparation, and final verific
 Its expiration ends the turn loop and starts grading with `stop_reason="total_turn_timeout"`.
 No model response means an unavailable grade.
 Backend command limits also stop commands that outlive an enclosing coroutine deadline.
+The command limit is separate from the tool-turn deadline.
+When these limits are finite, lowering requires the command limit to be less than the tool-turn deadline.
+Configure the tool-turn deadline to allow the commands and backend cleanup within that turn.
+A timed-out shell command returns a `timed_out` tool observation. The model can continue the task.
+Expiration of the tool-turn deadline interrupts the transition.
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
 Startup failures retain an empty record.
@@ -132,7 +141,7 @@ Thread-backed sessions retain their pending operations until session cleanup can
 ## Grading
 
 The built-in session accepts shared VerifyIT verifier kinds, private shell graders, and explicit skipped grading.
-Application sessions use private `ExternalVerifierSpec` parameters from `taskcompendium.importers.skyrl`.
+SkyRL sessions use private `ExternalVerifierSpec` parameters from `skyrl_gym.source_task`.
 Group grading belongs to SkyRL.
 
 Text, JSON, and final-action submissions use typed grading contracts.
@@ -152,7 +161,6 @@ The session's verifier deadline controls the full grading phase.
 
 `FileReward` accepts a number or a JSON object with the configured numeric key.
 A malformed first file is a verifier failure. The engine does not try a lower-priority file.
-Other finite numeric keys remain in `grade.rewards`.
 The optional `pass_above` threshold supplies a separate pass/fail result.
 Harbor task packages contain instructions, environment configuration, and private test scripts.
 Their reward files use `reward.json` before `reward.txt` and treat a positive reward as a pass.
@@ -165,7 +173,9 @@ Score bounds describe the verifier's native range. SkyRL's metric normalization 
 
 Harbor lowering uses package machine settings, agent users, total-turn deadlines, and verifier deadlines.
 Other session limits come from launch configuration.
-Unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, shared private verifier environment variables, and healthchecks.
+SkyRL rejects shared-machine Harbor shell graders during runtime lowering.
+Disabling Harbor verification removes private grader resources before lowering and selects skipped grading.
+Unsupported cases include multi-stage tasks, task-specific image builds, shared-machine shell grading, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.
 SWE tasks require prebuilt images and initialize `refs/taskcompendium/base` before inference.
 Patch collection compares the final index with that revision, including agent commits and new files.
@@ -193,6 +203,9 @@ The engine grades completed state with stop reason `length`.
 It does not add an oversized observation to retained response evidence.
 
 ## Use
+
+The submission convention controls final-answer extraction and model-visible submission instructions.
+The Shellbox session selects native-action or JSON extraction when the task's answer type requires it.
 
 This function accepts a fully lowered record and a model callable:
 
@@ -222,11 +235,11 @@ SkyRL stores one private JSON record per `lowered_task_spec` column in task Parq
 Source rows use Hugging Face `Dataset.map` with prepared tasks in memory.
 Application metadata, including teacher routes, stays in the request envelope outside `TaskSpec`.
 
-From the Marin repository root:
+From the Marin repository root, with the test environment installed:
 
 ```bash
 task_test_prefix=$(mktemp -d -t taskcompendium-tests.XXXXXX)
-MARIN_PREFIX="$task_test_prefix" uv run --package taskcompendium --frozen --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
+MARIN_PREFIX="$task_test_prefix" uv run --frozen --no-sync pytest lib/taskcompendium/tests -q -n 0
 uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
 ```
 
