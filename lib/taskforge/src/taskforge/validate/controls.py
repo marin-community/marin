@@ -157,7 +157,10 @@ class ControlOutcome:
 class ControlPlan:
     """Which item the controls belong to, their deadlines, how they retry, and where they are recorded.
 
-    Each control is one ``CONTROL`` trial named by its id.
+    Each control is one ``CONTROL`` trial named by its id. ``first_attempts`` maps a control id to
+    the number of its first attempt file and ledger step, as ``TrialPlan.first_attempt`` does for a
+    trial: a control re-entered after earlier attempts passes the count already on disk. A control
+    it does not name starts at 0.
     """
 
     item_id: str
@@ -167,8 +170,14 @@ class ControlPlan:
     retry_backoff: ExponentialBackoff
     evidence_dir: Path
     ledger: Ledger
+    first_attempts: Mapping[str, int]
 
-    def trial_plan(self) -> TrialPlan:
+    def __post_init__(self) -> None:
+        if any(attempt < 0 for attempt in self.first_attempts.values()):
+            raise ValueError("A control plan needs non-negative first attempts")
+
+    def trial_plan(self, control_id: str) -> TrialPlan:
+        """The ``CONTROL`` trial plan of the control named ``control_id``."""
         return TrialPlan(
             item_id=self.item_id,
             round=self.round,
@@ -180,7 +189,7 @@ class ControlPlan:
             retry_backoff=self.retry_backoff,
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,
-            first_attempt=0,
+            first_attempt=self.first_attempts.get(control_id, 0),
         )
 
 
@@ -214,9 +223,13 @@ async def replay(
 
     Raises:
         ValueError: ``controls`` is not a valid control set for ``task`` (``validate_controls``), a
-            control needs more turns than ``settings.max_turns``, or ``task`` is staged.
+            control needs more turns than ``settings.max_turns``, ``task`` is staged, or
+            ``plan.first_attempts`` names a control not in ``controls``.
     """
     validate_controls(task, controls)
+    unknown = sorted(set(plan.first_attempts) - {control.id for control in controls})
+    if unknown:
+        raise ValueError(f"First attempts name controls {unknown} that are not replayed")
     if task.stages:
         raise ValueError("Control replay does not support staged tasks yet")
     too_long = [control.id for control in controls if len(control_turns(control)) > settings.max_turns]
@@ -226,14 +239,13 @@ async def replay(
         isinstance(event, AssistantToolCalls) or (isinstance(event, TextMessage) and event.role == "assistant")
         for event in task.context.events
     )
-    trial_plan = plan.trial_plan()
     async with asyncio.TaskGroup() as group:
         runs = [
             group.create_task(
                 run_trial(
                     task,
                     execution,
-                    trial_plan,
+                    plan.trial_plan(control.id),
                     settings,
                     ScriptedModel(control_turns(control), context_assistant_turns, tokenize),
                     control.id,
