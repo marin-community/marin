@@ -8,9 +8,9 @@ shard is tokenized by the real tokenize stage, and ``score_normalized`` runs
 over both. The assertions are what downstream consumers rely on: output
 co-partitioned with normalize and tokenize, the same score the trainer-side
 ``score_bme`` gives for the document text (train == serve), chunked documents
-scored once, a misaligned or foreign tokenize artifact refused before any
-output is written, and a shard that fails mid-stream leaving no output that a
-re-run would mistake for a finished one.
+scored once, a foreign tokenize artifact refused before anything is listed, and
+a misaligned shard or one that fails mid-stream leaving no output that a re-run
+would mistake for a finished one.
 """
 
 import json
@@ -224,7 +224,7 @@ def test_chunked_document_scores_as_one_row(tmp_path, monkeypatch, gpt2_tokenize
     np.testing.assert_allclose(main.column("score").to_pylist(), expected, atol=1e-6, rtol=0)
 
 
-def test_missing_tokenize_document_fails_before_writing(tmp_path, monkeypatch, gpt2_tokenizer_path, trained_model_dir):
+def test_missing_tokenize_document_leaves_no_output(tmp_path, monkeypatch, gpt2_tokenizer_path, trained_model_dir):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     normalized = _normalized_fixture(tmp_path)
     tokenized = _tokenize(tmp_path, normalized, gpt2_tokenizer_path)

@@ -24,10 +24,10 @@ output is co-partitioned with the source ``NormalizedData`` by basename *and
 row order* -- the store's positional join relies on both. ``from_list`` +
 ``flat_map`` keeps one input file as exactly one zephyr shard processed as a
 single sequential stream. A tokenize shard that does not line up with its
-normalize shard document-for-document is refused before any record of it is
-scored; a shard that fails mid-stream (the streaming reader rejecting out-of-order
-chunk rows, a writer error) has its partial outputs removed, so a re-run scores
-it again instead of skipping it as done.
+normalize shard document-for-document is refused at the first row that
+differs, and any shard that fails mid-stream (that mismatch, the streaming
+reader rejecting out-of-order chunk rows, a writer error) has its partial
+outputs removed, so a re-run scores it again instead of skipping it as done.
 
 The stage is forward-bound (~30 CPU-s per 35k docs at batch 64 on a laptop
 CPU), not I/O-bound. The model dir holds the scorer artifacts (``*.eqx`` +
@@ -46,12 +46,10 @@ import posixpath
 from collections.abc import Iterator
 
 import numpy as np
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fray.cluster import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
-from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.tokenize.attributes import TokenizedAttrData, iter_tokenized_documents
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -94,49 +92,38 @@ def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledS
     return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
 
 
-def _check_ids_aligned(tok_path: str, text_path: str) -> None:
-    """Fail unless the tokenize shard's documents (rows with ``chunk_index == 0``) are
-    exactly the normalize shard's documents, in order.
-
-    Runs before any record of the shard is scored, so a broken input is refused
-    without a model forward.
-    """
-    with StoragePath(tok_path).open("rb") as fh:
-        tok = pq.read_table(fh, columns=["id", CHUNK_INDEX_FIELD])
-    with StoragePath(text_path).open("rb") as fh:
-        text_ids = pq.read_table(fh, columns=["id"]).column("id")
-    doc_ids = tok.column("id").filter(pc.equal(tok.column(CHUNK_INDEX_FIELD), 0))
-    n = min(len(doc_ids), len(text_ids))
-    first_diff = pc.index(pc.not_equal(doc_ids.slice(0, n), text_ids.slice(0, n)), True).as_py()
-    if first_diff < 0 and len(doc_ids) == len(text_ids):
-        return
-    pos = n if first_diff < 0 else first_diff
-    text_id = text_ids[pos].as_py() if pos < len(text_ids) else None
-    doc_id = doc_ids[pos].as_py() if pos < len(doc_ids) else None
-    raise RuntimeError(
-        f"{posixpath.basename(tok_path)}: row {pos}: normalize id {text_id!r} but tokenize document "
-        f"{doc_id!r} ({len(text_ids)} normalize documents, {len(doc_ids)} tokenize documents; "
-        "tokenize drops zero-token documents) -- co-partitioning broken"
-    )
-
-
-def _iter_texts(path: str) -> Iterator[str]:
+def _iter_id_texts(path: str) -> Iterator[tuple[str, str]]:
     with StoragePath(path).open("rb") as fh:
-        for batch in pq.ParquetFile(fh).iter_batches(batch_size=_TEXT_BATCH_SIZE, columns=["text"]):
-            yield from batch.column("text").to_pylist()
+        for batch in pq.ParquetFile(fh).iter_batches(batch_size=_TEXT_BATCH_SIZE, columns=["id", "text"]):
+            yield from zip(batch.column("id").to_pylist(), batch.column("text").to_pylist(), strict=True)
 
 
 def _load_documents(tok_path: str, *, text_dir: str, max_tokens: int) -> Iterator[dict]:
     """One record per document of a tokenize shard: its bme token windows plus the
-    normalize shard's text for the samples, read positionally in lockstep."""
+    normalize shard's text for the samples, read in lockstep.
+
+    The two shards must hold the same documents in the same order; the first row
+    where they differ raises, and the shard's partial outputs are discarded.
+    """
     basename = posixpath.basename(tok_path)
-    text_path = prefix_join(text_dir, basename)
-    _check_ids_aligned(tok_path, text_path)
-    for (doc_id, ids), text in zip(iter_tokenized_documents(tok_path), _iter_texts(text_path), strict=True):
+    documents = iter_tokenized_documents(tok_path)
+    texts = _iter_id_texts(prefix_join(text_dir, basename))
+    for position in itertools.count():
+        document = next(documents, None)
+        row = next(texts, None)
+        if document is None and row is None:
+            return
+        doc_id = document[0] if document is not None else None
+        text_id = row[0] if row is not None else None
+        if document is None or row is None or doc_id != text_id:
+            raise RuntimeError(
+                f"{basename}: row {position}: normalize id {text_id!r} but tokenize document {doc_id!r} "
+                "(tokenize drops zero-token documents) -- co-partitioning broken"
+            )
         yield {
             "id": doc_id,
-            "windows": bme_windows(ids, max_tokens),
-            "text": text[:SAMPLE_TEXT_CHARS],
+            "windows": bme_windows(document[1], max_tokens),
+            "text": row[1][:SAMPLE_TEXT_CHARS],
             _SHARD_FILE: basename,
         }
 
