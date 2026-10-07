@@ -1,0 +1,45 @@
+n_concurrent_trials: 32
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - AgentKilledBySignalError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: pi
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    version: 0.87.0
+    model_info:
+      max_input_tokens: 32768
+datasets:
+- name: bfcl_parity
+  version: '1.0'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/2203bacd03d82e9d4f2a9422f0b3f7e9bb7952cc/registry.json
+verifier:
+  override_timeout_sec: 300
