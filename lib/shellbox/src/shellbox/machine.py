@@ -19,6 +19,14 @@ class NetworkPolicy(StrEnum):
     ALLOW = "allow"
 
 
+class Backend(StrEnum):
+    DOCKER = "docker"
+    GVISOR = "gvisor"
+    QEMU = "qemu"
+    SHELLSIM = "shellsim"
+    DAYTONA = "daytona"
+
+
 class ExitReason(StrEnum):
     EXITED = "exited"
     TIMED_OUT = "timed_out"
@@ -149,5 +157,8 @@ class Machine(Protocol):
 
 class MachineFactory(Protocol):
     """Create a fresh machine from an image source."""
+
+    @property
+    def backend(self) -> Backend: ...
 
     async def create(self, spec: MachineSpec) -> Machine: ...

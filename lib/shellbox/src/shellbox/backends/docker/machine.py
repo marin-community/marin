@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
 from shellbox.machine import (
+    Backend,
     Command,
     DockerImage,
     ExitReason,
@@ -114,6 +115,8 @@ class DockerMachine:
 
 class DockerMachineFactory:
     """Start a Docker image as a fresh trial container."""
+
+    backend: Backend = Backend.DOCKER
 
     def __init__(
         self,
