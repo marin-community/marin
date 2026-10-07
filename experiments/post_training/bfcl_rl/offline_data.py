@@ -241,6 +241,17 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
             if key not in {"content", "reasoning_content", "unparsed_content"}
         }
         structural["content"] = None
+        # Only call identity is needed to associate tool observations. The renderer
+        # replaces this entire assistant turn with the captured literal above.
+        if structural.get("tool_calls"):
+            structural["tool_calls"] = [
+                {**call, "function": {**call["function"], "arguments": {}}} for call in structural["tool_calls"]
+            ]
+        if structural.get("function_call"):
+            function = structural["function_call"]
+            if isinstance(function, str):
+                function = json.loads(function)
+            structural["function_call"] = {**function, "arguments": {}}
         if not structural.get("tool_calls") and not structural.get("function_call"):
             structural["unparsed_content"] = CAPTURED_ASSISTANT_PLACEHOLDER
         messages.append(structural)

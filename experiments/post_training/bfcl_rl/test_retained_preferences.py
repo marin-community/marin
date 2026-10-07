@@ -13,11 +13,12 @@ import numpy as np
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from levanter.data.text.formats import ChatProcessor
 from levanter.data.text.preference import PreferencePairDataset
 from levanter.store.cache import TreeCache
 from levanter.tokenizers import load_tokenizer
 from marin.datakit.chat_normalize import InvalidToolCallPolicy, _normalize_chat_record
-from marin.datakit.chat_render import render_chat_record
+from marin.datakit.chat_render import chat_training_record, render_chat_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.download.rollout_transforms import LiteralToolCallFormat
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
@@ -297,6 +298,51 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     terminated_render = render_chat_record(normalized_terminated)["text"]
     assert "<|eot_id|><|eot_id|>" not in terminated_render
+    for malformed_arguments in (
+        '{"path":"/app/result.json"}<tool_call>\n<|end_think|><tool_call>',
+        '"{}"}}<tool_call>\n<|start_header_id|>tool<|end_header_id|>\n<tool_response name="cat">',
+    ):
+        raw_call = '<tool_call>\n{"name":"lookup","arguments":' + malformed_arguments
+        malformed = replace(
+            trace,
+            messages=[
+                *trace.messages[:2],
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "a", "type": "function", "function": {"name": "lookup", "arguments": malformed_arguments}}
+                    ],
+                },
+                *trace.messages[3:],
+            ],
+            assistant_prefill="",
+            assistant_completion_token_ids=(
+                tuple(hf_tokenizer.encode(raw_call, add_special_tokens=False)),
+                trace.assistant_completion_token_ids[-1],
+            ),
+        )
+        malformed_document = native_chat_document(malformed)
+        normalized_malformed = _normalize_chat_record(
+            malformed_document, "messages", "id", invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN
+        )
+        rendered = render_chat_record(normalized_malformed)["text"]
+        assert raw_call in rendered
+        assert '<tool_response name="lookup">TOOL_OBSERVATION</tool_response>' in rendered
+        assert "CAPTURED_ASSISTANT" not in rendered
+        assert malformed.messages[2]["tool_calls"][0]["function"]["arguments"] == malformed_arguments
+        processor = ChatProcessor(
+            load_tokenizer(str(tokenizer_path)),
+            chat_template=MARIN_CHAT_TEMPLATE,
+            system_prompt_field=None,
+            mask_user_turns=True,
+        )
+        encoded = processor([chat_training_record(normalized_malformed)])[0]
+        masked = hf_tokenizer.decode(
+            np.asarray(encoded["input_ids"])[np.asarray(encoded["assistant_masks"], dtype=bool)].tolist()
+        )
+        assert raw_call in masked
+        assert "TOOL_OBSERVATION" not in masked
+        assert "USER_CONTEXT" not in masked
     with set_current_client(LocalClient()):
         store = build_verified_sft_store(
             [trace, duplicate, incorrect],
@@ -1210,7 +1256,8 @@ def test_two_wrong_rollouts_produce_no_optimizer_data(tmp_path: Path):
     assert rows == [] and report["dispositions"] == {"both_incorrect": 1}
     with pytest.raises(ValueError, match="must perform no update"):
         write_recovery_cache(rows, report, str(tmp_path / "cache"))
-    assert not (tmp_path / "cache").exists()
+    assert json.loads((tmp_path / "cache/selection.json").read_text()) == report
+    assert not (tmp_path / "cache/train").exists()
 
 
 @pytest.mark.parametrize("mismatch", ["sampling", "backend"])

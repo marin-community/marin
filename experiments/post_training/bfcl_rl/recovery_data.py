@@ -259,12 +259,12 @@ def recovery_preference_rows(
 
 def write_recovery_cache(rows: Sequence[PretokenizedPreference], report: Mapping[str, Any], output_path: str) -> None:
     """Write exact-token columns using Levanter's cache writer and retain preference provenance."""
-    if not rows:
-        raise ValueError("no verifier-discriminated pairs exist; recovery must perform no update")
     root = StoragePath(output_path)
     root.mkdirs()
     report_text = json.dumps(report, sort_keys=True, indent=2) + "\n"
     (root / "selection.json").write_text(report_text)
+    if not rows:
+        raise ValueError("no verifier-discriminated pairs exist; recovery must perform no update")
     records = ({key: np.asarray(value, dtype=np.int32) for key, value in row.items()} for row in rows)
     metadata = {
         "preference_provenance_uri": str(root / "selection.json"),
