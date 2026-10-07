@@ -119,3 +119,48 @@ def value_lookahead(
         reshard(shifted_k, spec_k),
         reshard(previous_token(mixed, segment_ids).astype(v.dtype), spec_v),
     )
+
+
+def shift_tokens(x: jax.Array, segment_ids: Int[Array, "B S"] | None, n: int) -> jax.Array:
+    """``x`` moved ``n`` tokens later along axis 1 (``n < 0``: earlier), zero where the source token is outside the
+    sequence or in another document."""
+    if n == 0:
+        return x
+    pad = ((0, 0), (n, 0)) if n > 0 else ((0, 0), (0, -n))
+    src = x[:, :-n] if n > 0 else x[:, -n:]
+    out = jnp.pad(src, pad + ((0, 0),) * (x.ndim - 2))
+    seq = x.shape[1]
+    valid = jnp.broadcast_to((jnp.arange(seq) - n >= 0) & (jnp.arange(seq) - n < seq), x.shape[:2])
+    if segment_ids is not None:
+        moved = jnp.pad(segment_ids[:, :-n] if n > 0 else segment_ids[:, -n:], pad, constant_values=-1)
+        valid = valid & (moved == segment_ids)
+    return jnp.where(valid.reshape(valid.shape + (1,) * (x.ndim - 2)), out, 0)
+
+
+@named_call
+def future_heads(
+    qf: Float[Array, "B S F D"],
+    k: Float[Array, "B S N D"],
+    v: Float[Array, "B S N E"],
+    segment_ids: Int[Array, "B S"] | None,
+    window: int,
+) -> tuple[jax.Array, jax.Array]:
+    """The last ``F`` heads remember each token's future: token ``t`` attends over its own document's next ``window``
+    tokens with query ``qf_t`` (the head's keys / values, plus a zero null slot) to ``f_t``; those heads store
+    ``v_t + f_t`` and their keys / values move ``window`` slots later, so query ``i`` reads only tokens
+    ``t <= i - window`` there (``f_t`` covers tokens ``<= i``: no leakage)."""
+    spec_k, spec_v = jax.typeof(k).sharding.spec, jax.typeof(v).sharding.spec
+    heads = qf.shape[2]
+    kf, vf = k[:, :, -heads:].astype(jnp.float32), v[:, :, -heads:].astype(jnp.float32)
+    qf = qf.astype(jnp.float32) / math.sqrt(qf.shape[-1])
+    ahead_k = [shift_tokens(kf, segment_ids, -o) for o in range(1, window + 1)]
+    ahead_v = [shift_tokens(vf, segment_ids, -o) for o in range(1, window + 1)]
+    valid = [shift_tokens(jnp.ones(k.shape[:2], bool), segment_ids, -o) for o in range(1, window + 1)]
+    scores = [jnp.where(m[..., None], jnp.sum(qf * ko, axis=-1), -jnp.inf) for ko, m in zip(ahead_k, valid, strict=True)]
+    logits = jnp.stack([*scores, jnp.zeros_like(scores[0])], axis=-1)  # [B, S, F, window + 1]; last: the null slot
+    probs = jax.nn.softmax(logits, axis=-1)
+    future = sum(probs[..., o, None] * vo for o, vo in enumerate(ahead_v))
+    k_out = jnp.concatenate([k[:, :, :-heads], shift_tokens(k[:, :, -heads:], segment_ids, window)], axis=2)
+    v_mem = (vf + future).astype(v.dtype)
+    v_out = jnp.concatenate([v[:, :, :-heads], shift_tokens(v_mem, segment_ids, window)], axis=2)
+    return reshard(k_out, spec_k), reshard(v_out, spec_v)

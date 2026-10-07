@@ -69,6 +69,7 @@ from experiments.grug.fast_track.head_loss import prototype_target_logits, reduc
 from experiments.grug.fast_track.key_offset import (
     MatchAppend,
     append_shared_match,
+    future_heads,
     partial_key_offset,
     shifted_channels,
     value_lookahead,
@@ -871,10 +872,8 @@ class GrugModelConfig:
     expert_router_orthogonal: str = "off"
     """``full``: each routed expert ignores its own router direction: expert e's ``w_up`` (and ``w_gate``) are
     projected off ``u_e = normalize(r_e @ W_down)``, the latent image of its router column
-    (``_orthogonalize_expert_reads``). Every
-    token routed to e shares a large component along ``r_e``; removing it lets the expert spend its neurons on how
-    the arriving tokens differ, and decouples router alignment from the expert's activations (``u_e`` is
-    stop-gradient). ``learned``: remove only a learned fraction ``alpha_e`` of it (``expert_router_alpha``, zero-init,
+    (``_orthogonalize_expert_reads``, ``u_e`` stop-gradient). ``learned``: remove only a learned fraction
+    ``alpha_e`` of it (``expert_router_alpha``, zero-init,
     so it starts as the plain model). ``off``: neither. Needs the LatentMoE projection and a full-rank linear router."""
     router_mlp_hidden: int = 0
     """A tiny MLP router added to the linear one: ``logits += silu(x @ W_a) @ W_b`` with this many hidden neurons
@@ -980,6 +979,9 @@ class GrugModelConfig:
     """MLA values also read the next token (``key_offset.value_lookahead``); attention then skips the query itself."""
     mla_lookahead_self: bool = False
     """With ``mla_value_lookahead``: a learned per-channel weight ``v_self`` on ``v_t`` too (init 1)."""
+    mla_future_heads: int = 0
+    """The last this many MLA heads remember each token's next ``mla_future_window`` tokens (``future_heads``)."""
+    mla_future_window: int = 0
     mla_lookahead_sink: bool = False
     """With ``mla_value_lookahead``: each document's first (empty) slot gets a learned per-head key ``k_null``."""
     mla_tie_prev_qk: bool = False
@@ -1587,10 +1589,7 @@ class GrugModelConfig:
     memory_layers: tuple[int, ...] = ()
     """Product-key memory layers (arXiv 1907.05242; memory+ of arXiv 2412.09764): each listed 0-indexed layer
     adds ``(bag(V, topk(rms(x W_q) . rms(K))) * silu(x W_gate)) W_out`` to its MoE output, ``x`` the RMS-normed
-    MoE input. Each head's query is split in two halves scored against the head's two ``memory_keys``-row
-    codebooks; the ``memory_topk^2`` candidate sums keep the top ``memory_topk`` of ``memory_keys^2`` slots,
-    softmax-weighted. Heads share one ``[memory_keys^2, hidden_dim]`` value table per layer, stored like the
-    second table (``embed2_fsdp``) and trained by the ``memory`` Adam group. ``W_out`` is zero-init. Empty: off."""
+    MoE input; heads share one ``[memory_keys^2, hidden_dim]`` value table per layer (``memory`` Adam group)."""
     memory_keys: int = 512
     memory_topk: int = 32
     memory_heads: int = 4
@@ -1609,11 +1608,7 @@ class GrugModelConfig:
     erc_loss_weight: float = 0.0
     """Expert-router coupling loss (arXiv 2512.23447): each real expert's router column, perturbed by
     ``U(1 +- eps_i)`` noise (``eps_i`` = half the distance to the nearest other router column over its norm),
-    is a proxy token that runs the token's path into the experts (latent down-projection and ``latent_norm``)
-    and every expert's first projection (``w_gate``, or ``w_up`` when ungated); with ``M[i, j]`` the L2 norm of
-    proxy ``i`` through expert ``j``, the loss is ``mean_{i != j} relu(M_ij - alpha M_ii) + relu(M_ji - alpha M_ii)``
-    over all ``n^2`` entries, summed over MoE layers. Router-parameter only: token-count independent, never
-    touches the QB bias. Training only. 0: off (the paper uses 1)."""
+    is a proxy token through every expert's first projection; the loss penalizes ``M_ij > alpha M_ii``. 0: off."""
     erc_alpha: float = 1.0
     """ERC coupling margin ``alpha`` in [0, 1]; smaller is stricter (the paper's n=256 optimum is 0.5)."""
     window_embed_dim: int = 0
@@ -2360,6 +2355,7 @@ class CausalSelfAttention(eqx.Module):
     v_ahead: Float[Array, "N D"] | None  # mla_value_lookahead
     v_self: Float[Array, "N D"] | None  # mla_lookahead_self
     k_null: Float[Array, "N D"] | None  # mla_lookahead_sink
+    w_qf: Float[Array, "D FC"] | None  # mla_future_heads: each future head's look-ahead query
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2471,6 +2467,11 @@ class CausalSelfAttention(eqx.Module):
                 v_ahead=jnp.zeros((n, h), jnp.float32) if cfg.mla_value_lookahead else None,
                 v_self=jnp.ones((n, h), jnp.float32) if cfg.mla_lookahead_self else None,
                 k_null=jnp.zeros((n, h), jnp.float32) if cfg.mla_lookahead_sink else None,
+                w_qf=(
+                    reshard(_init_weight(random.fold_in(k_q, 9), (d, cfg.mla_future_heads * h), std), P(None, None))
+                    if cfg.mla_future_heads
+                    else None
+                ),
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2612,6 +2613,7 @@ class CausalSelfAttention(eqx.Module):
             v_ahead=None,
             v_self=None,
             k_null=None,
+            w_qf=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2962,6 +2964,10 @@ class CausalSelfAttention(eqx.Module):
             q, k, kernel_v = append_shared_match(q, k, kernel_v, match, gate, sconv_segment_ids, head_spec)
         if self.v_ahead is not None:
             k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids, self.k_null, self.v_self)
+        if self.w_qf is not None:
+            qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
+            window = self.cfg.mla_future_window
+            k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
         attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
             assert self.gda_lambda is not None
