@@ -82,6 +82,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
+from experiments.grug.fast_track.sparse_attention import sparse_index_attention
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -981,6 +982,13 @@ class GrugModelConfig:
     """The last this many MLA heads remember each token's next ``mla_future_window`` tokens (``future_heads``)."""
     mla_future_window: int = 0
     mla_lag_groups: tuple[str, ...] = ()
+    mla_sparse_window: int = 0
+    """> 0: MLA attention keeps only each query's last this many keys, its document start and the followers of its
+    ``mla_sparse_topk`` best index matches (``sparse_attention.py``; a slow dense emulation)."""
+    mla_sparse_topk: int = 0
+    mla_sparse_index_dim: int = 32
+    mla_sparse_tail: bool = True
+    """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
     mla_lookahead_sink: bool = False
     """With ``mla_value_lookahead``: each document's first (empty) slot gets a learned per-head key ``k_null``."""
@@ -1244,18 +1252,10 @@ class GrugModelConfig:
     """modded-nanogpt partial key offset (record #49): on the MLA layers, the first half of each head's key
     channels come from the previous token (within documents), enabling one-layer induction."""
     mla_grouped_diff: int = 0
-    """Grouped differential attention (Motif 3's GDLA, arXiv 2608.09119) on the MLA layers, with this group ratio
-    ``g``: ``num_heads / g`` noise maps (their own query and key up-projections), each shared by ``g`` signal
-    heads, give ``D = H_signal - lambda * H_noise`` over the same values, with a token-dependent
-    ``lambda = sigmoid(x W_lambda)`` per head (``W_lambda`` zero-init, so lambda starts at 0.5). The sigmoid keeps
-    the subtraction a subtraction (the unconstrained DIFF lambda turned negative, batch 77). 0: off."""
+    """Grouped differential attention on the MLA layers: this many shared noise maps (``w_qn`` / ``w_ukn``)."""
     mla_gdla_noise_heads: int = 0
-    """Motif 3's GDLA head layout (arXiv 2608.09119) on the MLA layers, inside the head budget: of the ``num_heads``
-    query heads, this many are noise heads, so the attention kernel runs no extra heads. Heads form groups of
-    ``g = (num_heads - m) / m`` signal heads plus one noise head; each group shares one value head (``w_uv`` and
-    the value embeds have ``m`` heads), while keys stay per query head. The output has only the signal heads:
-    ``D = H_signal - lambda * H_noise(group)``, ``lambda = sigmoid(x W_lambda)`` per signal head and token
-    (``W_lambda`` zero-init: 0.5). Unlike ``mla_grouped_diff``, the noise map is computed once per group. 0: off."""
+    """GDLA (arXiv 2608.09119) on the MLA layers: this many of the query heads are noise heads, one per group of
+    signal heads sharing a value head; output ``H_signal - lambda * H_noise``. 0: off."""
     mla_diff_attn: bool = False
     """Differential attention (DIFF Transformer, arXiv 2410.05258) on the MLA layers:
     ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection
@@ -1369,18 +1369,9 @@ class GrugModelConfig:
     knobs (``pooled_transport_capacity_factor``, ``moe_expert_waves``, ``moe_expert_remat``) and sizes its receiver
     buffers by ``capacity_factor``; its XLA transport kernel is ``GrugRunConfig.ragged_transport``."""
     moe_bank2_experts: int = 0
-    """Heterogeneous experts: the last ``moe_bank2_experts`` of ``num_experts`` form a second expert bank with its
-    own width (``moe_bank2_intermediate_dim``) and activation (``moe_bank2_activation``). One router scores all
-    experts; each token takes ``num_experts_per_token - moe_bank2_topk`` experts from bank 1 and ``moe_bank2_topk``
-    from bank 2 (a fixed split, so each bank's FLOPs are fixed), QB balances each bank against its own K/E, and
-    the combine weights are renormalized over all selected experts. 0: one uniform bank."""
+    """A second expert bank of this many experts (``_bank2``); 0: off."""
     moe_null_experts: int = 0
-    """MoE++ (arXiv 2410.07348) zero experts: extra router columns past ``num_experts`` (after them come the
-    ``moe_copy_experts`` and ``moe_const_experts`` columns) whose output is 0. The router takes top-K over the
-    real and all zero-computation experts, so a token uses between 0 and K real experts; the combine weights
-    are renormalized over all K slots, so a null slot's weight is taken from the real experts. Null slots go to
-    the real-expert backend as combine-weight-0 assignments spread over the experts (the fixed-capacity EP
-    dispatch still carries and computes them), so this changes the math, not the FLOPs. 0: off."""
+    """Null experts: zero-output routing targets added to the router."""
     moe_copy_experts: int = 0
     """MoE++ copy experts (zero-computation): output = the expert input (the latent-space token)."""
     moe_const_experts: int = 0
@@ -1443,10 +1434,7 @@ class GrugModelConfig:
     the AttnRes history, the analogue of MAI-Thinking-1's dropout on each layer's output before the residual add.
     Training only (evals pass no route key). AttnRes only."""
     dual_attn_prev: bool = False
-    """Two weight sets for every MLA attention module: the current weights and a frozen copy of the previous step's
-    (``Block.attn_prev``, refreshed by the trainer). In training, odd batch rows run attention with the previous
-    weights and even rows with the current ones; both rows' gradients reach the current weights, so each update uses
-    the gradient at both ends of the last step (about its midpoint). Evals use the current weights only. AttnRes only."""
+    """Dual attention reading the previous layer's stream (closed experiment)."""
     router_on_embed: bool = False
     """Every MoE router reads only the token's input embedding (RMS-normed, the first AttnRes source) instead of
     the layer's MLP input: routing by learned token identity, one router per layer. AttnRes only."""
@@ -1634,11 +1622,7 @@ class GrugModelConfig:
     """With ``embed2_hash_heads``, the n-gram order of each head (e.g. ``(2, 2, 3, 3)``: two bigram and two trigram
     slices in the same table and gather). Empty: every head uses ``embed2_ngram``."""
     embed2_sign_trick: bool = False
-    """Count-sketch sign trick of modded-nanogpt PR #299 / record #360 on the hashed n-gram table: each gathered
-    row is multiplied elementwise by a +-1 row of a fixed random ``[embed2_sign_pool, row width]`` pool, picked by
-    an independent (the record's multiply-xor) hash of the same n-gram key, so n-grams colliding in a table row
-    see near-orthogonal signs and their contributions roughly cancel instead of adding. Each hash head gets its
-    own sign hash. Sign flips preserve RMS, so ``embed2_norm`` sees the same scale. Needs ``second_embed_bigram``."""
+    """Second-embedding sign trick: each hashed row is read with a per-token sign."""
     embed2_sign_pool: int = 8192
     """Rows of the +-1 sign pool (a power of two, like the record's)."""
     trigram_gate: bool = False
@@ -2358,6 +2342,8 @@ class CausalSelfAttention(eqx.Module):
     v_self: Float[Array, "N D"] | None  # mla_lookahead_self
     k_null: Float[Array, "N D"] | None  # mla_lookahead_sink
     w_qf: Float[Array, "D FC"] | None  # mla_future_heads: each future head's look-ahead query
+    w_sidx: Float[Array, "D R"] | None  # mla_sparse_topk: the tied sparse index projection
+    sparse_lam: Float[Array, " N"] | None  # per-head weight on the index score of selected keys
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2474,6 +2460,12 @@ class CausalSelfAttention(eqx.Module):
                     if cfg.mla_future_heads
                     else None
                 ),
+                w_sidx=(
+                    reshard(_init_weight(random.fold_in(k_q, 10), (d, cfg.mla_sparse_index_dim), std), P(None, None))
+                    if cfg.mla_sparse_topk
+                    else None
+                ),
+                sparse_lam=jnp.ones((n,), jnp.float32) if cfg.mla_sparse_topk else None,
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2616,6 +2608,8 @@ class CausalSelfAttention(eqx.Module):
             v_self=None,
             k_null=None,
             w_qf=None,
+            w_sidx=None,
+            sparse_lam=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2972,7 +2966,15 @@ class CausalSelfAttention(eqx.Module):
             qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        attn_out = _attend(q, k)[..., :head_dim]
+        if self.cfg.mla and self.cfg.mla_sparse_window:
+            topk = self.cfg.mla_sparse_topk
+            idx = jnp.zeros((*x.shape[:2], 1)) if self.w_sidx is None else rms_norm(_proj(self.cfg, x, self.w_sidx))
+            lam = jnp.zeros((q.shape[2],)) if self.sparse_lam is None else self.sparse_lam
+            attn_out = sparse_index_attention(
+                q, k, kernel_v, rel_bias, sconv_segment_ids, idx, lam, window=self.cfg.mla_sparse_window, topk=topk
+            )
+        else:
+            attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
             assert self.gda_lambda is not None
             grouped = rearrange(attn_out.astype(jnp.float32), "b s (m j) d -> b s m j d", m=gdla_noise)
@@ -8936,6 +8938,8 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         final_experts_per_token=0,
         final_num_experts=0,
         final_routing_renorm_sum=0.0,
+        mla_sparse_window=cfg.mla_sparse_window if cfg.mla_sparse_tail else 0,
+        mla_sparse_topk=cfg.mla_sparse_topk if cfg.mla_sparse_tail else 0,
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
