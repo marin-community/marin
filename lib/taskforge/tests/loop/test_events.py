@@ -120,6 +120,39 @@ def test_an_abandoned_item_re_enters_validation_with_a_fresh_retry_count(tmp_pat
     assert resumed.terminal is None and resumed.phase is Phase.TRIALS
 
 
+def test_host_failures_hold_the_build_until_abandoned_and_the_relaunch_rebuilds_the_same_program(tmp_path):
+    log = (
+        Log(tmp_path)
+        .add(EventKind.OPENED, input_hash="p1", proposal="d00.x/1", idea="d00.x", policy_digest="pol")
+        .add(EventKind.TRIAGED, input_hash="p1", decision="accept", tally="1 accept", repairs="0")
+        .add(EventKind.AUTHORED, input_hash="prog1", revises="", revision="none")
+    )
+    failure = {"message": "connection reset", "retries_used": "1"}
+    log.add(
+        EventKind.BUILD_INFRASTRUCTURE,
+        input_hash="prog1",
+        cause="host_unreachable",
+        abandon="false",
+        not_before="99.5",
+        **failure,
+    )
+    waiting = derive_state(log.entries())
+    log.add(
+        EventKind.BUILD_INFRASTRUCTURE, input_hash="prog1", cause="no_factory", abandon="true", not_before="0", **failure
+    )
+    closing = derive_state(log.entries()).closing
+    log.add(
+        EventKind.TERMINAL, terminal="abandoned", reason="build host failures", causes="host_unreachable:1,no_factory:1"
+    )
+    abandoned = derive_state(log.entries())
+
+    assert (waiting.phase, waiting.program_digest, waiting.not_before) == (Phase.BUILD, "prog1", 99.5)
+    assert waiting.build_revisions == 0
+    assert closing is not None and closing.terminal is Terminal.ABANDONED
+    assert closing.causes == ("host_unreachable", "no_factory")
+    assert (abandoned.phase, abandoned.program_digest, abandoned.build_host_failures) == (Phase.BUILD, "prog1", ())
+
+
 def test_a_failed_item_keeps_its_phase_and_a_final_terminal_ends_the_log(tmp_path):
     log = built_log(tmp_path).add(EventKind.TERMINAL, terminal="failed", reason="RuntimeError: boom")
     failed = derive_state(log.entries())

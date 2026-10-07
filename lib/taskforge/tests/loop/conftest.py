@@ -342,6 +342,7 @@ def loop_policy(**changes: Any) -> LoopPolicy:
         max_build_revisions=2,
         max_repairs=1,
         max_validation_retries=1,
+        max_build_retries=1,
         retry_backoff=FAST,
         output_token_budget=1_000_000,
         validation=validation_policy(),

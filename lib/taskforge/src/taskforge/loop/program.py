@@ -10,8 +10,11 @@ proposals re-proposes the idea, up to ``max_idea_reproposals``, then the idea is
 building with bounded revisions, control replay, solver and adversary trials, the calibration summary
 and review's decision. A ``Repair`` starts the next round: the author revises the condemned program
 with the repair brief as ``Revision.failure`` and the build recomputes the steps the repair invalidates.
-A ``Retry`` re-enters validation after a backoff, re-running only unsettled trials; retries spent end
-the item ``ABANDONED``. An unhandled exception records ``FAILED`` and propagates.
+A ``Retry`` re-enters validation after a backoff, re-running only unsettled trials. A build the machine
+host failed (``BuildInfrastructureFailure``) spends no revision and reaches no author: it records
+``BUILD_INFRASTRUCTURE`` and rebuilds the same program after the same backoff. Either kind of retry,
+spent, ends the item ``ABANDONED``. An unhandled exception, ``GlmUnavailable`` included, records
+``FAILED`` and propagates.
 
 Each loop iteration derives the item's state from its event log, runs the sub-phase the state names
 and appends that sub-phase's completion event, so a new process resumes an item by re-running only
@@ -57,6 +60,7 @@ from taskforge.loop.events import (
     Phase,
     RevisionKind,
     Terminal,
+    cause_counts,
     derive_idea_state,
     derive_state,
     events,
@@ -494,11 +498,13 @@ async def _build(item: _Item, state: ItemState) -> None:
             draft = await run_build(
                 program, proposal, round_dir, services.root / CACHE_DIR, services.build, state.invalidate, state.round
             )
-        except (GlmUnavailable, BuildInfrastructureFailure):
+        except GlmUnavailable:
             raise
+        except BuildInfrastructureFailure as failure:
+            _host_failed(item, state, program.digest, failure)
+            return
         except Exception as error:
-            # A BuildFailure or any other exception the program raised goes back to the author as a
-            # revision. A host failure is not the program's: it fails the item, which re-enters the build.
+            # A BuildFailure or any other exception the program raised goes back to the author as a revision.
             failure = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
             step = (error.step or "") if isinstance(error, BuildFailure) else ""
             _build_failed(item, state, program.digest, step, failure, noop=False)
@@ -517,6 +523,26 @@ async def _build(item: _Item, state: ItemState) -> None:
         steps=str(len(steps)),
         hits=str(sum(record.status is CacheStatus.HIT for record in steps)),
         staged=str(bool(draft.task.stages)).lower(),
+    )
+
+
+def _host_failed(item: _Item, state: ItemState, program_digest: str, failure: BuildInfrastructureFailure) -> None:
+    policy = item.policy
+    retries = len(state.build_host_failures) + 1
+    abandon = retries > policy.max_build_retries
+    not_before = time.time() + (0.0 if abandon else retry_wait(policy.retry_backoff, retries))
+    logger.warning(
+        "%s: the build host failed (%s), retry %d of %d", item.item_id, failure, retries, policy.max_build_retries
+    )
+    item.log.append(
+        state.round,
+        EventKind.BUILD_INFRASTRUCTURE,
+        program_digest,
+        cause=failure.cause,
+        message=_clip(failure.message),
+        retries_used=str(retries),
+        abandon=str(abandon).lower(),
+        not_before=repr(not_before),
     )
 
 
@@ -636,4 +662,6 @@ def _close(item: _Item, state: ItemState) -> None:
     attrs = {"terminal": closing.terminal.value, "reason": _clip(closing.reason)}
     if closing.kind is not None:
         attrs["kind"] = closing.kind.value
+    if closing.causes:
+        attrs["causes"] = cause_counts(closing.causes)
     item.log.append(state.round, EventKind.TERMINAL, None, **attrs)

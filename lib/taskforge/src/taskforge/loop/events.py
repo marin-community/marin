@@ -15,17 +15,19 @@ event names them by digest.
 idea item's (``idea--<idea_id>``). Status is never stored. A gap or a repeat in ``seq``, the only sign
 of two processes writing one run root, and an unknown schema raise ``ValueError``.
 
-An item that ended ``ABANDONED`` (validation retries spent) or ``FAILED`` (an unhandled exception)
-is not final: when it is run again, the next event clears ``terminal``, and an abandoned item resumes
-at ``CONTROLS`` with a fresh retry count. Whether a launch runs it again is the caller's choice.
-``ACCEPTED`` and ``REJECTED`` are final.
+An item that ended ``ABANDONED`` (build or validation retries spent) or ``FAILED`` (an unhandled
+exception) is not final: when it is run again, the next event clears ``terminal``, and an abandoned
+item resumes where it stopped (the build of the same program, or ``CONTROLS``) with fresh retry
+counts. Whether a launch runs it again is the caller's choice. ``ACCEPTED`` and ``REJECTED`` are final.
 """
 
 import time
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
 from taskforge.review.decision import RejectKind
 from taskforge.triage.verdict import TriageDecision
@@ -36,6 +38,7 @@ EVENT_SCHEMA = "1"
 SEQ = "seq"
 SCHEMA = "schema"
 LIST_SEPARATOR = ","
+COUNT_SEPARATOR = ":"
 
 
 class EventKind(StrEnum):
@@ -57,6 +60,10 @@ class EventKind(StrEnum):
     """input_hash: the program digest. attrs: revises, revision (a ``RevisionKind``)."""
     BUILD_FAILED = "build_failed"
     """input_hash: the program digest. attrs: step, failure (truncated), failure_file, noop."""
+    BUILD_INFRASTRUCTURE = "build_infrastructure"
+    """The machine host failed the build; no revision is spent and the author is not told.
+    input_hash: the program digest. attrs: cause (an ``InfrastructureCause``), message (truncated),
+    retries_used, abandon, not_before."""
     BUILT = "built"
     """input_hash: the task digest. attrs: program_digest, steps, hits, staged."""
     CONTROLS_REPLAYED = "controls_replayed"
@@ -70,7 +77,8 @@ class EventKind(StrEnum):
     kind (a ``RejectKind``) and reasons for reject; findings and invalidate for repair; cause, count,
     abandon and not_before for retry."""
     TERMINAL = "terminal"
-    """attrs: terminal (a ``Terminal``), reason, and kind (a ``RejectKind``) when rejected."""
+    """attrs: terminal (a ``Terminal``), reason, kind (a ``RejectKind``) when rejected, and causes
+    (``cause:count`` pairs, comma-separated) when abandoned."""
 
 
 IDEA_EVENTS = frozenset({EventKind.PROPOSED, EventKind.SLOT_FAILED, EventKind.IDEA_EXHAUSTED})
@@ -80,7 +88,7 @@ class Terminal(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     ABANDONED = "abandoned"
-    """Validation retries spent on an infrastructure cause; re-entered on the next launch."""
+    """Build or validation retries spent on an infrastructure cause; re-entered on the next launch."""
     FAILED = "failed"
     """An unhandled exception; the queue re-enters it only when asked to retry failed items."""
 
@@ -122,6 +130,8 @@ class Closing:
     terminal: Terminal
     reason: str
     kind: RejectKind | None
+    causes: tuple[str, ...]
+    """The infrastructure cause of each retry an ``ABANDONED`` item spent; () otherwise."""
 
 
 @dataclass(frozen=True)
@@ -145,12 +155,14 @@ class ItemState:
         triage_repairs: Rubric repairs so far.
         build_revisions: Build failures so far, each owed one revision.
         repairs_used: Review ``Repair`` decisions so far.
-        validation_retries: ``Retry`` decisions since the last ``ABANDONED``, so a relaunch re-enters
-            with a fresh budget.
+        retry_causes: The cause of each ``Retry`` decision since the last ``ABANDONED``, so a relaunch
+            re-enters with a fresh budget.
+        build_host_failures: The cause of each consecutive host failure of the current build since the
+            last ``ABANDONED``; a build that finishes, built or failed, clears it.
         prior_band_findings: Band findings already repaired once.
         solved: The solver trials of this validation pass are recorded.
         adversaries_run: The adversary trials of this validation pass are recorded.
-        not_before: Unix time before which a retried validation does not start.
+        not_before: Unix time before which a retried build or validation does not start.
         closing: The terminal event a recorded decision leads to (phase ``DONE``).
         terminal: The item's terminal, until a later event re-enters it.
     """
@@ -170,13 +182,18 @@ class ItemState:
     triage_repairs: int
     build_revisions: int
     repairs_used: int
-    validation_retries: int
+    retry_causes: tuple[str, ...]
+    build_host_failures: tuple[InfrastructureCause, ...]
     prior_band_findings: frozenset[FindingKind]
     solved: bool
     adversaries_run: bool
     not_before: float | None
     closing: Closing | None
     terminal: Terminal | None
+
+    @property
+    def validation_retries(self) -> int:
+        return len(self.retry_causes)
 
 
 @dataclass(frozen=True)
@@ -264,6 +281,20 @@ def joined(values: Iterable[str]) -> str:
     return LIST_SEPARATOR.join(values)
 
 
+def cause_counts(causes: Iterable[str]) -> str:
+    """``causes`` as ``cause:count`` pairs in cause order, comma-separated."""
+    return joined(f"{cause}{COUNT_SEPARATOR}{n}" for cause, n in sorted(Counter(causes).items()))
+
+
+def build_host_failures(entries: Iterable[LedgerEntry]) -> Counter[InfrastructureCause]:
+    """The item's ``BUILD_INFRASTRUCTURE`` events by cause, over every launch."""
+    return Counter(
+        InfrastructureCause(entry.attrs["cause"])
+        for entry in events(entries)
+        if entry.step == EventKind.BUILD_INFRASTRUCTURE
+    )
+
+
 def derive_idea_state(entries: Iterable[LedgerEntry]) -> IdeaState:
     """Fold an idea item's events. Raises ``ValueError`` on a proposal item's event or a bad log."""
     state = IdeaState(seq=0, items=None, reproposals=0, exhausted=False)
@@ -308,7 +339,8 @@ def derive_state(entries: Iterable[LedgerEntry]) -> ItemState:
         triage_repairs=0,
         build_revisions=0,
         repairs_used=0,
-        validation_retries=0,
+        retry_causes=(),
+        build_host_failures=(),
         prior_band_findings=frozenset(),
         solved=False,
         adversaries_run=False,
@@ -351,7 +383,16 @@ def _apply(state: ItemState, kind: EventKind, entry: LedgerEntry) -> ItemState:
                 revision=RevisionKind.BUILD_FAILURE,
                 failure_file=attrs["failure_file"],
                 build_revisions=state.build_revisions + 1,
+                build_host_failures=(),
+                not_before=None,
             )
+        case EventKind.BUILD_INFRASTRUCTURE:
+            failures = (*state.build_host_failures, InfrastructureCause(attrs["cause"]))
+            state = replace(state, build_host_failures=failures)
+            if attrs["abandon"] == "true":
+                reason = f"build host failures: {cause_counts(failures)}"
+                return _closing(state, Terminal.ABANDONED, reason, None, failures)
+            return replace(state, not_before=float(attrs["not_before"]))
         case EventKind.BUILT:
             staged = attrs["staged"] == "true"
             return replace(
@@ -360,6 +401,8 @@ def _apply(state: ItemState, kind: EventKind, entry: LedgerEntry) -> ItemState:
                 phase=Phase.DECIDE if staged else Phase.CONTROLS,
                 solved=False,
                 adversaries_run=False,
+                build_host_failures=(),
+                not_before=None,
             )
         case EventKind.CONTROLS_REPLAYED:
             passed = attrs["passed"] == "true"
@@ -374,8 +417,10 @@ def _apply(state: ItemState, kind: EventKind, entry: LedgerEntry) -> ItemState:
             return _terminal(state, Terminal(attrs["terminal"]))
 
 
-def _closing(state: ItemState, terminal: Terminal, reason: str, kind: RejectKind | None) -> ItemState:
-    return replace(state, phase=Phase.DONE, closing=Closing(terminal, reason, kind))
+def _closing(
+    state: ItemState, terminal: Terminal, reason: str, kind: RejectKind | None, causes: tuple[str, ...] = ()
+) -> ItemState:
+    return replace(state, phase=Phase.DONE, closing=Closing(terminal, reason, kind, causes))
 
 
 def _trials(state: ItemState) -> ItemState:
@@ -390,9 +435,10 @@ def _decided(state: ItemState, entry: LedgerEntry) -> ItemState:
     if decision is DecisionKind.REJECT:
         return _closing(state, Terminal.REJECTED, attrs["reasons"], RejectKind(attrs["kind"]))
     if decision is DecisionKind.RETRY:
-        state = replace(state, validation_retries=state.validation_retries + 1, solved=False, adversaries_run=False)
+        causes = (*state.retry_causes, attrs["cause"])
+        state = replace(state, retry_causes=causes, solved=False, adversaries_run=False)
         if attrs["abandon"] == "true":
-            return _closing(state, Terminal.ABANDONED, attrs["cause"], None)
+            return _closing(state, Terminal.ABANDONED, attrs["cause"], None, causes)
         return replace(state, phase=Phase.CONTROLS, not_before=float(attrs["not_before"]))
     findings = frozenset(FindingKind(kind) for kind in split(attrs["findings"]))
     return replace(
@@ -418,5 +464,7 @@ def _terminal(state: ItemState, terminal: Terminal) -> ItemState:
         return replace(state, terminal=terminal)
     state = replace(state, terminal=terminal, closing=None)
     if terminal is Terminal.ABANDONED:
-        return replace(state, phase=Phase.CONTROLS, validation_retries=0, not_before=None)
+        # Abandoned before this round's draft was built, the item re-enters the build of the same program.
+        resume = Phase.BUILD if state.task_digest is None else Phase.CONTROLS
+        return replace(state, phase=resume, retry_causes=(), build_host_failures=(), not_before=None)
     return replace(state, phase=Phase.DONE)

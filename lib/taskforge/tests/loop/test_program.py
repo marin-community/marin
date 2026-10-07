@@ -5,14 +5,18 @@
 validation through RolloutEngine, and fakes only at the source, the rubric and the rollout model."""
 
 import asyncio
+from collections import Counter
 from dataclasses import replace
 
 import pytest
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Machine, MachineSpec
+from taskcompendium.environment import EnvironmentKind
 
-from taskforge.build.infrastructure import BuildInfrastructureFailure, InfrastructureCause
+from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.build.run import item_id_for
 from taskforge.ledger.records import EntryKind
-from taskforge.loop.events import EventKind, Phase, RevisionKind, Terminal, derive_state
+from taskforge.loop.events import EventKind, Phase, RevisionKind, Terminal, build_host_failures, derive_state
 from taskforge.loop.program import NOOP_FAILURE, idea_item_id, run_idea, run_item
 from taskforge.review.decision import DECISION_FILE, Accept, Reject, RejectKind, Repair, load_decision
 from taskforge.review.rules import STAGED_BRIEF
@@ -191,6 +195,7 @@ async def test_validation_retries_end_abandoned_and_a_relaunch_re_enters_with_a_
     decided = events_of(loop, item_id, EventKind.DECIDED)
     assert [(e.attrs["decision"], e.attrs["abandon"]) for e in decided] == [("retry", "false"), ("retry", "true")]
     assert {e.attrs["cause"] for e in decided} == {"model_unavailable"}
+    assert events_of(loop, item_id, EventKind.TERMINAL)[-1].attrs["causes"] == "model_unavailable:2"
 
     loop.model.error = None
     async with loop.services() as services:
@@ -253,25 +258,60 @@ async def test_an_unhandled_exception_records_failed_and_a_relaunch_re_enters(lo
         assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
 
 
-async def test_a_host_failure_in_the_build_fails_the_item_without_spending_a_revision(loop, programs, fake_glm):
+class DroppingFactory:
+    """A ShellSim factory whose first ``drops`` creations lose the connection to the host."""
+
+    def __init__(self, drops: int):
+        self.drops = drops
+        self.inner = ShellSimMachineFactory()
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        if self.drops:
+            self.drops -= 1
+            raise ConnectionError("connection reset by the machine host")
+        return await self.inner.create(spec)
+
+
+async def test_a_dropped_host_connection_rebuilds_the_program_without_telling_the_author(loop, programs, fake_glm):
     proposal = programs.proposal()
     programs.submit(fake_glm, programs.source())
-    policy = programs.policy()
+
+    async with loop.services() as services:
+        flaky = replace(
+            services, build=replace(services.build, factories={EnvironmentKind.SHELLSIM: DroppingFactory(1)})
+        )
+        assert await run_item(proposal, programs.policy(max_build_retries=1), flaky) is Terminal.ACCEPTED
+    item_id = item_id_for(proposal)
+
+    (dropped,) = events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE)
+    assert (dropped.attrs["cause"], dropped.attrs["abandon"]) == (InfrastructureCause.HOST_UNREACHABLE, "false")
+    assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
+    assert len(fake_glm.requests) == 1 and len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
+
+
+async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuilds_the_same_program(
+    loop, programs, fake_glm
+):
+    proposal = programs.proposal()
+    programs.submit(fake_glm, programs.source())
+    policy = programs.policy(max_build_retries=1)
 
     async with loop.services() as services:
         hostless = replace(services, build=replace(services.build, factories={}))
-        with pytest.raises(BuildInfrastructureFailure) as failure:
-            await run_item(proposal, policy, hostless)
-    assert failure.value.cause is InfrastructureCause.NO_FACTORY
+        assert await run_item(proposal, policy, hostless) is Terminal.ABANDONED
     item_id = item_id_for(proposal)
+    failures = events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE)
+    assert [e.attrs["abandon"] for e in failures] == ["false", "true"]
     assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
-    (failed,) = events_of(loop, item_id, EventKind.TERMINAL)
-    assert failed.attrs["terminal"] == Terminal.FAILED
+    (abandoned,) = events_of(loop, item_id, EventKind.TERMINAL)
+    assert (abandoned.attrs["terminal"], abandoned.attrs["causes"]) == (Terminal.ABANDONED, "no_factory:2")
+    assert derive_state(loop.entries(item_id)).phase is Phase.BUILD
 
     # The relaunch builds the program already authored: no second authoring call is queued.
     async with loop.services() as services:
         assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
-    assert len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
+    assert len(fake_glm.requests) == 1 and len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
+    assert build_host_failures(loop.entries(item_id)) == Counter({InfrastructureCause.NO_FACTORY: 2})
 
 
 async def test_a_log_opened_under_another_policy_is_refused(loop, programs):
