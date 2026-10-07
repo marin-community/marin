@@ -17,7 +17,7 @@ be read against a different task, execution or convention.
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from taskcompendium.models import AssistantToolCalls, TextMessage
@@ -153,16 +153,18 @@ async def replay_controls(
     )
     settings = draft_settings(draft, settings)
     files = trial_files(site.evidence_dir, TrialKind.CONTROL)
-    base = site.control_plan(policy).trial_plan()
+    unsettled = [c.id for c in draft.controls if c.id in files and not files[c.id].settled]
+    plan = site.control_plan(policy, {cid: files[cid].attempts for cid in unsettled})
 
     async def replay_one(control: Control) -> ControlOutcome:
         existing = files.get(control.id)
         if existing is not None and existing.settled:
             assert existing.last is not None
             return control_outcome(control, existing.last)
-        plan = replace(base, first_attempt=0 if existing is None else existing.attempts)
         model = ScriptedModel(control_turns(control), context_turns, tokenize)
-        return control_outcome(control, await run_trial(task, draft.execution, plan, settings, model, control.id))
+        return control_outcome(
+            control, await run_trial(task, draft.execution, plan.trial_plan(control.id), settings, model, control.id)
+        )
 
     async with asyncio.TaskGroup() as group:
         runs = [group.create_task(replay_one(control)) for control in draft.controls]
