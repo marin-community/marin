@@ -51,12 +51,16 @@ are present in its environment.
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
+The runtime executes tasks through `TaskSession` and sends token requests to model engines.
+Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
+See [task rollouts](task-rollouts.md) for task execution and backend limits.
+
 ```text
 Marin experiment
   SkyRLSpec + IrisSkyRLExecution + resolved artifacts
                          |
                          v
-  source launch.yaml: run, runtime, iris, ingress, ray,
+  source launch.yaml: run, runtime, iris, ray,
                       artifacts, inputs, skyrl recipe
                          |
                          v
