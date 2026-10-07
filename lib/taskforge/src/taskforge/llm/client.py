@@ -37,7 +37,7 @@ from typing import Self
 import httpx
 from rigging.timing import ExponentialBackoff
 
-from taskforge.llm.endpoint import GLM_MODEL, resolve_glm_base_url
+from taskforge.llm.endpoint import API_ROOT, GLM_MODEL, resolve_glm_base_url
 from taskforge.llm.policy import (
     CONTINUE_FINAL_MESSAGE_FIELDS,
     PREFILL_TEMPLATE_KWARGS,
@@ -76,8 +76,8 @@ class GlmEndpoint:
     model: str = GLM_MODEL
 
     def __post_init__(self) -> None:
-        if not self.base_url.endswith("/v1"):
-            raise ValueError(f"base_url must end in /v1: {self.base_url}")
+        if not self.base_url.endswith(API_ROOT):
+            raise ValueError(f"base_url must end in {API_ROOT}: {self.base_url}")
 
 
 def endpoint_in_task(relay_job: str, token: str, pool: Pool) -> GlmEndpoint:
@@ -560,7 +560,7 @@ class GlmClient:
         """
         try:
             response = await self._http.get(
-                f"{self.endpoint.base_url.removesuffix('/v1')}/health", timeout=HEALTH_TIMEOUT
+                f"{self.endpoint.base_url.removesuffix(API_ROOT)}/health", timeout=HEALTH_TIMEOUT
             )
         except httpx.TransportError:
             return False
