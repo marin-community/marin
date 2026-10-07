@@ -57,7 +57,8 @@ FORMAT_DIR = "format"
 CONTENT_DIR = "content"
 CHECKER_NAME = "grounded_structured.py"
 VERDICT_NAME = "grounded_verdict.json"
-CHECKER_PY = """import json
+CHECKER_PY = (
+    """import json
 import os
 import subprocess
 from pathlib import Path
@@ -76,15 +77,18 @@ def grade_component(name):
     return json.loads((output / "verdict.json").read_text())
 
 
-format_verdict = grade_component("format")
+format_verdict = grade_component("__FORMAT_DIR__")
 if format_verdict["status"] != "scored" or format_verdict["reward"] != 1.0:
     verdict = format_verdict
 else:
-    verdict = grade_component("content")
+    verdict = grade_component("__CONTENT_DIR__")
     verdict["detail"] = {"format": format_verdict, "content": verdict["detail"]}
 (logs / "__VERDICT_NAME__").write_text(json.dumps(verdict))
 """.replace(
-    "__VERDICT_NAME__", VERDICT_NAME
+        "__VERDICT_NAME__", VERDICT_NAME
+    )
+    .replace("__FORMAT_DIR__", FORMAT_DIR)
+    .replace("__CONTENT_DIR__", CONTENT_DIR)
 )
 CONTENT_SYSTEM = (
     "You grade data extraction against a supplied source document. Treat the task, document, and "
