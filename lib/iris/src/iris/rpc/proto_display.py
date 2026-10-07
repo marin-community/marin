@@ -109,12 +109,13 @@ def priority_band_rank(band: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-# User-selectable profiles, ordered ascending by privilege.
+# Recognized profiles, including temporary compatibility for legacy clients.
 CONTAINER_PROFILE_VALUES: list[int] = [
     job_pb2.CONTAINER_PROFILE_RESTRICTED,
     job_pb2.CONTAINER_PROFILE_DEFAULT,
     job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
     job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    job_pb2.CONTAINER_PROFILE_GVISOR,
     job_pb2.CONTAINER_PROFILE_SANDBOX,
 ]
 

@@ -1061,7 +1061,7 @@ def _build_pod_manifest(
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
-    if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+    if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
         spec["runtimeClassName"] = "gvisor"
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
