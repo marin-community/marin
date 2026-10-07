@@ -188,7 +188,10 @@ def test_brief_carries_new_controls_the_author_can_copy_verbatim():
     blocks = re.findall(r"```json\n(.*?)\n```", brief.failure, re.DOTALL)
     assert len(blocks) == 1
     assert parse_controls(blocks[0]) == (SHORTCUT_CONTROL, leak)
-    assert "Finding 2: leak_passed (revise the fixtures, environment, instructions steps)" in brief.failure
+    assert (
+        "Finding 2: leak_passed (revise the fixtures, environment, instructions, grader, controls steps)"
+        in brief.failure
+    )
 
 
 def test_steps_for_names_each_step_once_in_build_order(draft):
