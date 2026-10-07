@@ -7,7 +7,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
-from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -66,10 +65,11 @@ class ShellboxRolloutEngine:
         self.sessions = {} if sessions is None else sessions
         self.token_contract = token_contract
 
-    def _record_metrics(self, metrics: dict[str, Any]) -> dict[str, Any]:
+    def _contract_record(self, record: RolloutData) -> RolloutData:
+        """Mark every TEXT record, including empty and interrupted ones, as informational."""
         if self.token_contract == TokenContract.EXACT:
-            return metrics
-        return {**metrics, "token_contract": self.token_contract.value}
+            return record
+        return replace(record, logprobs=None, metrics={**record.metrics, "token_contract": self.token_contract.value})
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
@@ -102,6 +102,7 @@ class ShellboxRolloutEngine:
                 ),
                 metrics={**record.metrics, "cleanup_error_count": float(len(cleanup.errors))},
             )
+        record = self._contract_record(record)
         if operation is not None:
             raise RolloutInterrupted(record, operation) from cause
         return record
@@ -221,7 +222,7 @@ class ShellboxRolloutEngine:
                         completed.grade,
                         turn.stop_reason,
                         (*steps, pending),
-                        self._record_metrics(pending.transition.metrics),
+                        pending.transition.metrics,
                     )
                     try:
                         async with asyncio.timeout(limits.tool_turn_timeout):
@@ -255,7 +256,7 @@ class ShellboxRolloutEngine:
                         continue
                     steps.append(replace(pending, transition=transition))
                     completed = replace(
-                        completed, steps=tuple(steps), stop_reason=stop_reason, metrics=self._record_metrics(transition.metrics)
+                        completed, steps=tuple(steps), stop_reason=stop_reason, metrics=transition.metrics
                     )
                     if transition.done or stop_reason == LENGTH_STOP_REASON:
                         break
