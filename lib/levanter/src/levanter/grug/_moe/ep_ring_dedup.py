@@ -32,8 +32,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.ep_common import _prefix_cap_counts
-from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows
+from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
@@ -182,13 +181,6 @@ def _moe_mlp_ep_ring_dedup_local(
         received_ids = jnp.round(received_ids).astype(jnp.int32).reshape(received_assignments)
         assignment_mask = received_ids >= 0
         local_expert = jnp.where(assignment_mask, received_ids, 0)
-
-        expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
-        counts = jnp.sum(
-            (local_expert[:, None] == expert_ids[None, :]) & assignment_mask[:, None],
-            axis=0,
-            dtype=jnp.int32,
-        )
         logical_capacity = _scaled_capacity(
             group_valid_assignments,
             capacity_factor=capacity_factor,
@@ -196,16 +188,13 @@ def _moe_mlp_ep_ring_dedup_local(
             minimum=local_experts,
             maximum=expert_capacity,
         )
-        accepted_counts = _prefix_cap_counts(counts, capacity=logical_capacity)
-        accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
-        receiver_dropped = jnp.sum(counts, dtype=jnp.int32) - accepted_total
-
-        # Same selection as ring: (local expert, arrival position) order, top `expert_capacity`.
-        flat_position = jnp.arange(received_assignments, dtype=jnp.int32)
-        order_key = local_expert * received_assignments + flat_position
-        selection_key = jnp.where(assignment_mask, local_experts * received_assignments - order_key, -1)
-        _, picked = jax.lax.top_k(selection_key, expert_capacity)
-        dispatch_valid = jnp.arange(expert_capacity, dtype=jnp.int32) < accepted_total
+        group_sizes, receiver_dropped, picked, dispatch_valid = _select_local_assignments(
+            local_expert,
+            assignment_mask,
+            local_experts=local_experts,
+            logical_capacity=logical_capacity,
+            physical_capacity=expert_capacity,
+        )
         picked = jnp.where(dispatch_valid, picked, received_assignments)
         dispatch_row = jnp.where(dispatch_valid, picked // topk, send_rows)
         # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
@@ -218,8 +207,6 @@ def _moe_mlp_ep_ring_dedup_local(
 
         x_dispatch = _dispatch_rows(received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position)
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
-        # Padding rows go to the last expert group, as in ring.
-        group_sizes = accepted_counts.at[-1].add(expert_capacity - accepted_total)
 
     with jax.named_scope("moe_up_down"):
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
