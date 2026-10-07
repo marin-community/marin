@@ -19,6 +19,10 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
         # docker cp would use a different overlay, as on a runsc host.
         assert args[0] == "exec"
         index = next(i for i, value in enumerate(args) if value.startswith("harbor-machine-"))
+        # Private fixtures are unreadable to the image's default unprivileged user.
+        options = args[1:index]
+        if "--user" not in options or options[options.index("--user") + 1] != "0":
+            return DockerCommandResult(1, b"", b"Permission denied")
         result = subprocess.run(args[index + 1 :], input=stdin, capture_output=True, timeout=30)
         return DockerCommandResult(result.returncode, result.stdout, result.stderr)
 
@@ -46,3 +50,4 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
     assert (target / "answer").stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in target.iterdir()) == ["answer"]
     assert (tmp_path / "file").read_bytes() == b"\x00\xffpayload"
+    assert (tmp_path / "file").stat().st_mode & 0o777 == 0o755

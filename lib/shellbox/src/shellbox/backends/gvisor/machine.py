@@ -37,20 +37,25 @@ class GvisorMachine(DockerMachine):
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
-        probe = await docker("exec", self.name, "test", "-d", source)
+        probe = await docker("exec", "--user", "0", self.name, "test", "-d", source)
         if probe.exit_code == 0:
-            result = await docker("exec", self.name, "tar", "-cf", "-", "-C", source, ".")
+            result = await docker("exec", "--user", "0", self.name, "tar", "-cf", "-", "-C", source, ".")
             if result.exit_code:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
             target.mkdir(parents=True, exist_ok=True)
             with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
                 archive.extractall(target, filter="data")
             return
-        result = await docker("exec", self.name, "cat", source)
+        path = PurePosixPath(source)
+        result = await docker(
+            "exec", "--user", "0", self.name, "tar", "-cf", "-", "-C", str(path.parent), "--", path.name
+        )
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(result.stdout)
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+            member = archive.getmember(path.name).replace(name=target.name)
+            archive.extract(member, target.parent, filter="data")
 
 
 class GvisorMachineFactory(DockerMachineFactory):
