@@ -11,9 +11,10 @@ and reports zero workers for the endpoint's pool, is an infrastructure hold: the
 the pool to come back, up to ``hold_timeout``, without spending an attempt. A ``/health`` that is
 unreachable or does not report the pool never causes a hold. A 400 saying the prompt plus
 ``max_tokens`` exceeds the context window lowers ``max_tokens`` to the remaining context, measured
-by a one-token probe of the same prompt; when the prompt alone fills the window,
-``GlmContextExhausted`` is raised, and a continuation that hits it ends the call with the output
-gathered so far.
+by a one-token probe of the same prompt. When the prompt alone fills the window, or the measured
+remaining context does not lower ``max_tokens`` (the router and the server count the prompt
+differently), ``GlmContextExhausted`` is raised, and a continuation that hits it ends the call with
+the output gathered so far.
 
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
 ``finish_reason == "tool_calls"`` with the partial arguments (measured live). A ``tool_calls``
@@ -435,9 +436,15 @@ class GlmClient:
                 if failure.outcome is AttemptOutcome.CONTEXT_OVERFLOW:
                     if max_tokens == 1:
                         raise GlmContextExhausted(failure.detail) from failure
-                    max_tokens = await self._remaining_context(
-                        messages, policy, request_fields, failure.detail, attempts
-                    )
+                    remaining = await self._remaining_context(messages, policy, request_fields, failure.detail, attempts)
+                    if remaining >= max_tokens:
+                        # The router's 400 and vLLM's usage disagree on the prompt length; retrying
+                        # at the same budget would get the same 400 forever.
+                        raise GlmContextExhausted(
+                            f"context overflow at max_tokens={max_tokens}, measured remaining {remaining}: "
+                            f"{failure.detail}"
+                        ) from failure
+                    max_tokens = remaining
                     continue
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:

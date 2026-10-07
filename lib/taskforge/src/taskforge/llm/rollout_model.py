@@ -9,13 +9,13 @@ stream events of the call's completed attempt: vLLM sends ``prompt_token_ids`` o
 and ``choices[].token_ids`` plus ``choices[].logprobs`` on every chunk that carries tokens. The
 response ids include the stop token (``<|observation|>`` after tool calls, ``<|user|>`` after a
 reply), which is also the first token the chat template renders for the next turn. Measured live
-(``.evidence/validate/rollout_model/``): GLM's template re-renders a replayed assistant turn token
-for token, including empty reasoning, content beside tool calls, and multi-line arguments.
+(recorded in PR #9783): GLM's template re-renders a replayed assistant turn token for token,
+including empty reasoning, content beside tool calls, and multi-line arguments.
 
 The served prefix survives only when the sampled response ids are the tokenizer's canonical
 encoding of their text. Chat completions take text, and the router accepts no prompt token ids, so
 the next prompt is the re-tokenized conversation: a sampled ``"),"`` ``"("`` comes back as the
-single token ``"),("`` (``.evidence/validate/rollout_model/prefix-bug/``). No message the client
+single token ``"),("`` (2 of 7 live reruns of one build draft). No message the client
 sends can restore the sampled ids, so the model raises ``RolloutContractError`` naming where the
 served prompt diverged.
 

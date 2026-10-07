@@ -200,6 +200,16 @@ def test_context_overflow_lowers_max_tokens_to_remaining_context(fake_glm):
     assert [a.segment for a in completion.attempts] == [0, -1, 0]
 
 
+def test_context_overflow_that_the_lowered_budget_does_not_fix_is_rejected(fake_glm):
+    for _ in range(2):
+        fake_glm.status(400, CONTEXT_ERROR)
+        fake_glm.stream(content="x", finish="length", prompt_tokens=140_000, completion_tokens=1)
+    with pytest.raises(GlmContextExhausted):
+        run(fake_glm)
+    remaining = 262_144 - 140_000
+    assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS, 1, remaining, 1]
+
+
 def test_length_finish_continues_from_partial_output(fake_glm):
     fake_glm.stream(content="first half, ", finish="length", completion_tokens=100)
     fake_glm.stream(content="second half.", finish="stop", completion_tokens=40)

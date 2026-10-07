@@ -6,7 +6,9 @@
 A ``StructuredTool`` is a strict function tool whose arguments a pydantic model validates. The
 request carries that one tool with ``tool_choice`` pinned to it. If the reply has no
 single valid call, one repair request follows that keeps the prior output in the conversation as
-the assistant turn and states the validation error.
+the assistant turn and states the validation error. A reply cut off by the output limit
+(``FinishReason.LENGTH``) is invalid even when its arguments validate, because a cut call can be a
+valid object that is missing optional fields.
 """
 
 from collections.abc import Sequence
@@ -15,7 +17,7 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
-from taskforge.llm.client import Completion, GlmClient, ToolCall
+from taskforge.llm.client import Completion, FinishReason, GlmClient, ToolCall
 from taskforge.llm.policy import LLMPolicy, Message
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
@@ -78,6 +80,12 @@ class StructuredOutputError(ValueError):
         self.completions = tuple(completions)
 
 
+def _parsed(tool: StructuredTool[OutputT], completion: Completion) -> OutputT:
+    if completion.finish_reason is FinishReason.LENGTH:
+        raise ValueError(f"the {tool.name} call was cut off by the output limit before it was complete")
+    return tool.parse(completion.tool_calls)
+
+
 def repair_messages(
     messages: Sequence[Message], tool: StructuredTool[OutputT], prior: Completion, error: ValueError
 ) -> list[Message]:
@@ -95,10 +103,10 @@ async def complete_structured(
     fields = tool.request_fields()
     first = await client.complete(messages, policy, fields)
     try:
-        return StructuredResult(tool.parse(first.tool_calls), (first,))
+        return StructuredResult(_parsed(tool, first), (first,))
     except ValueError as error:
         repair = await client.complete(repair_messages(messages, tool, first, error), policy, fields)
         try:
-            return StructuredResult(tool.parse(repair.tool_calls), (first, repair))
+            return StructuredResult(_parsed(tool, repair), (first, repair))
         except ValueError as repair_error:
             raise StructuredOutputError(repair_error, (first, repair)) from repair_error

@@ -175,6 +175,24 @@ def test_reply_still_cut_off_after_continuations_stops_with_length(fake_glm):
     assert result.messages[-1]["content"] == "partial"
 
 
+def test_context_filled_mid_run_returns_the_turns_so_far(fake_glm):
+    context_error = json.dumps({"error": {"message": "This model's maximum context length is 262144 tokens."}})
+    fake_glm.stream(tool_calls=(("echo", '{"text": "one"}'),), finish="tool_calls")
+    fake_glm.status(400, context_error)
+    fake_glm.status(400, context_error)
+    calls: list[Mapping[str, object]] = []
+    ledger = ListLedger()
+
+    result = run(fake_glm, [echo_tool(calls)], ledger=ledger)
+
+    assert result.stop is AgentStop.CONTEXT
+    assert calls == [{"text": "one"}]
+    assert len(result.turns) == 1
+    assert result.messages[-1] == {"role": "tool", "tool_call_id": "call-0", "content": "echo: one"}
+    last_call = [e for e in ledger.entries if e.kind is EntryKind.LLM_CALL][-1]
+    assert last_call.cause == "GlmContextExhausted"
+
+
 def test_max_turns_stops_after_running_the_last_turns_tools(fake_glm):
     for text in ("one", "two"):
         fake_glm.stream(tool_calls=(("echo", json.dumps({"text": text})),), finish="tool_calls")

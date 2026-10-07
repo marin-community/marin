@@ -40,7 +40,7 @@ from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_t
 from shellbox.machine import Command, Machine
 
 from taskforge.ledger.records import EntryKind, Ledger, span
-from taskforge.llm.client import Completion, FinishReason, GlmClient, ToolCall, Usage
+from taskforge.llm.client import Completion, FinishReason, GlmClient, GlmContextExhausted, ToolCall, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.rollout_model import assistant_wire_message
 
@@ -75,6 +75,8 @@ class AgentStop(StrEnum):
     MAX_TURNS = "max_turns"
     LENGTH = "length"
     """A reply without tool calls stayed cut off after ``LLMPolicy.max_continuations``; it is kept."""
+    CONTEXT = "context"
+    """The conversation filled the context window before the next reply; the turns so far are kept."""
 
 
 class ToolOutcome(StrEnum):
@@ -219,7 +221,10 @@ async def run_agent(
     max_turns: int,
     record: AgentLedger,
 ) -> AgentRun:
-    """Run the tool loop until the model answers, a reply stays cut off, or ``max_turns`` replies.
+    """Run the tool loop until the model answers, a reply stays cut off, the context fills, or ``max_turns`` replies.
+
+    A turn that ``GlmClient`` rejects with ``GlmContextExhausted`` ends the run with
+    ``AgentStop.CONTEXT``; its ``LLM_CALL`` span carries the exception as ``cause``.
 
     Args:
         client: Shared GLM client; concurrent runs share its connection pool.
@@ -237,7 +242,10 @@ async def run_agent(
     turns: list[AgentTurn] = []
     usage = NO_USAGE
     for turn in range(max_turns):
-        completion = await _complete(client, policy, conversation, request_fields, record, turn)
+        try:
+            completion = await _complete(client, policy, conversation, request_fields, record, turn)
+        except GlmContextExhausted:
+            return AgentRun(tuple(conversation), tuple(turns), AgentStop.CONTEXT, usage)
         usage = usage + completion.usage
         conversation.append(assistant_message(completion))
         if not completion.tool_calls:

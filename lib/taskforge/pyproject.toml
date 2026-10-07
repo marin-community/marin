@@ -53,7 +53,7 @@ asyncio_mode = "auto"
 timeout = 60
 # pytest skips build/ directories by default; tests/build holds the taskforge.build tests.
 norecursedirs = [".*", "*.egg", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
-addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not live_glm'"
 markers = [
     "slow: long-running test",
     "integration: external service",

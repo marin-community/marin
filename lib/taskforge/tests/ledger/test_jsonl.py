@@ -52,6 +52,24 @@ def test_reader_skips_torn_trailing_line(tmp_path):
     assert [e.step for e in read_entries(ledger.path_for("a"))] == ["done"]
 
 
+def test_append_after_a_torn_line_drops_the_fragment(tmp_path):
+    ledger = JsonlLedger(tmp_path)
+    ledger.record(make_entry("a", "done"))
+    with ledger.path_for("a").open("ab") as f:
+        f.write(b'{"item_id": "a", "rou')
+    ledger.record(make_entry("a", "resumed"))
+
+    assert [e.step for e in read_entries(ledger.path_for("a"))] == ["done", "resumed"]
+
+
+def test_append_after_a_torn_first_line_starts_the_file_over(tmp_path):
+    ledger = JsonlLedger(tmp_path)
+    tmp_path.joinpath("a.jsonl").write_bytes(b'{"item_id": "a", "rou')
+    ledger.record(make_entry("a", "resumed"))
+
+    assert [e.step for e in read_entries(ledger.path_for("a"))] == ["resumed"]
+
+
 WRITER_PROGRAM = """
 import sys
 from pathlib import Path

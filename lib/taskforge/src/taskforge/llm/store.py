@@ -4,7 +4,10 @@
 """Content-addressed cache of GLM calls.
 
 Each call lives at ``<root>/items/<stage>/<hash>/`` where ``hash`` is the ``taskforge.canonical.digest`` of
-the request: model, messages, policy fields that change the output, and the structured-output tool.
+the request: model, messages, policy fields that change the output, the structured-output tool,
+and the sample index. Callers that draw several independent samples of one request pass a distinct
+``sample`` for each, so each sample has its own entry; ``sample`` defaults to 0 for a request drawn
+once.
 ``request.json`` is written before the call, ``response.json`` (every ``Completion``, including
 raw events) after it, and ``result.json`` last; a cached value is reused only when ``result.json``
 exists and records the same hash. ``stall_timeout`` is excluded from the key because it does not
@@ -28,7 +31,7 @@ _COMPLETIONS = TypeAdapter(tuple[Completion, ...])
 
 
 def canonical_request(
-    model: str, messages: Sequence[Message], policy: LLMPolicy, tool: StructuredTool | None
+    model: str, messages: Sequence[Message], policy: LLMPolicy, tool: StructuredTool | None, sample: int
 ) -> dict[str, object]:
     """The fields that determine a call's output, in JSON-ready form."""
     return {
@@ -39,6 +42,7 @@ def canonical_request(
         "sampling": policy.sampling_fields(),
         "max_continuations": policy.max_continuations,
         "tool": None if tool is None else tool.definition(),
+        "sample": sample,
     }
 
 
@@ -75,9 +79,11 @@ class CallStore:
         write_json(work / "response.json", _COMPLETIONS.dump_python(tuple(completions), mode="json"))
         write_json(work / "result.json", {"request_hash": key, "value": value})
 
-    async def complete(self, stage: str, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
-        """Return the cached completion for this exact request, or make the call and record it."""
-        request = canonical_request(self.client.endpoint.model, messages, policy, None)
+    async def complete(
+        self, stage: str, messages: Sequence[Message], policy: LLMPolicy, *, sample: int = 0
+    ) -> Completion:
+        """Return the cached completion for this exact request and ``sample``, or make the call and record it."""
+        request = canonical_request(self.client.endpoint.model, messages, policy, None, sample)
         work, key = self._begin(stage, request)
         if self._cached(work, key) is not None:
             return _COMPLETIONS.validate_json((work / "response.json").read_text())[0]
@@ -87,10 +93,16 @@ class CallStore:
         return completion
 
     async def structured(
-        self, stage: str, messages: Sequence[Message], policy: LLMPolicy, tool: StructuredTool[OutputT]
+        self,
+        stage: str,
+        messages: Sequence[Message],
+        policy: LLMPolicy,
+        tool: StructuredTool[OutputT],
+        *,
+        sample: int = 0,
     ) -> StructuredResult[OutputT]:
-        """Return the cached validated value for this exact request, or make the call and record it."""
-        request = canonical_request(self.client.endpoint.model, messages, policy, tool)
+        """Return the cached validated value for this exact request and ``sample``, or make the call and record it."""
+        request = canonical_request(self.client.endpoint.model, messages, policy, tool, sample)
         work, key = self._begin(stage, request)
         cached = self._cached(work, key)
         if cached is not None:
