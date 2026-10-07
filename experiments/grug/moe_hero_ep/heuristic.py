@@ -6,7 +6,7 @@
 ``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
 pairs it with the fixed hero model spec so a launcher gets both configs back from a single
-``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
+``(num_train_steps, batch_size, seq_len)`` call, keeping the hero self-contained.
 
 The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
 the router selects eight experts per token. Expert parallelism moves tokens with the ragged
@@ -14,7 +14,7 @@ all-to-all transport at a 1.15 receiver capacity factor.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
@@ -115,9 +115,11 @@ HERO_MODEL = GrugModelConfig(
 )
 
 
-def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+def build_hero_configs(
+    *, num_train_steps: int, batch_size: int, seq_len: int
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
     """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
-    model = HERO_MODEL
+    model = replace(HERO_MODEL, max_seq_len=seq_len)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,
         batch_size=batch_size,
