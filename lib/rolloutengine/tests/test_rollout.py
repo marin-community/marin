@@ -231,6 +231,38 @@ async def test_text_contract_grades_retokenized_turns_without_training_tokens():
     assert result.logprobs is None
 
 
+@pytest.mark.parametrize("failure", ["length", "total_turn_timeout"])
+async def test_text_contract_marks_a_record_without_a_response(failure):
+    class Model:
+        async def complete(self, _request):
+            if failure == "length":
+                raise GenerationLimitReached((90, 91))
+            await asyncio.Future()
+
+    result = await engine(Model(), token_contract=TokenContract.TEXT).run(
+        lowered(arithmetic_task(), total_turn_timeout=0.05)
+    )
+
+    assert result.stop_reason == failure
+    assert (result.grade.status, result.grade.reward) == (Outcome.UNAVAILABLE, None)
+    assert result.metrics["token_contract"] == "text"
+    assert result.response_token_ids == result.loss_mask == ()
+    assert result.logprobs is None
+
+
+async def test_text_contract_marks_an_interrupted_record_without_a_response():
+    class Model:
+        async def complete(self, _request):
+            await asyncio.Future()
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(Model(), token_contract=TokenContract.TEXT).run(lowered(arithmetic_task(), attempt_timeout=0.05))
+
+    assert interrupted.value.operation == RolloutOperation.ATTEMPT
+    assert interrupted.value.rollout.metrics["token_contract"] == "text"
+    assert interrupted.value.rollout.logprobs is None
+
+
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
 async def test_lowering_preserves_task_and_produces_private_grade_with_training_tokens(answer, reward):
     task = arithmetic_task()
