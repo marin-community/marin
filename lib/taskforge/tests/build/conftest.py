@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixtures for builder tests: a small proposal, a recording ledger, and build services."""
+"""Fixtures for builder tests: a small proposal and build services over the shared ledger."""
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -12,7 +12,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 
 from taskforge.build.sdk import BuildServices
-from taskforge.ledger.records import LedgerEntry
+from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentTool
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
@@ -51,26 +51,13 @@ None.
 """
 
 
-class ListLedger:
-    def __init__(self) -> None:
-        self.entries: list[LedgerEntry] = []
-
-    def record(self, entry: LedgerEntry) -> None:
-        self.entries.append(entry)
-
-
 @pytest.fixture
 def proposal() -> TaskProposal:
     return parse(PROPOSAL)
 
 
 @pytest.fixture
-def ledger() -> ListLedger:
-    return ListLedger()
-
-
-@pytest.fixture
-def services(ledger: ListLedger) -> Callable:
+def services(ledger: Ledger) -> Callable:
     """``async with services(base_url, web_tools=()) as s``: build services over a GLM endpoint."""
 
     @asynccontextmanager
