@@ -7,10 +7,13 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from verifyit.spec import ScriptSpec, Spec, mode_of, spec_to_table
+from verifyit.spec import Spec, mode_of, spec_to_table
 
 from taskcompendium.models import TaskResource, TaskSpec, VerifierSpec
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.native_grader import NATIVE_COMMAND_KIND, NativeCommandSpec
+from taskcompendium.runtime.resources import resource_bytes
+
+SOURCE_UNAVAILABLE_KIND = "source_unavailable"
 
 
 @dataclass(frozen=True)
@@ -29,21 +32,18 @@ def grader_package(spec: Spec, resources: tuple[TaskResource, ...] = ()) -> Grad
     return GraderPackage(verifier, resources)
 
 
-def script_package(script: bytes, config: dict[str, Any], *, timeout: float = 60) -> GraderPackage:
-    """Bundle trusted recipe code and its private JSON configuration."""
-    return grader_package(
-        ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=timeout),
-        (
-            inline_resource("grader.py", script),
-            inline_resource("config.json", json.dumps(config, allow_nan=False).encode()),
-        ),
-    )
+def native_command_package(spec: NativeCommandSpec, resources: tuple[TaskResource, ...] = ()) -> GraderPackage:
+    """Package an unchanged source command with its private files."""
+    return GraderPackage(VerifierSpec(kind=NATIVE_COMMAND_KIND, parameters_json=spec.model_dump_json()), resources)
 
 
 def grader_config(task: TaskSpec) -> dict[str, Any]:
-    """Read the bundled private configuration of a script grader."""
-    resource = next(resource for resource in task.resources.verifier if resource.path == "config.json")
-    value = json.loads(resource_bytes(resource))
+    """Read a declared source contract or an executable grader's private configuration."""
+    if task.verifier.kind == SOURCE_UNAVAILABLE_KIND:
+        value = json.loads(task.verifier.parameters_json)
+    else:
+        resource = next(resource for resource in task.resources.verifier if resource.path == "config.json")
+        value = json.loads(resource_bytes(resource))
     if not isinstance(value, dict):
         raise ValueError("Grader configuration must be a JSON object")
     return value

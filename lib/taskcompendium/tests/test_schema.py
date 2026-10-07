@@ -96,7 +96,7 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_request(tmp_pat
         chat_request(task, convention)
 
 
-@pytest.mark.parametrize("second_path", ["data", "DATA", "data/input.txt"])
+@pytest.mark.parametrize("second_path", ["data", "data/input.txt"])
 @pytest.mark.parametrize("role", ["worker", "oracle", "verifier"])
 def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification, second_path, role):
     wire = specification.model_dump()
@@ -195,18 +195,22 @@ def test_schema_only_verifiers_cannot_grade(tmp_path, specification, kind):
 
 
 @pytest.mark.parametrize(
-    "base_path,alias", [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup")]
+    "base_path,alias",
+    [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup"), ("foo", "FOO"), ("a/b", "a\\b")],
 )
-def test_resource_groups_reject_portable_path_aliases_before_mounts_can_overwrite_inputs(
-    specification, base_path, alias
-):
+def test_resource_groups_preserve_distinct_linux_files(tmp_path, specification, base_path, alias):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         "all": [{"path": base_path, "source": {"kind": "inline_file", "content_base64": "cHVibGlj"}}],
         "worker": [{"path": alias, "source": {"kind": "inline_file", "content_base64": "b3ZlcndyaXRl"}}],
     }
-    with pytest.raises(ValidationError):
-        TaskSpec.model_validate(wire)
+    task = TaskSpec.model_validate(wire)
+    for resource in task.resources.all + task.resources.worker:
+        target = tmp_path / resource.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(resource.source.content_base64))
+    assert (tmp_path / base_path).read_bytes() == b"public"
+    assert (tmp_path / alias).read_bytes() == b"overwrite"
 
 
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])
@@ -280,7 +284,7 @@ def test_task_json_rejects_old_schema_and_verifier_shape(specification):
 def test_json_answer_schema_roundtrip_and_prior_version_rejection(specification):
     task = specification.model_copy(update={"answer_type": AnswerType.JSON, "verifier": structured_exact({"answer": 1})})
     payload = json.loads(task.model_dump_json())
-    assert payload["schema_version"] == "0.22"
+    assert payload["schema_version"] == "0.24"
     assert TaskSpec.model_validate_json(json.dumps(payload)) == task
     payload["schema_version"] = "0.21"
     with pytest.raises(ValidationError):

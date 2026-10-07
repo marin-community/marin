@@ -13,9 +13,10 @@ from typing import Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from shellbox.machine import Backend, UnsupportedMachineSpec
 from verifyit.json_objects import unique_object
 
-SCHEMA_VERSION = "0.22"
+SCHEMA_VERSION = "0.24"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -292,6 +293,7 @@ class EnvironmentRequirements(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
+    compatible_backends: tuple[Backend, ...] = ()
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
     working_directory: str | None = None
     setup_commands: tuple[str, ...] = ()
@@ -300,6 +302,10 @@ class EnvironmentRequirements(BaseModel):
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
+        if len(set(self.compatible_backends)) != len(self.compatible_backends):
+            raise ValueError("Compatible backends must be unique")
+        if Backend.SHELLSIM in self.compatible_backends and self.docker_image is not None:
+            raise ValueError("ShellSim cannot satisfy a required Docker image")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):
@@ -311,6 +317,12 @@ class EnvironmentRequirements(BaseModel):
         if self.working_directory is not None:
             validate_workspace_path(self.working_directory)
         return self
+
+
+def require_compatible_backend(requirements: EnvironmentRequirements, backend: Backend) -> None:
+    """Reject a runtime that the source has not declared semantically compatible."""
+    if backend not in requirements.compatible_backends:
+        raise UnsupportedMachineSpec(f"Backend {backend.value} is not declared compatible with this environment")
 
 
 class VerifierSpec(BaseModel):
@@ -337,6 +349,26 @@ class VerifierSpec(BaseModel):
         return value
 
 
+class OutputDirectory(BaseModel):
+    """Bounded regular files selected by relative fnmatch patterns, including subdirectories."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    root: str
+    patterns: tuple[str, ...] = Field(min_length=1)
+    max_files: int = Field(gt=0)
+    max_bytes: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> "OutputDirectory":
+        if not self.root.startswith("/"):
+            raise ValueError("Output directory must be absolute")
+        validate_relative_file_path(self.root[1:])
+        for pattern in self.patterns:
+            validate_relative_file_path(pattern)
+        return self
+
+
 class TaskSpec(BaseModel):
     """The complete private semantic definition of one task and final result."""
 
@@ -348,6 +380,7 @@ class TaskSpec(BaseModel):
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     output_paths: tuple[str, ...] = ()
+    output_directories: tuple[OutputDirectory, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
@@ -361,6 +394,8 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
+        if self.output_directories and "python3" not in self.environment_requirements.capabilities:
+            raise ValueError("Directory capture requires the actor's python3 capability")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
             raise ValueError("Advertised function names must be unique")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:

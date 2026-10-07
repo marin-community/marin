@@ -5,13 +5,15 @@
 
 from verifyit.spec import Mode
 
+from taskcompendium.grader import SOURCE_UNAVAILABLE_KIND
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
+from taskcompendium.native_grader import NATIVE_COMMAND_KIND
 from taskcompendium.pipeline.models import DatasetRecipe
 
-NORMALIZATION_STAGE_REVISION = "4"
-VERIFICATION_STAGE_REVISION = "3"
-REVIEW_STAGE_REVISION = "2"
+NORMALIZATION_STAGE_REVISION = "8"
+VERIFICATION_STAGE_REVISION = "5"
+REVIEW_STAGE_REVISION = "4"
 
 
 def recipe_code_identity(recipe: DatasetRecipe) -> dict[str, str]:
@@ -19,7 +21,7 @@ def recipe_code_identity(recipe: DatasetRecipe) -> dict[str, str]:
     return {
         "normalization_stage": NORMALIZATION_STAGE_REVISION,
         "task_schema": SCHEMA_VERSION,
-        "family": recipe.pipeline.normalize.__module__,
+        "family": recipe.policy.normalize.__module__,
         "family_revision": recipe.version,
         "verification_stage": VERIFICATION_STAGE_REVISION,
         "review_stage": REVIEW_STAGE_REVISION,
@@ -46,5 +48,5 @@ def deduplication_key(task: TaskSpec) -> str:
     # quality review checks reference agreement; exact copies still deduplicate.
     return semantic_digest(
         task,
-        include_reference=task.verifier.kind == Mode.SCRIPT,
+        include_reference=task.verifier.kind in (Mode.SCRIPT, NATIVE_COMMAND_KIND, SOURCE_UNAVAILABLE_KIND),
     )

@@ -1,10 +1,18 @@
 # TaskCompendium
 
+The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every selected input, source locator, edit and rejection reason. Library families define normalization, checks and rubrics; the experiment binds pinned inputs, intended use, download artifacts and inference clients.
+
+For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
+and the [experiment flow](../../experiments/post_training/task_curation/README.md).
+The [package index](src/taskcompendium/README.md) links the implementation areas;
+[GOAL.md](../../GOAL.md) records the current campaign status and proposed cleanup.
+The sections below describe the task model and its presentation and grading contracts.
+
 ## What problem does it solve?
 
 TaskCompendium stores a task's semantic contract, extracts one final submission, and grades it through the shared verifier library. A caller can choose a submission convention while keeping expected answers and verifier resources private.
 
-Execution, model requests, tool dispatch, environment setup, and cleanup belong to the caller's runtime. [RolloutEngine](../../docs/references/task-rollouts.md) executes tasks through TaskSession and Shellbox. TaskCompendium has no dependency on RolloutEngine.
+Actor execution, model requests, tool dispatch, and actor environment lifecycle belong to the caller’s runtime. TaskCompendium provides private grading execution through `taskcompendium.runtime`. RolloutEngine provides the actor runtime; see [task rollouts](../../docs/references/task-rollouts.md). TaskCompendium does not depend on RolloutEngine.
 
 ## What does it contain?
 
@@ -31,14 +39,26 @@ flowchart LR
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
+| `interaction_tools` | Executable function declarations used by the optional episode runtime. |
+| `output_paths` | Absolute output paths captured by the optional episode runtime. |
+| `output_directories` | Workspace roots, relative fnmatch patterns and explicit file-count/aggregate-byte capture budgets. |
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.22`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.24`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
+
+Directory capture requires the actor's `python3` capability and a real POSIX
+Python interpreter; ShellSim does not support it. Selection patterns use
+case-sensitive fnmatch semantics, where `*` includes `/` and hidden paths.
+Capture preserves unsorted depth-first filesystem order, skips symlinks in
+directory selections, and fails the whole capture on file or byte overflow.
+Existing named `output_paths` retain their file/symlink behavior. Roots must stay
+inside the declared workspace and outside private verifier, log and oracle
+mounts. Membership and budgets are checked again before private grading upload.
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON.
 
@@ -68,7 +88,7 @@ For text and numeric tasks, the `answer_call` convention adds `submit_answer(ans
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires a runtime and an appropriate submission convention; this package does not acquire files or environment state. The shared `structured_exact` verifier compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime and an appropriate submission convention. Pure candidate grading uses supplied evidence; the optional TaskCompendium episode runtime captures declared output files. The shared `structured_exact` verifier compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
 
 `answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. The shared structured scorer accepts either evidence envelope. The existing `JsonAnswer` convention instead unwraps an `answer` string for text or numeric tasks. Both reject duplicate keys at every nesting level and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
 
@@ -78,9 +98,18 @@ Public expectations belong in `context`: for example, the columns a CSV must con
 
 `environment_requirements` declares the initial state and operations needed to solve a task.
 
+`compatible_backends` lists the Shellbox backends the source author permits for
+this environment, such as `shellsim` or `gvisor`. The private verifier has its own
+list. Empty means no Shellbox backend is declared; it is not a wildcard. Shellbox
+execution checks the selected factory against the appropriate list before
+creating a machine. A required Docker image excludes ShellSim. See the
+[source-author rubric](src/taskcompendium/pipeline/README.md) for compatibility
+criteria and the distinction between declarations and sampled runtime evidence.
+
 | Field | Meaning |
 | --- | --- |
 | `capabilities` | Unique operation names, such as `shell`, `network`, `filesystem`, `process`, or `browser`. Names are open so future capabilities can be represented. |
+| `compatible_backends` | Unique Shellbox backend names permitted by the source author; empty declares none. |
 | `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
 | `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
@@ -89,7 +118,7 @@ Public expectations belong in `context`: for example, the columns a CSV must con
 
 Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
-The task's `docker_image` and worker file mounts describe worker initial state. A verifier declares its own capabilities, image, and workspace requirements in private `VerifierSpec.environment_requirements`. Execution runtimes must not expose the verifier's requirements or private resources to the model.
+The task's `docker_image` and worker file mounts describe worker initial state. A verifier declares its own capabilities, image, and workspace requirements in private `VerifierSpec.environment_requirements`. Runtimes must keep those requirements and private resources separate from the worker environment.
 
 ## Resource mounts
 
@@ -102,7 +131,7 @@ The task's `docker_image` and worker file mounts describe worker initial state. 
 | `oracle` | Private reference material. |
 | `verifier` | Private evaluation inputs. The verifier is the task's evaluator. |
 
-Private gold and hidden tests belong in `oracle` or `verifier`. An `all` resource is model-visible. A role receives `all` followed by its own mounts in its runtime-owned workspace root. Destinations must be distinct in that combined sequence, including case-folded collisions and file/directory ancestor collisions. Separate role-specific groups can reuse a relative path without sharing their content.
+Private gold and hidden tests belong in `oracle` or `verifier`. An `all` resource is model-visible. A role receives `all` followed by its own mounts in its runtime-owned workspace root. Destinations must be distinct in that combined sequence and have no file/directory ancestor collisions. Names retain POSIX case distinctions. Separate role-specific groups can reuse a relative path without sharing their content.
 
 Oracle resources are reserved for trusted reference-solution generation. Verifier resources are used when evaluating a candidate result. These groups declare access; they do not require an oracle or evaluator process to run.
 
@@ -169,7 +198,7 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 `verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
-Schema loading accepts descriptors without a grader implementation. The pure candidate grading boundary validates its supported verifier configuration; an unimplemented kind raises `NotImplementedError`. Runtime file and script grading uses shared verifyit specifications separately, with private entrypoints and resources in the verifier package. The pure grading boundary rejects nonempty verifier environment requirements; an isolated verifier runtime must satisfy them.
+Schema loading accepts descriptors without a grader implementation. The pure candidate grading boundary validates its supported verifier configuration; an unimplemented kind raises `NotImplementedError`. For file and script grading, the TaskSpec carries the source's private files and declared invocation. TaskCompendium runs that invocation through its grading runtime; VerifyIT supplies standard graders and generic source-call transport. The pure grading boundary rejects nonempty verifier environment requirements; an isolated verifier runtime must satisfy them.
 
 Standard verifier contracts and pure candidate scoring live in `verifyit`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. Submission conventions acquire evidence; TaskCompendium scores it and returns a typed grading outcome; it has no verifier registry or separate standard verifier schema.
 
@@ -179,11 +208,10 @@ Private verifier factories include:
 
 ```python
 from taskcompendium.grading import exact_answer, structured_exact, verifier_descriptor
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
-from verifyit.spec import FunctionCall, PredictedActionSpec
+from verifyit.spec import FunctionCall, McqSpec, PredictedActionSpec
 
 text_verifier = exact_answer("expected text")
-mcq_verifier = multiple_choice_answer("C", options=4)
+mcq_verifier = verifier_descriptor(McqSpec(expected="C", options=4))
 json_verifier = structured_exact({"value": 16})
 action_verifier = verifier_descriptor(
     PredictedActionSpec(expected_calls=(FunctionCall(name="lookup", arguments={"city": "Paris"}),))
@@ -254,11 +282,11 @@ restored = TaskSpec.model_validate_json(serialized)
 
 The serialized spec includes private verifier configuration and private resources. Store it where trusted grading code can read it; construct model-visible requests from public context, expectations, and the selected convention.
 
-Runtime evidence grading lives in `taskcompendium.runtime.task_grading`. Its synchronous `grade_task` entrypoint accepts a conversation and already acquired `RuntimeEvidence`, delegates candidate modes to `grade_answer`, and prepares private resources for file and script graders. Script verdicts retain `invalid_task` and `infra_error` status and details separately from graded rewards. Callers opt into calendar or shell episode controls by selecting a check suite from `taskcompendium.runtime.checks.episode_suite`; the pinned source graph does not run these controls.
+Runtime evidence grading lives in `taskcompendium.runtime.task_grading`. Its synchronous `grade_task` entrypoint accepts a conversation and already acquired `RuntimeEvidence`, delegates candidate modes to `grade_answer`, and prepares private resources for file and script graders. Isolated private grading requires an explicit Shellbox machine factory and machine specification. Native script graders receive the typed final action without discarding call names or argument types. Script verdicts retain `invalid_task` and `infra_error` status and details separately from graded rewards.
 
 ## Development
 
-TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for portable path and mount-collision validation. The validator leaf module performs no storage access.
+TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for relative POSIX path and mount-collision validation. Resource names preserve Linux semantics, including colons, backslashes, trailing spaces, and case distinctions. Absolute paths, traversal, NUL bytes, duplicate files, and file/directory collisions are rejected. The validator leaf module performs no storage access.
 
 TaskCompendium uses the root workspace's `uv.lock` and `.venv`. Run the package tests from the repository root:
 
@@ -269,3 +297,5 @@ uv run --package taskcompendium --extra pipeline --group test pytest lib/taskcom
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
+
+Schema `0.24` combines the distinct JSON result kind with backend compatibility and bounded directory capture. Decoders reject other schema versions; existing conversion pipelines must emit the current contract.

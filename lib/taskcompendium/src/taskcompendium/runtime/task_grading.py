@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from rigging.filesystem.path_validation import validate_relative_file_path
-from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.machine import MachineFactory, MachineSpec
 from verifyit.candidate import supports_candidate_mode
 from verifyit.grade import InvalidTask
 from verifyit.grade import grade as verifyit_grade
@@ -27,6 +27,7 @@ from verifyit.spec import (
     StdioSpec,
 )
 
+from taskcompendium.grader import SOURCE_UNAVAILABLE_KIND
 from taskcompendium.grading import grade_answer, grade_result
 from taskcompendium.grading_contract import (
     GradingAttempt,
@@ -44,10 +45,11 @@ from taskcompendium.models import (
     TaskResource,
     TaskSpec,
 )
+from taskcompendium.native_grader import NATIVE_COMMAND_KIND
 from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import SubmissionConvention
+from taskcompendium.submission import FinalAction, SubmissionConvention
 
 
 def grade_task(
@@ -55,8 +57,22 @@ def grade_task(
     convention: SubmissionConvention,
     conversation: ConversationTrace,
     evidence: RuntimeEvidence | None = None,
+    *,
+    machine_factory: MachineFactory | None = None,
+    machine_spec: MachineSpec | None = None,
 ) -> GradeResult:
     """Score captured evidence through pure candidate or runtime file grading."""
+    if specification.verifier.kind == SOURCE_UNAVAILABLE_KIND:
+        return GradeResult(Outcome.UNAVAILABLE, None, "Source evaluator is unavailable")
+    if specification.verifier.kind == NATIVE_COMMAND_KIND:
+        return _grade_native_task(
+            specification,
+            convention,
+            conversation,
+            evidence,
+            machine_factory=machine_factory,
+            machine_spec=machine_spec,
+        )
     verifier = resolve_verifier(specification.verifier)
     requirements = specification.verifier.environment_requirements
     if requirements != EnvironmentRequirements() and requirements.docker_image is None:
@@ -86,7 +102,17 @@ def grade_task(
         if not isinstance(submission, TextSubmission):
             raise TypeError("Runtime text grading requires a text submission")
         candidate = submission.value
+    if specification.answer_type == AnswerType.NATIVE_ACTION and isinstance(verifier, ScriptSpec):
+        if not isinstance(convention, FinalAction):
+            raise TypeError("Native script grading requires a final-action convention")
+        try:
+            final = convention.validate_final_message(conversation.events[-1])
+        except SubmissionFailure as error:
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        candidate = final.model_dump_json()
     if requirements.docker_image:
+        if machine_factory is None or machine_spec is None:
+            return GradeResult(Outcome.INFRA_ERROR, None, "Private grading requires an explicit Shellbox runtime")
         if evidence is None:
             return GradeResult(Outcome.INFRA_ERROR, None, "Missing captured submission files")
         files = dict(evidence.files)
@@ -99,12 +125,52 @@ def grade_task(
             if not output.is_relative_to(DEFAULT_WORKSPACE) or ".." in output.parts:
                 return GradeResult(Outcome.INVALID_TASK, None, "Answer output must be within /app")
             files[str(output)] = candidate.encode()
-        return asyncio.run(grade_submission(specification, files, DockerMachineFactory()))
+        return asyncio.run(grade_submission(specification, files, machine_factory, machine_spec=machine_spec))
     if executable:
         return GradeResult(Outcome.INFRA_ERROR, None, "Executable grading requires an isolated image")
     if isinstance(verifier, ReasoningGymSpec):
         return GradeResult(Outcome.INFRA_ERROR, None, "Reasoning-gym grading requires an isolated runner")
     return _grade_files(specification, verifier, candidate, evidence)
+
+
+def _grade_native_task(
+    task: TaskSpec,
+    convention: SubmissionConvention,
+    conversation: ConversationTrace,
+    evidence: RuntimeEvidence | None,
+    *,
+    machine_factory: MachineFactory | None,
+    machine_spec: MachineSpec | None,
+) -> GradeResult:
+    if machine_factory is None or machine_spec is None:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Private grading requires an explicit Shellbox runtime")
+    if evidence is None:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Missing captured submission files")
+    files = dict(evidence.files)
+    files["/app/state.json"] = evidence.state_json.encode()
+    if task.answer_type in {AnswerType.TEXT, AnswerType.NUMBER, AnswerType.NATIVE_ACTION}:
+        try:
+            submission = convention.extract(GradingAttempt(conversation))
+        except SubmissionFailure as error:
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        if task.answer_type == AnswerType.NATIVE_ACTION:
+            if not isinstance(convention, FinalAction):
+                raise TypeError("Native action grading requires a final-action convention")
+            try:
+                answer = convention.validate_final_message(conversation.events[-1]).model_dump_json()
+            except SubmissionFailure as error:
+                return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        elif isinstance(submission, TextSubmission):
+            answer = submission.value
+        else:
+            raise TypeError("Native text grading requires a text submission")
+        if len(task.output_paths) != 1:
+            return GradeResult(Outcome.INVALID_TASK, None, "Native answer grading requires one output path")
+        output = Path(task.output_paths[0])
+        if not output.is_relative_to(DEFAULT_WORKSPACE) or ".." in output.parts:
+            return GradeResult(Outcome.INVALID_TASK, None, "Answer output must be within /app")
+        files[str(output)] = answer.encode()
+    return asyncio.run(grade_submission(task, files, machine_factory, machine_spec=machine_spec))
 
 
 def _answer_output(verifier: Spec) -> Path:

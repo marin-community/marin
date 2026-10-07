@@ -8,9 +8,9 @@ import json
 
 import pytest
 
+from taskcompendium.datasets import atlas_math_qa
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
-from taskcompendium.pipeline.datasets import atlas_math_qa
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, RawRow
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import resource_bytes
@@ -143,7 +143,7 @@ def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wr
     assert not task.resources.worker and not task.resources.all
 
 
-def test_abstention_is_zero_while_paraphrases_remain_ungraded():
+def test_abstention_source_judge_requires_original_runtime():
     task = atlas_math_qa.normalize(
         row(
             "qa_abstention",
@@ -153,13 +153,9 @@ def test_abstention_is_zero_while_paraphrases_remain_ungraded():
         "qa_abstention",
     )
     assert isinstance(task, TaskSpec)
-    assert grade(task, r"\boxed{PARIS}").reward == 1.0
-    assert (grade(task, r"\boxed{[IDK]}").status, grade(task, r"\boxed{[IDK]}").reward) == (Outcome.GRADED, 0.0)
-    assert (grade(task, "France's capital is Paris.").status, grade(task, "France's capital is Paris.").reward) == (
-        Outcome.INFRA_ERROR,
-        None,
-    )
-    assert grade(task, r"\boxed{\text{Paris}}").status == Outcome.INFRA_ERROR
+    assert task.verifier.kind == "source_unavailable"
+    assert grade(task, r"\boxed{PARIS}").status == Outcome.UNAVAILABLE
+    assert all(check.status == CheckStatus.UNSUPPORTED for check in atlas_math_qa.verification_report(task).checks)
 
 
 @pytest.mark.parametrize("wrapper", ["{}", r"\boxed{{{}}}"])

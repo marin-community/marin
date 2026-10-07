@@ -4,10 +4,7 @@
 import pytest
 from verifyit.grade import Status
 from verifyit.modes.grade_script import grade_script_callable
-
-from .bounded_grading import trusted_script
-
-pytestmark = pytest.mark.usefixtures("importable_grading_modules")
+from verifyit_test_support.bounded_grading import trusted_script
 
 
 @pytest.mark.parametrize(

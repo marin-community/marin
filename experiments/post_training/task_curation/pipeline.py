@@ -1,457 +1,364 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build pinned source acquisition, Zephyr audit, filtering, and merged task artifacts.
-
-The default prints the artifact plan. Add --run to build it using the configured
-Marin storage prefix and a GLM batch endpoint.
-"""
+"""Explicit Atlas source selections bound to whole-source curation artifacts."""
 
 import hashlib
-import os
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Any
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
+from functools import partial
+from typing import Any, Literal
 
-import click
-from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, run
-from marin.execution.remote import remote
-from marin.inference.openai_batch import OpenAIBatchClient
-from pydantic import TypeAdapter
+from marin.execution.lazy import ArtifactStep, StepContext
+from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import SecretSpec
+from taskcompendium.datasets.kto_components import TRAIN_FILE, KtoComponentRows
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
-from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, ReviewRubric
-from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, DEFAULT_REVIEW_MAX_TOKENS, BatchReviewer
-from taskcompendium.pipeline.rewriting import REWRITE_INSTRUCTIONS, BatchRewriter
+from taskcompendium.pipeline.inputs import HubDownload, UrlDownload
+from taskcompendium.pipeline.models import CheckSuite, DatasetRecipe, HFSource, IntendedUse
+from taskcompendium.pipeline.recorded_review import RecordedReviewer, load_recorded_reviews
+from taskcompendium.pipeline.source_processing import (
+    SOURCE_PIPELINE_REVISION,
+    SourcePipelineConfig,
+    SourceProcessingMode,
+    answer_check_suite,
+    run_source_pipeline,
+)
+from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION
+from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION
 from taskcompendium.pipeline.sources import source_files_identity
-from taskcompendium.pipeline.stages import (
-    AuditExecution,
-    ReviewConfig,
-    rewrite_audit_source,
-)
-from taskcompendium.pipeline.stages import (
-    audit_source as audit_source_rows,
-)
-from taskcompendium.pipeline.stages import canonicalize_sources as canonicalize_source_rows
-from taskcompendium.pipeline.stages import (
-    concat_sources as concatenate_source_rows,
-)
-from taskcompendium.pipeline.stages import (
-    filter_source as filter_source_rows,
-)
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
-from experiments.post_training.task_curation.downloads import source_download
-from experiments.post_training.task_curation.source_bindings import SOURCE_NAMES, source_recipe
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.datasets.nemotron_ultra.inputs import bind_reference_paths
+from experiments.post_training.task_curation.staging import DownloadInputs, download_inputs
 
-PIPELINE_VERSION = "2026.10.02.1"
-AUDIT_REVISION = "staged-source-v1"
-PIPELINE_PREFIX = "task-curation"
-WORKER_PACKAGE = "./lib/taskcompendium[pipeline]"
+PIPELINE_VERSION = "2026.10.06.2"
+
+
+class AtlasStatus(StrEnum):
+    AVAILABLE = "Available"
+    EXCLUDED = "Excluded"
 
 
 @dataclass(frozen=True)
-class RewriteSelection:
-    task_ids: tuple[str, ...]
-    rubric: ReviewRubric
-    max_tokens: int = BatchRewriter.max_tokens
-    prompt_budget: int = BatchRewriter.max_prompt_characters
+class AtlasSource:
+    id: str
+    name: str
+    origin: str
+    family: str
+    status: AtlasStatus
+    exclusion_reason: str | None
+    dataset_id: str
+    dataset_revision: str | None
+    archive_revision: str | None
+    verifier_revision: str | None
+    historical_disposition: str | None
+    historical_contract_changed: bool | None
+
+    @property
+    def input_revision(self) -> str | None:
+        """Keep archive pins distinct from TaskTrove upstream lineage."""
+        return self.archive_revision if self.origin == "Task Trove" else self.dataset_revision
+
+
+@dataclass(frozen=True)
+class SourceRuntime:
+    backend: Literal["local-gvisor", "iris-gvisor", "qemu"]
+    image: str
+    worker_image: str | None = None
+    qemu_bundle: str | None = None
+
+
+@dataclass(frozen=True)
+class RecordedReviewInput:
+    path: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class SourceRuntimeConfig:
+    images: Mapping[str, SourceRuntime]
+    controller_url: str | None
+    campaign: CampaignRuntime = field(default_factory=CampaignRuntime)
+    source_inputs: Mapping[str, ArtifactStep[Artifact]] = field(default_factory=dict)
+    verification_suites: Mapping[str, CheckSuite] = field(default_factory=dict)
+    verifier_secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    verification_inputs: Mapping[str, ArtifactStep[Artifact]] = field(default_factory=dict)
+    recorded_reviews: Mapping[str, RecordedReviewInput] = field(default_factory=dict)
+
+
+class RlDataArtifact(Artifact):
+    status: str
+    report: dict[str, Any]
+
+
+class SourcePipelineIncomplete(RuntimeError):
+    """The source retained its evidence but has incomplete review or verification."""
+
+
+@dataclass(frozen=True)
+class RlDataPipeline:
+    source_key: str
+    source: HFSource
+    intended_use: IntendedUse
+    atlas: AtlasSource | None
+    recipe_builder: Callable[[SourceRuntimeConfig], DatasetRecipe]
+
+    @property
+    def hf_id(self) -> str:
+        return self.source.dataset
+
+    @property
+    def revision(self) -> str:
+        return self.source.revision
+
+    @property
+    def config(self) -> str:
+        return self.source.config
+
+    @property
+    def split(self) -> str:
+        return self.source.split
+
+    @property
+    def atlas_id(self) -> str | None:
+        return self.atlas.id if self.atlas is not None else None
+
+    @property
+    def atlas_status(self) -> AtlasStatus | None:
+        return self.atlas.status if self.atlas is not None else None
+
+    @property
+    def atlas_revision(self) -> str | None:
+        return self.atlas.input_revision if self.atlas is not None else None
+
+    @property
+    def atlas_verifier_revision(self) -> str | None:
+        return self.atlas.verifier_revision if self.atlas is not None else None
+
+    def recipe(self, runtime: SourceRuntimeConfig) -> DatasetRecipe:
+        return self.recipe_builder(runtime)
+
+    def bind(self, config: SourcePipelineConfig, runtime: SourceRuntimeConfig) -> ArtifactStep[RlDataArtifact]:
+        recipe = self.recipe(runtime)
+        return _bind(self, recipe, config, runtime)
+
+
+def _source_identity(
+    recipe: DatasetRecipe, config: SourcePipelineConfig, suite: CheckSuite, runtime: SourceRuntime | None
+) -> dict[str, Any]:
+    return {
+        "source": asdict(recipe.source),
+        "recipe": recipe.name,
+        "version": recipe.version,
+        "intended_use": recipe.intended_use,
+        "code": recipe_code_identity(recipe),
+        "files": source_files_identity(recipe.inputs.files),
+        "rubric": asdict(recipe.policy.rubric),
+        "review": asdict(config.review),
+        "mode": config.mode,
+        "review_batch_size": config.execution.review_batch_size,
+        "review_input_bytes": config.execution.review_input_bytes,
+        "execution_image": config.execution.worker_resources.image if config.execution.worker_resources else None,
+        "normalized_shards": config.normalized_shards,
+        "quality_policy": asdict(config.quality_policy),
+        "verification_policy": asdict(config.verification_policy),
+        "filter_policy": asdict(config.filter_policy),
+        "suite": {"id": suite.id, "revision": suite.revision, "parameters": dict(suite.parameters)},
+        "runtime": asdict(runtime) if runtime else None,
+        "procedure_revision": SOURCE_PIPELINE_REVISION,
+        "quality_revision": SOURCE_QUALITY_REVISION,
+        "verification_revision": SOURCE_VERIFICATION_REVISION,
+    }
 
 
 @dataclass(frozen=True)
 class SourceBinding:
-    name: str
-    version: str
-    recipe: DatasetRecipe
-    downloaded: ArtifactStep[Artifact]
-    review: ReviewConfig
-    limit: int | None
-    rewrite: RewriteSelection | None = None
-
-
-@dataclass(frozen=True)
-class SourceArtifacts:
-    name: str
-    downloaded: ArtifactStep[Artifact]
-    audited: ArtifactStep[Artifact]
-    accepted: ArtifactStep[Artifact]
-
-
-@dataclass(frozen=True)
-class CurationWorkflow:
-    sources: tuple[SourceArtifacts, ...]
-    canonical: ArtifactStep[Artifact]
-
-
-@dataclass(frozen=True)
-class AuditStageConfig:
-    source_path: str
-    output_path: str
-    recipe_identity: dict[str, Any]
-    files_identity: dict[str, Any]
-    review: ReviewConfig
-    limit: int | None
-    max_workers: int
-    review_batch_size: int
-    resources: ResourceConfig
-
-
-@dataclass(frozen=True)
-class RewriteStageConfig:
-    source_path: str
-    output_path: str
     identity: dict[str, Any]
-    recipe_identity: dict[str, Any]
-    max_workers: int
-    review_batch_size: int
-    resources: ResourceConfig
+    source_input: str
+    output_path: str
+    reference_paths: dict[str, str]
+    verification_report_path: str | None = None
+    recorded_review_path: str | None = None
+    recorded_review_sha256: str | None = None
 
 
-def content_name(name: str, config: object) -> str:
-    """Address config changes separately so fixed artifacts cannot mask changed inputs."""
-    return f"{name}-{hashlib.sha256(canonical_json(config).encode()).hexdigest()[:16]}"
-
-
-def recipe_identity(recipe: DatasetRecipe) -> dict[str, Any]:
-    """Record explicit recipe revisions and parameters without serializing callables."""
-    checks = recipe.pipeline.check_suite
-    return {
-        "name": recipe.name,
-        "version": recipe.version,
-        "source": recipe.source,
-        "rubric": recipe.pipeline.rubric,
-        "intended_use": recipe.intended_use,
-        "check_suite": (
-            {"id": checks.id, "revision": checks.revision, "parameters": checks.parameters}
-            if checks is not None
+def _source_config(
+    identity: dict[str, Any],
+    downloaded: ArtifactStep[Artifact],
+    references: Mapping[str, ArtifactStep[Artifact]],
+    verification_input: ArtifactStep[Artifact] | None,
+    recorded_review_input: ArtifactStep[Artifact] | None,
+    recorded_review_sha256: str | None,
+    ctx: StepContext,
+) -> SourceBinding:
+    return SourceBinding(
+        identity=identity,
+        source_input=ctx.artifact_path(downloaded),
+        output_path=ctx.output_path,
+        reference_paths={name: ctx.artifact_path(step) for name, step in references.items()},
+        recorded_review_path=ctx.artifact_path(recorded_review_input) if recorded_review_input is not None else None,
+        recorded_review_sha256=recorded_review_sha256,
+        verification_report_path=(
+            str(StoragePath(ctx.artifact_path(verification_input)) / "verification/report.json")
+            if verification_input is not None
             else None
         ),
-        "audit_revision": AUDIT_REVISION,
-        "implementation": recipe_code_identity(recipe),
-    }
+    )
 
 
-def audit_source(
+def _run_source(
+    recipe: DatasetRecipe,
+    config: SourcePipelineConfig,
+    suite: CheckSuite,
     binding: SourceBinding,
-    downloaded: ArtifactStep[Artifact],
-    execution: AuditExecution,
-    resources: ResourceConfig,
-) -> ArtifactStep[Artifact]:
-    """Normalize, check, and review the acquired shards through the Zephyr stage."""
-    recipe_config = recipe_identity(binding.recipe)
-    identity = {
-        "recipe": recipe_config,
-        "review": binding.review,
-        "downloaded": (downloaded.name, downloaded.version),
-        "files": source_files_identity(binding.recipe.inputs.files),
-        "limit": binding.limit,
-    }
-
-    def build_config(ctx: StepContext) -> AuditStageConfig:
-        return AuditStageConfig(
-            source_path=ctx.artifact_path(downloaded),
-            output_path=ctx.output_path,
-            recipe_identity=recipe_config,
-            files_identity=source_files_identity(binding.recipe.inputs.files),
-            limit=binding.limit,
-            review=binding.review,
-            max_workers=ctx.runtime_arg("max_workers"),
-            review_batch_size=ctx.runtime_arg("review_batch_size"),
-            resources=ctx.runtime_arg("resources"),
-        )
-
-    def execute(config: AuditStageConfig) -> None:
-        # Artifact sidecars persist build_config values; clients and credentials stay outside it.
-        remote(
-            audit_source_rows,
-            resources=config.resources,
-            pip_packages=[WORKER_PACKAGE],
-        )(
-            source_path=config.source_path,
-            output_path=config.output_path,
-            recipe=binding.recipe,
-            review=config.review,
-            files=binding.recipe.inputs.files,
-            limit=config.limit,
-            execution=replace(execution, max_workers=config.max_workers, review_batch_size=config.review_batch_size),
-        )
-
-    return ArtifactStep(
-        name=content_name(f"{PIPELINE_PREFIX}/{binding.name}/audited", identity),
-        version=binding.version,
-        artifact_type=Artifact,
-        run=execute,
-        build_config=build_config,
-        deps=(downloaded,),
-        runtime_args={
-            "max_workers": execution.max_workers,
-            "review_batch_size": execution.review_batch_size,
-            "resources": resources,
-        },
-    )
-
-
-def filter_source(
-    binding: SourceBinding,
-    audited: ArtifactStep[Artifact],
-    policy: FilterPolicy,
-    resources: ResourceConfig,
-) -> ArtifactStep[Artifact]:
-    """Keep final decisions in an audit view beside the accepted task view."""
-    return apply(
-        content_name(
-            f"{PIPELINE_PREFIX}/{binding.name}/filtered", {"audited": (audited.name, audited.version), "policy": policy}
-        ),
-        remote(filter_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
-        version=binding.version,
-        audit_path=audited,
-        output_path=OUT,
-        policy=policy,
-    )
-
-
-def rewrite_source(
-    binding: SourceBinding,
-    filtered: ArtifactStep[Artifact],
-    policy: FilterPolicy,
-    execution: AuditExecution,
-    rewriter: BatchRewriter | None,
-    resources: ResourceConfig,
-) -> ArtifactStep[Artifact]:
-    """Recheck selected instruction repairs and preserve the original audit evidence."""
-    assert binding.rewrite is not None
-    identity = {
-        "input": (filtered.name, filtered.version),
-        "selection": binding.rewrite,
-        "recipe": recipe_identity(binding.recipe),
-        "policy": policy,
-        "model": binding.review.model,
-        "model_revision": binding.review.model_revision,
-        "rewrite_revision": "instruction-edits-v2",
-        "instructions_sha256": hashlib.sha256(REWRITE_INSTRUCTIONS.encode()).hexdigest(),
-    }
-
-    def config(ctx: StepContext) -> RewriteStageConfig:
-        return RewriteStageConfig(
-            source_path=ctx.artifact_path(filtered),
-            output_path=ctx.output_path,
-            identity=identity,
-            recipe_identity=recipe_identity(binding.recipe),
-            max_workers=ctx.runtime_arg("max_workers"),
-            review_batch_size=ctx.runtime_arg("review_batch_size"),
-            resources=ctx.runtime_arg("resources"),
-        )
-
-    def execute(values: RewriteStageConfig) -> None:
-        if execution.reviewer is None or rewriter is None:
-            raise ValueError("Rewrite execution requires both a rewriter and a reviewer")
-        assert binding.rewrite is not None
-        remote(rewrite_audit_source, resources=values.resources, pip_packages=[WORKER_PACKAGE])(
-            source_path=values.source_path,
-            output_path=values.output_path,
-            recipe=binding.recipe,
-            policy=policy,
-            rewrite_rubric=binding.rewrite.rubric,
-            rewriter=replace(
-                rewriter,
-                model=binding.review.model,
-                model_revision=binding.review.model_revision,
-                max_tokens=binding.rewrite.max_tokens,
-                max_prompt_characters=binding.rewrite.prompt_budget,
-            ),
-            reviewer=execution.reviewer,
-            selected_task_ids=binding.rewrite.task_ids,
-            review_batch_size=values.review_batch_size,
-            max_workers=values.max_workers,
-        )
-
-    return ArtifactStep(
-        name=content_name(f"{PIPELINE_PREFIX}/{binding.name}/rewritten", identity),
-        version=binding.version,
-        artifact_type=Artifact,
-        run=execute,
-        build_config=config,
-        deps=(filtered,),
-        runtime_args={
-            "max_workers": execution.max_workers,
-            "review_batch_size": execution.review_batch_size,
-            "resources": resources,
-        },
-    )
-
-
-def concat_sources(sources: Sequence[SourceArtifacts], resources: ResourceConfig) -> ArtifactStep[Artifact]:
-    """Merge the selected source views with explicit source dependencies."""
-    inputs = tuple(source.accepted for source in sources)
-    return apply(
-        content_name(
-            f"{PIPELINE_PREFIX}/merged-audit",
-            {"sources": [(step.name, step.version) for step in inputs], "view": "audit"},
-        ),
-        remote(concatenate_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
-        version=PIPELINE_VERSION,
-        input_paths=inputs,
-        output_path=OUT,
-        view="audit",
-    )
-
-
-def build_workflow(
-    bindings: Sequence[SourceBinding],
     *,
-    execution: AuditExecution,
-    resources: ResourceConfig,
-    policy: FilterPolicy = FilterPolicy(),
-    rewriter: BatchRewriter | None = None,
-) -> CurationWorkflow:
-    """Build source branches and one canonical artifact containing all output views."""
-    if not bindings or len({binding.name for binding in bindings}) != len(bindings):
-        raise ValueError("Choose at least one source, with unique artifact names")
-    sources = []
-    for binding in bindings:
-        audited = audit_source(binding, binding.downloaded, execution, resources)
-        accepted = filter_source(binding, audited, policy, resources)
-        if binding.rewrite is not None:
-            accepted = rewrite_source(binding, accepted, policy, execution, rewriter, resources)
-        sources.append(SourceArtifacts(binding.name, binding.downloaded, audited, accepted))
-    merged = concat_sources(sources, resources)
-    canonical = apply(
-        content_name(f"{PIPELINE_PREFIX}/canonical", {"merged": (merged.name, merged.version), "policy": "exact-v1"}),
-        remote(canonicalize_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
+    canonical_source: str,
+    campaign: CampaignRuntime,
+) -> RlDataArtifact:
+    if binding.recorded_review_path is not None:
+        assert binding.recorded_review_sha256 is not None
+        load_recorded_reviews(binding.recorded_review_path, binding.recorded_review_sha256)
+        fallback = config.execution.reviewer
+        if fallback is None:
+            raise ValueError("Recorded review requires the original fallback reviewer transport")
+        config = replace(
+            config,
+            execution=replace(
+                config.execution,
+                reviewer=RecordedReviewer(fallback, binding.recorded_review_path, binding.recorded_review_sha256),
+            ),
+        )
+    files = recipe.inputs.files
+    if binding.reference_paths:
+        if isinstance(files.reader, KtoComponentRows):
+            parent_path = str(StoragePath(binding.reference_paths["component-parent"]) / TRAIN_FILE)
+            files = replace(files, reader=replace(files.reader, parent_path=parent_path))
+        else:
+            files = bind_reference_paths(files, binding.reference_paths)
+    result = run_source_pipeline(
+        recipe,
+        campaign.context,
+        binding.source_input,
+        binding.output_path,
+        files,
+        config,
+        suite,
+        previous_verification_report=binding.verification_report_path,
+        previous_sample_path=(
+            str(StoragePath(binding.verification_report_path).parent.parent)
+            if config.mode == SourceProcessingMode.NORMALIZE_ONLY and binding.verification_report_path is not None
+            else None
+        ),
+        canonical_source=canonical_source,
+    )
+    if result.status == "incomplete":
+        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.report_path}")
+    report = asdict(result)
+    return RlDataArtifact(path=binding.output_path, status=str(result.status), report=report)
+
+
+def _download_config(declaration: HubDownload | UrlDownload, ctx: StepContext) -> DownloadInputs:
+    return DownloadInputs((declaration,), ctx.output_path)
+
+
+def _download_source(config: DownloadInputs, *, campaign: CampaignRuntime) -> None:
+    download_inputs(config, context=campaign.context)
+
+
+def _source_download(declaration: HubDownload | UrlDownload, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+    # The same source bytes can appear under different auxiliary subdirectories.
+    acquisition = replace(declaration, subdirectory="") if isinstance(declaration, HubDownload) else declaration
+    identity = hashlib.sha256(canonical_json(acquisition).encode()).hexdigest()[:16]
+    return ArtifactStep(
+        name=f"task-curation/download/{identity}",
         version=PIPELINE_VERSION,
-        merged_path=merged,
-        output_path=OUT,
+        artifact_type=Artifact,
+        run=partial(_download_source, campaign=campaign),
+        build_config=partial(_download_config, acquisition),
     )
-    return CurationWorkflow(tuple(sources), canonical)
 
 
-@click.command(help=__doc__)
-@click.option("--source", "source_names", multiple=True, required=True, type=click.Choice(SOURCE_NAMES))
-@click.option("--image", help="Immutable Docker image for selected coding-source grader controls.")
-@click.option("--version", default=PIPELINE_VERSION, show_default=True)
-@click.option(
-    "--limit",
-    type=int,
-    default=100,
-    show_default=True,
-    help="At most this many input records per source, across all staged files.",
-)
-@click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--all-rows", is_flag=True, help="Process every selected source record instead of applying --limit.")
-@click.option("--model-revision", required=True)
-@click.option("--max-tokens", type=int, default=DEFAULT_REVIEW_MAX_TOKENS, show_default=True)
-@click.option("--prompt-budget", type=int, default=DEFAULT_PROMPT_CHARACTERS, show_default=True)
-@click.option("--base-url", help="GLM batch endpoint, required with --run.")
-@click.option("--review-cache", help="Stable FineStore query cache location, shared across catalog versions.")
-@click.option(
-    "--environment-inventory",
-    "environment_inventories",
-    type=(str, click.Path(exists=True, path_type=Path)),
-    multiple=True,
-    metavar="SOURCE JSON",
-    help="Attach a scoped Shellbox or source-manifest file inventory to this source's review rubric.",
-)
-@click.option(
-    "--rewrite-plan",
-    "rewrite_plans",
-    type=(str, click.Path(exists=True, path_type=Path)),
-    multiple=True,
-    metavar="SOURCE JSON",
-    help="Select task_ids and a separate instruction-repair rubric for a source.",
-)
-@click.option("--max-workers", type=int, default=4, show_default=True)
-@click.option("--review-batch-size", type=int, default=100, show_default=True)
-@click.option("--cpu", type=int, default=4, show_default=True)
-@click.option("--ram", default="16g", show_default=True)
-@click.option("--max-concurrent", type=int, default=8, show_default=True)
-@click.option("--run", "do_run", is_flag=True, help="Build the canonical views; the default prints the artifact plan.")
-def main(
-    source_names: tuple[str, ...],
-    image: str | None,
-    version: str,
-    limit: int,
-    all_rows: bool,
-    model: str,
-    model_revision: str,
-    max_tokens: int,
-    prompt_budget: int,
-    base_url: str | None,
-    review_cache: str | None,
-    environment_inventories: tuple[tuple[str, Path], ...],
-    rewrite_plans: tuple[tuple[str, Path], ...],
-    max_workers: int,
-    review_batch_size: int,
-    cpu: int,
-    ram: str,
-    max_concurrent: int,
-    do_run: bool,
-) -> None:
-    if limit < 1:
-        raise click.UsageError("--limit must be positive")
-    row_limit = None if all_rows else limit
-    review = ReviewConfig(model=model, model_revision=model_revision, prompt_budget=prompt_budget, max_tokens=max_tokens)
-    reviewer = None
-    if do_run:
-        if base_url is None:
-            raise click.UsageError("--base-url is required with --run")
-        reviewer = BatchReviewer(
-            OpenAIBatchClient(base_url, os.environ[GLM_BULK_TOKEN_ENV]),
-            model,
-            model_revision,
-            max_tokens=max_tokens,
-            max_prompt_characters=prompt_budget,
-            query_cache_root=review_cache,
+def _source_inputs(
+    recipe: DatasetRecipe,
+    adopted: ArtifactStep[Artifact] | None,
+    campaign: CampaignRuntime,
+) -> tuple[ArtifactStep[Artifact], dict[str, ArtifactStep[Artifact]]]:
+    if adopted is not None:
+        return adopted, {}
+    primary = []
+    references = {}
+    for declaration in recipe.inputs.downloads:
+        artifact = _source_download(declaration, campaign)
+        if isinstance(declaration, HubDownload) and declaration.subdirectory:
+            references[declaration.subdirectory] = artifact
+        else:
+            primary.append(artifact)
+    if len(primary) != 1:
+        raise ValueError(f"Source {recipe.name} requires one primary acquisition or an explicitly staged input artifact")
+    return primary[0], references
+
+
+def _bind(
+    definition: RlDataPipeline, recipe: DatasetRecipe, config: SourcePipelineConfig, runtime: SourceRuntimeConfig
+) -> ArtifactStep[RlDataArtifact]:
+    name = definition.source_key
+    assert name is not None
+    environment = runtime.images.get(name)
+    suite = runtime.verification_suites.get(name) or recipe.policy.check_suite or answer_check_suite()
+    downloaded, references = _source_inputs(recipe, runtime.source_inputs.get(name), runtime.campaign)
+    verification_input = runtime.verification_inputs.get(name)
+    recorded_review = runtime.recorded_reviews.get(name)
+    recorded_review_input = (
+        ArtifactStep.adopt(
+            f"task-curation/recorded-review/{name}-{recorded_review.sha256[:16]}",
+            PIPELINE_VERSION,
+            source=recorded_review.path,
+            kind=Artifact,
+            config=asdict(recorded_review),
         )
-    resources = ResourceConfig.with_cpu(cpu=cpu, ram=ram)
-    bindings = []
-    for name in source_names:
-        recipe = source_recipe(name, image)
-        downloaded = source_download(recipe, resources)
-        bindings.append(SourceBinding(name, version, recipe, downloaded, review, row_limit))
-    inventories = {
-        name: TypeAdapter(EnvironmentInventory).validate_json(path.read_bytes())
-        for name, path in environment_inventories
+        if recorded_review is not None
+        else None
+    )
+    identity = _source_identity(recipe, config, suite, environment)
+    if recorded_review is not None:
+        identity["recorded_review"] = asdict(recorded_review)
+    identity["acquisition"] = recipe.inputs.downloads
+    identity["input"] = {"name": downloaded.name, "version": downloaded.version, "fingerprint": downloaded.fingerprint()}
+    identity["references"] = {
+        name: {"name": step.name, "version": step.version, "fingerprint": step.fingerprint()}
+        for name, step in references.items()
     }
-    if set(inventories) - {binding.name for binding in bindings}:
-        raise click.UsageError("--environment-inventory must name a selected source")
-    bindings = [
-        (
-            replace(
-                binding,
-                recipe=replace(
-                    binding.recipe,
-                    pipeline=replace(
-                        binding.recipe.pipeline,
-                        rubric=replace(binding.recipe.pipeline.rubric, environment_inventory=inventories[binding.name]),
-                    ),
-                ),
-            )
-            if binding.name in inventories
-            else binding
-        )
-        for binding in bindings
-    ]
-    plans = {name: TypeAdapter(RewriteSelection).validate_json(path.read_bytes()) for name, path in rewrite_plans}
-    if set(plans) - set(source_names):
-        raise click.UsageError("--rewrite-plan must name a selected source")
-    bindings = [replace(binding, rewrite=plans.get(binding.name)) for binding in bindings]
-    rewriter = None
-    if plans and reviewer is not None:
-        rewriter = BatchRewriter(reviewer.client, model, model_revision)
-    workflow = build_workflow(
-        bindings,
-        execution=AuditExecution(max_workers=max_workers, review_batch_size=review_batch_size, reviewer=reviewer),
-        resources=resources,
-        rewriter=rewriter,
+    identity["verification_input"] = (
+        {
+            "name": verification_input.name,
+            "version": verification_input.version,
+            "fingerprint": verification_input.fingerprint(),
+        }
+        if verification_input is not None
+        else None
     )
-    if do_run:
-        run(workflow.canonical, max_concurrent=max_concurrent)
-        return
-    click.echo(lower(workflow.canonical))
-
-
-if __name__ == "__main__":
-    main()
+    return ArtifactStep(
+        name=f"data/rl/{name}-{hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]}",
+        version=PIPELINE_VERSION,
+        artifact_type=RlDataArtifact,
+        run=partial(_run_source, recipe, config, suite, canonical_source=name, campaign=runtime.campaign),
+        build_config=partial(
+            _source_config,
+            identity,
+            downloaded,
+            references,
+            verification_input,
+            recorded_review_input,
+            recorded_review.sha256 if recorded_review is not None else None,
+        ),
+        deps=(
+            downloaded,
+            *references.values(),
+            *((verification_input,) if verification_input is not None else ()),
+            *((recorded_review_input,) if recorded_review_input is not None else ()),
+        ),
+    )

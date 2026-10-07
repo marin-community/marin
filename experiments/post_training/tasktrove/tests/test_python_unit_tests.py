@@ -106,7 +106,8 @@ def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tm
 
     solution.write_text("")
     missing_implementation = run(spec_path, workspace)
-    assert (missing_implementation.status, missing_implementation.reward) == (Status.INFRA_ERROR, 0.0)
+    assert (missing_implementation.status, missing_implementation.reward) == (Status.SCORED, 0.0)
+    assert missing_implementation.detail["reason"] == "collection_error"
 
     solution.write_text("def add(left, right):\n    return left - right - 1\n")
     wrong_answer = run(spec_path, workspace)

@@ -1,0 +1,241 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Direct generated Reasoning Gym entries with their pinned native scorer contract."""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+from collections.abc import Generator, Iterator
+from dataclasses import dataclass
+from tempfile import TemporaryDirectory, TemporaryFile
+from typing import Any
+
+from pydantic import BaseModel, ValidationError
+from rigging.filesystem.storage_path import StoragePath
+
+from taskcompendium.datasets.direct_contracts import contract_task
+from taskcompendium.grader import grader_config
+from taskcompendium.models import (
+    TaskSpec,
+    TextMessage,
+)
+from taskcompendium.pipeline.models import (
+    CheckResult,
+    CheckStatus,
+    CheckSuite,
+    ImportFailureKind,
+    ImportRejection,
+    RawRow,
+    ReviewRubric,
+    TaskPolicy,
+    VerificationReport,
+)
+from taskcompendium.pipeline.verification import verify_task
+
+RUBRIC = ReviewRubric(
+    id="direct-reasoning-gym-answerability",
+    version="1",
+    criteria=(
+        (
+            "Read the complete generated question and verify that every grid, rule, sequence, or example "
+            "required to solve it is present."
+        ),
+        (
+            "Independently check the private generated answer against the public problem where feasible; "
+            "passing native scoring does not establish correctness."
+        ),
+        (
+            "Preserve the task-native partial reward and answer parsing; a label or approximate substring "
+            "match is not a substitute for that scorer."
+        ),
+        (
+            "Judge default generated difficulty and unusual puzzle formats on their actual content, without "
+            "assuming they are defects."
+        ),
+        (
+            "Check non-discrimination when a scorer accepts incorrect alternatives, and record concrete "
+            "semantic mismatches rather than rejecting an unbound runtime alone."
+        ),
+    ),
+)
+
+# The pinned library can print during import as well as generation. Import it
+# under the diagnostic stream before the producer starts its JSONL emitter.
+GENERATOR_ENTRYPOINT = """import contextlib, sys
+with contextlib.redirect_stdout(sys.stderr):
+    from taskcompendium.datasets.reasoning_gym import source
+source.main(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+"""
+GENERATOR_ERROR_BYTES = 8192
+
+
+def generated_rows(
+    archive_path: StoragePath,
+    generator_revision: str,
+    *,
+    excluded_generators: tuple[tuple[str, str], ...],
+    python_hash_seed: int,
+) -> Generator[dict[str, Any], None, None]:
+    """Yield puzzle rows and native-score evidence from the selected generator archive."""
+    with TemporaryDirectory() as directory:
+        local_archive = os.path.join(directory, "generator.tar.gz")
+        with archive_path.open("rb") as source, open(local_archive, "wb") as destination:
+            shutil.copyfileobj(source, destination)
+        with tarfile.open(local_archive, mode="r:gz") as archive:
+            roots = {member.name.split("/", 1)[0] for member in archive if member.name}
+            if len(roots) != 1:
+                raise ValueError("Pinned generator archive has multiple roots")
+            archive.extractall(directory, filter="data")
+        root = os.path.join(directory, roots.pop())
+        environment = {
+            **os.environ,
+            "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "MPLCONFIGDIR": directory,
+            "PYTHONHASHSEED": str(python_hash_seed),
+        }
+        with TemporaryFile(mode="w+b") as errors:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    GENERATOR_ENTRYPOINT,
+                    generator_revision,
+                    json.dumps(dict(excluded_generators)),
+                    str(python_hash_seed),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                text=True,
+                env=environment,
+            )
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    yield json.loads(line)
+                if process.wait() != 0:
+                    errors.seek(0, os.SEEK_END)
+                    errors.seek(max(0, errors.tell() - GENERATOR_ERROR_BYTES))
+                    detail = errors.read().decode(errors="replace")
+                    raise RuntimeError(f"Pinned reasoning-gym generator failed: {detail}")
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait()
+
+
+class RecordedScoringError(BaseModel):
+    type: str
+    message: str
+
+
+class RecordedReward(BaseModel):
+    candidate: str | None
+    reward: float | None
+    scoring_error: RecordedScoringError | None = None
+
+
+class RecordedControls(BaseModel):
+    generator_revision: str
+    positive: RecordedReward
+    negative: RecordedReward
+    execution: str
+
+
+def normalize(row: RawRow) -> TaskSpec | ImportRejection:
+    try:
+        entry = row.data["entry"]
+        generation = row.data["generation"]
+        task_name = entry["metadata"]["source_dataset"]
+        if task_name != generation["task"] or (entry["answer"] is not None and not isinstance(entry["answer"], str)):
+            raise ValueError("Generated entry and generation provenance must identify the same native task")
+        recorded = row.data.get("recorded_pinned_generator_controls")
+        controls = RecordedControls.model_validate(recorded) if recorded is not None else None
+        contract = {
+            "task": task_name,
+            "entry": entry,
+            "generation": generation,
+            "generator_revision": row.source.revision,
+            "answer_extraction": "Text after the last Answer: marker, stripped; otherwise stripped whole response",
+            "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
+            "recorded_pinned_generator_controls": controls.model_dump(mode="json") if controls is not None else None,
+        }
+    except (ValidationError, ValueError, KeyError, TypeError) as error:
+        return ImportRejection(
+            kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_generated_reasoning_entry", detail=str(error)
+        )
+    return contract_task(
+        row,
+        (TextMessage(role="user", content=entry["question"]),),
+        "MarinSkyRL:skyrl_gym.envs.reasoning_gym.scoring.score_response",
+        contract,
+        (f"Native reasoning-gym scorer at generator revision {row.source.revision}",),
+    )
+
+
+def verification_report(task: TaskSpec) -> VerificationReport:
+    controls = grader_config(task)["contract"].get("recorded_pinned_generator_controls")
+    checks = verify_task(task)
+    if controls is None:
+        return VerificationReport(checks=checks)
+    controls = RecordedControls.model_validate(controls)
+    if controls.generator_revision != task.source.revision:
+        checks.append(
+            CheckResult(
+                check="recorded_pinned_generator_controls",
+                status=CheckStatus.FAIL,
+                detail="Recorded native controls do not identify the pinned generator revision",
+            )
+        )
+        return VerificationReport(checks=checks)
+    positive_status = (
+        CheckStatus.SKIPPED
+        if controls.positive.candidate is None
+        else CheckStatus.PASS if controls.positive.reward == 1.0 else CheckStatus.FAIL
+    )
+    negative_status = (
+        CheckStatus.UNSUPPORTED
+        if controls.negative.reward is None
+        else CheckStatus.PASS if controls.negative.reward < 1.0 else CheckStatus.FAIL
+    )
+    for name, control, status in (
+        ("positive", controls.positive, positive_status),
+        ("negative", controls.negative, negative_status),
+    ):
+        checks.append(
+            CheckResult(
+                check="recorded_pinned_generator_controls/" + name,
+                status=status,
+                detail="Recorded acquisition-time native control, not current bound runtime: "
+                + control.model_dump_json(),
+            )
+        )
+    return VerificationReport(checks=checks)
+
+
+@dataclass(frozen=True)
+class GeneratedRows:
+    generator_revision: str
+    excluded_generators: tuple[tuple[str, str], ...]
+    python_hash_seed: int
+
+    def __call__(self, archive_path: StoragePath) -> Iterator[dict[str, Any]]:
+        return generated_rows(
+            archive_path,
+            self.generator_revision,
+            excluded_generators=self.excluded_generators,
+            python_hash_seed=self.python_hash_seed,
+        )
+
+
+def policy() -> TaskPolicy:
+    return TaskPolicy(
+        normalize=normalize,
+        rubric=RUBRIC,
+        check_suite=CheckSuite(
+            id="recorded-pinned-generator-controls", revision="3", parameters={}, run=verification_report
+        ),
+    )

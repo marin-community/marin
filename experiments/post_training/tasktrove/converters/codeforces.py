@@ -3,16 +3,12 @@
 
 """Codeforces and CodeElo stdin/stdout problems, some with a per-task special judge.
 
-Each task ships ``tests/inputs/input_<n>.txt`` / ``tests/outputs/output_<n>.txt`` pairs and a
-fixed ``tests/judge.py`` launcher. The launcher always falls back to a whitespace-normalized exact
-match, which is what plain ``stdio`` token comparison already does. Instructions with an explicit
-numeric-error tolerance use float comparison. Only the ~16% of tasks that also ship a per-task
-``tests/checker.py`` need ``special_judge``: :data:`_JUDGE_PY` adapts the
-shipped launcher to the ``(input, expected, got)`` argv the special-judge contract calls it with,
-by locating ``checker.py`` next to itself instead of taking it as a fourth argument. About half of
-the shipped checkers define ``main()`` with no parameters and always raise when called positionally
-with three arguments; :data:`_JUDGE_PY` catches that and falls back to the normalized match, same
-as the original launcher did.
+Each task ships ``tests/inputs/input_<n>.txt`` / ``tests/outputs/output_<n>.txt`` pairs.
+Tasks without ``tests/checker.py`` use whitespace-token comparison, or float comparison
+when the instruction specifies numeric-error tolerance. Tasks with a checker preserve its
+decision: the launcher supports positional ``main(input, expected, got)`` and CLI-style
+``main()`` reading those paths from argv. A crashing or malformed checker scores zero;
+it must not silently become an exact-output comparison that rejects valid alternatives.
 
 The agent may submit ``solution.py`` or ``solution.cpp``. The Dockerfile has no JDK, so the
 converter removes the source's stale ``Solution.java`` boilerplate. :data:`_BUILD` compiles the
@@ -55,38 +51,27 @@ _COMMAND = (
     "elif [ -f solution_bin ]; then exec ./solution_bin; else exit 1; fi'"
 )
 
-_JUDGE_PY = r"""import contextlib
-import importlib.util
-import io
-import re
+_JUDGE_PY = r"""import importlib.util
+import inspect
 import sys
 from pathlib import Path
 
 
-def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip())
-
-
 def main() -> None:
-    input_path, expected_path, got_path = sys.argv[1], sys.argv[2], sys.argv[3]
-    got = open(got_path, errors="replace").read()
-    expected = open(expected_path, errors="replace").read()
+    paths = sys.argv[1:]
     checker_path = Path(__file__).with_name("checker.py")
-    if checker_path.is_file():
-        try:
-            spec = importlib.util.spec_from_file_location("cf_checker", checker_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                module.main(input_path, expected_path, got_path)
-            lines = [line for line in buffer.getvalue().strip().splitlines() if line.strip()]
-            if lines and lines[-1].strip() in ("0", "1"):
-                print(lines[-1].strip())
-                return
-        except Exception:
-            pass  # broken or argv-style checker: fall back to the normalized match
-    print("1" if _norm(got) == _norm(expected) else "0")
+    sys.argv = [str(checker_path), *paths]
+    spec = importlib.util.spec_from_file_location("cf_checker", checker_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    signature = inspect.signature(module.main)
+    try:
+        signature.bind(*paths)
+    except TypeError:
+        signature.bind()
+        module.main()
+    else:
+        module.main(*paths)
 
 
 main()

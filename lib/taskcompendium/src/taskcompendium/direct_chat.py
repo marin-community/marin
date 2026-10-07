@@ -12,6 +12,7 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
     features = [
         name
         for name, value in (
+            ("compatible_backends", requirements.compatible_backends),
             ("capabilities", requirements.capabilities),
             ("docker_image", requirements.docker_image),
             ("working_directory", requirements.working_directory),
@@ -25,6 +26,8 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         features.append("interaction_tools")
     if specification.output_paths:
         features.append("output_paths")
+    if specification.output_directories:
+        features.append("output_directories")
     if specification.verifier.environment_requirements != EnvironmentRequirements():
         features.append("verifier.environment_requirements")
     resources = specification.resources

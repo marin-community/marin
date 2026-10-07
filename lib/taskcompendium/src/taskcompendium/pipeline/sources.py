@@ -74,8 +74,8 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
         raise ValueError(f"Unsupported staged source format: {source_format}")
 
 
-def staged_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterator[dict[str, Any]]:
-    """Yield selected records with a stable original file and row locator."""
+def staged_raw_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterator[dict[str, Any]]:
+    """Yield selected source rows before decoding with their original stable locators."""
     if relative_file.startswith("/") or ".." in relative_file.split("/"):
         raise ValueError(f"Source file must be relative to its staged root: {relative_file}")
     root = StoragePath(path)
@@ -86,5 +86,16 @@ def staged_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterat
             raise ValueError(f"Expected an object at {relative_file}:{index}")
         if spec.selector is not None and not spec.selector(row, root):
             continue
-        data = spec.decoder(row, root) if spec.decoder is not None else row
-        yield {"index": index, "locator": f"{relative_file}:{index}", "data": data}
+        yield {"index": index, "locator": f"{relative_file}:{index}", "data": row}
+
+
+def decode_staged_row(record: dict[str, Any], path: str, spec: SourceFiles) -> dict[str, Any]:
+    """Apply a source decoder to an already selected row without changing its locator."""
+    data = spec.decoder(record["data"], StoragePath(path)) if spec.decoder is not None else record["data"]
+    return {**record, "data": data}
+
+
+def staged_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterator[dict[str, Any]]:
+    """Yield selected, decoded records with their original file and row locators."""
+    for record in staged_raw_file_rows(path, relative_file, spec):
+        yield decode_staged_row(record, path, spec)

@@ -131,8 +131,6 @@ def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
     if not isinstance(expected, str):
         return Rejected(ConvertStatus.NULL_GRADER, f"expected_output missing or not a string: {type(expected)}")
     solve = task.get_text(SOLVE_SH)
-    if not solve:
-        return Rejected(ConvertStatus.NULL_GRADER, "no oracle solution/solve.sh shipped")
 
     data_files: dict[str, bytes] = {
         f"tests/{CHECKER_NAME}": CHECKER_PY.encode(),
@@ -148,7 +146,7 @@ def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
         tags=("shell", "bash", "nl2bash", "terminal", "dcagent2"),
         language="bash",
         data_files=data_files,
-        solution_files={SOLVE_SH: solve.replace(_BROKEN_SEED_CALL, _FIXED_SEED_CALL).encode()},
+        solution_files={SOLVE_SH: solve.replace(_BROKEN_SEED_CALL, _FIXED_SEED_CALL).encode()} if solve else {},
     )
 
 

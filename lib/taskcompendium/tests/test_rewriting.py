@@ -4,15 +4,14 @@
 """Instruction repairs retain grader behavior, originals, and auditable lineage."""
 
 import json
-from dataclasses import dataclass, field
 
 import pyarrow.parquet as pq
 import pytest
 from zephyr.writers import write_parquet_file
 
+from taskcompendium.datasets import instruction_following, structured_output
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
-from taskcompendium.pipeline.datasets import instruction_following, structured_output
 from taskcompendium.pipeline.models import (
     Confidence,
     Decision,
@@ -37,18 +36,7 @@ from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import resource_bytes
 
 from .pipeline_stages import fixture_recipe
-
-
-@dataclass(frozen=True)
-class Submission:
-    file_id: str
-    batch_id: str
-
-
-@dataclass(frozen=True)
-class Output:
-    output: str
-    errors: str | None = None
+from .test_pipeline import BatchService, Output
 
 
 def rewrite_response(task_id, action, edits):
@@ -88,18 +76,12 @@ def rewrite_response(task_id, action, edits):
     }
 
 
-@dataclass
-class RewriteService:
-    """An external batch-service fake with retained submissions."""
+class RewriteService(BatchService):
+    """A batch-service fake returning supplied rewrite proposals."""
 
-    responses: list[dict]
-    batches: dict[str, list[dict]] = field(default_factory=dict)
-    interrupted: bool = True
-
-    def submit(self, requests, filename):
-        batch_id = f"batch-{len(self.batches)}"
-        self.batches[batch_id] = list(requests)
-        return Submission("file-0", batch_id)
+    def __init__(self, responses: list[dict], interrupted: bool = True):
+        super().__init__(interrupted=interrupted)
+        self.responses = responses
 
     def wait(self, batch_id, poll_seconds):
         if self.interrupted:
@@ -148,12 +130,13 @@ def test_rewrite_retry_resubmits_batch_and_retains_lineage(tmp_path, structured_
     )
     rewriter = BatchRewriter(service, "model", "deployment")
     rubric = ReviewRubric("repair", "1", ("Preserve the schema.",))
-    with pytest.raises(TimeoutError):
-        rewriter.rewrite([structured_task], rubric, tmp_path / "failed-attempt")
+    failed = rewriter.rewrite([structured_task], rubric, tmp_path / "failed-attempt")
+    assert failed.records[0].status == ReviewStatus.UNAVAILABLE
+    assert failed.candidates == []
     result = rewriter.rewrite([structured_task], rubric, tmp_path)
     assert len(service.batches) == 2
-    assert json.loads((tmp_path / "failed-attempt/batch-submission.json").read_text())["batch_id"] == "batch-0"
-    assert json.loads((tmp_path / "batch-submission.json").read_text())["batch_id"] == "batch-1"
+    submissions = [json.loads(path.read_text()) for path in tmp_path.rglob("batch-submission.json")]
+    assert {submission["batch_id"] for submission in submissions} == {"batch-0", "batch-1"}
     original = TaskSpec.model_validate_json((tmp_path / "originals.jsonl").read_text())
     candidate = TaskSpec.model_validate_json((tmp_path / "candidates.jsonl").read_text())
     assert original == structured_task
@@ -310,7 +293,7 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     manifest = rewrite_audit_source(
         str(source),
         str(output),
-        fixture_recipe(structured_output.pipeline()),
+        fixture_recipe(structured_output.policy()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ("Preserve the schema.",)),
         BatchRewriter(service, "model", "deployment"),
@@ -332,7 +315,7 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     repeated = rewrite_audit_source(
         str(source),
         str(output),
-        fixture_recipe(structured_output.pipeline()),
+        fixture_recipe(structured_output.policy()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ("Preserve the schema.",)),
         BatchRewriter(service, "model", "deployment"),
@@ -347,7 +330,7 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     assert reviewer.calls == 1
 
 
-def test_rewrite_stage_rejects_candidate_with_unavailable_review(tmp_path, structured_task):
+def test_rewrite_stage_defers_candidate_with_unavailable_review(tmp_path, structured_task):
     original = TaskAudit(
         task_id=structured_task.id,
         source=structured_task.source,
@@ -393,7 +376,7 @@ def test_rewrite_stage_rejects_candidate_with_unavailable_review(tmp_path, struc
     manifest = rewrite_audit_source(
         str(source),
         str(output),
-        fixture_recipe(structured_output.pipeline()),
+        fixture_recipe(structured_output.policy()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ()),
         BatchRewriter(service, "model", "deployment"),
@@ -404,9 +387,9 @@ def test_rewrite_stage_rejects_candidate_with_unavailable_review(tmp_path, struc
     )
     row = pq.read_table(output / "audit/part-00000.parquet").to_pylist()[0]
     assert row["task_id"] != structured_task.id
-    assert row["filter_status"] == "reject"
+    assert row["filter_status"] == "defer"
     assert row["review_status"] == "unavailable"
-    assert manifest["rewritten_rows"] == 1 and manifest["dispositions"] == {"reject": 1}
+    assert manifest["rewritten_rows"] == 1 and manifest["dispositions"] == {"defer": 1}
     assert json.loads(row["cleanup_lineage_json"])["original_audit"]["filter_reasons"] == ["review:bad"]
 
 
@@ -451,7 +434,7 @@ def test_rewrite_stage_preserves_original_decisions_without_a_candidate(tmp_path
     manifest = rewrite_audit_source(
         str(source),
         str(output),
-        fixture_recipe(structured_output.pipeline()),
+        fixture_recipe(structured_output.policy()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ()),
         BatchRewriter(service, "model", "deployment"),

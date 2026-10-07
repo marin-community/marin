@@ -9,10 +9,10 @@ import tomllib
 
 from verifyit.spec import McqSpec, parse_spec
 
+from taskcompendium.grading import verifier_descriptor
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -24,8 +24,7 @@ _PREFIX = (
     "---\n\n"
 )
 _FORMAT_PREFIX = (
-    "Answer the following multiple choice question. The last line of your response "
-    "should be in the following format: "
+    "Answer the following multiple choice question. The last line of your response should be in the following format: "
 )
 
 
@@ -68,6 +67,6 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=multiple_choice_answer(contract.expected, contract.options),
+        verifier=verifier_descriptor(McqSpec(expected=contract.expected.strip().upper(), options=contract.options)),
         source=archive.source,
     )

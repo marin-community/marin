@@ -136,8 +136,12 @@ def test_missing_expected_output_is_rejected_as_null_grader():
     assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
 
 
-def test_missing_oracle_solution_is_rejected_as_null_grader():
+def test_missing_oracle_preserves_task_and_grader_without_inventing_solution():
     task = read_task_binary(_fixture())
     del task.files["solution/solve.sh"]
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
-    assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
+    assert record.status == ConvertStatus.CONVERTED and record.task_binary is not None
+    assert record.solution_binary is None
+    converted = read_task_binary(record.task_binary)
+    assert verify_task(record.task_binary) is None
+    assert f"tests/{CHECKER_NAME}" in converted.files

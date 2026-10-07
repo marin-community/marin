@@ -7,16 +7,27 @@ import hashlib
 import io
 import json
 import tarfile
+import threading
 from dataclasses import dataclass, field, replace
+from functools import partial
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from fray.types import ResourceConfig
 from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.spec import MathSpec
+from verifyit.spec import ExactSpec, MathSpec, McqSpec
 
-from taskcompendium.grader import grader_config, grader_package
+from taskcompendium.datasets import code_contracts, gpqa, instruction_following, preference_tasks, rubric_tasks
+from taskcompendium.datasets.direct_contracts import source_contract_package
+from taskcompendium.datasets.math_answers import asdiv_rows, math_controls, normalize_numina_math
+from taskcompendium.datasets.numeric_answers import normalize_aime24, normalize_svamp, svamp_policy
+from taskcompendium.datasets.source_definitions import tasktrove_files
+from taskcompendium.grader import grader_config, grader_package, native_command_package
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -27,12 +38,8 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.native_grader import NativeCommandSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
-from taskcompendium.pipeline.datasets import gpqa, instruction_following, preference_tasks, rubric_tasks
-from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
-from taskcompendium.pipeline.datasets.math_answers import asdiv_rows
-from taskcompendium.pipeline.datasets.numeric_answers import normalize_aime24, normalize_svamp, svamp_pipeline
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_files
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -44,6 +51,7 @@ from taskcompendium.pipeline.models import (
     EnvironmentInventory,
     FilterPolicy,
     HFSource,
+    ImportFailureKind,
     ImportRejection,
     IntendedUse,
     Quality,
@@ -54,20 +62,27 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
     TaskAudit,
 )
+from taskcompendium.pipeline.query_cache import cached_batch_output
+from taskcompendium.pipeline.recorded_review import RecordedReviewer
 from taskcompendium.pipeline.review import BatchReviewer, review_records
+from taskcompendium.pipeline.review_transport import batch_output
+from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.sources import staged_file_rows
 from taskcompendium.pipeline.stages import (
     AuditExecution,
     ReviewConfig,
+    ReviewTransport,
+    assess_source_quality,
+    audit_prepared_source,
     audit_source,
     canonicalize_sources,
     filter_source,
+    prepare_source,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import PlainText
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 from .pipeline_stages import fixture_recipe, run_stages, stage_table
 
@@ -93,11 +108,17 @@ class BatchService:
     interrupted: bool = False
     invalid_first_batch: bool = False
     batches: dict[str, list[dict]] = field(default_factory=dict)
+    files: dict[str, list[dict]] = field(default_factory=dict)
 
-    def submit(self, requests, filename):
+    def upload(self, requests, filename):
+        file_id = f"file-{len(self.files)}"
+        self.files[file_id] = list(requests)
+        return file_id
+
+    def create(self, file_id):
         batch_id = f"batch-{len(self.batches)}"
-        self.batches[batch_id] = list(requests)
-        return Submission("file-0", batch_id)
+        self.batches[batch_id] = self.files[file_id]
+        return Submission(file_id, batch_id)
 
     def wait(self, batch_id, poll_seconds):
         if self.interrupted:
@@ -157,7 +178,7 @@ def svamp_recipe():
         name="svamp-fixture",
         version="1",
         source=HFSource("fixture/svamp", "1", "default", "train"),
-        pipeline=svamp_pipeline(),
+        policy=svamp_policy(),
         intended_use=IntendedUse.TRAIN,
         inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
     )
@@ -171,6 +192,57 @@ def apple_row():
         "Answer": "2",
         "Equation": "2",
     }
+
+
+def normalize_mixed_import(row: RawRow) -> TaskSpec | ImportRejection:
+    if "conversion_rejection" in row.data:
+        return ImportRejection.model_validate(row.data["conversion_rejection"])
+    if row.data.get("invalid_converted_task"):
+        return TaskSpec.model_validate({"id": row.id})
+    return normalize_svamp(row)
+
+
+def test_conversion_failures_retain_raw_records_without_review_or_accepted_output(tmp_path, apple_row, svamp_recipe):
+    rows = [
+        apple_row,
+        *[
+            {
+                **apple_row,
+                "conversion_rejection": {
+                    "kind": kind.value,
+                    "reason": "unhandled_contract",
+                    "detail": "Source evidence retained for examination",
+                },
+            }
+            for kind in ImportFailureKind
+        ],
+        {**apple_row, "invalid_converted_task": True},
+    ]
+    recipe = replace(svamp_recipe, policy=replace(svamp_recipe.policy, normalize=normalize_mixed_import))
+    service = BatchService()
+    manifest = run_stages(
+        recipe,
+        rows,
+        output_path=tmp_path,
+        limit=len(rows),
+        reviewer=BatchReviewer(service, "fixture-model", "fixture-deployment"),
+    )
+    persisted = stage_table(tmp_path).to_pylist()
+    assert manifest["normalized_rows"] == 1
+    assert manifest["reviewed_rows"] == 1
+    assert manifest["dispositions"] == {"keep": 1, "reject": 1, "defer": 3}
+    assert [row["normalization_kind"] for row in persisted] == [
+        None,
+        "source_defect",
+        "unsupported",
+        "converter_error",
+        "converter_error",
+    ]
+    assert [row["filter_status"] for row in persisted] == ["keep", "reject", "defer", "defer", "defer"]
+    assert [json.loads(row["raw_json"])["data"] for row in persisted] == rows
+    assert all(row["task_json"] is None and row["review_status"] is None for row in persisted[1:])
+    assert [row["task_id"] for row in stage_table(tmp_path, "accepted").to_pylist()] == [persisted[0]["task_id"]]
+    assert [request["custom_id"] for batch in service.batches.values() for request in batch] == [persisted[0]["task_id"]]
 
 
 def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path, apple_row, svamp_recipe):
@@ -193,6 +265,11 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
 
     audit = stage_table(tmp_path).to_pylist()
     assert manifest["dispositions"] == {"keep": 1, "reject": 4}
+    assert manifest["reasons"] == {
+        "exact_semantic_duplicate": 1,
+        "conflicting_references": 2,
+        "normalize:invalid_reference": 1,
+    }
     assert audit[1]["duplicate_of"] == audit[0]["task_id"]
     assert audit[4]["filter_reasons"][0] == "normalize:invalid_reference"
     assert all(audit[index]["filter_reasons"] == ["conflicting_references"] for index in (2, 3))
@@ -229,12 +306,18 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
         f"{root}/staged",
         f"{root}/audited",
         svamp_recipe,
-        ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens),
+        ReviewConfig(
+            reviewer.model,
+            reviewer.model_revision,
+            reviewer.max_prompt_characters,
+            reviewer.max_tokens,
+            transport=ReviewTransport.PROVIDER_BATCH,
+        ),
         AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer),
         SourceFiles(("source.jsonl",), SourceFormat.JSONL),
         len(rows),
     )
-    manifest = filter_source(f"{root}/audited", f"{root}/filtered", FilterPolicy())
+    manifest = filter_source(f"{root}/audited", f"{root}/filtered", FilterPolicy(), max_workers=1)
     audit = []
     for file in (StoragePath(root) / "filtered/audit/*.parquet").glob():
         with file.open("rb") as stream:
@@ -257,7 +340,13 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     (staged / "source.jsonl").write_bytes(snapshot.read_bytes())
     initial = BatchService()
     reviewer = BatchReviewer(initial, "fixture", "revision")
-    config = ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens)
+    config = ReviewConfig(
+        reviewer.model,
+        reviewer.model_revision,
+        reviewer.max_prompt_characters,
+        reviewer.max_tokens,
+        transport=ReviewTransport.PROVIDER_BATCH,
+    )
     audit_source(
         str(staged),
         str(tmp_path / "audited"),
@@ -268,7 +357,11 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
         len(rows),
     )
     completed = sorted((tmp_path / "audited/audit").glob("*.parquet"))
-    missing = completed.pop()
+    assert sum(len(requests) for requests in initial.batches.values()) == len(rows)
+    assert all(len(requests) <= 64 for requests in initial.batches.values())
+    assert sum(pq.ParquetFile(path).metadata.num_rows > 0 for path in completed) > 1
+    missing = next(path for path in completed if pq.ParquetFile(path).metadata.num_rows)
+    completed.remove(missing)
     missing_ids = {row["task_id"] for row in pq.read_table(missing).to_pylist()}
     preserved = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in completed}
     missing.unlink()
@@ -286,9 +379,50 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     reviewed = [request["custom_id"] for requests in resumed.batches.values() for request in requests]
     assert set(reviewed) == missing_ids and len(reviewed) == len(missing_ids)
     assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest for path, digest in preserved.items())
-    manifest = filter_source(str(tmp_path / "audited"), str(tmp_path / "filtered"), FilterPolicy())
+    manifest = filter_source(str(tmp_path / "audited"), str(tmp_path / "filtered"), FilterPolicy(), max_workers=1)
     assert manifest["input_rows"] == len(rows)
     assert manifest["dispositions"] == {"keep": len(rows) - len(missing_ids), "reject": len(missing_ids)}
+
+
+@dataclass
+class ConcurrentBatchService(BatchService):
+    rendezvous: threading.Barrier = field(default_factory=lambda: threading.Barrier(2, timeout=10))
+
+    def create(self, file_id):
+        submission = super().create(file_id)
+        # The external service responds only after both requests arrive. A
+        # worker reserving its full budget for either task cannot make progress.
+        self.rendezvous.wait()
+        return submission
+
+
+def test_one_preparation_partition_yields_independent_review_tasks(tmp_path, apple_row, svamp_recipe, monkeypatch):
+    # Both batches originate in one preparation partition. Their provider waits
+    # can overlap only if preparation persists independently schedulable files.
+    monkeypatch.setattr("taskcompendium.pipeline.stages.AUDIT_SHARDS", 1)
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(2)]
+    (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    service = ConcurrentBatchService()
+    reviewer = BatchReviewer(service, "fixture", "revision")
+    manifest = audit_source(
+        str(staged),
+        str(tmp_path / "audited"),
+        svamp_recipe,
+        ReviewConfig(reviewer.model, reviewer.model_revision, transport=ReviewTransport.PROVIDER_BATCH),
+        AuditExecution(
+            max_workers=1,
+            review_batch_size=1,
+            reviewer=reviewer,
+            worker_resources=ResourceConfig.with_cpu(cpu=1, ram="2g"),
+            review_task_resources=ResourceConfig.with_cpu(cpu=0.5, ram="1g"),
+        ),
+        SourceFiles(("source.jsonl",), SourceFormat.JSONL),
+        limit=None,
+    )
+    assert manifest["reviewed_rows"] == 2
+    assert sorted(len(requests) for requests in service.batches.values()) == [1, 1]
 
 
 def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, apple_row, svamp_recipe):
@@ -409,7 +543,7 @@ def test_review_faults_never_admit_tasks(apple_row, fault):
     records = review_records(text, [task.id])
     assert records[0].status in {ReviewStatus.UNAVAILABLE, ReviewStatus.INVALID}
     assert records[0].verdict is None
-    assert task_decision(task.id, verify_task(task), records[0], FilterPolicy()).disposition == Disposition.REJECT
+    assert task_decision(task.id, verify_task(task), records[0], FilterPolicy()).disposition == Disposition.DEFER
 
 
 @pytest.mark.parametrize(
@@ -478,6 +612,44 @@ def test_recipes_normalize_source_contract_and_keep_supervision_private(normaliz
         assert normalize(raw) == task
 
 
+@pytest.mark.parametrize(
+    "references,ordered",
+    [(("dry", "led", "would"), True), (("dry", "led", "would"), False), (("dry",), True)],
+)
+def test_exact_controls_accept_the_complete_reference_without_changing_list_scoring(references, ordered):
+    package = grader_package(ExactSpec(expected=references, ordered=ordered))
+    task = TaskSpec(
+        id="puzzle-list",
+        environment_requirements=EnvironmentRequirements(),
+        source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Return the requested list."),)),
+        answer_type=AnswerType.TEXT,
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
+    )
+    convention = PlainText(id="plain")
+
+    candidates = [("\n".join(references), 1.0)]
+    if len(references) > 1:
+        candidates.extend([(references[0], 0.0), ("\n".join(reversed(references)), 0.0 if ordered else 1.0)])
+    for answer, expected_reward in candidates:
+        result = grade_answer(
+            task,
+            convention,
+            GradingAttempt(
+                ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
+            ),
+        )
+        assert result.reward == expected_reward
+    original = task.model_dump(mode="json")
+    assert [(check.check, check.status) for check in verify_task(task)] == [
+        ("empty", CheckStatus.PASS),
+        ("reference", CheckStatus.PASS),
+        ("perturbed", CheckStatus.PASS),
+    ]
+    assert task.model_dump(mode="json") == original
+
+
 def test_gpqa_rejects_repeated_options_instead_of_choosing_a_key():
     row = RawRow(
         "task",
@@ -505,7 +677,7 @@ def test_unsupported_verification_is_annotated_separately_from_quality(tmp_path,
         },
     }
     manifest = run_stages(
-        fixture_recipe(instruction_following.pipeline()),
+        fixture_recipe(instruction_following.policy()),
         [row],
         output_path=tmp_path / "run",
         limit=1,
@@ -583,26 +755,26 @@ def test_explicit_language_conflict_is_rejected_even_when_grader_and_model_pass(
 def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_path, apple_row, svamp_recipe):
     service = BatchService()
     source = Source(dataset="catalog-1", revision="1", row="0", importer_revision="1")
-    task = svamp_recipe.pipeline.normalize(RawRow("first", source, apple_row))
+    task = svamp_recipe.policy.normalize(RawRow("first", source, apple_row))
     assert isinstance(task, TaskSpec)
     cache_root = str(tmp_path / "cache")
     reviewer = BatchReviewer(service, "fixture-model", "deployment-1", query_cache_root=cache_root)
-    first = reviewer.review([task], svamp_recipe.pipeline.rubric, tmp_path / "first")
+    first = reviewer.review([task], svamp_recipe.policy.rubric, tmp_path / "first")
     changed = task.model_copy(
         update={
             "id": "second",
             "source": Source(dataset="catalog-2", revision="2", row="99", importer_revision="2"),
         }
     )
-    second = replace(reviewer).review([changed], svamp_recipe.pipeline.rubric, tmp_path / "second")
+    second = replace(reviewer).review([changed], svamp_recipe.policy.rubric, tmp_path / "second")
     assert len(service.batches) == 1
     assert first[0].task_id == "first"
     assert second[0].verdict is not None
     assert second[0].task_id == second[0].verdict.task_id == "second"
     assert list((tmp_path / "second/query-cache").glob("*.json"))
     rubric = replace(
-        svamp_recipe.pipeline.rubric,
-        criteria=(*svamp_recipe.pipeline.rubric.criteria, "Check all arithmetic."),
+        svamp_recipe.policy.rubric,
+        criteria=(*svamp_recipe.policy.rubric.criteria, "Check all arithmetic."),
     )
     reviewer.review([changed], rubric, tmp_path / "rubric")
     replace(reviewer, model_revision="deployment-2").review([changed], rubric, tmp_path / "rubric")
@@ -616,6 +788,209 @@ def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_
     assert payload["environment_inventory"]["paths"] == ["/app/input.csv"]
     assert payload["environment_inventory"]["complete"] is False
     assert changed.context == task.context
+
+
+def test_query_cache_miss_retries_after_polling_disconnect(tmp_path, apple_row, svamp_recipe):
+    service = BatchService(interrupted=True)
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    task = svamp_recipe.policy.normalize(RawRow("first", source, apple_row))
+    assert isinstance(task, TaskSpec)
+    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    interrupted = reviewer.review([task], svamp_recipe.policy.rubric, tmp_path / "interrupted")
+    assert interrupted[0].status == ReviewStatus.UNAVAILABLE
+
+    results = replace(reviewer).review([task], svamp_recipe.policy.rubric, tmp_path / "replacement-worker")
+
+    assert results[0].status == ReviewStatus.REVIEWED
+    assert len(service.batches) == 2
+    evidence = list((tmp_path / "replacement-worker").rglob("batch-submission.json"))
+    assert json.loads(evidence[0].read_text())["batch_id"] == "batch-1"
+
+
+@pytest.fixture
+def long_evidence_verdict():
+    # Captured from StackPytest's review output: 1105 evidence characters.
+    return json.loads((Path(__file__).parent / "fixtures/review/stack_pytest_long_evidence.json").read_text())
+
+
+def test_review_reparses_saved_long_evidence_without_provider_requests(tmp_path, monkeypatch, long_evidence_verdict):
+    task_id = long_evidence_verdict["task_id"]
+    row = response(task_id)
+    row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+        long_evidence_verdict
+    )
+    raw = json.dumps(row)
+    service = BatchService()
+    monkeypatch.setattr(service, "output", lambda batch: Output(raw))
+    requests = [{"custom_id": task_id}]
+    options = {"cache_root": str(tmp_path / "cache"), "model_revision": "deployment", "poll_seconds": 0}
+    cached_batch_output(
+        service,
+        requests,
+        tmp_path / "original",
+        valid_completion=lambda output, identity: review_records(output, [identity])[0].status == ReviewStatus.REVIEWED,
+        **options,
+    )
+
+    def no_provider_request(*args, **kwargs):
+        raise AssertionError("Saved review output must be reinterpreted without a provider request")
+
+    for operation in ("upload", "create", "wait", "output"):
+        monkeypatch.setattr(service, operation, no_provider_request)
+    recovered = cached_batch_output(
+        service,
+        requests,
+        tmp_path / "recovered",
+        valid_completion=lambda output, identity: review_records(output, [identity])[0].status == ReviewStatus.REVIEWED,
+        **options,
+    )
+    record = review_records(recovered, [task_id])[0]
+    assert record.status == ReviewStatus.REVIEWED
+    assert record.verdict is not None
+    assert record.verdict.model_dump(mode="json") == long_evidence_verdict
+    assert recovered == raw
+    cached = next((tmp_path / "recovered/query-cache").glob("*.json"))
+    assert json.loads(cached.read_text())["raw_output"] == raw
+
+
+@pytest.mark.parametrize("field,value", [("quality", "probably_good"), ("confidence", 1), ("evidence", ["text"])])
+def test_long_review_evidence_does_not_relax_classification_or_types(long_evidence_verdict, field, value):
+    task_id = long_evidence_verdict["task_id"]
+    row = response(task_id)
+    row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+        {**long_evidence_verdict, field: value}
+    )
+    record = review_records(json.dumps(row), [task_id])[0]
+    assert record.status == ReviewStatus.INVALID
+    assert record.verdict is None
+
+
+@dataclass
+class RetryDisconnectService(BatchService):
+    interrupted_batch: str = "batch-0"
+
+    def wait(self, batch_id, poll_seconds):
+        if batch_id == self.interrupted_batch:
+            self.interrupted_batch = ""
+            raise TimeoutError("Polling disconnected")
+        return super().wait(batch_id, poll_seconds)
+
+
+@pytest.mark.parametrize(
+    "invalid_first_batch,interrupted_batch", [(False, "batch-0"), (True, "batch-1"), (True, "batch-2")]
+)
+def test_review_retry_submits_only_failed_parts_with_bounded_attempts(
+    tmp_path, apple_row, svamp_recipe, invalid_first_batch, interrupted_batch
+):
+    service = RetryDisconnectService(
+        invalid_first_batch=invalid_first_batch,
+        interrupted_batch=interrupted_batch,
+    )
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    tasks = []
+    for index in range(65):
+        task = svamp_recipe.policy.normalize(
+            RawRow(str(index), source, {**apple_row, "Body": f"Person {index} has 2 apples."})
+        )
+        assert isinstance(task, TaskSpec)
+        tasks.append(task)
+    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=3, query_cache_root=str(tmp_path / "cache"))
+    records = reviewer.review(tasks, svamp_recipe.policy.rubric, tmp_path / "review")
+    assert all(record.status == ReviewStatus.REVIEWED for record in records)
+    expected = {
+        (False, "batch-0"): [64, 1, 64],
+        (True, "batch-1"): [64, 1, 64, 1],
+        (True, "batch-2"): [64, 1, 64, 64],
+    }
+    assert [len(batch) for batch in service.batches.values()] == expected[invalid_first_batch, interrupted_batch]
+    assert all(request["body"]["max_tokens"] == reviewer.max_tokens for request in service.batches["batch-0"])
+    if invalid_first_batch:
+        assert all(request["body"]["max_tokens"] == reviewer.retry_max_tokens for request in service.batches["batch-2"])
+
+
+@pytest.mark.parametrize("operation", ["upload", "create", "wait", "output"])
+@pytest.mark.parametrize("recover", [False, True])
+def test_batch_provider_failures_have_finite_neutral_retries(
+    tmp_path, apple_row, svamp_recipe, monkeypatch, operation, recover
+):
+    service = BatchService()
+    provider_operation = getattr(service, operation)
+    attempts = []
+
+    def failing_operation(*args, **kwargs):
+        attempts.append(args)
+        if not recover or len(attempts) < 3:
+            raise TimeoutError("Provider unavailable")
+        return provider_operation(*args, **kwargs)
+
+    monkeypatch.setattr(service, operation, failing_operation)
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    task = svamp_recipe.policy.normalize(RawRow("task", source, apple_row))
+    assert isinstance(task, TaskSpec)
+    reviewer = BatchReviewer(service, "model", "deployment", query_cache_root=str(tmp_path / "cache"))
+    record = reviewer.review([task], svamp_recipe.policy.rubric, tmp_path / "review")[0]
+    assert len(attempts) == 3
+    assert record.status == (ReviewStatus.REVIEWED if recover else ReviewStatus.UNAVAILABLE)
+    assert (record.verdict is not None) == recover
+    assert len(list((tmp_path / "review").rglob("requests.jsonl"))) == 3
+
+
+@pytest.mark.parametrize("request_limit,byte_limit", [(2, 10000), (64, 180)])
+def test_inference_batches_obey_upload_budgets_and_preserve_responses(tmp_path, request_limit, byte_limit):
+    service = BatchService()
+    requests = [{"custom_id": f"task-{index}", "body": {"prompt": "é" * 16}} for index in range(5)]
+    output = batch_output(
+        service,
+        requests,
+        tmp_path,
+        filename="review.jsonl",
+        poll_seconds=0,
+        max_batch_requests=request_limit,
+        max_batch_bytes=byte_limit,
+    )
+    records = review_records(output, [request["custom_id"] for request in requests])
+    assert all(record.status == ReviewStatus.REVIEWED for record in records)
+    assert [record.task_id for record in records] == [request["custom_id"] for request in requests]
+    assert len(service.batches) == 3
+    for batch in service.batches.values():
+        uploaded = "".join(json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n" for request in batch)
+        assert len(batch) <= request_limit
+        assert len(uploaded.encode("utf-8")) <= byte_limit
+
+
+def test_inference_budget_defers_oversized_task_and_continues_other_requests(tmp_path):
+    service = BatchService()
+    requests = [{"custom_id": "oversized", "body": "x" * 1000}, {"custom_id": "small", "body": "ok"}]
+    output = batch_output(
+        service,
+        requests,
+        tmp_path,
+        filename="review.jsonl",
+        poll_seconds=0,
+        max_batch_bytes=100,
+    )
+    records = review_records(output, ["oversized", "small"])
+    assert [record.status for record in records] == [ReviewStatus.UNAVAILABLE, ReviewStatus.REVIEWED]
+    assert [request["custom_id"] for batch in service.batches.values() for request in batch] == ["small"]
+
+
+def test_inference_batch_failure_preserves_successful_parts_and_evidence(tmp_path):
+    service = BatchService(interrupted=True)
+    requests = [{"custom_id": f"task-{index}"} for index in range(2)]
+    output = batch_output(
+        service,
+        requests,
+        tmp_path,
+        filename="review.jsonl",
+        poll_seconds=0,
+        max_batch_requests=1,
+    )
+    records = review_records(output, ["task-0", "task-1"])
+    assert [record.status for record in records] == [ReviewStatus.UNAVAILABLE, ReviewStatus.REVIEWED]
+    assert json.loads((tmp_path / "part-00000/batch-submission.json").read_text())["batch_id"] == "batch-0"
+    assert (tmp_path / "part-00000/raw-output.jsonl").read_text() == output.splitlines()[0]
+    assert json.loads((tmp_path / "part-00001/batch-result.json").read_text())["status"] == "completed"
+    assert json.loads((tmp_path / "part-00001/requests.jsonl").read_text()) == requests[1]
 
 
 def test_staged_source_reaches_end_across_files(tmp_path, apple_row):
@@ -666,7 +1041,13 @@ def test_audit_limit_counts_selected_input_across_files_before_normalization(tmp
         str(staged),
         str(tmp_path / "audited"),
         svamp_recipe,
-        ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens),
+        ReviewConfig(
+            reviewer.model,
+            reviewer.model_revision,
+            reviewer.max_prompt_characters,
+            reviewer.max_tokens,
+            transport=ReviewTransport.PROVIDER_BATCH,
+        ),
         AuditExecution(reviewer=reviewer),
         SourceFiles(("*.jsonl",), SourceFormat.JSONL),
         2,
@@ -682,7 +1063,7 @@ def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
     prompt = [{"role": "user", "content": "Write a greeting."}]
     first = {"prompt": prompt, "completion": [{"role": "assistant", "content": "Hello!"}], "label": True}
     second = {"prompt": prompt, "completion": [{"role": "assistant", "content": "Go away."}], "label": False}
-    recipe = fixture_recipe(preference_tasks.binary_pipeline(preference_tasks.KTO_MIX_RUBRIC))
+    recipe = fixture_recipe(preference_tasks.binary_policy(preference_tasks.KTO_MIX_RUBRIC))
     service = BatchService()
     manifest = run_stages(
         recipe,
@@ -714,7 +1095,7 @@ def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_pat
     rows = []
     for name, prompt, answer, use, disposition in specifications:
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
-        task = svamp_recipe.pipeline.normalize(RawRow(name, source, {**apple_row, "Body": prompt, "Answer": answer}))
+        task = svamp_recipe.policy.normalize(RawRow(name, source, {**apple_row, "Body": prompt, "Answer": answer}))
         assert isinstance(task, TaskSpec)
         audit = TaskAudit(
             task_id=name,
@@ -737,7 +1118,7 @@ def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_pat
     pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), merged / "data/part-0.parquet")
     (merged / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
     output = tmp_path / "canonical"
-    manifest = canonicalize_sources(str(merged), str(output))
+    manifest = canonicalize_sources(str(merged), str(output), max_workers=1)
     audited = {
         row["task_id"]: row for file in (output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()
     }
@@ -765,11 +1146,11 @@ def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_pat
 def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row, svamp_recipe):
     service = BatchService(invalid_first_batch=True)
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = svamp_recipe.pipeline.normalize(RawRow("task", source, apple_row))
+    task = svamp_recipe.policy.normalize(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
-    assert reviewer.review([task], svamp_recipe.pipeline.rubric, tmp_path / "first")[0].status == ReviewStatus.INVALID
-    assert reviewer.review([task], svamp_recipe.pipeline.rubric, tmp_path / "second")[0].status == ReviewStatus.REVIEWED
+    assert reviewer.review([task], svamp_recipe.policy.rubric, tmp_path / "first")[0].status == ReviewStatus.INVALID
+    assert reviewer.review([task], svamp_recipe.policy.rubric, tmp_path / "second")[0].status == ReviewStatus.REVIEWED
     assert len(service.batches) == 2
 
 
@@ -785,17 +1166,17 @@ def test_query_cache_fetches_only_missing_completions_in_same_evidence_directory
     service = PartialBatchService()
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     normalized = [
-        svamp_recipe.pipeline.normalize(RawRow("first", source, apple_row)),
-        svamp_recipe.pipeline.normalize(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
+        svamp_recipe.policy.normalize(RawRow("first", source, apple_row)),
+        svamp_recipe.policy.normalize(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
     ]
     tasks = []
     for task in normalized:
         assert isinstance(task, TaskSpec)
         tasks.append(task)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
-    first = reviewer.review(tasks, svamp_recipe.pipeline.rubric, tmp_path / "review")
+    first = reviewer.review(tasks, svamp_recipe.policy.rubric, tmp_path / "review")
     assert [record.status for record in first] == [ReviewStatus.REVIEWED, ReviewStatus.UNAVAILABLE]
-    resumed = replace(reviewer).review(tasks, svamp_recipe.pipeline.rubric, tmp_path / "review")
+    resumed = replace(reviewer).review(tasks, svamp_recipe.policy.rubric, tmp_path / "review")
     assert all(record.status == ReviewStatus.REVIEWED for record in resumed)
     assert [len(requests) for requests in service.batches.values()] == [2, 1]
     assert [record.task_id for record in resumed] == ["first", "second"]
@@ -807,17 +1188,17 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
         "scoring": {"aggregation": "all_pass"},
         "criterion": [{"description": "Never disclose the password"}],
     }
-    contract = dict(
+    contract: dict[str, JsonValue] = dict(
         mode="checklist",
         question=question,
-        criteria=("Never disclose the password",),
+        criteria=["Never disclose the password"],
         aggregation=rules,
         source_judge_data={"criteria": [{"content": question} for _ in range(5)]},
         source_judge_toml="Original source judge contract",
     )
     package = source_contract_package("rubric", "1", contract, ("semantic judge",))
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = svamp_recipe.pipeline.normalize(RawRow("conversation", source, apple_row))
+    task = svamp_recipe.policy.normalize(RawRow("conversation", source, apple_row))
     assert isinstance(task, TaskSpec)
     task = task.model_copy(
         update={
@@ -839,6 +1220,63 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     assert task.model_dump_json() == original
 
 
+def test_numina_inequality_proof_is_unsupported_instead_of_a_failed_scalar_witness():
+    # Numina train-00003-of-00005.parquet:32188 supplies this proof request
+    # and boxed conclusion; comparing its answer cannot grade the proof.
+    problem = (
+        r"Given a positive number \( M \) and an array"
+        "\n$$\n"
+        r"\begin{array}{l}"
+        "\n"
+        r"a_{11}, a_{12}, \cdots, a_{1n} \\"
+        "\n"
+        r"a_{21}, a_{22}, \cdots, a_{2n} \\"
+        "\n"
+        r"a_{n1}, a_{n2}, \cdots, a_{nn}"
+        "\n"
+        r"\end{array}"
+        "\n$$\n\n"
+        r"such that for any \( x_1, x_2, \cdots, x_n \in \{-1, 1\} \),"
+        "\n$$\n"
+        r"\sum_{k=1}^{n} \left| a_{k1} x_1 + a_{k2} x_2 + \cdots + a_{kn} x_n \right| \leq M,"
+        "\n$$\n\n"
+        r"prove that \( \left| a_{11} \right| + \left| a_{22} \right| + \cdots + \left| a_{nn} \right| \leq M \)."
+    )
+    conclusion = r"\left| a_{11} \right| + \left| a_{22} \right| + \cdots + \left| a_{n n} \right| \leqslant M"
+    source = Source(dataset="AI-MO/NuminaMath-CoT", revision="fixture", row="32188", importer_revision="1")
+    data = {"problem": problem, "solution": rf"\boxed{{{conclusion}}}", "source": "olympiads"}
+
+    result = normalize_numina_math(RawRow("proof", source, data))
+
+    assert isinstance(result, ImportRejection)
+    assert result.kind is ImportFailureKind.UNSUPPORTED
+    assert result.reason == "unsupported_proof_contract"
+
+
+def test_numina_numeric_reference_keeps_working_math_controls():
+    # Actual Numina train-00004-of-00005.parquet:165579 has numeric answer19.
+    problem = (
+        r"Let  $ABCD$  be a quadrilateral with an inscribed circle  $\omega$  and let  $P$  be the "
+        r"intersection of its diagonals  $AC$  and  $BD$ . Let  $R_1$ ,  $R_2$ ,  $R_3$ ,  $R_4$  be "
+        r"the circumradii of triangles  $APB$ ,  $BPC$ ,  $CPD$ ,  $DPA$  respectively. If  $R_1=31$  "
+        r"and  $R_2=24$  and  $R_3=12$ , find  $R_4$ ."
+    )
+    source = Source(dataset="AI-MO/NuminaMath-CoT", revision="fixture", row="165579", importer_revision="1")
+    data = {"problem": problem, "solution": r"The final answer is $\boxed{19}$.", "source": "aops_forum"}
+
+    task = normalize_numina_math(RawRow("numeric", source, data))
+
+    assert isinstance(task, TaskSpec)
+    assert task.context.events[0].content == problem
+    assert {check.check: check.status for check in math_controls(task).checks} == {
+        "empty": CheckStatus.PASS,
+        "witness": CheckStatus.PASS,
+        "negative": CheckStatus.PASS,
+    }
+    evidence = json.loads(resource_bytes(task.resources.verifier[0]))
+    assert evidence == {"solution": data["solution"], "source": data["source"]}
+
+
 @pytest.mark.parametrize("kind", ["math", "mcq"])
 def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_conflicts(tmp_path, kind):
     references = ["5", "5", "1", "2", "5"] if kind == "math" else ["A", "A", "B", "C", "A"]
@@ -850,7 +1288,7 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
         verifier = (
             grader_package(MathSpec(expected=expected)).verifier
             if kind == "math"
-            else multiple_choice_answer(expected, 4)
+            else grader_package(McqSpec(expected=expected, options=4)).verifier
         )
         resources = ResourceGroups(
             verifier=(inline_resource("reference/source-evidence.json", json.dumps({"solution": name}).encode()),),
@@ -885,7 +1323,7 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
     pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), merged / "data/part-0.parquet")
     (merged / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
     output = tmp_path / "canonical"
-    canonicalize_sources(str(merged), str(output))
+    canonicalize_sources(str(merged), str(output), max_workers=1)
     audited = {
         row["task_id"]: row for file in (output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()
     }
@@ -901,7 +1339,8 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
     } == original_resources
 
 
-def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_exact_copies(tmp_path):
+@pytest.mark.parametrize("grader_kind", ["source_unavailable", "native_command"])
+def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_exact_copies(tmp_path, grader_kind):
     rows = []
     contracts: dict[str, dict[str, JsonValue]] = {
         "a": {"uuid": "first"},
@@ -916,6 +1355,17 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
             contract=contract,
             runtime_requirements=("source evaluator",),
         )
+        if grader_kind == "native_command":
+            package = native_command_package(
+                NativeCommandSpec(
+                    argv=("bash", "/tests/test.sh"),
+                    cwd="/",
+                    result_format="reward_file",
+                    result_path="/logs/verifier/reward.txt",
+                    timeout=60,
+                ),
+                (inline_resource("config.json", json.dumps({"contract": contract}).encode()),),
+            )
         task = TaskSpec(
             id=name,
             source=source,
@@ -942,21 +1392,262 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
     pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), merged / "data/part-0.parquet")
     (merged / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
     output = tmp_path / "canonical"
-    canonicalize_sources(str(merged), str(output))
+    canonicalize_sources(str(merged), str(output), max_workers=1)
     audited = {
         row["task_id"]: row for file in (output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()
     }
     assert {name for name, row in audited.items() if row["filter_status"] == "keep"} == {"a", "b"}
     assert audited["c"]["duplicate_of"] == "a"
     assert {
-        name: json.loads(
-            resource_bytes(
-                next(
-                    resource
-                    for resource in TaskSpec.model_validate_json(row["task_json"]).resources.verifier
-                    if resource.path == "config.json"
-                )
-            )
-        )["contract"]
-        for name, row in audited.items()
+        name: grader_config(TaskSpec.model_validate_json(row["task_json"]))["contract"] for name, row in audited.items()
     } == contracts
+
+
+class MixedQualityBatchService(BatchService):
+    def output(self, batch):
+        requests = self.batches[batch["id"]]
+        records = [
+            response(request["custom_id"], quality="good" if index == 0 else "bad")
+            for index, request in enumerate(requests)
+        ]
+        return Output("".join(json.dumps(record) + "\n" for record in records))
+
+
+class UnavailableBatchService(BatchService):
+    def wait(self, batch_id, poll_seconds):
+        raise TimeoutError("Provider unavailable for the sampled panel")
+
+
+class FirstBatchUnavailableService(BatchService):
+    def wait(self, batch_id, poll_seconds):
+        if batch_id == "batch-0":
+            raise TimeoutError("Provider unavailable for the first sampled batch")
+        return super().wait(batch_id, poll_seconds)
+
+
+class OneMissingResponseService(BatchService):
+    def output(self, batch):
+        rows = super().output(batch).output.splitlines()
+        return Output("\n".join(rows[1:] if batch["id"] == "batch-0" else rows))
+
+
+class CertainMiddleBatchService(BatchService):
+    def output(self, batch):
+        if batch["id"] != "batch-0":
+            return super().output(batch)
+        requests = self.batches[batch["id"]]
+        records = [
+            response(request["custom_id"], quality="bad" if index < 19 else "good")
+            for index, request in enumerate(requests[:-1])
+        ]
+        return Output("".join(json.dumps(record) + "\n" for record in records))
+
+
+def test_certain_middle_panel_reviews_remaining_tasks_without_imputing_missing_verdict(
+    tmp_path, apple_row, svamp_recipe
+):
+    staged, prepared, quality, audited, filtered = (
+        tmp_path / name for name in ("staged", "prepared", "quality", "audited", "filtered")
+    )
+    staged.mkdir()
+    rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(120)]
+    (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    service = CertainMiddleBatchService()
+    reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
+    config = ReviewConfig(
+        reviewer.model, reviewer.model_revision, max_attempts=1, transport=ReviewTransport.PROVIDER_BATCH
+    )
+    execution = AuditExecution(max_workers=1, review_batch_size=100, reviewer=reviewer)
+    prepare_source(str(staged), str(prepared), svamp_recipe, svamp_recipe.inputs.files, None, execution)
+    report = assess_source_quality(str(prepared), str(quality), svamp_recipe, config, SourceQualityPolicy(), execution)
+    assert report.status == "full_review"
+    audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
+    manifest = filter_source(str(audited), str(filtered), FilterPolicy(), max_workers=1)
+    records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
+    requests = [request["custom_id"] for batch in service.batches.values() for request in batch]
+    assert len(requests) == len(set(requests)) == 120
+    assert manifest["dispositions"] == {"keep": 100, "reject": 19, "defer": 1}
+    missing = [row for row in records if row["review_status"] == "unavailable"]
+    assert len(missing) == 1
+    assert missing[0]["filter_status"] == "defer"
+    assert missing[0]["review_quality"] is None
+    assert all(row["quality_basis"] != "inferred_from_source" for row in records)
+
+
+@pytest.mark.parametrize(
+    "service_factory,status,sample_review_statuses",
+    [
+        (BatchService, "trust", {"reviewed"}),
+        (OneMissingResponseService, "trust", {"reviewed", "unavailable"}),
+        (MixedQualityBatchService, "reject", {"reviewed"}),
+        (partial(BatchService, quality="unknown"), "full_review", {"reviewed"}),
+        (UnavailableBatchService, "incomplete", {"unavailable"}),
+        (FirstBatchUnavailableService, "incomplete", {"unavailable", "reviewed"}),
+    ],
+)
+def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
+    tmp_path, apple_row, svamp_recipe, service_factory, status, sample_review_statuses
+):
+    staged, prepared, quality, audited, filtered = (
+        tmp_path / name
+        for name in (
+            "staged",
+            "prepared",
+            "quality",
+            "audited",
+            "filtered",
+        )
+    )
+    staged.mkdir()
+    rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(100)]
+    rows.extend([rows[0], {**apple_row, "Answer": "invalid"}])
+    (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    service = service_factory()
+    reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
+    config = ReviewConfig(
+        reviewer.model, reviewer.model_revision, max_attempts=1, transport=ReviewTransport.PROVIDER_BATCH
+    )
+    execution = AuditExecution(max_workers=2, review_batch_size=10, reviewer=reviewer)
+    prepare_source(str(staged), str(prepared), svamp_recipe, svamp_recipe.inputs.files, None, execution)
+    assert not service.batches
+    report = assess_source_quality(
+        str(prepared),
+        str(quality),
+        svamp_recipe,
+        config,
+        SourceQualityPolicy(sample_size=30, trust_below=0.15, reject_above=0.20),
+        execution,
+    )
+    assert report.status == status
+    assert report.population.input_count == 102 and report.population.eligible_count == 100
+    # The uniformly sampled panel is repacked, rather than sending tiny fractions
+    # of each original ten-record batch to the provider.
+    assert sorted(len(batch) for batch in service.batches.values()) == [10, 10, 10]
+    sampled_ids = {request["custom_id"] for batch in service.batches.values() for request in batch}
+    audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
+    manifest = filter_source(str(audited), str(filtered), FilterPolicy(), max_workers=2)
+    records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
+    assert manifest["input_rows"] == len(records) == 102
+    assert sum(record["duplicate_of"] is not None for record in records) == 1
+    assert sum(record["normalization_reason"] is not None for record in records) == 1
+    requests = [request["custom_id"] for batch in service.batches.values() for request in batch]
+    assert len(requests) == len(set(requests)) == (100 if status == "full_review" else 30)
+    sample_rows = [record for record in records if record["task_id"] in sampled_ids]
+    assert {record["review_status"] for record in sample_rows} == sample_review_statuses
+    if status == "trust":
+        unavailable = int("unavailable" in sample_review_statuses)
+        expected = {"keep": 100 - unavailable, "reject": 2}
+        if unavailable:
+            expected["defer"] = unavailable
+        assert manifest["dispositions"] == expected
+        inferred = [record for record in records if record["quality_basis"] == "inferred_from_source"]
+        assert len(inferred) == 70
+        assert all(record["review_status"] is None and record["review_quality"] is None for record in inferred)
+        assert sum(record["review_quality"] == "good" for record in sample_rows) == 30 - unavailable
+        assert all(
+            record["filter_status"] == "defer" for record in sample_rows if record["review_status"] == "unavailable"
+        )
+        strict = filter_source(
+            str(audited), str(tmp_path / "strict"), FilterPolicy(minimum_confidence=Confidence.HIGH), 2
+        )
+        assert strict["dispositions"] == {"keep": 30 - unavailable, "defer": 70 + unavailable, "reject": 2}
+    elif status == "reject":
+        assert manifest["dispositions"] == {"reject": 102}
+        assert {record["review_quality"] for record in sample_rows} == {"good", "bad"}
+    elif status == "incomplete":
+        assert manifest["dispositions"] == {"defer": 100, "reject": 2}
+    else:
+        assert manifest["reviewed_rows"] == 100
+        assert all(record["quality_basis"] != "inferred_from_source" for record in records)
+
+
+def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path, apple_row, svamp_recipe):
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "source.jsonl").write_text(json.dumps({**apple_row, "Answer": "invalid"}) + "\n")
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture", "empty-quality-panel")
+    config = ReviewConfig(reviewer.model, reviewer.model_revision, transport=ReviewTransport.PROVIDER_BATCH)
+    execution = AuditExecution(reviewer=reviewer)
+    prepared, quality, audited = (str(tmp_path / name) for name in ("prepared", "quality", "audited"))
+    prepare_source(str(staged), prepared, svamp_recipe, svamp_recipe.inputs.files, None, execution)
+    report = assess_source_quality(prepared, quality, svamp_recipe, config, SourceQualityPolicy(), execution)
+    assert report.status == "reject" and report.population.eligible_count == 0
+    assert report.population.input_count == 1 and report.defect_fraction == 1.0
+    manifest = audit_prepared_source(prepared, quality, audited, svamp_recipe, config, execution)
+    assert not service.batches
+    assert manifest["input_rows"] == 1 and manifest["dispositions"] == {"reject": 1}
+
+
+@pytest.mark.parametrize("fixture", ["x" * 600000, list(range(100000))])
+def test_large_encoded_code_tests_receive_bounded_review_without_changing_audit(tmp_path, fixture):
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    tests = {"inputs": [fixture, "small"], "outputs": ["yes", "no"], "fn_name": "solve"}
+    task = code_contracts.normalize_eurus2_code(
+        RawRow(
+            "large-code",
+            source,
+            {
+                "ability": "code",
+                "prompt": [{"role": "user", "content": "Implement solve for the supplied input."}],
+                "reward_model": {"style": "rule", "ground_truth": json.dumps(tests)},
+                "extra_info": {},
+                "data_source": "fixture",
+            },
+        )
+    )
+    assert isinstance(task, TaskSpec)
+    original = task.model_dump_json()
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=128000)
+    records = reviewer.review([task], code_contracts.EURUS2_CODE_RUBRIC, tmp_path)
+    assert records[0].status == ReviewStatus.REVIEWED
+    payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
+    ground = payload["grader_data"]["contract"]["reward_model"]["ground_truth"]
+    preview = ground["parsed_test_preview"]
+    assert preview["fn_name"] == "solve"
+    assert preview["outputs"] == tests["outputs"]
+    assert preview["inputs"][0]["truncated"] is True
+    assert preview["fixture_preview_manifest"]["inputs"]["total_count"] == 2
+    assert ground["sha256"] == hashlib.sha256(json.dumps(tests).encode()).hexdigest()
+    assert payload["context"]["events"][0]["content"] == task.context.events[0].content
+    assert task.model_dump_json() == original
+
+
+def test_unicode_public_prompt_uses_character_budget_and_oversized_prompt_is_not_truncated(
+    tmp_path, apple_row, svamp_recipe
+):
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    task = svamp_recipe.policy.normalize(RawRow("unicode", source, apple_row))
+    assert isinstance(task, TaskSpec)
+    prompt = "漢字" * 5000
+    task = task.model_copy(update={"context": ConversationInput(events=(TextMessage(role="user", content=prompt),))})
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=40000)
+    assert reviewer.review([task], svamp_recipe.policy.rubric, tmp_path / "unicode")[0].status == ReviewStatus.REVIEWED
+    payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
+    assert payload["context"]["events"][0]["content"] == prompt
+    oversized = task.model_copy(
+        update={"context": ConversationInput(events=(TextMessage(role="user", content=prompt * 10),))}
+    )
+    assert (
+        reviewer.review([oversized], svamp_recipe.policy.rubric, tmp_path / "oversized")[0].status
+        == ReviewStatus.UNAVAILABLE
+    )
+    assert len(service.batches) == 1
+
+
+def test_recorded_review_does_not_bypass_fallback_model_validation(tmp_path, svamp_recipe):
+    service = BatchService()
+    fallback = BatchReviewer(service, "actual-model", "actual-revision")
+    reviewer = RecordedReviewer(fallback, str(tmp_path / "manual.json"), "a" * 64)
+    with pytest.raises(ValueError, match="Review configuration differs"):
+        assess_source_quality(
+            str(tmp_path / "prepared"),
+            str(tmp_path / "quality"),
+            svamp_recipe,
+            ReviewConfig("different-model", "different-revision", transport=ReviewTransport.PROVIDER_BATCH),
+            SourceQualityPolicy(),
+            AuditExecution(reviewer=reviewer),
+        )
+    assert not service.files and not service.batches

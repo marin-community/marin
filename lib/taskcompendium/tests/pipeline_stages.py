@@ -12,21 +12,21 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
-from taskcompendium.pipeline.models import DatasetRecipe, FilterPolicy, HFSource, IntendedUse, TaskPipeline
+from taskcompendium.pipeline.models import DatasetRecipe, FilterPolicy, HFSource, IntendedUse, TaskPolicy
 from taskcompendium.pipeline.review import BatchReviewer
-from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, audit_source, filter_source
+from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewTransport, audit_source, filter_source
 
 
 def source_files() -> SourceFiles:
     return SourceFiles(("source.jsonl",), SourceFormat.JSONL)
 
 
-def fixture_recipe(pipeline: TaskPipeline) -> DatasetRecipe:
+def fixture_recipe(policy: TaskPolicy) -> DatasetRecipe:
     return DatasetRecipe(
         name="fixture",
         version="1",
         source=HFSource("fixture/tasks", "1", "default", "train"),
-        pipeline=pipeline,
+        policy=policy,
         intended_use=IntendedUse.TRAIN,
         inputs=RecipeInputs(source_files(), ()),
     )
@@ -41,6 +41,8 @@ def review_config(reviewer: BatchReviewer) -> ReviewConfig:
         reviewer.max_attempts,
         reviewer.retry_max_tokens,
         reviewer.retry_max_prompt_characters,
+        max_batch_bytes=reviewer.max_batch_bytes,
+        transport=ReviewTransport.PROVIDER_BATCH,
     )
 
 
@@ -68,7 +70,7 @@ def run_stages(
             source_files(),
             limit,
         )
-    return filter_source(str(audited), str(filtered), policy)
+    return filter_source(str(audited), str(filtered), policy, max_workers=1)
 
 
 def stage_table(output_path: Path, view: str = "audit") -> pa.Table:

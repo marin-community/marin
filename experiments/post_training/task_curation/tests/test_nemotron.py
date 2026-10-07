@@ -14,7 +14,11 @@ from taskcompendium.models import Source, TextMessage
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.pipeline.sources import staged_file_rows
 
-from experiments.post_training.task_curation.nemotron import RECIPES
+from experiments.post_training.task_curation.datasets.nemotron_ultra.inputs import bind_reference_paths
+from experiments.post_training.task_curation.pipeline import SourceRuntimeConfig
+from experiments.post_training.task_curation.sources import rl_data_pipelines
+
+SOURCES = {source.source_key: source for source in rl_data_pipelines().values()}
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -26,8 +30,8 @@ def _source() -> Source:
 
 
 def test_safety_selection_preserves_request_for_normalization(tmp_path):
-    name = "nemotron_ultra_mopd_ultra_sft_step3200_jailbreak"
-    recipe = RECIPES[name]
+    name = "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak"
+    recipe = SOURCES[name].recipe(SourceRuntimeConfig(images={}, controller_url=None))
     _write_jsonl(
         tmp_path / "mopd.jsonl",
         [
@@ -47,13 +51,15 @@ def test_safety_selection_preserves_request_for_normalization(tmp_path):
     records = list(staged_file_rows(str(tmp_path), "mopd.jsonl", recipe.inputs.files))
     assert len(records) == 1
     assert records[0]["locator"] == "mopd.jsonl:0"
-    result = recipe.pipeline.normalize(RawRow("safety-1", _source(), records[0]["data"]))
+    result = recipe.policy.normalize(RawRow("safety-1", _source(), records[0]["data"]))
     assert isinstance(result, NormalizedTask)
     assert result.task.context.events == (TextMessage(role="user", content="Explain safe handling."),)
 
 
-def test_swe_components_split_by_pinned_membership(tmp_path):
-    membership = tmp_path / "swe-gym-membership/data/train-00000-of-00001.parquet"
+@pytest.mark.parametrize("separate_acquisition", [False, True])
+def test_swe_components_split_by_pinned_membership(tmp_path, separate_acquisition):
+    reference_root = tmp_path / "separate-membership" if separate_acquisition else tmp_path / "swe-gym-membership"
+    membership = reference_root / "data/train-00000-of-00001.parquet"
     membership.parent.mkdir(parents=True)
     pq.write_table(pa.Table.from_pylist([{"instance_id": "gym-1"}]), membership)
     selector = "swe_pivot_len40k"
@@ -64,14 +70,19 @@ def test_swe_components_split_by_pinned_membership(tmp_path):
             {"dataset": selector, "metadata": {"instance_id": "rebench-1"}},
         ],
     )
-    gym = RECIPES["nemotron_ultra_mopd_swe_pivot_len40k_swe_gym_swe_gym"]
-    rebench = RECIPES["nemotron_ultra_mopd_swe_pivot_len40k_nebius_swe_rebench_v2"]
-    assert [row["locator"] for row in staged_file_rows(str(tmp_path), "mopd.jsonl", gym.inputs.files)] == [
-        "mopd.jsonl:0"
-    ]
-    assert [row["locator"] for row in staged_file_rows(str(tmp_path), "mopd.jsonl", rebench.inputs.files)] == [
-        "mopd.jsonl:1"
-    ]
+    gym = SOURCES["MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym"].recipe(
+        SourceRuntimeConfig(images={}, controller_url=None)
+    )
+    rebench = SOURCES["MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2"].recipe(
+        SourceRuntimeConfig(images={}, controller_url=None)
+    )
+    gym_files, rebench_files = gym.inputs.files, rebench.inputs.files
+    if separate_acquisition:
+        roots = {"swe-gym-membership": str(reference_root)}
+        gym_files = bind_reference_paths(gym_files, roots)
+        rebench_files = bind_reference_paths(rebench_files, roots)
+    assert [row["locator"] for row in staged_file_rows(str(tmp_path), "mopd.jsonl", gym_files)] == ["mopd.jsonl:0"]
+    assert [row["locator"] for row in staged_file_rows(str(tmp_path), "mopd.jsonl", rebench_files)] == ["mopd.jsonl:1"]
 
 
 @pytest.mark.parametrize(
@@ -82,8 +93,12 @@ def test_swe_components_split_by_pinned_membership(tmp_path):
         ("Give the set of roots of x^2 - 3x + 2 = 0.", "{1, 2}", "{1, 2}"),
     ],
 )
-def test_math_placeholder_reconstructs_question_and_answer(tmp_path, question, ground_truth, expected):
-    placeholder_file = tmp_path / "placeholder-dapo/data/dapo-math-17k.parquet"
+@pytest.mark.parametrize("separate_acquisition", [False, True])
+def test_math_placeholder_reconstructs_question_and_answer(
+    tmp_path, question, ground_truth, expected, separate_acquisition
+):
+    reference_root = tmp_path / "separate-dapo" if separate_acquisition else tmp_path / "placeholder-dapo"
+    placeholder_file = reference_root / "data/dapo-math-17k.parquet"
     placeholder_file.parent.mkdir(parents=True)
     pq.write_table(
         pa.Table.from_pylist([{"prompt": [{"content": question}], "reward_model": {"ground_truth": ground_truth}}]),
@@ -105,10 +120,17 @@ def test_math_placeholder_reconstructs_question_and_answer(tmp_path, question, g
             }
         ],
     )
-    recipe = RECIPES["nemotron_ultra_mopd_ultra_sft_step3200_math_cot"]
-    record = next(staged_file_rows(str(tmp_path), "mopd.jsonl", recipe.inputs.files))
+    recipe = SOURCES["MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot"].recipe(
+        SourceRuntimeConfig(images={}, controller_url=None)
+    )
+    files = recipe.inputs.files
+    if separate_acquisition:
+        files = bind_reference_paths(
+            files, {"placeholder-dapo": str(reference_root), "placeholder-skywork": str(tmp_path / "skywork")}
+        )
+    record = next(staged_file_rows(str(tmp_path), "mopd.jsonl", files))
     assert record["data"]["placeholder_source"]["record"]["reward_model"]["ground_truth"] == ground_truth
-    result = recipe.pipeline.normalize(RawRow("math-1", _source(), record["data"]))
+    result = recipe.policy.normalize(RawRow("math-1", _source(), record["data"]))
     assert isinstance(result, NormalizedTask)
     assert result.task.context.events == (TextMessage(role="user", content=question),)
     assert grader_config(result.task)["contract"]["expected_answer"] == expected

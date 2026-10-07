@@ -3,15 +3,18 @@
 
 """Source contracts retain unsupported semantics instead of exact-only acceptance."""
 
+import base64
 import json
 from pathlib import Path
 
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 
+from taskcompendium.datasets import nemo_actions, qa_tasks
+from taskcompendium.datasets.source_definitions import unpack_task_binary
 from taskcompendium.grader import grader_config
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
-from taskcompendium.pipeline.datasets import nemo_actions, qa_tasks
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     CheckStatus,
@@ -26,6 +29,7 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
     ReviewVerdict,
 )
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import PlainText
 
@@ -63,20 +67,20 @@ def qa_row(request):
 
 
 @pytest.mark.parametrize("answer", ["\\boxed{PARIS}", "The Paris."])
-def test_openqa_gate_accepts_source_answer_shapes_and_preserves_private_judge(qa_row, answer):
+def test_openqa_preserves_private_source_contract_without_local_scoring(qa_row, answer):
     task = qa_tasks.normalize(qa_row)
     assert isinstance(task, TaskSpec)
     result = grade(task, answer)
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.UNAVAILABLE, None)
     assert "Accept substantive equivalence" not in task.context.events[0].content
-    assert grader_config(task)["source_judge_data"] == qa_row.data["verifier_data"]
+    assert grader_config(task)["contract"]["source_judge_data"] == qa_row.data["verifier_data"]
 
 
 def test_openqa_static_quality_acceptance_preserves_unbound_answer_grading(qa_row):
     task = qa_tasks.normalize(qa_row)
     assert isinstance(task, TaskSpec)
     result = grade(task, "France's capital is Paris.")
-    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+    assert (result.status, result.reward) == (Outcome.UNAVAILABLE, None)
     report = qa_tasks.verification_report(task)
     review = ReviewRecord(
         task_id=task.id,
@@ -94,6 +98,19 @@ def test_openqa_static_quality_acceptance_preserves_unbound_answer_grading(qa_ro
     decision = task_decision(task.id, report.checks, review, FilterPolicy())
     assert decision.disposition == Disposition.KEEP
     assert report.checks[-1].status == CheckStatus.UNSUPPORTED
+
+
+def test_openqa_retains_original_private_exact_gate_and_judge():
+    fixture = Path(__file__).parents[3] / "experiments/post_training/tasktrove/fixtures/nemotron_openqa.tar.gz"
+    decoded = unpack_task_binary({"task_binary": fixture.read_bytes(), "path": "openqa/fixture"}, StoragePath("/tmp"))
+    source = Source(dataset="open-thoughts/TaskTrove", revision="fixture-v1", row="fixture", importer_revision="1")
+    task = qa_tasks.normalize(RawRow("openqa", source, decoded))
+    assert isinstance(task, TaskSpec)
+    assert task.verifier.kind == "source_unavailable"
+    private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
+    for path in ("tests/test.sh", "tests/exact_gate", "tests/sitecustomize.py", "tests/judge.toml"):
+        assert private[path.removeprefix("tests/")] == base64.b64decode(decoded["files"][path])
+    assert "test.sh" not in {resource.path for resource in task.resources.worker}
 
 
 def test_nemo_reference_schema_violation_is_not_hidden_by_matching_comparator():

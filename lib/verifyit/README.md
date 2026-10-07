@@ -71,6 +71,12 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
+Pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
+checks the interpreter and JSON-report plugin from a temporary directory isolated from task
+imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
+baseline remains an infrastructure error. The task's original import paths and tests still
+run unchanged, so a candidate named after a standard-library module is graded as submitted.
+
 For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
 budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
 request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with
@@ -132,9 +138,11 @@ uv run --group test pytest lib/verifyit/tests
 
 ## Candidate scoring
 
-Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset policy belongs to the converter that emits a grader: source parsing conventions, calendar postconditions and abstention rules should be packaged as task-owned scripts.
+Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions remain in the pinned source package or task resources.
 
 A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
+
+For a pinned Python source scorer, [`execution/source_callable.py`](src/verifyit/execution/source_callable.py) is a transport script. It reads the task's private descriptor, passes declared inputs to the original image-installed function, and writes its returned reward and detail. It does not define a scoring rule. The dataset declaration chooses the source function, input projection, image, and source hash. See the [execution](src/verifyit/execution/README.md) and [mode](src/verifyit/modes/README.md) boundaries.
 
 `StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
 Its TOML reference is encoded as a JSON string so null and nested JSON types survive

@@ -9,7 +9,10 @@ from typing import Any
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter
 from verifyit.json_objects import unique_object
+from verifyit.spec import FunctionCall as CandidateCall
+from verifyit.spec import PredictedActionSpec
 
+from taskcompendium.grading import verifier_descriptor
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -24,7 +27,6 @@ from taskcompendium.models import (
     ToolResult,
 )
 from taskcompendium.submission import FinalAction
-from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
@@ -185,7 +187,11 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Fin
         environment_requirements=EnvironmentRequirements(),
         final_tools=functions,
         answer_type=AnswerType.NATIVE_ACTION,
-        verifier=predicted_action_verifier(expected_calls),
+        verifier=verifier_descriptor(
+            PredictedActionSpec(
+                expected_calls=tuple(CandidateCall(call.name, call.arguments) for call in expected_calls)
+            )
+        ),
         source=source,
     )
     convention = FinalAction(

@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Nemotron multichallenge-advanced: a checklist judge over the final turn of a conversation.
+"""Legacy checklist approximation of the multichallenge-advanced source grader.
 
-The old grader (``rewardkit`` driven by ``tests/judge.toml``) showed a judge model the conversation
-transcript plus the candidate's final response and asked one yes/no question per criterion,
-scoring the mean. That is ``judge`` mode with the ``checklist`` rubric: the questions come from the
-``Requirement:`` block of each criterion description and the transcript ships as the judge's context.
+The original RewardKit grader uses numeric criteria and ``all_pass``: every normalized score
+must be greater than zero. This legacy conversion instead extracts ``Requirement:`` questions
+into VerifyIT's binary checklist with mean aggregation and different judge prompts. It is not
+source-faithful. The task-curation MultiChallenge adapter preserves the original private runtime
+contract and leaves execution unsupported until that runtime is bound.
 """
 
 import re

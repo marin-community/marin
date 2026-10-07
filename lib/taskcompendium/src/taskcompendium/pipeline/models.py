@@ -39,8 +39,17 @@ class RawRow:
     data: Mapping[str, Any]
 
 
+class ImportFailureKind(StrEnum):
+    SOURCE_DEFECT = "source_defect"
+    UNSUPPORTED = "unsupported"
+    CONVERTER_ERROR = "converter_error"
+
+
 class ImportRejection(BaseModel):
+    """An import failure; only demonstrated source defects warrant rejection."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: ImportFailureKind
     reason: str
     detail: str
 
@@ -84,7 +93,7 @@ class NormalizedTask:
 
 
 @dataclass(frozen=True)
-class TaskPipeline:
+class TaskPolicy:
     """Reusable conversion and review policy, independent of source acquisition."""
 
     normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
@@ -99,7 +108,7 @@ class DatasetRecipe:
     name: str
     version: str
     source: HFSource | GeneratedSource
-    pipeline: TaskPipeline
+    policy: TaskPolicy
     intended_use: IntendedUse
     inputs: RecipeInputs
 
@@ -107,12 +116,14 @@ class DatasetRecipe:
 class CheckStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"
+    SKIPPED = "skipped"
     UNSUPPORTED = "unsupported"
     INFRA_ERROR = "infra_error"
 
 
 class GraderReadiness(StrEnum):
     READY = "ready"
+    SOURCE_SAMPLED = "source_sampled"
     FAILED = "failed"
     UNVERIFIED = "unverified"
 
@@ -175,7 +186,9 @@ class ReviewVerdict(BaseModel):
     confidence: Confidence
     reference_status: ReferenceStatus
     defects: list[Defect]
-    evidence: str = Field(min_length=1, max_length=1000)
+    # Keep the provider's brevity guidance and exact request identity, but retain
+    # longer explanations rather than invalidate an otherwise usable verdict.
+    evidence: str = Field(min_length=1, json_schema_extra={"maxLength": 1000})
 
 
 class ReviewStatus(StrEnum):
@@ -195,11 +208,19 @@ class ReviewRecord(BaseModel):
 class Disposition(StrEnum):
     KEEP = "keep"
     REJECT = "reject"
+    DEFER = "defer"
+
+
+class QualityBasis(StrEnum):
+    DIRECT_REVIEW = "direct_review"
+    INFERRED_FROM_SOURCE = "inferred_from_source"
+    SOURCE_REJECTED = "source_rejected"
+    SOURCE_INCOMPLETE = "source_incomplete"
 
 
 @dataclass(frozen=True)
 class FilterPolicy:
-    id: str = "binary-static-v1"
+    id: str = "evidence-static-v2"
     minimum_confidence: Confidence = Confidence.MEDIUM
 
 
@@ -283,3 +304,5 @@ class TaskAudit(BaseModel):
     lineage: RewriteLineage | None = None
     normalization_changes: tuple[NormalizationChange, ...] = ()
     intended_use: IntendedUse | None = None
+    quality_basis: QualityBasis | None = None
+    source_quality_report: str | None = None

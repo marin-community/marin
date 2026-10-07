@@ -9,7 +9,7 @@ from typing import Any
 import pyarrow as pa
 
 from taskcompendium.models import TextMessage
-from taskcompendium.pipeline.models import TaskAudit
+from taskcompendium.pipeline.models import QualityBasis, ReviewStatus, TaskAudit
 from taskcompendium.pipeline.verification import grader_readiness
 
 TASK_SCHEMA = pa.schema(
@@ -36,6 +36,7 @@ TASK_SCHEMA = pa.schema(
         ("raw_json", pa.string()),
         ("original_task_json", pa.string()),
         ("parent_id", pa.string()),
+        ("normalization_kind", pa.string()),
         ("normalization_reason", pa.string()),
         ("normalization_detail", pa.string()),
         ("filter_status", pa.string()),
@@ -48,6 +49,8 @@ TASK_SCHEMA = pa.schema(
         ("review_defects", pa.list_(pa.string())),
         ("review_evidence", pa.string()),
         ("review_detail", pa.string()),
+        ("quality_basis", pa.string()),
+        ("source_quality_report", pa.string()),
         ("checks", pa.list_(pa.struct([("check", pa.string()), ("status", pa.string()), ("detail", pa.string())]))),
         ("grader_readiness", pa.string()),
         ("cleanup_status", pa.string()),
@@ -57,7 +60,7 @@ TASK_SCHEMA = pa.schema(
         ("cleanup_detail", pa.string()),
         ("cleanup_lineage_json", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"6"},
+    metadata={b"taskcompendium.curation_schema": b"8"},
 )
 
 
@@ -69,6 +72,9 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
     cleanup = audit.cleanup
     proposal = cleanup.proposal if cleanup is not None else None
     rejection = audit.normalization_rejection
+    quality_basis = audit.quality_basis
+    if quality_basis is None and review is not None and review.status == ReviewStatus.REVIEWED:
+        quality_basis = QualityBasis.DIRECT_REVIEW
     data = audit.raw.get("data", {}) if audit.raw is not None else {}
     changes = [change.model_dump(mode="json") for change in audit.normalization_changes]
     if not changes:
@@ -95,6 +101,7 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "raw_json": json.dumps(audit.raw, ensure_ascii=False, allow_nan=False) if audit.raw is not None else None,
         "original_task_json": audit.original.model_dump_json() if audit.original is not None else None,
         "parent_id": audit.original.id if audit.original is not None else None,
+        "normalization_kind": rejection.kind.value if rejection is not None else None,
         "normalization_reason": rejection.reason if rejection is not None else None,
         "normalization_detail": rejection.detail if rejection is not None else None,
         "filter_status": decision.disposition.value if decision is not None else None,
@@ -107,6 +114,8 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "review_defects": [defect.value for defect in verdict.defects] if verdict is not None else [],
         "review_evidence": verdict.evidence if verdict is not None else None,
         "review_detail": review.detail if review is not None else None,
+        "quality_basis": quality_basis.value if quality_basis is not None else None,
+        "source_quality_report": audit.source_quality_report,
         "checks": [check.model_dump(mode="json") for check in audit.checks],
         "grader_readiness": grader_readiness(audit.checks).value,
         "cleanup_status": cleanup.status.value if cleanup is not None else None,

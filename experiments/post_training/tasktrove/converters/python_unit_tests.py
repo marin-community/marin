@@ -35,8 +35,8 @@ PYTEST_INSTALL = (
 )
 
 
-def _test_file(task: TaskFiles) -> str | Rejected:
-    candidates = [path for path in TEST_FILES if path in task.files]
+def _test_file(task: TaskFiles, test_files: tuple[str, ...]) -> str | Rejected:
+    candidates = [path for path in test_files if path in task.files]
     if len(candidates) != 1:
         return Rejected(
             ConvertStatus.UNSUPPORTED_VARIANT,
@@ -69,9 +69,9 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
     return {**files, SOLVE_SH: ORACLE_SCRIPT.encode()}
 
 
-def convert(task: TaskFiles) -> ConvertedTask | Rejected:
+def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> ConvertedTask | Rejected:
     """Convert one self-contained Python task without preserving its legacy shell grader."""
-    test_file = _test_file(task)
+    test_file = _test_file(task, test_files)
     if isinstance(test_file, Rejected):
         return test_file
     solution_files = _solution_files(task)

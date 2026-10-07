@@ -4,8 +4,9 @@
 """A multiple-choice answer verifier independent of a source importer."""
 
 import pytest
+from verifyit.spec import McqSpec
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import Outcome, grade_answer, verifier_descriptor
 from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import (
     AnswerType,
@@ -17,7 +18,6 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.submission import PlainText
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 @pytest.mark.parametrize(
@@ -30,7 +30,7 @@ def test_hand_authored_multiple_choice_answer(response, reward):
         context=ConversationInput(events=(TextMessage(role="user", content="Choose A, B, C, or D."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=multiple_choice_answer("B", 4),
+        verifier=verifier_descriptor(McqSpec(expected="B", options=4)),
         source=Source(dataset="hand-authored", revision="1", row="mcq", importer_revision="1"),
     )
     convention = PlainText(id="plain")

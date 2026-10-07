@@ -8,9 +8,16 @@ import json
 import pytest
 from pydantic import PrivateAttr
 from verifyit.json_comparison import NumericTypePolicy
-from verifyit.spec import Mode
+from verifyit.spec import McqSpec, Mode
 
-from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
+from taskcompendium.grading import (
+    Outcome,
+    exact_answer,
+    grade_answer,
+    numeric_answer,
+    structured_exact,
+    verifier_descriptor,
+)
 from taskcompendium.grading_contract import GradingAttempt, StateSubmission, SubmissionFailure, TextSubmission
 from taskcompendium.models import (
     SCHEMA_VERSION,
@@ -31,7 +38,6 @@ from taskcompendium.submission import (
     PlainText,
     SubmissionConvention,
 )
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 def _task(verifier, answer_type=AnswerType.TEXT):
@@ -150,7 +156,7 @@ def test_invalid_private_verifier_is_not_scored_as_agent_failure():
     [
         ("exact", exact_answer("yes"), AnswerType.TEXT, "yes", "no"),
         ("numeric", numeric_answer("12.0", tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
-        ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
+        ("mcq", verifier_descriptor(McqSpec(expected="B", options=3)), AnswerType.TEXT, "B", "A"),
     ],
 )
 def test_canonical_verifier_kinds_serialize_load_and_grade(wire_kind, verifier, answer_type, correct, wrong):

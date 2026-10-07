@@ -3,15 +3,22 @@
 
 """Private grader packages and their observable verdicts."""
 
-from verifyit.spec import JsonSchemaSpec
+import json
 
-from taskcompendium.grader import GraderPackage, grader_package, script_package
+import pytest
+from shellbox.machine import Backend, DockerImage, MachineSpec
+from verifyit.spec import JsonSchemaSpec, ScriptSpec
+
+from taskcompendium.grader import GraderPackage, grader_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    FunctionDefinition,
     ResourceGroups,
     Source,
     TaskSpec,
@@ -20,7 +27,9 @@ from taskcompendium.models import (
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
+from taskcompendium.submission import FinalAction, PlainText
+
+from .test_executable_ingestion import GradingMachines
 
 PLAIN = PlainText(id="plain")
 
@@ -79,7 +88,10 @@ verdict = {
 }
 (logs / 'verdict.json').write_text(json.dumps(verdict))
 """
-    package = script_package(script, {"expected": 3})
+    package = grader_package(
+        ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=60),
+        (inline_resource("grader.py", script), inline_resource("config.json", b'{"expected": 3}')),
+    )
     config_resource = package.resources[1].model_copy(update={"mode": "0600", "mtime_ns": 1_234_567_890})
     package = GraderPackage(package.verifier, (package.resources[0], config_resource))
     original = _task(package, AnswerType.STATE)
@@ -99,3 +111,87 @@ verdict = {
         None,
         "runner failed",
     )
+
+
+@pytest.fixture
+def native_script_task():
+    script = b"""import json
+import os
+from pathlib import Path
+
+workspace = Path(os.environ['VERIFYIT_WORKSPACE'])
+logs = Path(os.environ['VERIFYIT_LOGS_DIR'])
+event = json.loads((workspace / 'answer.txt').read_text())
+reward = float(event['type'] == 'assistant_tool_calls'
+    and len(event['calls']) == 1
+    and event['calls'][0]['name'] == 'lookup'
+    and event['calls'][0]['arguments'] == {'index': 3})
+(logs / 'verdict.json').write_text(json.dumps({'status': 'scored', 'reward': reward, 'detail': {}}))
+"""
+    task = _task(
+        grader_package(
+            ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=60),
+            (inline_resource("grader.py", script),),
+        )
+    ).model_copy(
+        update={
+            "answer_type": AnswerType.NATIVE_ACTION,
+            "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+        }
+    )
+    return TaskSpec.model_validate_json(task.model_dump_json())
+
+
+@pytest.mark.parametrize(
+    "event, expected_reward",
+    [
+        (
+            AssistantToolCalls(calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": 3}),)),
+            1.0,
+        ),
+        (
+            AssistantToolCalls(calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": "3"}),)),
+            0.0,
+        ),
+        (TextMessage(role="assistant", content="lookup(index=3)"), 0.0),
+    ],
+)
+def test_native_script_grader_receives_terminal_call_and_argument_types(native_script_task, event, expected_reward):
+    trace = ConversationTrace(events=(*native_script_task.context.events, event))
+    result = grade_task(native_script_task, FinalAction(id="native"), trace)
+    assert (result.status, result.reward) == (Outcome.GRADED, expected_reward)
+
+
+def test_isolated_native_script_receives_terminal_event_in_submission_archive(native_script_task):
+    image = "test@sha256:" + "a" * 64
+    task = native_script_task.model_copy(
+        update={
+            "verifier": native_script_task.verifier.model_copy(
+                update={
+                    "environment_requirements": EnvironmentRequirements(
+                        docker_image=image, compatible_backends=(Backend.DOCKER,)
+                    )
+                }
+            )
+        }
+    )
+    event = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": 3}),),
+        content="A native action",
+    )
+    machines = GradingMachines()
+    result = grade_task(
+        task,
+        FinalAction(id="native"),
+        ConversationTrace(events=(*task.context.events, event)),
+        RuntimeEvidence({}, "{}"),
+        machine_factory=machines,
+        machine_spec=MachineSpec(DockerImage(image)),
+    )
+    assert result.status == Outcome.GRADED
+    assert json.loads(machines.machines[0].files["/app/answer.txt"]) == {
+        "type": "assistant_tool_calls",
+        "calls": [{"call_id": "call-1", "name": "lookup", "arguments": {"index": 3}}],
+        "content": "A native action",
+    }
+    assert machines.machines[0].closed
