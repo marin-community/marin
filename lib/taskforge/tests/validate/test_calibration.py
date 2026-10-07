@@ -325,15 +325,15 @@ NO_READ: tuple[str, ...] = ()
     ],
 )
 def test_tier_table(role, changes, facts, expected):
-    tier, kind, rule, reason = tier_of(role, signals(**changes), facts)
+    ruling = tier_of(role, signals(**changes), facts)
 
-    assert (tier, kind, rule) == expected and reason
+    assert (ruling.tier, ruling.kind, ruling.rule) == expected and ruling.reason
 
 
 def test_a_failed_pass_records_why_it_failed():
-    assert tier_of(SHORTCUT, signals(passed=False, gave_up=True), FILE_FACTS)[3] == "gave up"
-    assert tier_of(SHORTCUT, signals(passed=False, budget_exhausted=True), FILE_FACTS)[3] == "budget exhausted"
-    assert tier_of(SHORTCUT, signals(passed=False), FILE_FACTS)[3] == "rejected"
+    assert tier_of(SHORTCUT, signals(passed=False, gave_up=True), FILE_FACTS).reason == "gave up"
+    assert tier_of(SHORTCUT, signals(passed=False, budget_exhausted=True), FILE_FACTS).reason == "budget exhausted"
+    assert tier_of(SHORTCUT, signals(passed=False), FILE_FACTS).reason == "rejected"
 
 
 async def test_a_hedged_text_pass_is_a_repair_with_its_transcript_control(trial, lenient_text_task, rounds):

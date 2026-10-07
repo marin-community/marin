@@ -77,8 +77,8 @@ class FindingKind(StrEnum):
     CONTROL_VIOLATED = "control_violated"
     """A replayed control's grade missed its expectation: the grader or the controls are wrong."""
     SHORTCUT_PASSED = "shortcut_passed"
-    """An adversary pass whose answer did not come from the task's work (shortcut or ambiguity role), or a
-    shortcut pass on text no honest run produced."""
+    """An adversary pass whose answer did not come from the task's work (rows 1 and 2 of ``tier_of`` for any
+    role, row 4 for the shortcut and ambiguity roles), or a shortcut pass on text no honest run produced."""
     LEAK_PASSED = "leak_passed"
     """A leak pass that never read the task's inputs, or one on text no honest run produced: what the machine or
     instruction revealed was accepted."""
@@ -227,6 +227,16 @@ class AdversarySignals:
     inputs_written: tuple[str, ...]
     submission: str | None
     comparison: Comparison
+
+
+@dataclass(frozen=True)
+class TierRuling:
+    """The verdict of the first ``tier_of`` row that fires: the tier, the finding kind it reports, the row and why."""
+
+    tier: DefectTier
+    kind: FindingKind | None
+    rule: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -649,10 +659,8 @@ def adversary_signals(
     )
 
 
-def tier_of(
-    role: AdversaryRole, s: AdversarySignals, facts: TaskFacts
-) -> tuple[DefectTier, FindingKind | None, str, str]:
-    """(tier, finding kind, rule id, reason) of one graded adversary outcome; the first row that fires decides.
+def tier_of(role: AdversaryRole, s: AdversarySignals, facts: TaskFacts) -> TierRuling:
+    """The ruling on one graded adversary outcome; the first row that fires decides.
 
     Rows 1 and 2 say the answer did not come from the task's work, whatever the role, so they condemn the
     grader (``SHORTCUT_PASSED``). Row 4 says the same for the shortcut and ambiguity roles; for the leak
@@ -663,24 +671,24 @@ def tier_of(
     """
     if not s.passed:
         reason = "gave up" if s.gave_up else "budget exhausted" if s.budget_exhausted else "rejected"
-        return DefectTier.NONE, None, "0", reason
+        return TierRuling(DefectTier.NONE, None, "0", reason)
     if s.inputs_written:
         written = json.dumps(list(s.inputs_written))
-        return (
+        return TierRuling(
             DefectTier.REPAIR,
             FindingKind.SHORTCUT_PASSED,
             "1",
             f"passed after writing {written}: the grader trusts files the agent can change",
         )
     if facts.machine_answer and s.shell_calls == 0:
-        return (
+        return TierRuling(
             DefectTier.REPAIR,
             FindingKind.SHORTCUT_PASSED,
             "2",
             "passed without a shell command: the grader credited an untouched workspace",
         )
     if role is AdversaryRole.AMBIGUITY and s.gave_up:
-        return (
+        return TierRuling(
             DefectTier.NONE,
             None,
             "3",
@@ -688,13 +696,13 @@ def tier_of(
         )
     if facts.input_paths and not s.inputs_consumed:
         if role is AdversaryRole.LEAK:
-            return (
+            return TierRuling(
                 DefectTier.REPAIR,
                 FindingKind.LEAK_PASSED,
                 "4",
                 "passed without reading any input file: the environment or instruction revealed an accepted answer",
             )
-        return (
+        return TierRuling(
             DefectTier.REPAIR,
             FindingKind.SHORTCUT_PASSED,
             "4",
@@ -706,31 +714,23 @@ def tier_of(
             if role is AdversaryRole.AMBIGUITY
             else "the grader accepted text no honest run produced"
         )
-        return DefectTier.REPAIR, PASS_KINDS[role], "5", f"{accepted}: {_clip(json.dumps(s.submission))}"
+        return TierRuling(DefectTier.REPAIR, PASS_KINDS[role], "5", f"{accepted}: {_clip(json.dumps(s.submission))}")
     if role is AdversaryRole.AMBIGUITY and s.comparison is Comparison.MATCH:
-        return DefectTier.NONE, None, "6", "the stated reading produced the honest answer"
+        return TierRuling(DefectTier.NONE, None, "6", "the stated reading produced the honest answer")
     if role is AdversaryRole.AMBIGUITY:
         compared = (
             "the submission cannot be compared for a machine-state answer"
             if facts.machine_answer
             else "no honest submission to compare it with"
         )
-        return DefectTier.NOTED, PASS_KINDS[role], "7", f"passed under a stated reading; {compared}"
+        return TierRuling(DefectTier.NOTED, PASS_KINDS[role], "7", f"passed under a stated reading; {compared}")
     read = f"read {json.dumps(list(s.inputs_consumed))} and " if s.inputs_consumed else ""
-    return (
+    return TierRuling(
         DefectTier.NOTED,
         PASS_KINDS[role],
         "7",
         f"solved against orders: {read}submitted the answer; a role violation, not a task defect",
     )
-
-
-def assess(
-    role: AdversaryRole, index: int, outcome: Graded, facts: TaskFacts, references: Sequence[str]
-) -> AdversaryAssessment:
-    signals = adversary_signals(role, outcome, facts, references)
-    tier, _, rule, reason = tier_of(role, signals, facts)
-    return AdversaryAssessment(role, index, signals, tier, rule, reason)
 
 
 def _control_ids(controls: Sequence[ControlOutcome], verdict: ControlVerdict) -> tuple[str, ...]:
@@ -766,7 +766,8 @@ def _adversary_findings(
             if not isinstance(outcome, Graded):
                 continue
             signals = adversary_signals(role, outcome, evidence.facts, references)
-            tier, kind, rule, reason = tier_of(role, signals, evidence.facts)
+            ruling = tier_of(role, signals, evidence.facts)
+            tier, kind, rule, reason = ruling.tier, ruling.kind, ruling.rule, ruling.reason
             assessments.append(AdversaryAssessment(role, index, signals, tier, rule, reason))
             if kind is None:
                 continue
