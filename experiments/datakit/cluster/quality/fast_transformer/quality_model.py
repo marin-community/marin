@@ -40,7 +40,15 @@ class QualityPin:
     """:func:`calibration_sha256` over the calibration file."""
 
     tokenizer: str
-    """HuggingFace name of the corpus tokenizer whose ids the scorer reads."""
+    """``<repo>@<commit>`` of the corpus tokenizer whose ids the scorer reads.
+
+    ``load_tokenizer`` resolves the commit, so the pinned revision is what workers
+    load, not whatever the repository holds today."""
+
+    def __post_init__(self):
+        repo, _, revision = self.tokenizer.partition("@")
+        if not repo or not revision:
+            raise ValueError(f"tokenizer {self.tokenizer!r} must be pinned as <repo>@<commit>")
 
 
 def quality_model_dir(pin: QualityPin) -> str:

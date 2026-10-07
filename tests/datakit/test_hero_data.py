@@ -163,3 +163,14 @@ def test_fusion_scores_refuse_a_pin_that_is_another_model():
 def test_the_bucket_driver_resolves_to_the_registered_quality_path():
     (step,) = quality_run.build_bucket_steps(["stack-v3"])
     assert step.output_path == hero_data.quality("stack-v3").output_path
+
+
+def test_score_step_identity_moves_with_the_tokenizer_revision(monkeypatch):
+    # The score step tokenizes the text itself, so a different tokenizer commit is a
+    # different dataset and must not share a path the skip-existing rerun would reuse.
+    (before,) = quality_run.build_score_steps(["stack-v3"])
+    repo = hero_data.NEMOTRON_TOKENIZER.name
+    monkeypatch.setattr(hero_data, "NEMOTRON_88K", replace(hero_data.NEMOTRON_88K, tokenizer=f"{repo}@ffffffff"))
+    (after,) = quality_run.build_score_steps(["stack-v3"])
+
+    assert before.output_path != after.output_path

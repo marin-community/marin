@@ -99,7 +99,12 @@ class TokenizerPin:
     """HuggingFace tokenizer name."""
 
     revision: str
-    """Immutable HF commit. Identity-only -- ``load_tokenizer`` takes no revision."""
+    """Immutable HF commit. Hashed into the tokenize step."""
+
+    @property
+    def pinned_name(self) -> str:
+        """``<name>@<revision>``, the form ``load_tokenizer`` resolves to that commit."""
+        return f"{self.name}@{self.revision}"
 
     artifact_version: int
     """``TOKENIZED_ATTR_DATA_VERSION`` as of that run. Part of the tokenize hash."""
@@ -147,7 +152,7 @@ NEMOTRON_88K = QualityPin(
     model_path="datakit/models/quality/nemotron_88k",
     model_sha256="453745d4e06854eb8b9545f3014a8c5b59ad3a3072a18d1e26e0b916ca393196",
     calibration_sha256="b89b7b782e606394fd341e7705d438521e96fcb553f769c6c1dd520331da5758",
-    tokenizer=NEMOTRON_TOKENIZER.name,
+    tokenizer=NEMOTRON_TOKENIZER.pinned_name,
 )
 
 

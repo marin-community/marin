@@ -153,7 +153,7 @@ def test_scoring_refuses_bytes_that_are_not_the_pinned_ones(tmp_path):
         model_path="model",
         model_sha256=model_sha256(str(root)),
         calibration_sha256=calibration_sha256(str(root)),
-        tokenizer="tok",
+        tokenizer="tok@0123abcd",
     )
 
     assert require_pinned_model(pin, str(root)) == pin.model_sha256
@@ -167,3 +167,9 @@ def test_scoring_refuses_bytes_that_are_not_the_pinned_ones(tmp_path):
 def test_a_model_dir_without_an_artifact_does_not_digest(tmp_path):
     with pytest.raises(ValueError, match=r"no \.eqx artifact"):
         model_sha256(str(tmp_path))
+
+
+def test_a_tokenizer_without_a_revision_is_refused():
+    # A bare repo name is mutable: the same pin could tokenize to different ids.
+    with pytest.raises(ValueError, match="<repo>@<commit>"):
+        QualityPin(name="pin", model_path="m", model_sha256="0", calibration_sha256="0", tokenizer="tok")

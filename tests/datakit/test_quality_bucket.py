@@ -72,7 +72,7 @@ def make_pin(root: Path, knots: dict = KNOTS) -> QualityPin:
         model_path="models/pin",
         model_sha256="unused",
         calibration_sha256=calibration_sha256(str(model_dir)),
-        tokenizer="tok",
+        tokenizer="tok@0123abcd",
     )
 
 

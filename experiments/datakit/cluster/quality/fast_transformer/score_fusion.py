@@ -69,7 +69,9 @@ logger = logging.getLogger(__name__)
 FUSION_SCORES_VERSION = 1
 # Documents per tokenize call and per forward. Padded to a constant shape so the
 # forward compiles once; the largest shard holds 2.68M documents, so a batch
-# bounds the resident tokens and embeddings at ~6 KB a document.
+# bounds the resident tokens and embeddings at ~6 KB a document. The batch shape
+# moves the scores (up to 1.6e-3 between 4,096 and 32,768), so it is hashed into
+# the step identity rather than exposed as a knob.
 BATCH_DOCS = 4096
 # 128 characters per token over the scorer's 512-token window.
 TEXT_CHAR_CAP = 65_536
@@ -109,6 +111,7 @@ def fusion_hash_attrs(pin: QualityPin) -> dict[str, str | int]:
         "model_sha256": pin.model_sha256,
         "tokenizer": pin.tokenizer,
         "text_char_cap": TEXT_CHAR_CAP,
+        "batch_docs": BATCH_DOCS,
         "v": FUSION_SCORES_VERSION,
     }
 
@@ -291,7 +294,6 @@ def _score_shard(
     embedding_paths: tuple[str, ...],
     model_dir: str,
     pin: QualityPin,
-    batch_docs: int,
 ) -> Iterator[pa.RecordBatch]:
     """Score one normalized shard against its embedding shard, in the normalized order."""
     scorer = pinned_scorer(model_dir, pin)
@@ -300,11 +302,11 @@ def _score_shard(
     where = f"shard {shard.shard_idx} ({embedding_path})"
     embeddings = read_aligned_column(embedding_path, "embedding", where)
     documents = 0
-    for batch in rebatch(batches, batch_docs):
+    for batch in rebatch(batches, BATCH_DOCS):
         ids = batch.column("id").to_numpy(zero_copy_only=False)
         tokens = pad_ids(first_chunk_ids(ids, batch.column("text").to_pylist()), scorer.max_tokens, vocab_size)
         embedding = normalize_embeddings(embeddings.take(ids))
-        scores = predict(scorer.model, tokens, batch_size=batch_docs, doc_embed=embedding)
+        scores = predict(scorer.model, tokens, batch_size=BATCH_DOCS, doc_embed=embedding)
         documents += len(ids)
         yield pa.RecordBatch.from_arrays([batch.column("id"), pa.array(scores, type=pa.float32())], schema=SCORE_SCHEMA)
     embeddings.require_consumed()
@@ -319,7 +321,6 @@ def score_fusion(
     normalized: NormalizedData,
     embedding_dir: str,
     quality_model: QualityPin,
-    batch_docs: int = BATCH_DOCS,
     worker_resources: ResourceConfig = WORKER_RESOURCES,
     task_resources: ResourceConfig = TASK_RESOURCES,
     max_workers: int = MAX_WORKERS,
@@ -344,7 +345,6 @@ def score_fusion(
                 embedding_paths=embedding_paths,
                 model_dir=model_dir,
                 pin=quality_model,
-                batch_docs=batch_docs,
             )
         )
         .write_parquet(shard_output_pattern(output_path, basenames), schema=SCORE_SCHEMA, skip_existing=True)
@@ -376,7 +376,6 @@ def fusion_score_step(
     normalized: StepSpec,
     embedding: StepSpec,
     quality_model: QualityPin,
-    batch_docs: int = BATCH_DOCS,
     worker_resources: ResourceConfig = WORKER_RESOURCES,
     task_resources: ResourceConfig = TASK_RESOURCES,
     max_workers: int = MAX_WORKERS,
@@ -397,7 +396,6 @@ def fusion_score_step(
             normalized=read_artifact(normalized.output_path, NormalizedData),
             embedding_dir=embedding.output_path,
             quality_model=quality_model,
-            batch_docs=batch_docs,
             worker_resources=worker_resources,
             task_resources=task_resources,
             max_workers=max_workers,
