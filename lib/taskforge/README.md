@@ -24,6 +24,7 @@ src/taskforge/
   validate/   trials, the failure classifier, control replay, evidence aggregation, solver and
               adversary trials, calibration, attempt files as resumable evidence
   review/     the Decision contract and the rules that derive it from validation evidence
+  loop/       the per-item program, its policy, and the event log that item status is derived from
 scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
 ```
@@ -32,7 +33,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review -> loop
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
@@ -41,9 +42,10 @@ modules, each of which keeps its types beside the code that checks their invaria
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
 `ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `builder.run` (`TaskDraft`,
 `load_draft`, `item_id_for`), `builder.author` (`BuildProgram`, `Revision`), `validate.outcome`,
-`validate.evidence`, `validate.calibration` (`CalibrationSummary`, `Finding`) and `review.decision`
-(`Decision`). `tests/test_imports.py` parses every module and fails on an import that points right
-in the order, or on a package the order does not name.
+`validate.evidence`, `validate.calibration` (`CalibrationSummary`, `Finding`), `review.decision`
+(`Decision`), `loop.events` (`EventKind`, `ItemState`) and `loop.policy` (`LoopPolicy`).
+`tests/test_imports.py` parses every module and fails on an import that points right in the order,
+or on a package the order does not name.
 
 ## Seams
 

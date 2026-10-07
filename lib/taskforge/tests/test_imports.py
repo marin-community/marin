@@ -26,6 +26,7 @@ ORDER = (
     "builder",
     "validate",
     "review",
+    "loop",
 )
 ROOT = Path(taskforge.__file__).parent
 
