@@ -236,6 +236,7 @@ class ShellboxRolloutEngine:
                             "passed": grade.passed,
                             "error": grade.error,
                             "rewards": grade.rewards,
+                            "detail": grade.detail,
                         }
                         for name, grade in zip(stage_names, grades, strict=True)
                     ],

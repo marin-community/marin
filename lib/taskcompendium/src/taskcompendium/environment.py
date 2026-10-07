@@ -233,17 +233,15 @@ class FileReward(BaseModel):
 
 
 class VerdictReward(BaseModel):
-    """A verifyit ``verdict.json`` with a status, a reward in [0, 1], and a JSON detail object."""
+    """A verifyit ``verdict.json`` with a status, a reward in [0, 1], and a JSON detail object.
+
+    The engine creates a fresh private directory for each grade and passes it to the verifier as
+    ``VERIFYIT_LOGS_DIR``. The verifier writes ``verdict.json`` in that directory.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["verdict"] = "verdict"
-    path: str
-
-    @field_validator("path")
-    @classmethod
-    def absolute_path(cls, value: str) -> str:
-        return EnvironmentFile.absolute_path(value)
 
 
 class ShellVerifierSpec(BaseModel):

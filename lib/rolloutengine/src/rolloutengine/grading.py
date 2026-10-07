@@ -37,13 +37,23 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.runtime.task_grading import _grade_result, grade_task
 from taskcompendium.submission import SubmissionConvention
-from verifyit.grade import Reward, Status
+from verifyit.grade import VERDICT_JSON, Reward, Status
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
 
 MISSING_FILE_EXIT = 44
 VERDICT_KEYS = frozenset({"reward", "status", "detail"})
+# Run the verifier with a fresh private logs directory and read its verdict in the same command. A process the
+# agent left running cannot predict the directory, and it has one command's lifetime to find and rewrite the file.
+# The first output lines are the directory and the verifier's exit code; the verdict follows.
+VERDICT_COMMAND = (
+    'logs=$(mktemp -d) || exit 1; export VERIFYIT_LOGS_DIR="$logs"; '
+    '"$@" >"$logs/grader.stdout" 2>"$logs/grader.stderr"; code=$?; '
+    'printf "%s\\n%s\\n" "$logs" "$code"; '
+    f'if [ -f "$logs/{VERDICT_JSON}" ]; then cat "$logs/{VERDICT_JSON}"; else exit {MISSING_FILE_EXIT}; fi'
+)
+OUTPUT_COMMAND = 'cat "$1/grader.stdout" && cat "$1/grader.stderr" >&2 && rm -rf "$1"'
 
 
 def _validate_task(task: TaskSpec, execution: TaskExecution) -> None:
@@ -187,8 +197,6 @@ async def _download_artifact(
 def _reward_paths(verifier: ShellVerifierSpec) -> tuple[str, ...]:
     if isinstance(verifier.reward, FileReward):
         return tuple(file.path for file in verifier.reward.files)
-    if isinstance(verifier.reward, VerdictReward):
-        return (verifier.reward.path,)
     return ()
 
 
@@ -208,6 +216,8 @@ async def _shell_grade(
                     Outcome.INFRA_ERROR, None, "Cannot prepare private reward files", failure=GradingFailure.EXECUTION
                 )
     await _install_files(machine, files)
+    if isinstance(verifier.reward, VerdictReward):
+        return await _verdict_grade(verifier, messages, machine)
     result = await machine.run(
         Command(
             argv=verifier.argv,
@@ -237,8 +247,6 @@ async def _shell_grade(
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if isinstance(verifier.reward, FileReward):
         return await _file_grade(machine, verifier.reward, verifier.timeout, diagnostics, verifier.user)
-    if isinstance(verifier.reward, VerdictReward):
-        return await _verdict_file_grade(machine, verifier.reward, verifier.timeout, diagnostics, verifier.user)
     if result.exit_code != 0 or result.stdout_truncated:
         return GradeResult(
             Outcome.INFRA_ERROR,
@@ -328,28 +336,74 @@ def _parse_verdict(content: bytes) -> Reward:
     return Reward(float(reward), status, detail)
 
 
-async def _verdict_file_grade(
-    machine: Machine, specification: VerdictReward, timeout: float, diagnostics: dict[str, Any], user: str | None
+async def _verdict_grade(
+    verifier: ShellVerifierSpec, messages: tuple[dict[str, Any], ...], machine: Machine
 ) -> GradeResult:
     """Grade from a verifyit verdict: its status selects the outcome and its detail becomes the grade detail."""
-    content = await _reward_file_content(machine, specification.path, timeout, diagnostics, user)
-    if content is None:
+    result = await machine.run(
+        Command(
+            argv=("sh", "-c", VERDICT_COMMAND, "verdict-grader", *verifier.argv),
+            env=resolve_env_vars(verifier.env),
+            stdin=json.dumps(messages).encode(),
+            timeout=verifier.timeout,
+            user=verifier.user,
+        )
+    )
+    if result.reason == ExitReason.TIMED_OUT:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Grader command timed out", failure=GradingFailure.TIMEOUT)
+    header = result.stdout.split(b"\n", 2)
+    if result.exit_code not in {0, MISSING_FILE_EXIT} or len(header) != 3 or not header[1].isdigit():
         return GradeResult(
             Outcome.INFRA_ERROR,
             None,
-            f"Grader did not write a verdict file: {specification.path}",
+            f"Cannot run the verdict grader: exit={result.exit_code}",
+            diagnostics={"stderr": result.stderr.decode(errors="replace")},
+            failure=GradingFailure.EXECUTION,
+        )
+    logs, exit_code, content = header
+    output = await machine.run(
+        Command(
+            argv=("sh", "-c", OUTPUT_COMMAND, "grader-output", logs.decode()),
+            timeout=verifier.timeout,
+            user=verifier.user,
+        )
+    )
+    if output.exit_code != 0:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Cannot read the grader output", failure=GradingFailure.EXECUTION)
+    diagnostics = {
+        "stdout": output.stdout.decode(errors="replace"),
+        "stderr": output.stderr.decode(errors="replace"),
+        "exit_code": int(exit_code),
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
+    }
+    if result.exit_code == MISSING_FILE_EXIT:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Grader did not write {VERDICT_JSON}",
             diagnostics=diagnostics,
             failure=GradingFailure.MISSING_REWARD,
         )
-    if isinstance(content, GradeResult):
-        return content
-    try:
-        verdict = _parse_verdict(content)
-    except (UnicodeError, ValueError) as error:
+    if result.stdout_truncated:
         return GradeResult(
             Outcome.INFRA_ERROR,
             None,
-            f"Invalid verdict file {specification.path}: {error}",
+            "Cannot read the verdict file",
+            diagnostics=diagnostics,
+            failure=GradingFailure.EXECUTION,
+        )
+    if not content.strip():
+        return GradeResult(
+            Outcome.INFRA_ERROR, None, "Empty verdict file", diagnostics=diagnostics, failure=GradingFailure.EMPTY_REWARD
+        )
+    try:
+        verdict = _parse_verdict(content)
+    except (UnicodeError, ValueError, RecursionError) as error:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            f"Invalid verdict file: {error}",
             diagnostics=diagnostics,
             failure=GradingFailure.INVALID_REWARD,
         )
@@ -421,6 +475,11 @@ async def _remove_stage_grader(stage: TaskStage, machine: Machine) -> None:
 
 
 def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrategy) -> GradeResult:
+    """Reduce stage grades to the task grade.
+
+    A mean over one valid stage keeps that stage's verdict detail. A mean over several stages has no aggregate
+    detail; the engine records each stage's detail in ``diagnostics["stages"]``.
+    """
     final = grades[-1]
     if strategy == StageRewardStrategy.FINAL or final.status not in {Outcome.GRADED, Outcome.SKIPPED}:
         return final
@@ -432,4 +491,5 @@ def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrate
     rewards = {key: sum(values.get(key, 0.0) for values in components) / len(valid) for key in set().union(*components)}
     pass_results = [grade.passed for grade, _ in valid]
     passed = all(pass_results) if all(result is not None for result in pass_results) else None
-    return GradeResult(Outcome.GRADED, reward, passed=passed, rewards=rewards)
+    detail = valid[0][0].detail if len(valid) == 1 else None
+    return GradeResult(Outcome.GRADED, reward, passed=passed, rewards=rewards, detail=detail)

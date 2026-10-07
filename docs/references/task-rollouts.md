@@ -142,16 +142,23 @@ A command timeout has no grade. This contract supports Harbor reward files with
 exit code. A command timeout has no grade.
 
 `VerdictReward` reads the `verdict.json` file that `verifyit.grade.write_reward`
-writes: a reward in [0, 1], a status, and a JSON `detail` object. Status `scored`
-gives a `graded` result with that reward. Status `invalid_task` gives an
+writes: a reward in [0, 1], a status, and a JSON `detail` object. For each grade,
+the engine creates a new private directory with `mktemp -d`, passes it to the
+verifier command as `VERIFYIT_LOGS_DIR`, and reads the verdict in the same command
+that runs the verifier. The verifier writes `$VERIFYIT_LOGS_DIR/verdict.json`;
+a verifyit grader receives the directory through `--logs-dir "$VERIFYIT_LOGS_DIR"`.
+The engine does not stop processes the agent left running on the agent machine.
+Such a process cannot predict the directory, but one running as the verifier's
+user or as root can find it while the verifier runs. A separate grading
+environment removes that exposure. Status `scored` gives a `graded` result with
+that reward. Status `invalid_task` gives an
 `invalid_task` result and status `infra_error` gives an `infra_error` result;
 neither has a reward, and `grade.error` carries the detail's `error` text.
 Callers retry only `infra_error`; an `invalid_task` task needs repair. The
 verdict detail becomes `grade.detail`, so a caller can check partial credit, for
 example with `grade.detail["criteria"]`, while the command output stays in
 `grade.diagnostics`. A missing, empty, or malformed verdict is a verifier failure
-with the matching `GradeResult.failure`. As with reward files, the engine removes
-an existing verdict file before grading.
+with the matching `GradeResult.failure`.
 
 The optional `VerifierSpec.environment` defines a fresh grading machine.
 The engine runs `collect` commands in the agent machine, then copies the declared
@@ -183,6 +190,10 @@ An earlier execution failure retains its original operation and cause.
 stages with valid grades. Missing reward keys count as zero in that mean.
 JSON reward files can supply multiple numeric keys, such as `reward` and `safety`.
 The final strategy uses the last attempted stage.
+The aggregate `grade.detail` is the final stage's detail under `final`, and
+under `mean` when exactly one stage has a valid grade. A mean over several stages
+has no aggregate detail. Each stage's detail is in
+`grade.diagnostics["stages"][i]["detail"]`.
 
 If a stage cannot produce a grade, the aggregate retains that stage's outcome,
 failure details, and diagnostics. A skipped grader is not a failure.

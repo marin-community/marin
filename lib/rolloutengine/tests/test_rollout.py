@@ -776,7 +776,21 @@ async def test_file_grader_preserves_priority_and_rejects_agent_scores(script, s
     assert (result.grade.status, result.grade.reward) == (status, reward)
 
 
-VERDICT_PATH = "/logs/verifier/verdict.json"
+DEEP_VERDICT = '{"reward": 1.0, "status": "scored", "detail": {"deep": ' + "[" * 100_000 + "]" * 100_000 + "}}"
+
+
+def verdict_verifier(script: str) -> VerifierSpec:
+    return VerifierSpec(
+        kind=VerifierKind.SHELL,
+        parameters_json=ShellVerifierSpec(
+            argv=("sh", "/tests/grade.sh"), timeout=5, reward=VerdictReward()
+        ).model_dump_json(),
+        files=(EnvironmentFile(path="/tests/grade.sh", content=script.encode()),),
+    )
+
+
+def verdict_script(verdict: str) -> str:
+    return f"echo '{verdict}' > \"$VERIFYIT_LOGS_DIR/verdict.json\""
 
 
 @pytest.mark.parametrize(
@@ -803,7 +817,7 @@ VERDICT_PATH = "/logs/verifier/verdict.json"
             "judge unavailable",
             None,
         ),
-        (None, Outcome.INFRA_ERROR, None, f"Grader did not write a verdict file: {VERDICT_PATH}", "missing_reward"),
+        (None, Outcome.INFRA_ERROR, None, "Grader did not write verdict.json", "missing_reward"),
         (
             '{"reward": 0.5, "status": "invalid_task", "detail": {}}',
             Outcome.INFRA_ERROR,
@@ -825,26 +839,13 @@ VERDICT_PATH = "/logs/verifier/verdict.json"
             "exactly reward, status, and detail",
             "invalid_reward",
         ),
+        (DEEP_VERDICT, Outcome.INFRA_ERROR, None, "recursion", "invalid_reward"),
     ],
+    ids=["scored", "invalid_task", "infra_error", "missing", "unscored_reward", "nan", "missing_detail", "deep"],
 )
 async def test_verdict_grader_reports_verifier_status_and_detail(verdict, status, reward, error, failure):
-    # A planted verdict must not survive into grading; the grader either writes its own or none.
-    script = "true" if verdict is None else f"echo '{verdict}' > {VERDICT_PATH}"
-    verifier = ShellVerifierSpec(argv=("sh", "/tests/grade.sh"), timeout=5, reward=VerdictReward(path=VERDICT_PATH))
-    planted = '{"reward": 1.0, "status": "scored", "detail": {"planted": true}}'
-    task = file_task().model_copy(
-        update={
-            "environment": EnvironmentSpec(
-                kind=EnvironmentKind.SHELLSIM,
-                files=(EnvironmentFile(path=VERDICT_PATH, content=planted.encode()),),
-            ),
-            "verifier": VerifierSpec(
-                kind=VerifierKind.SHELL,
-                parameters_json=verifier.model_dump_json(),
-                files=(EnvironmentFile(path="/tests/grade.sh", content=script.encode()),),
-            ),
-        }
-    )
+    script = "echo grading" if verdict is None else f"echo grading; {verdict_script(verdict)}"
+    task = file_task().model_copy(update={"verifier": verdict_verifier(script)})
     result = await engine(
         ReplayModel([{"role": "assistant", "content": "Completed."}]),
         {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
@@ -856,8 +857,99 @@ async def test_verdict_grader_reports_verifier_status_and_detail(verdict, status
         None if failure is None else GradingFailure(failure),
     )
     assert (grade.error is None) if error is None else (error in grade.error)
-    assert grade.diagnostics["exit_code"] == 0
+    assert (grade.diagnostics["exit_code"], grade.diagnostics["stdout"]) == (0, "grading\n")
     assert grade.detail == (json.loads(verdict)["detail"] if failure is None else None)
+
+
+async def test_verdict_written_after_the_grader_command_does_not_change_the_grade():
+    factory = RecordingShellSimFactory()
+    forged = '{"reward": 1.0, "status": "scored", "detail": {"forged": true}}'
+    directories = []
+
+    class ForgingMachine:
+        """Stands in for an agent process that rewrites the verdict as soon as it learns the directory."""
+
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            result = await self.machine.run(command)
+            if command.argv[:2] == ("sh", "-c") and "VERIFYIT_LOGS_DIR" in command.argv[2]:
+                directory = result.stdout.split(b"\n", 1)[0].decode()
+                directories.append(directory)
+                await self.machine.run(
+                    Command(
+                        ("sh", "-c", f"echo '{forged}' > {directory}/verdict.json; echo '{forged}' > /tmp/verdict.json")
+                    )
+                )
+            return result
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            return ForgingMachine(await factory.create(spec))
+
+    verdict = '{"reward": 0.25, "status": "scored", "detail": {"logs": "%s"}}'
+    verifier = verdict_verifier(f'printf \'{verdict}\' "$VERIFYIT_LOGS_DIR" > "$VERIFYIT_LOGS_DIR/verdict.json"')
+    task = file_task().model_copy(
+        update={
+            "stages": (TaskStage(name="first", verifier=verifier), TaskStage(name="second", verifier=verifier)),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.STAGED,
+                parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+            ),
+        }
+    )
+    rollout = await engine(
+        ReplayModel([{"role": "assistant", "content": "Completed."}] * 2), {EnvironmentKind.SHELLSIM: Factory()}
+    ).run(task, execution=TaskExecution(stages={"first": StageExecution(), "second": StageExecution()}))
+    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.25)
+    assert len(set(directories)) == 2
+    assert [stage["detail"] for stage in rollout.grade.diagnostics["stages"]] == [
+        {"logs": directory} for directory in directories
+    ]
+
+
+@pytest.mark.parametrize(
+    "rewards,detail",
+    [((0.5,), {"stage": 0}), ((0.5, 1.0), None)],
+)
+async def test_mean_stage_grade_keeps_a_single_stage_detail(rewards, detail):
+    stages = tuple(
+        TaskStage(
+            name=f"stage-{index}",
+            verifier=verdict_verifier(
+                verdict_script(f'{{"reward": {reward}, "status": "scored", "detail": {{"stage": {index}}}}}')
+            ),
+        )
+        for index, reward in enumerate(rewards)
+    )
+    task = file_task().model_copy(
+        update={
+            "stages": stages,
+            "verifier": VerifierSpec(
+                kind=VerifierKind.STAGED,
+                parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+            ),
+        }
+    )
+    rollout = await engine(
+        ReplayModel([{"role": "assistant", "content": "Completed."}] * len(stages)),
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+    ).run(task, execution=TaskExecution(stages={stage.name: StageExecution() for stage in stages}))
+    assert rollout.grade.reward == sum(rewards) / len(rewards)
+    assert rollout.grade.detail == detail
+    assert [stage["detail"] for stage in rollout.grade.diagnostics["stages"]] == [
+        {"stage": index} for index in range(len(stages))
+    ]
 
 
 async def test_model_failure_releases_the_shellbox_machine():
