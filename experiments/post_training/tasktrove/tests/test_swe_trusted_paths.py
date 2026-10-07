@@ -226,7 +226,10 @@ def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(
     (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
     probe = "import pytest\n\ndef test_compatible_collection():\n    assert pytest.version_tuple[0] < 9\n"
     if repository.startswith("marshmallow-code__"):
-        probe += "\ndef test_declared_dependency():\n    import simplejson\n    assert simplejson.loads(simplejson.dumps({'ok': True})) == {'ok': True}\n"
+        probe += (
+            "\ndef test_declared_dependency():\n    import simplejson\n"
+            "    assert simplejson.loads(simplejson.dumps({'ok': True})) == {'ok': True}\n"
+        )
     (tmp_path / "test_probe.py").write_text(probe)
     image = f"atlas-swesmith-regression:{uuid.uuid4().hex}"
     try:
