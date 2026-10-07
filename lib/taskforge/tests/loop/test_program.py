@@ -315,21 +315,45 @@ async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuil
     policy = programs.policy(max_build_retries=1)
 
     async with loop.services() as services:
-        hostless = replace(services, build=replace(services.build, factories={}))
-        assert await run_item(proposal, policy, hostless) is Terminal.ABANDONED
+        dropping = replace(
+            services, build=replace(services.build, factories={EnvironmentKind.SHELLSIM: DroppingFactory(2)})
+        )
+        assert await run_item(proposal, policy, dropping) is Terminal.ABANDONED
     item_id = item_id_for(proposal)
     failures = events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE)
     assert [e.attrs["abandon"] for e in failures] == ["false", "true"]
     assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
     (abandoned,) = events_of(loop, item_id, EventKind.TERMINAL)
-    assert (abandoned.attrs["terminal"], abandoned.attrs["causes"]) == (Terminal.ABANDONED, "no_factory:2")
+    assert (abandoned.attrs["terminal"], abandoned.attrs["causes"]) == (Terminal.ABANDONED, "host_unreachable:2")
     assert derive_state(loop.entries(item_id)).phase is Phase.BUILD
 
     # The relaunch builds the program already authored: no second authoring call is queued.
     async with loop.services() as services:
         assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
     assert len(fake_glm.requests) == 1 and len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
-    assert build_host_failures(loop.entries(item_id)) == Counter({InfrastructureCause.NO_FACTORY: 2})
+    assert build_host_failures(loop.entries(item_id)) == Counter({InfrastructureCause.HOST_UNREACHABLE: 2})
+
+
+async def test_a_build_needing_a_machine_the_host_has_no_factory_for_is_rejected_without_retrying(
+    loop, programs, fake_glm
+):
+    proposal = programs.proposal()
+    programs.submit(fake_glm, programs.source())
+    policy = programs.policy(max_build_retries=3)
+
+    async with loop.services() as services:
+        hostless = replace(services, build=replace(services.build, factories={}))
+        assert await run_item(proposal, policy, hostless) is Terminal.REJECTED
+    item_id = item_id_for(proposal)
+    assert events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE) == []
+    assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
+    (rejected,) = events_of(loop, item_id, EventKind.TERMINAL)
+    assert rejected.attrs["kind"] == RejectKind.HOST and "no_factory" in rejected.attrs["reason"]
+
+    # A rejection is final: the relaunch on a host with the factory does not build again.
+    async with loop.services() as services:
+        assert await run_item(proposal, policy, services) is Terminal.REJECTED
+    assert len(fake_glm.requests) == 1
 
 
 async def test_a_log_opened_under_another_policy_is_refused(loop, programs):

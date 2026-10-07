@@ -35,7 +35,8 @@ class LoopPolicy:
         max_repairs: Review ``Repair`` decisions per item, staged repairs included.
         max_validation_retries: Review ``Retry`` decisions per item per launch; then the item is abandoned.
         max_build_retries: Rebuilds of a program after consecutive host failures of its build, per
-            launch; then the item is abandoned. A host failure spends no build revision.
+            launch; then the item is abandoned. A host failure spends no build revision; one in
+            ``build.infrastructure.HOST_REJECTIONS`` is not retried but rejects the item.
         retry_backoff: Wait before a ``Retry`` re-enters validation, or a build the host failed is
             retried; the k-th retry waits the k-th interval.
         output_token_budget: Output tokens of the item's ``LLM_CALL`` ledger entries (triage, author,
