@@ -10,7 +10,7 @@ import io
 import itertools
 import time
 from collections import defaultdict
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from typing import BinaryIO, ClassVar, Protocol
@@ -45,7 +45,7 @@ class BlobReadDiagnostics:
 
     descriptor_seconds: float = 0.0
     payload_seconds: float = 0.0
-    scan_reads: int = 0
+    descriptor_lookups: int = 0
     selected_shards: int = 0
     bytes_returned: int = 0
 
@@ -67,7 +67,7 @@ class _ScanProfile:
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
-_BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 
 
 @dataclass(frozen=True)
@@ -130,6 +130,42 @@ class BlobDescriptor:
         if part_count is not None and not isinstance(part_count, int):
             raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
         return cls(name=name, size=size, metadata_json=metadata_json, data=data, part_count=part_count)
+
+
+def _validated_blob_parts(descriptor: BlobDescriptor, rows: Iterable[Mapping[str, object]]) -> Iterator[bytes]:
+    """Yield a descriptor's bytes while checking its committed part and size metadata."""
+    name = descriptor.name
+    part_count = descriptor.part_count
+    if part_count is None:
+        data = descriptor.data
+        if data is None:
+            raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
+        if descriptor.size is not None and len(data) != descriptor.size:
+            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
+        yield data
+        return
+    if part_count <= 0:
+        raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
+    expected_part = 0
+    total_bytes = 0
+    for row in rows:
+        part = row.get(BlobColumns.PART)
+        if not isinstance(part, int):
+            raise BlobCorruptionError(f"blob {name!r} has invalid part number {part!r}")
+        if part >= part_count:
+            break
+        if part != expected_part:
+            raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
+        data = row.get(BlobColumns.DATA)
+        if not isinstance(data, bytes):
+            raise BlobCorruptionError(f"blob {name!r} part {part} has invalid data")
+        total_bytes += len(data)
+        expected_part += 1
+        yield data
+    if expected_part != part_count:
+        raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
+    if descriptor.size is not None and total_bytes != descriptor.size:
+        raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
 
 
 class _BlobReader(io.RawIOBase):
@@ -346,7 +382,7 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
                 batch_size=scan_profile.batch_rows,
                 batch_readahead=scan_profile.batch_readahead,
                 fragment_readahead=scan_profile.fragment_readahead,
-                fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+                fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
                 use_threads=False,
             ).to_table()
         part = part.append_column(
@@ -501,55 +537,23 @@ class _ReadOperations:
             for row in rows.to_pylist():
                 descriptor = BlobDescriptor.from_row(row)
                 if descriptor.part_count is None:
-                    data = descriptor.data
-                    if data is None:
-                        raise BlobCorruptionError(f"blob {descriptor.name!r} has neither inline data nor parts")
-                    if descriptor.size is not None and len(data) != descriptor.size:
-                        raise BlobCorruptionError(
-                            f"blob {descriptor.name!r} declares {descriptor.size} bytes but stores {len(data)}"
-                        )
-                    values[descriptor.name] = data
+                    values[descriptor.name] = b"".join(_validated_blob_parts(descriptor, ()))
                 else:
-                    if descriptor.part_count <= 0:
-                        raise BlobCorruptionError(
-                            f"blob {descriptor.name!r} has invalid part count {descriptor.part_count!r}"
-                        )
                     chunked[descriptor.name] = descriptor
             if chunked:
-                parts: dict[str, list[bytes]] = {name: [] for name in chunked}
                 with closing(
                     self._iter_rows(
                         BlobTables.PARTS,
                         columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
                         where=[(BlobColumns.NAME, "in", list(chunked))],
-                        scan_profile=_BLOB_SCAN_PROFILE,
+                        scan_profile=_BLOB_PART_SCAN_PROFILE,
                     )
                 ) as part_rows:
-                    for row in part_rows:
-                        name = row[BlobColumns.NAME]
-                        descriptor = chunked[name]
-                        assert descriptor.part_count is not None
-                        part = row[BlobColumns.PART]
-                        if part is not None and part >= descriptor.part_count:
-                            continue
-                        expected_part = len(parts[name])
-                        if part != expected_part:
-                            raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
-                        data = row[BlobColumns.DATA]
-                        if data is None:
-                            raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
-                        parts[name].append(bytes(data))
+                    for name, group in itertools.groupby(part_rows, key=lambda row: row[BlobColumns.NAME]):
+                        values[name] = b"".join(_validated_blob_parts(chunked[name], group))
                 for name, descriptor in chunked.items():
-                    if len(parts[name]) != descriptor.part_count:
-                        raise BlobCorruptionError(
-                            f"blob {name!r} has {len(parts[name])} of {descriptor.part_count} parts"
-                        )
-                    value = b"".join(parts[name])
-                    if descriptor.size is not None and len(value) != descriptor.size:
-                        raise BlobCorruptionError(
-                            f"blob {name!r} declares {descriptor.size} bytes but stores {len(value)}"
-                        )
-                    values[name] = value
+                    if name not in values:
+                        values[name] = b"".join(_validated_blob_parts(descriptor, ()))
         finally:
             if diagnostics is not None:
                 diagnostics.payload_seconds += time.monotonic() - started
@@ -562,7 +566,7 @@ class _ReadOperations:
     ) -> pa.Table | None:
         started = time.monotonic()
         if diagnostics is not None:
-            diagnostics.scan_reads += 1
+            diagnostics.descriptor_lookups += 1
         try:
             plan = self._read_plan(BlobTables.DESCRIPTORS, None, [(BlobColumns.NAME, "in", list(names))])
             if plan is None:
@@ -587,45 +591,18 @@ class _ReadOperations:
 
     def blob_parts(self, descriptor: BlobDescriptor) -> Generator[bytes, None, None]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
-        name = descriptor.name
-        part_count = descriptor.part_count
-        if part_count is None:
-            data = descriptor.data
-            if data is None:
-                raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
-            if descriptor.size is not None and len(data) != descriptor.size:
-                raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
-            yield data
+        if descriptor.part_count is None:
+            yield from _validated_blob_parts(descriptor, ())
             return
-        if part_count <= 0:
-            raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
-        expected_part = 0
-        total_bytes = 0
         with closing(
             self._iter_rows(
                 BlobTables.PARTS,
                 columns=[BlobColumns.PART, BlobColumns.DATA],
-                where=[(BlobColumns.NAME, "==", name)],
-                scan_profile=_BLOB_SCAN_PROFILE,
+                where=[(BlobColumns.NAME, "==", descriptor.name)],
+                scan_profile=_BLOB_PART_SCAN_PROFILE,
             )
         ) as part_rows:
-            for row in part_rows:
-                part = row.get(BlobColumns.PART)
-                if part is not None and part >= part_count:
-                    break
-                if part != expected_part:
-                    raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
-                data = row.get(BlobColumns.DATA)
-                if data is None:
-                    raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
-                value = bytes(data)
-                total_bytes += len(value)
-                expected_part += 1
-                yield value
-        if expected_part != part_count:
-            raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
-        if descriptor.size is not None and total_bytes != descriptor.size:
-            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
+            yield from _validated_blob_parts(descriptor, part_rows)
 
     def resolve(self, uri: str) -> bytes | None:
         """Resolve a blob URI, returning ``None`` when absent and rejecting unsupported references."""

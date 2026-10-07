@@ -25,6 +25,8 @@ from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import factory
 from rigging.filesystem.storage_path import StoragePath
 
+_BLOB_URI_SCHEME = "blobread"
+
 _CACHE_PROCESS = textwrap.dedent(
     """
     import atexit
@@ -76,7 +78,7 @@ class _RangeFileSystem(LocalFileSystem):
         super().__init__(**kwargs)
         self.fetched_bytes = 0
 
-    def _open(self, path, mode="rb", *, cache_type="readahead", **kwargs):
+    def _open(self, path, mode="rb", *, cache_type="readahead", **_kwargs):
         assert mode == "rb"
         return _RangeFile(self, path, mode=mode, block_size=50 * 1024 * 1024, cache_type=cache_type)
 
@@ -84,7 +86,7 @@ class _RangeFileSystem(LocalFileSystem):
 class _BlobUriFileSystem(_RangeFileSystem):
     """Exercise URI routing with file options rejected by the storage constructor."""
 
-    protocol = "blobread"
+    protocol = _BLOB_URI_SCHEME
 
     def __init__(self, **kwargs):
         if "cache_type" in kwargs:
@@ -94,7 +96,7 @@ class _BlobUriFileSystem(_RangeFileSystem):
 
     @classmethod
     def _strip_protocol(cls, path):
-        return str(path).removeprefix("blobread://")
+        return str(path).removeprefix(f"{_BLOB_URI_SCHEME}://")
 
     def _open(self, path, mode="rb", *, cache_type="readahead", **kwargs):
         if path.endswith(".parquet"):
@@ -103,9 +105,9 @@ class _BlobUriFileSystem(_RangeFileSystem):
 
 
 def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
-    fsspec.register_implementation("blobread", _BlobUriFileSystem, clobber=True)
+    fsspec.register_implementation(_BLOB_URI_SCHEME, _BlobUriFileSystem, clobber=True)
     local_root = str(tmp_path / "archive")
-    root = f"blobread://{local_root}"
+    root = f"{_BLOB_URI_SCHEME}://{local_root}"
     chunked = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(local_root, flush_interval=600) as store:
         store.write_object("inline", b"old")
@@ -118,7 +120,11 @@ def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
     snapshot = read_snapshot(FineStoreLayout(local_root))
     tables = {
         name: table.model_copy(
-            update={"shards": [shard.model_copy(update={"path": f"blobread://{shard.path}"}) for shard in table.shards]}
+            update={
+                "shards": [
+                    shard.model_copy(update={"path": f"{_BLOB_URI_SCHEME}://{shard.path}"}) for shard in table.shards
+                ]
+            }
         )
         for name, table in snapshot.manifest.tables.items()
     }
@@ -131,7 +137,7 @@ def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
         "inline": b"latest",
         "chunked": chunked,
     }
-    assert diagnostics.scan_reads == 1
+    assert diagnostics.descriptor_lookups == 1
     assert diagnostics.bytes_returned == len(b"latest") + len(chunked)
     assert filesystem.read_cache_types
     assert set(filesystem.read_cache_types) == {"none"}
@@ -158,7 +164,7 @@ def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, m
     assert view.read_blobs(["matched", "absent", "matched"], diagnostics=diagnostics) == {"matched": b"latest"}
     bounded_bytes = filesystem.fetched_bytes
     assert diagnostics.bytes_returned == len(b"latest")
-    assert diagnostics.scan_reads == 1
+    assert diagnostics.descriptor_lookups == 1
 
     # The unchanged Arrow filter can prune the other row groups. Default fsspec
     # read-ahead still pulls their bytes after reading the small matched group.

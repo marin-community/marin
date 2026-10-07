@@ -99,7 +99,7 @@ all requested descriptors together and gathers chunked parts in one parts scan.
 
 Pass a `finestore.reader.BlobReadDiagnostics` instance as `diagnostics=` to
 `ReadView.read_blobs` or `PersistentKvCache.load_many` to accumulate
-descriptor-scan and payload-assembly seconds, descriptor scan counts,
+descriptor-scan and payload-assembly seconds, descriptor lookup counts,
 selected descriptor-shard counts and returned value bytes. Returned bytes measure
 decoded output, not physical storage traffic. Memory hits do not add storage-read
 diagnostics.

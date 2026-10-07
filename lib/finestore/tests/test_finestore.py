@@ -513,6 +513,7 @@ def test_chunked_blob_rewrite_ignores_stale_tail_parts(tmp_path):
 
     view = ReadView(root)
     assert view.read_blob("archive.log") == second
+    assert view.read_blobs(["archive.log"]) == {"archive.log": second}
 
     with DataStore.open(root, writer_id="w2") as store:
         store.write_object("archive.log", b"inline")
