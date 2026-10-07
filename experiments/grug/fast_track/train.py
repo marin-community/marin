@@ -99,6 +99,7 @@ from experiments.grug.fast_track.model import (
     HEAD_PROBE_STAT,
     HEAD_QCOS_STAT,
     NEWTON_GRAM_KEY,
+    RELPOS_ROWS_STAT,
     DenseMLP,
     ForwardProbe,
     FutureAux,
@@ -1949,9 +1950,9 @@ def _attn_distance_dump(
         model = _cast_to_compute(mp, params)
         with attention_rows_probe(rows, positions):
             _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
-        return {k: v for k, v in metrics.items() if k.startswith(ATTN_ROWS_STAT)}
+        return {k: v for k, v in metrics.items() if k.startswith((ATTN_ROWS_STAT, RELPOS_ROWS_STAT))}
 
-    attn, meta = [], []
+    attn, relpos, meta = [], [], []
     with set_mesh(mesh):
         for b, queries in sorted(by_batch.items()):
             ids = global_batch(tokens[b * batch : (b + 1) * batch])
@@ -1962,9 +1963,12 @@ def _attn_distance_dump(
                 rows = jnp.asarray([r - b * batch for r, _, _ in padded], jnp.int32)
                 positions = jnp.asarray([c for _, c, _ in padded], jnp.int32)
                 out = probe(params, ids, segs, rows, positions)
-                names = sorted(out, key=lambda k: int(k.rsplit("_L", 1)[1]))
+                names = sorted((k for k in out if k.startswith(ATTN_ROWS_STAT)), key=lambda k: int(k.rsplit("_L", 1)[1]))
                 stacked = np.stack([np.asarray(out[k]) for k in names], axis=1)[: len(chunk)]  # [Q, L, H, S]
                 attn.append(stacked.astype(np.float16))
+                rel_names = [k.replace(ATTN_ROWS_STAT, RELPOS_ROWS_STAT) for k in names]
+                if all(k in out for k in rel_names):
+                    relpos.append(np.stack([np.asarray(out[k]) for k in rel_names], axis=1)[: len(chunk)])
                 meta += chunk
     if jax.process_index() == 0:
         with fsspec.open(path, "wb") as f:
@@ -1977,6 +1981,8 @@ def _attn_distance_dump(
                 query_pos=np.asarray([c for _, c, _ in meta]),
                 query_doc_pos=np.asarray([d for _, _, d in meta]),
                 layers=np.asarray([int(k.rsplit("_L", 1)[1]) for k in names]),
+                # [Q, L, H, rel_extent]: each query's Inkling bias at distance 0 .. rel_extent - 1 back.
+                relpos=np.concatenate(relpos, axis=0) if relpos else np.zeros((0,)),
             )
 
 

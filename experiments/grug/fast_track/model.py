@@ -134,6 +134,8 @@ class ForwardProbe:
 _FORWARD_PROBE: ForwardProbe | None = None
 # ``attention_rows_probe``: traced (rows, positions) [Q] of the queries whose full softmax rows the MLA layers record.
 ATTN_ROWS_STAT = f"{_LAYER_KNOB_PREFIX}probe_attn_rows"
+# Under ``attention_rows_probe``: each query's Inkling bias by distance back, ``[Q, H, rel_extent]``.
+RELPOS_ROWS_STAT = f"{_LAYER_KNOB_PREFIX}probe_relpos_rows"
 _ATTN_ROWS_PROBE: tuple[jax.Array, jax.Array] | None = None
 
 # Per-token, per-query-head attention statistics (``head_probe``), ``[B, S, H, len(HEAD_PROBE_FIELDS)]`` per layer:
@@ -2852,6 +2854,14 @@ class CausalSelfAttention(eqx.Module):
             stats[ATTN_PROBE_STAT] = _probe_attention(q, k, mask, rel_bias, _FORWARD_PROBE.attn_queries)
         if _ATTN_ROWS_PROBE is not None and self.cfg.mla:
             stats[ATTN_ROWS_STAT] = _probe_attention_rows(q, k, mask, rel_bias, *_ATTN_ROWS_PROBE)
+            if rel_bias is not None:
+                rows, positions = _ATTN_ROWS_PROBE
+                band = rel_bias.at[rows, :, positions].get(out_sharding=P(None, None, None))  # [Q, H, W]
+                extent = rel_extent_of_band(rel_bias)
+                column = (positions % REL_BIAS_BLOCK)[:, None] + extent - jnp.arange(extent)[None, :]
+                stats[RELPOS_ROWS_STAT] = jax.lax.stop_gradient(
+                    jnp.take_along_axis(band, column[:, None, :], axis=-1).astype(jnp.float32)
+                )
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
