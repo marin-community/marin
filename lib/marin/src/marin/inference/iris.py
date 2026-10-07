@@ -59,6 +59,7 @@ _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 BACKEND_PORT_NAME = "backend"
+DASHBOARD_PORT_NAME = "http"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 
 
@@ -164,7 +165,7 @@ class IrisServiceConfig:
     broker: BrokerConfig | None = None
     timeout_hours: float = 24.0
     controller_proxy_timeout_seconds: float = 2100.0
-    port_name: str | None = "http"
+    port_name: str | None = DASHBOARD_PORT_NAME
 
     def __post_init__(self) -> None:
         if self.instances <= 0:

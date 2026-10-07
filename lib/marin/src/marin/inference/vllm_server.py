@@ -657,6 +657,9 @@ def _poll_until_ready(
         check_alive: Optional callable invoked each iteration *before* the HTTP
             probe. Should raise if the underlying server process is
             no longer alive (the exception propagates directly to the caller).
+
+    Returns:
+        The expected model ID, or the first advertised ID when no ID was specified.
     """
     models_url = f"{server_url}/models"
     start_time = time.time()
@@ -979,6 +982,7 @@ def _wait_for_vllm_server(
     expected_model_id: str | None = None,
     poll_interval_seconds: float = 5,
 ) -> str:
+    """Wait for the native process to advertise the expected model and return its ID."""
     process = handle.process
     assert handle.log_pump is not None
 
