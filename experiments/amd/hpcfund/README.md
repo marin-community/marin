@@ -30,7 +30,10 @@ The wrapper leaves `RAGGED_DOT_IMPL` unset, so Haliax picks the `ragged_dot`
 implementation: on GPU it tries Triton and falls back to XLA. Set
 `RAGGED_DOT_IMPL=triton` or `RAGGED_DOT_IMPL=xla` explicitly when
 benchmarking, so results stay comparable across runs. XLA's `ragged_dot`
-rejects bf16 on MI350X (gfx950).
+rejects bf16 on MI350X (gfx950). On MI300X (gfx942), `RAGGED_DOT_IMPL=xla` is
+the fastest path: in per-call microbenchmarks on one MI300X, XLA's bf16 grouped
+GEMM took 11-28% less time per forward+backward triple than the best Triton
+configuration.
 
 ## Build the venv
 
