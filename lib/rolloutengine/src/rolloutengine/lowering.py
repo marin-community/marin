@@ -50,8 +50,11 @@ def validate_lowered_task(
 ) -> None:
     """Reject unknown providers and unsupported task requirements before startup."""
     task = lowered.task
-    if task.verifier.kind == "shell" and lowered.runtime.verifier_machine is None:
-        raise ValueError("Shell grading requires a separate verifier machine")
+    if task.verifier.kind == "shell":
+        if lowered.runtime.verifier_machine is None:
+            raise ValueError("Shell grading requires a separate verifier machine")
+        if task.verifier.environment_requirements.docker_image is None:
+            raise ValueError("Shell grading requires a prebuilt, digest-pinned verifier image")
     task_resources = task.resources.all + task.resources.worker
     for selection, requirements, resources in (
         (lowered.runtime.task_machine, task.environment_requirements, task_resources),

@@ -6,11 +6,11 @@
 import asyncio
 import json
 import tarfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, Machine, NetworkPolicy, Result
+from shellbox.machine import Command, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -53,6 +53,8 @@ from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.lowering import lower_task
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
 
+FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
+
 
 @dataclass
 class ReplayModel:
@@ -66,12 +68,21 @@ class ReplayModel:
         return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
 
 
+class FixtureImageFactory:
+    """Execute fixture image commands on the built-in filesystem."""
+
+    async def create(self, spec):
+        return await ShellSimMachineFactory().create(
+            replace(spec, source=ShellSimBuiltins(), workdir=spec.workdir or "/workspace")
+        )
+
+
 @dataclass
 class RecordingShellSimFactory:
     machines: list[Machine] = field(default_factory=list)
 
     async def create(self, spec):
-        machine = await ShellSimMachineFactory().create(spec)
+        machine = await FixtureImageFactory().create(spec)
         self.machines.append(machine)
         return machine
 
@@ -94,6 +105,7 @@ def file_task(script: bytes = b'if [ "$(cat /workspace/answer)" = 12 ]; then ech
             "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
             "verifier": VerifierSpec(
                 kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
                 parameters_json=ShellVerifierSpec(
                     argv=("sh", "/tests/grade.sh"),
                     artifacts=(
@@ -272,7 +284,7 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
             {"role": "assistant", "content": "Done."},
         ]
     )
-    result = await engine(model, {"local": ShellSimMachineFactory()}).run(
+    result = await engine(model, {"local": FixtureImageFactory()}).run(
         lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
     )
 
@@ -309,7 +321,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
 
     class Factory:
         async def create(self, spec):
-            return TimeoutMachine(await ShellSimMachineFactory().create(spec))
+            return TimeoutMachine(await FixtureImageFactory().create(spec))
 
     message = shell_call("hang", call_id="first")
     message["tool_calls"].extend(
@@ -369,7 +381,7 @@ async def test_candidate_verifier_grades_captured_file_without_text_submission(a
     model = ReplayModel(
         [shell_call(f"mkdir -p /app && echo {answer} > /app/answer.txt"), {"role": "assistant", "content": "Done."}]
     )
-    record = await engine(model, {"local": ShellSimMachineFactory()}).run(lowered(task, machine=machine_runtime()))
+    record = await engine(model, {"local": FixtureImageFactory()}).run(lowered(task, machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert record.loss_mask == (1, 0, 0, 1)
     assert "12" not in json.dumps(model.requests[0].messages)
@@ -392,7 +404,7 @@ async def test_answer_call_retains_submission_tool_and_finishes():
     model = ReplayModel([message])
     result = await engine(
         model,
-        {"local": ShellSimMachineFactory()},
+        {"local": FixtureImageFactory()},
         convention=AnswerCall(id="answer"),
     ).run(lowered(task, machine=machine_runtime()))
     assert result.grade.reward == 1.0
@@ -434,7 +446,7 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
 async def test_workspace_state_does_not_receive_a_text_submission_instruction():
     task = file_task().model_copy(update={"answer_type": AnswerType.WORKSPACE_STATE})
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": ShellSimMachineFactory()}).run(
+    record = await engine(model, {"local": FixtureImageFactory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
@@ -454,7 +466,9 @@ async def test_private_shell_verifier_can_run_without_a_task_machine():
     task = arithmetic_task().model_copy(
         update={
             "verifier": VerifierSpec(
-                kind="shell", parameters_json=ShellVerifierSpec(argv=("cat", "/tests/reward")).model_dump_json()
+                kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
+                parameters_json=ShellVerifierSpec(argv=("cat", "/tests/reward")).model_dump_json(),
             ),
             "resources": ResourceGroups(verifier=(inline_resource("reward", b"0.75"),)),
         }
@@ -483,7 +497,9 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
             "verifier": VerifierSpec(
                 kind="shell",
                 parameters_json=verifier.model_dump_json(),
-                environment_requirements=EnvironmentRequirements(setup_commands=("echo clean > /workspace/baseline",)),
+                environment_requirements=EnvironmentRequirements(
+                    docker_image=FIXTURE_IMAGE, setup_commands=("echo clean > /workspace/baseline",)
+                ),
             ),
             "resources": ResourceGroups(
                 worker=(inline_resource("workspace/input", answer),),
@@ -524,7 +540,7 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
             return await super().complete(request)
 
     record = await engine(
-        LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": ShellSimMachineFactory()}
+        LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": FixtureImageFactory()}
     ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert record.stop_reason == "length"
     assert (record.grade.status, record.grade.reward) == (
@@ -549,7 +565,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
 
     runner = ShellboxRolloutEngine(
         complete,
-        {"local": ShellSimMachineFactory()},
+        {"local": FixtureImageFactory()},
         convention=PlainText(id="plain"),
     )
     with pytest.raises(RolloutContractError):
@@ -588,7 +604,11 @@ async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, st
     )
     task = file_task().model_copy(
         update={
-            "verifier": VerifierSpec(kind="shell", parameters_json=verifier.model_dump_json()),
+            "verifier": VerifierSpec(
+                kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
+                parameters_json=verifier.model_dump_json(),
+            ),
             "resources": ResourceGroups(
                 worker=(inline_resource("logs/verifier/reward.txt", b"1"),),
                 verifier=(inline_resource("grade.sh", script.encode()),),
@@ -596,7 +616,7 @@ async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, st
         }
     )
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": ShellSimMachineFactory()}
+        ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": FixtureImageFactory()}
     ).run(lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward, record.grade.failure) == (status, reward, failure)
     if reward == 0:
@@ -1014,7 +1034,13 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
         ),
     )
     task = file_task().model_copy(
-        update={"verifier": VerifierSpec(kind="shell", parameters_json=verifier.model_dump_json())}
+        update={
+            "verifier": VerifierSpec(
+                kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
+                parameters_json=verifier.model_dump_json(),
+            )
+        }
     )
     runner = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
     spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())

@@ -173,9 +173,10 @@ Score bounds describe the verifier's native range. SkyRL's metric normalization 
 
 Harbor lowering uses package machine settings, agent users, total-turn deadlines, and verifier deadlines.
 Other session limits come from launch configuration.
-SkyRL rejects shared-machine Harbor shell graders during runtime lowering.
+The Harbor importer rejects shared verifier mode, including the unset default.
+Shell grading requires a prebuilt, digest-pinned verifier image and a separate machine.
 Disabling Harbor verification removes private grader resources before lowering and selects skipped grading.
-Unsupported cases include multi-stage tasks, task-specific image builds, shared-machine shell grading, Harbor collect hooks, and healthchecks.
+Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.
 SWE tasks require prebuilt images and initialize `refs/taskcompendium/base` before inference.
 Patch collection compares the final index with that revision, including agent commits and new files.

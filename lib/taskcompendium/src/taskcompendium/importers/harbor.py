@@ -79,12 +79,14 @@ def _environment(config: EnvironmentConfig, *, capabilities: tuple[str, ...] = (
 def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     """Preserve task semantics and keep verifier files outside the agent workspace.
 
-    Multi-stage packages, image builds, and healthchecks are unsupported.
+    Shared verifier mode, multi-stage packages, image builds, and healthchecks are unsupported.
     Machine limits, users, and deadlines belong to runtime lowering.
     """
     config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
     if config.steps or config.multi_step_reward_strategy:
         raise NotImplementedError("Multi-stage Harbor tasks are unsupported")
+    if config.verifier.environment_mode != VerifierEnvironmentMode.SEPARATE and config.verifier.environment is None:
+        raise NotImplementedError("Harbor shell grading requires a separate verifier environment")
     requirements = _environment(config.environment, capabilities=("shell", "filesystem"))
     requirements = requirements.model_copy(
         update={
@@ -96,21 +98,14 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     )
     worker = _directory_resources(directory / "setup_files", "setup_files/")
     private = _directory_resources(directory / "tests")
-    separate = (
-        config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE or config.verifier.environment is not None
+    verifier_requirements = _environment(config.verifier.environment or config.environment).model_copy(
+        update={
+            "environment_variables": {
+                **(config.verifier.environment or config.environment).env,
+                **config.verifier.env,
+            },
+        }
     )
-    verifier_requirements = EnvironmentRequirements()
-    if separate:
-        verifier_requirements = _environment(config.verifier.environment or config.environment).model_copy(
-            update={
-                "environment_variables": {
-                    **(config.verifier.environment or config.environment).env,
-                    **config.verifier.env,
-                },
-            }
-        )
-    elif config.verifier.env:
-        raise NotImplementedError("Private verifier environment variables on a shared Harbor machine are unsupported")
     if config.verifier.collect:
         raise NotImplementedError("Harbor collect hooks with per-hook users and deadlines are unsupported")
     artifacts = [ArtifactConfig(source=item) if isinstance(item, str) else item for item in config.artifacts]
@@ -118,19 +113,15 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
         artifacts.append(ArtifactConfig(source=ARTIFACTS_PATH))
     verifier = ShellVerifierSpec(
         argv=("bash", GRADER_PATH),
-        artifacts=(
-            tuple(
-                VerifierArtifact(
-                    source=artifact.source,
-                    target=artifact.source,
-                    kind=ArtifactKind.AUTO,
-                    exclude=tuple(artifact.exclude),
-                    missing=MissingArtifactPolicy.SKIP,
-                )
-                for artifact in artifacts
+        artifacts=tuple(
+            VerifierArtifact(
+                source=artifact.source,
+                target=artifact.source,
+                kind=ArtifactKind.AUTO,
+                exclude=tuple(artifact.exclude),
+                missing=MissingArtifactPolicy.SKIP,
             )
-            if separate
-            else ()
+            for artifact in artifacts
         ),
         reward=FileReward(
             pass_above=0,
