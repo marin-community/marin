@@ -44,10 +44,11 @@ from taskforge.build.step import (
 )
 from taskforge.canonical import canonical_json, digest
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
-from taskforge.llm.agent import AgentLedger, AgentRun, AgentTool, run_agent
+from taskforge.llm.agent import AgentRun, AgentTool, run_agent
 from taskforge.llm.agent import shell_tool as agent_shell_tool
 from taskforge.llm.client import Completion, GlmClient
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import StructuredTool, complete_structured
 from taskforge.proposal.model import TaskProposal, render
 from taskforge.spec import controls as controls_module
@@ -208,7 +209,7 @@ class BuildLLM:
 
     async def agent(self, messages: Sequence[Message], tools: Sequence[AgentTool], max_turns: int) -> AgentRun:
         """Run the Taskforge agent loop (``taskforge.llm.agent.run_agent``) with ``tools``."""
-        record = AgentLedger(ledger=self._ledger, item_id=self._item_id, round=self._round, step=self._step())
+        record = CallLedger(ledger=self._ledger, item_id=self._item_id, round=self._round, step=self._step())
         return await run_agent(self.client, self.policy, messages, tools, max_turns, record)
 
 
