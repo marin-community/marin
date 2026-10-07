@@ -142,11 +142,12 @@ async def assemble(b: Build, env: EnvironmentSpec, graded: Grader) -> TaskSpec:
     )
 
 
-def control(id, kind, category, text, **expect):
+def control(id, kind, category, concern, text, **expect):
     return controls.Control(
         id=id,
         kind=kind,
         category=category,
+        concern=concern,
         author="test",
         payload=controls.Transcript((controls.reply(text),)),
         expect=controls.Expectation(status=Outcome.GRADED, **expect),
@@ -156,14 +157,14 @@ def control(id, kind, category, text, **expect):
 @step(StepRole.CONTROLS)
 async def fixed_controls(b: Build, task: TaskSpec) -> tuple[controls.Control, ...]:
     return (
-        control("gold", K.POSITIVE, C.KNOWN_CORRECT, "ANSWER = 42", reward_min=1.0),
-        control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, "", reward_max=0.0),
-        control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, "ANSWER = 41", reward_max=0.0),
-        control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, "ANSWER = 13", reward_max=0.0),
+        control("gold", K.POSITIVE, C.KNOWN_CORRECT, N.REFERENCE, "ANSWER = 42", reward_min=1.0),
+        control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, N.EXTRACTION, "", reward_max=0.0),
+        control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE, "ANSWER = 41", reward_max=0.0),
+        control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT, "ANSWER = 13", reward_max=0.0),
     )
 
 
-K, C = controls.ControlKind, controls.ControlCategory
+K, C, N = controls.ControlKind, controls.ControlCategory, controls.ControlConcern
 
 
 async def build(b: Build) -> BuildOutput:

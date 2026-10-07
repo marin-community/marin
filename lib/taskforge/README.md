@@ -96,8 +96,10 @@ modules, each of which keeps its types beside the code that checks their invaria
 - `build.run.run_build(program, proposal, ...)`: runs a builder program of memoized async steps.
   A step's memo key covers its code, arguments, the data globals it reads, `SDK_VERSION`, the
   proposal and the model policy. The verifier must come from a GRADER step and the controls from
-  a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The draft holds
-  the task, its `TaskExecution` and its controls. A host failure during the build raises
+  a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The SDK reference
+  lists the concerns each control category allows; every stage needs a reference, an acceptance
+  and a shortcut control. The draft holds the task, its `TaskExecution` and its controls. A host
+  failure during the build raises
   `build.infrastructure.BuildInfrastructureFailure` with a `cause` of `no_factory`,
   `scheduling_timeout` or `host_unreachable`, even when the program wrapped it; it is never a
   `BuildFailure`, and the caller does not charge it to the program.

@@ -464,6 +464,7 @@ def sdk_reference() -> str:
             "Control",
             "ControlKind",
             "ControlCategory",
+            "ControlConcern",
             "Expectation",
             "Transcript",
             "Workspace",
@@ -478,6 +479,13 @@ def sdk_reference() -> str:
             f"- {kind.name}: {', '.join(sorted(c.name for c in categories))}"
             for kind, categories in controls_module.CATEGORIES.items()
         ),
+        "Allowed concerns per control category:",
+        *(
+            f"- {category.name}: {', '.join(sorted(c.name for c in concerns))}"
+            for category, concerns in controls_module.CONCERNS.items()
+        ),
+        "Every stage needs controls with each of these concerns: "
+        f"{', '.join(sorted(c.name for c in controls_module.REQUIRED_CONCERNS_PER_STAGE))}.",
         f"Negative controls and graded malformed controls need reward_max <= {controls_module.REJECTION_CEILING}.",
         "",
     ]

@@ -106,17 +106,17 @@ async def test_failed_check_names_the_step(proposal, program_source, tmp_path, s
         (
             "controls=await fixed_controls(b, task))",
             "controls=(*await fixed_controls(b, task), "
-            'control("late", K.POSITIVE, C.KNOWN_CORRECT, "42", reward_min=1.0)))',
+            'control("late", K.POSITIVE, C.KNOWN_CORRECT, N.ACCEPTANCE, "42", reward_min=1.0)))',
             "CONTROLS step",
         ),
         # The execution settings prepare a stage the task does not have.
         ("execution=EXECUTION, convention=", 'execution=TaskExecution(stages={"extra": {}}), convention=', "execution:"),
         # The convention cannot carry the task's text answer.
         ('CONVENTION = PlainText(id="plain_text")', 'CONVENTION = JsonValueAnswer(id="json")', "convention 'json'"),
-        # The control set lacks a shortcut or reward-hack control.
+        # The control set lacks a shortcut control.
         (
-            'control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT',
-            'control("sum", K.NEGATIVE, C.PLAUSIBLE_WRONG',
+            'control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT',
+            'control("sum", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE',
             "controls:",
         ),
     ],
