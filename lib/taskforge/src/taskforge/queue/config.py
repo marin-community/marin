@@ -171,7 +171,9 @@ class RunConfig:
         if self.width < 1:
             raise ValueError(f"width must be at least 1, got {self.width}")
         if (self.host is MachineHost.LAPTOP) != (self.image_cache is not None):
-            raise ValueError(f"a {self.host} run takes an image_cache only on a laptop, got {self.image_cache}")
+            raise ValueError(
+                f"image_cache is a directory on a laptop and null on Iris; this {self.host} run has {self.image_cache}"
+            )
         if self.host is MachineHost.IRIS and self.root.is_absolute():
             raise ValueError(f"an Iris run root is relative to $IRIS_OUTPUT_DIR, got {self.root}")
 
