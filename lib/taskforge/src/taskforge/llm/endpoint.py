@@ -7,6 +7,8 @@ from iris.client.client import iris_ctx
 from iris.cluster.types import JobName
 
 GLM_MODEL = "glm-5.3"
+API_ROOT = "/v1"
+"""The path suffix of an OpenAI-compatible base URL; the router's ``/health`` sits beside it."""
 
 
 def resolve_glm_base_url(relay_job: str) -> str:
@@ -18,4 +20,4 @@ def resolve_glm_base_url(relay_job: str) -> str:
     if not endpoints:
         raise RuntimeError("The GLM relay has no registered endpoint")
     base_url = endpoints[0].url.rstrip("/")
-    return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+    return base_url if base_url.endswith(API_ROOT) else f"{base_url}{API_ROOT}"
