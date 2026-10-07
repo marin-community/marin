@@ -9,6 +9,13 @@ assign equal weight to each input cache.
 
 ## Build a union
 
+Native curation excludes scored branches whose retained assistant loss masks are
+entirely zero. Failed Harbor trials can retain a fully masked placeholder instead
+of a sampled completion. The selection manifest records
+`no_trainable_assistant_tokens`, the original verifier outcome and source paths;
+collection scoring counts remain unchanged. A token mismatch in a branch with
+trainable tokens still fails conversion.
+
 Pass each cache's artifact name and immutable version with `--cache`. Names are
 relative to the current user's namespace; omit `users/<username>/`. Choose one
 completed curated cache version per original student run. Expanded snapshots overlap their

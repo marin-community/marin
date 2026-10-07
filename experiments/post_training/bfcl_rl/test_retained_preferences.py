@@ -864,6 +864,16 @@ def _native_pair_collection(
                             },
                         }
                     )
+            if model == "teacher" and index == 0 and fault == "no_trainable_assistant_tokens":
+                record["prompt"]["token_ids"] = [0]
+                record["response"] = {
+                    "token_ids": [0],
+                    "loss_mask": [0],
+                    "step_boundaries": [{"prompt_token_ids": [0], "token_start": 0, "token_end": 1}],
+                }
+                record["disposition"]["exception_type"] = "NonZeroAgentExitCodeError"
+                trial["exception_info"] = {"exception_type": "NonZeroAgentExitCodeError"}
+                entries = [entry for entry in entries if entry["trial_id"] != trial_id]
             path = root / f"attempts/trace_jobs/eval_sessions/native/{task.name}/result.json"
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps(trial))
@@ -1076,12 +1086,27 @@ def test_native_dpo_sealed_batches_from_unfinished_producers_preserve_verified_p
     assert report["unmatched_branches"][0]["teacher_without_student"] == [[tasks[2].source_id, "codex@0.118.0", 0]]
 
 
-@pytest.mark.parametrize("fault", ["auxiliary_capture", "unmatched_literal_tool_calls", "unproven_assistant_history"])
-def test_native_dpo_excludes_unusable_capture_without_changing_verifier_grade(tmp_path: Path, fault: str):
+@pytest.mark.parametrize(
+    "fault,teacher_score",
+    [
+        ("auxiliary_capture", 1.0),
+        ("unmatched_literal_tool_calls", 1.0),
+        ("unproven_assistant_history", 1.0),
+        ("no_trainable_assistant_tokens", 0.0),
+        ("no_trainable_assistant_tokens", 1.0),
+    ],
+)
+def test_native_dpo_excludes_unusable_capture_without_changing_verifier_grade(
+    tmp_path: Path, fault: str, teacher_score: float
+):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
     partition = replace(PARTITION, complement=tasks)
-    teacher = _native_pair_collection(tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, fault)
-    student = _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, "none")
+    teacher = _native_pair_collection(
+        tmp_path / "teacher", "teacher", (teacher_score, 0.0, 0.0, 1.0, 1.0), partition, fault
+    )
+    student = _native_pair_collection(
+        tmp_path / "student", "student", (1.0 - teacher_score, 1.0, 0.0, 1.0, None), partition, "none"
+    )
     tokenizer_path = tmp_path / "student-tokenizer"
     _native_pair_tokenizer(tokenizer_path)
     config = NativePreferenceConfig(
@@ -1094,12 +1119,14 @@ def test_native_dpo_excludes_unusable_capture_without_changing_verifier_grade(tm
     [excluded] = report["excluded_branches"]
     assert excluded["source_id"] == f"teacher-collection/teacher-{tasks[0].name}"
     assert excluded["reason"] == ("tool_free_auxiliary_capture" if fault == "auxiliary_capture" else fault)
-    assert excluded["verifier_outcome"] == "correct"
+    assert excluded["verifier_outcome"] == ("correct" if teacher_score else "incorrect")
     if fault != "auxiliary_capture":
         assert excluded["retained_uri"].endswith("records/0.json.gz")
         assert excluded["native_trace_uri"].endswith(f"{tasks[0].name}/result.json")
     assert report["preferences"][0]["chosen"]["task_source_id"] == tasks[1].source_id
-    assert report["collections"][0]["dispositions"]["opencode@1.18.2/correct"] == 2
+    assert report["collections"][0]["dispositions"]["opencode@1.18.2/correct"] == 1 + int(teacher_score)
+    if not teacher_score:
+        assert report["collections"][0]["dispositions"]["opencode@1.18.2/incorrect"] == 1
 
 
 def test_native_teacher_pool_matches_context_without_reweighting_student_trajectories(tmp_path: Path):

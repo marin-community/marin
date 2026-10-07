@@ -153,6 +153,22 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                 source_id = f"{evidence.identity.run_id}/{evidence.retained.record_id}"
                 initial_prompt = ""
                 if evidence.retained.rollout.outcome is not RolloutOutcome.UNSCORED:
+                    if not any(any(step.loss_mask) for step in evidence.retained.steps):
+                        excluded_branches.append(
+                            {
+                                "source_id": source_id,
+                                "reason": "no_trainable_assistant_tokens",
+                                "verifier_outcome": evidence.retained.rollout.outcome.value,
+                                "retained_uri": evidence.retained_uri,
+                                "native_trace_uri": evidence.native_uri,
+                            }
+                        )
+                        selected.append(
+                            NativePreferenceBranch(
+                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
+                            )
+                        )
+                        continue
                     try:
                         trace = native_model_trace(
                             identity=evidence.identity,
