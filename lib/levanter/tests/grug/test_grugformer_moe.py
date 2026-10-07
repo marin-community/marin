@@ -34,7 +34,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
-from levanter.grug._moe.ep_ragged_all_to_all import _is_sm100_or_newer, _loop_local_zeros, _LoopLocalZeroSite
+from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -184,14 +184,6 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
-
-
-@pytest.mark.parametrize(
-    ("compute_capability", "expected"),
-    [("9.0", False), ("10.0", True), ("12.0", True), ("gfx942", False), ("gfx950", False)],
-)
-def test_is_sm100_or_newer_accepts_cuda_versions_and_rocm_architectures(compute_capability, expected):
-    assert _is_sm100_or_newer(compute_capability) is expected
 
 
 def test_interleaved_receiver_ranks_allocate_capacity_round_robin_over_sources():
