@@ -13,7 +13,6 @@ from jsonschema.validators import validator_for
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec
 
 from taskcompendium.grader import grader_package
-from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -36,6 +35,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.task_grading import resolve_verifier
 
 RUBRIC = ReviewRubric(
     id="structured-outputs-answerability",

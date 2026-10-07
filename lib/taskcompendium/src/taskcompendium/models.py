@@ -13,8 +13,9 @@ from typing import Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from verifyit.json_objects import unique_object
 
-SCHEMA_VERSION = "0.21"
+SCHEMA_VERSION = "0.22"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -23,6 +24,7 @@ class AnswerType(StrEnum):
 
     TEXT = "text"
     NUMBER = "number"
+    JSON = "json"
     FILE = "file"
     STATE = "state"
     WORKSPACE_STATE = "workspace_state"
@@ -130,7 +132,7 @@ ConversationEvent = Annotated[TextMessage | AssistantToolCalls | ToolResult, Fie
 
 
 def format_conversation(events: tuple[ConversationEvent, ...]) -> str:
-    """Produce the Harbor instruction view of a structured conversation."""
+    """Format a structured conversation as readable instruction text."""
     sections = []
     for event in events:
         if isinstance(event, TextMessage):
@@ -327,7 +329,9 @@ class VerifierSpec(BaseModel):
     @field_validator("parameters_json")
     @classmethod
     def validate_parameters(cls, value: str) -> str:
-        parameters = json.loads(value, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+        parameters = json.loads(
+            value, object_pairs_hook=unique_object, parse_constant=_reject_json_constant, parse_float=_finite_json_float
+        )
         if not isinstance(parameters, dict):
             raise ValueError("Verifier configuration must be a JSON object")
         return value

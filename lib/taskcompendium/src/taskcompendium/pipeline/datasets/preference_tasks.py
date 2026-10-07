@@ -7,7 +7,6 @@ import re
 
 from pydantic import ValidationError
 
-from taskcompendium.harbor.protocol import chat_conversation
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -16,6 +15,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.chat_messages import chat_conversation
 from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.models import (
     ImportRejection,

@@ -8,14 +8,14 @@ import json
 
 import pytest
 
-from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, RawRow
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import PlainText
 
 
 def row(name, instruction, data):
@@ -33,9 +33,9 @@ def row(name, instruction, data):
 
 
 def grade(task, answer):
-    return grade_answer(
+    return grade_task(
         task,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 
@@ -139,7 +139,7 @@ def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wr
     assert "A: one\nB: two\nC: three" in task.context.events[0].content
     assert grade(task, "B").reward == 1.0
     assert grade(task, "A").reward == 0.0
-    assert grade(task, "Answer: B").status == Outcome.EXTRACTION_ERROR
+    assert (grade(task, "Answer: B").status, grade(task, "Answer: B").reward) == (Outcome.GRADED, 0.0)
     assert not task.resources.worker and not task.resources.all
 
 

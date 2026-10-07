@@ -13,7 +13,6 @@ from verifyit.numeric import numeric_literal
 from verifyit.spec import MathSpec, MathType, McqSpec, NumericSpec
 
 from taskcompendium.grader import grader_config, grader_package, script_package
-from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -34,6 +33,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.task_grading import resolve_verifier
 
 REFERENCE_SCRIPT = (Path(__file__).with_name("grader_scripts") / "references.py").read_bytes()
 

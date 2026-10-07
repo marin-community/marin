@@ -8,8 +8,19 @@ import json
 import pytest
 from verifyit.candidate import candidate_spec, grade_text_candidate
 from verifyit.grade import InvalidTask
+from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
-from verifyit.spec import ExactSpec, FunctionCall, Mode, PredictedActionSpec, spec_to_table
+from verifyit.modes.grade_structured_exact import grade_structured_exact_candidate
+from verifyit.spec import (
+    ExactSpec,
+    FunctionCall,
+    Mode,
+    PredictedActionSpec,
+    StructuredExactSpec,
+    parse_spec,
+    render_spec,
+    spec_to_table,
+)
 
 
 @pytest.mark.parametrize(
@@ -35,7 +46,7 @@ from verifyit.spec import ExactSpec, FunctionCall, Mode, PredictedActionSpec, sp
 )
 def test_private_candidate_configuration_roundtrip_grades_content(mode, parameters, correct, wrong):
     spec = candidate_spec(mode, json.loads(json.dumps(parameters)))
-    assert not isinstance(spec, PredictedActionSpec)
+    assert not isinstance(spec, (PredictedActionSpec, StructuredExactSpec))
     assert grade_text_candidate(spec, correct).reward == 1.0
     assert grade_text_candidate(spec, wrong).reward == 0.0
 
@@ -96,3 +107,14 @@ def test_private_predicted_action_overflowing_tolerance_is_invalid_configuration
             Mode.PREDICTED_ACTION,
             {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}], "numeric_tolerance": 10**400},
         )
+
+
+@pytest.mark.parametrize("policy,reward", [(NumericTypePolicy.VALUE, 1.0), (NumericTypePolicy.STRICT, 0.0)])
+def test_structured_exact_numeric_policy_survives_private_json_and_toml_roundtrips(policy, reward):
+    spec = StructuredExactSpec(expected={"nested": [16, True]}, numeric_types=policy)
+    table = spec_to_table(spec)
+    mode = table.pop("mode")
+    for restored in (candidate_spec(mode, json.loads(json.dumps(table))), parse_spec(render_spec(spec))):
+        assert isinstance(restored, StructuredExactSpec)
+        assert grade_structured_exact_candidate(restored, {"nested": [16.0, True]}).reward == reward
+        assert grade_structured_exact_candidate(restored, {"nested": [16, 1]}).reward == 0.0

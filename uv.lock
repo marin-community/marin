@@ -11692,9 +11692,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-harbor = [
-    { name = "harbor" },
-]
 pipeline = [
     { name = "datasets" },
     { name = "marin-finestore" },
@@ -11712,7 +11709,6 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
-    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
@@ -11722,7 +11718,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], editable = "lib/verifyit" },
 ]
-provides-extras = ["harbor", "pipeline"]
+provides-extras = ["pipeline"]
 
 [package.metadata.requires-dev]
 test = [
