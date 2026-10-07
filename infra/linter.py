@@ -536,20 +536,11 @@ def _concat_findings(lane_results: list[LaneResult]) -> str:
 def _resolve_review_stat() -> tuple[str, str] | None:
     """Resolve the merge-base with origin/main and a `git diff --stat` of the branch.
 
-    Refreshes origin/main before comparing. Returns `(merge_base, stat)`, or
-    None (after echoing the reason) when the merge-base can't be resolved or the
-    branch has no changes. A failed refresh raises so stale refs cannot produce
-    a misleading review. Lanes get this changed-file inventory (every file, any
+    Returns `(merge_base, stat)`, or None (after echoing the reason) when the
+    merge-base can't be resolved or the branch has no changes — both advisory
+    no-ops for the caller. Lanes get this changed-file inventory (every file, any
     language), not a pasted diff, and probe each file themselves.
     """
-    fetched = subprocess.run(
-        ["git", "fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-    )
-    if fetched.returncode != 0:
-        raise RuntimeError(f"could not refresh origin/main: {fetched.stderr.strip() or fetched.stdout.strip()}")
     base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT_DIR, capture_output=True, text=True)
     if base.returncode != 0:
         click.echo("  ⚠ Lint review skipped: could not resolve merge-base with origin/main")
@@ -735,8 +726,9 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
 
     Findings are advisory and never block. Returns 0 for every outcome that fits
     that contract (no findings, findings emitted, agent unavailable, merge-base
-    unresolved, lane/composer timeout). Returns 1 on a usage error, failed base
-    refresh, or when every lane's agent failed to run.
+    unresolved, lane/composer timeout). Returns 1 only on a usage error (unknown
+    lane) or when every lane's agent failed to run, which indicates a broken
+    agent CLI worth surfacing.
     """
     lanes = list(LINT_LANES)
     if lane_names:
@@ -754,11 +746,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
         return 0
     agent_cmd = _with_readonly_access(agent_cmd)
 
-    try:
-        resolved = _resolve_review_stat()
-    except RuntimeError as error:
-        click.echo(f"Lint review stopped: {error}", err=True)
-        return 1
+    resolved = _resolve_review_stat()
     if resolved is None:
         return 0
     merge_base, stat = resolved

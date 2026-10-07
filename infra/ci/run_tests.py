@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run the safe unit tests affected by a local branch and working tree.
 
-The default comparison refreshes origin/main and includes committed, staged,
-unstaged, and untracked changes from its merge base with HEAD. Pass --base-ref
-to select tests without fetching. Selected paths share one synced
+The default comparison includes committed, staged, unstaged, and untracked
+changes from the branch point with main. Selected paths share one synced
 workspace environment. When Haliax and other packages are selected together,
 the runner gives Haliax one eight-device worker and runs the remaining workers
 concurrently with the normal one-device topology. Dedicated accelerator and
@@ -30,7 +29,7 @@ if __package__ in (None, ""):
 
 from infra.ci.select_tests import BROAD_TRIGGER_REASON, RUST_SETUP_TAG, SelectionResult, select_local_tests
 
-DEFAULT_BASE_REF = "origin/main"
+DEFAULT_BASE_REFS: tuple[str, ...] = ("origin/HEAD", "origin/main", "main")
 LOCAL_SAFE_MARKERS = (
     "not slow and not integration and not data_integration and not cluster "
     "and not requires_cluster and not docker and not manual and not torch"
@@ -153,12 +152,13 @@ def _git_output(args: list[str], repo_root: Path) -> str:
 
 
 def default_base_ref(repo_root: Path) -> str:
-    """Refresh and return the default remote main-branch ref."""
-    result = _run_git(["fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main"], repo_root)
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise LocalTestError(f"could not refresh origin/main: {detail}; pass --base-ref for an offline run")
-    return DEFAULT_BASE_REF
+    """Return the first available conventional main-branch ref."""
+    for ref in DEFAULT_BASE_REFS:
+        result = _run_git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], repo_root)
+        if result.returncode == 0:
+            return ref
+    refs = ", ".join(DEFAULT_BASE_REFS)
+    raise LocalTestError(f"no default base ref found ({refs}); pass --base-ref explicitly")
 
 
 def worktree_diff(base_ref: str, repo_root: Path) -> WorktreeDiff:
