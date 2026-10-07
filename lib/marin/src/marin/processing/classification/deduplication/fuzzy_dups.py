@@ -33,7 +33,7 @@ from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
 from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
-from zephyr.dataset import Dataset, ShardInfo
+from zephyr.dataset import Dataset
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -168,49 +168,21 @@ def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
 # instead means each worker fetches and caches the list once.
 _SHARED_ENTRIES_KEY = "fuzzy_dups_entries"
 
-# A record id cannot contain a NUL byte, so this never collides with a real one.
-_SENTINEL_ID = "\x00shard-present\x00"
-
 _COUNTER_PREFIX = "dedup/fuzzy/document"
 
 
-def _make_cluster_member_emitter(num_entries: int):
-    """Return a map_shard function that drops singletons before the per-shard shuffle.
-
-    Singletons are typically most of the corpus, so filtering them here keeps
-    them out of the ``group_by`` entirely. Every entry still has to reach the
-    reducer so it gets its attribute file, hence shard 0 emits one sentinel
-    record per entry (Zephyr has no union op to add them separately).
-    """
-
-    def emit(records: Iterator[dict], shard_info: ShardInfo) -> Iterator[dict]:
-        if shard_info.shard_idx == 0:
-            for file_idx in range(num_entries):
-                yield {"id": _SENTINEL_ID, "file_idx": file_idx}
-
-        # CC's Hash-to-Min guarantees component_id == min(id_norm) across a
-        # cluster, so `component_id == id_norm` cheaply identifies the natural
-        # canonical. `preserve_singletons=True` wires singletons as self-links,
-        # so a node is a singleton iff its adjacency_list is exactly [id_norm].
-        for r in records:
-            adjacency = r["adjacency_list"]
-            if len(adjacency) == 1 and adjacency[0] == r["id_norm"]:
-                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/singletons_skipped", 1)
-                continue
-            yield {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
-
-    return emit
+def _is_cluster_member(record: dict) -> bool:
+    """Filter predicate that drops singletons before the per-shard shuffle and counts them."""
+    if record["is_singleton"]:
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/singletons_skipped", 1)
+        return False
+    return True
 
 
 def _make_per_shard_writer():
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
-    Skips the per-shard sentinel row. For every cluster member, writes
+    For every cluster member, writes
     ``{id, dup_cluster_id, is_cluster_canonical}``. Rows are
     already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
 
@@ -229,8 +201,6 @@ def _make_per_shard_writer():
         def cluster_member_rows():
             nonlocal cluster_members, canonicals
             for record in records:
-                if record["id"] == _SENTINEL_ID:
-                    continue
                 cluster_members += 1
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", 1)
                 if record["is_canonical"]:
@@ -375,10 +345,23 @@ def compute_fuzzy_dups_attrs(
     ctx.put(_SHARED_ENTRIES_KEY, entries)
     aggregator = _make_per_shard_writer()
 
+    # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
+    # so `component_id == id_norm` cheaply identifies the natural canonical.
+    # `preserve_singletons=True` wires singletons as self-links, so a node is a
+    # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
     shard_pipeline = (
         Dataset.from_list(cc_files)
         .load_parquet()
-        .map_shard(_make_cluster_member_emitter(len(entries)))
+        .map(
+            lambda r: {
+                "id": _strip_cc_prefix(r["record_id"]),
+                "component_id": r["component_id"],
+                "is_canonical": r["component_id"] == r["id_norm"],
+                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
+                "file_idx": r["file_idx"],
+            }
+        )
+        .filter(_is_cluster_member)
         .group_by(
             lambda r: r["file_idx"],
             sort_by=lambda r: r["id"],
@@ -393,6 +376,12 @@ def compute_fuzzy_dups_attrs(
         reduce_task_resources=reduce_task_resources,
     )
     shard_results = outcome.results
+    # A shard with no cluster members never reaches the reducer, so it gets its
+    # empty attribute file here; consumers resolve every shard to one.
+    written = {r["file_idx"] for r in shard_results}
+    for entry in entries:
+        if entry.file_idx not in written:
+            write_parquet_file([], entry.output_path)
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     # Aggregate per-source counters across shards for the final artifact.
