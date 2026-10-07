@@ -13,7 +13,7 @@ local experts and an expert weight ``[G, K, N]``:
 Each case is timed for both Triton kernel families (``tile_map``, used on AMD Instinct GPUs, and
 ``group_grid``, used on every other GPU), for XLA's ``ragged_dot_general`` (in ``--xla-dtype``,
 since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense ``jnp.matmul`` with the
-same FLOPs. Tile-map blocks follow this device's table, so on NVIDIA they are the generic blocks.
+same FLOPs. Tile-map blocks follow this device's entry in ``_TILE_MAP_CONFIGS``.
 Each timing warms up for ``--warmup-seconds``, then reports the median of ``--repeats`` windows of
 back-to-back calls.
 
@@ -236,7 +236,8 @@ def git_sha() -> str:
         return env_sha
     try:
         return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError) as exc:
+        logger.warning("MARIN_COMMIT is unset and git rev-parse failed (%s); recording git_sha=unknown", exc)
         return "unknown"
 
 
