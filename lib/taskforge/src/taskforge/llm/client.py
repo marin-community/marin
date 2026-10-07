@@ -40,9 +40,11 @@ from rigging.timing import ExponentialBackoff
 from taskforge.llm.endpoint import GLM_MODEL, resolve_glm_base_url
 from taskforge.llm.policy import (
     CONTINUE_FINAL_MESSAGE_FIELDS,
+    PREFILL_TEMPLATE_KWARGS,
     LLMPolicy,
     Message,
     continuation_messages,
+    prefilled_messages,
     reasoning_continuation_messages,
 )
 
@@ -575,3 +577,82 @@ class GlmClient:
             await asyncio.sleep(backoff.next_interval())
             if not await self._pool_empty():
                 return
+
+
+def _joined_prefilled(parts: Sequence[Completion], content: str, started: float) -> Completion:
+    """One ``Completion`` from prefilled segments, renumbering each segment's attempts in order."""
+    attempts = tuple(
+        replace(attempt, segment=index if attempt.segment != PROBE_SEGMENT else PROBE_SEGMENT)
+        for index, part in enumerate(parts)
+        for attempt in part.attempts
+    )
+    usage = parts[0].usage
+    for part in parts[1:]:
+        usage = usage + part.usage
+    return Completion(
+        content=content,
+        reasoning="".join(part.reasoning for part in parts),
+        tool_calls=parts[-1].tool_calls,
+        finish_reason=parts[-1].finish_reason,
+        usage=usage,
+        wall_time=time.monotonic() - started,
+        ttft=parts[0].ttft,
+        decode_time=sum(part.decode_time for part in parts),
+        continuations=len(parts) - 1,
+        attempts=attempts,
+    )
+
+
+async def complete_prefilled(
+    client: GlmClient,
+    messages: Sequence[Message],
+    policy: LLMPolicy,
+    prefix: str,
+    request_fields: Mapping[str, object] | None = None,
+) -> Completion:
+    """Run one logical call whose answer starts with ``prefix``; the returned ``content`` starts with it.
+
+    ``prefix`` is sent as the start of the assistant turn (``prefilled_messages``) with
+    ``CONTINUE_FINAL_MESSAGE_FIELDS``, and the model writes the rest. Measured live on GLM-5.3:
+
+    * A prefilled turn does not think. The chat template renders an empty ``<think></think>`` before
+      the prefilled text (the prompt has the same tokens with and without an explicit empty think
+      block), so the model continues the answer directly. Without ``enable_thinking: false`` vLLM's
+      reasoning parser, which waits for a ``</think>`` the output never contains, files the whole
+      continuation under ``reasoning`` and leaves ``content`` empty; with it the continuation is
+      ``content`` and ``reasoning_tokens`` is 0. This function sends ``enable_thinking: false``
+      beside the policy's ``reasoning_effort``, so ``chat_template_kwargs`` in ``request_fields`` is
+      replaced.
+    * The template strips the prefilled text, so ``"id: "`` and ``"id:"`` render the same prompt. A
+      ``prefix`` with leading or trailing whitespace is rejected, so ``content`` is exactly what the
+      model saw followed by what it wrote.
+
+    A reply cut off by ``max_tokens`` is continued, up to ``policy.max_continuations`` times, by
+    prefilling everything written so far (trailing whitespace removed, since the template strips it
+    and the model writes it again). A continuation that no longer fits the context window ends the
+    call with the output gathered so far, as in ``GlmClient.complete``.
+
+    Raises:
+        ValueError: ``prefix`` is empty or has leading or trailing whitespace.
+    """
+    if not prefix or prefix != prefix.strip():
+        raise ValueError(f"prefix must be non-empty without surrounding whitespace, got {prefix!r}")
+    template_kwargs = {**policy.template_kwargs(), **PREFILL_TEMPLATE_KWARGS}
+    fields = {**(request_fields or {}), **CONTINUE_FINAL_MESSAGE_FIELDS, "chat_template_kwargs": template_kwargs}
+    segment_policy = replace(policy, max_continuations=0)
+    started = time.monotonic()
+    parts: list[Completion] = []
+    written = prefix
+    while True:
+        try:
+            part = await client.complete(prefilled_messages(messages, written), segment_policy, fields)
+        except GlmContextExhausted:
+            if not parts:
+                raise
+            logger.warning("GLM context is full after %d prefilled segments; returning the partial output", len(parts))
+            break
+        parts.append(part)
+        if part.finish_reason is not FinishReason.LENGTH or part.tool_calls or len(parts) > policy.max_continuations:
+            return _joined_prefilled(parts, written + part.content, started)
+        written = (written + part.content).rstrip()
+    return _joined_prefilled(parts, written, started)

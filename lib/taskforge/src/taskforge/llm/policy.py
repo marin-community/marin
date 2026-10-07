@@ -30,6 +30,7 @@ CONTINUE_PROMPT = (
 )
 THINK_OPEN = "<think>"
 CONTINUE_FINAL_MESSAGE_FIELDS: dict[str, object] = {"continue_final_message": True, "add_generation_prompt": False}
+PREFILL_TEMPLATE_KWARGS: dict[str, object] = {"enable_thinking": False}
 
 Message = dict[str, object]
 
@@ -58,12 +59,13 @@ class LLMPolicy:
     stall_timeout: float = 600.0
     max_continuations: int = 4
 
+    def template_kwargs(self) -> dict[str, object]:
+        """The ``chat_template_kwargs`` this policy sends."""
+        return {"reasoning_effort": str(self.reasoning_effort)}
+
     def sampling_fields(self) -> dict[str, object]:
         """Request-body fields this policy contributes, other than ``max_tokens``."""
-        return {
-            "temperature": self.temperature,
-            "chat_template_kwargs": {"reasoning_effort": str(self.reasoning_effort)},
-        }
+        return {"temperature": self.temperature, "chat_template_kwargs": self.template_kwargs()}
 
 
 def continuation_messages(messages: Sequence[Message], partial: str) -> list[Message]:
@@ -77,3 +79,11 @@ def reasoning_continuation_messages(messages: Sequence[Message], reasoning: str)
     Send with ``CONTINUE_FINAL_MESSAGE_FIELDS`` so the model extends that turn.
     """
     return [*messages, {"role": "assistant", "content": THINK_OPEN + reasoning}]
+
+
+def prefilled_messages(messages: Sequence[Message], prefix: str) -> list[Message]:
+    """Return ``messages`` followed by an assistant turn that holds ``prefix`` as its answer so far.
+
+    Send with ``CONTINUE_FINAL_MESSAGE_FIELDS`` and ``enable_thinking`` off (``llm.client.complete_prefilled``).
+    """
+    return [*messages, {"role": "assistant", "content": prefix}]
