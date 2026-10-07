@@ -141,6 +141,24 @@ def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():
     )
 
 
+@pytest.mark.parametrize("effort", ["high", "low"])
+@pytest.mark.parametrize("use_chat", [True, False])
+def test_effective_reasoning_effort_reaches_chat_generation_overrides(effort, use_chat):
+    config = _payload(
+        _config(
+            tasks=(EvalTaskConfig("MATH500", 0, generation=True),),
+            apply_chat_template=use_chat,
+            chat_template_kwargs={"reasoning_effort": effort},
+            extra_gen_kwargs={"reasoning_effort": "high"},
+        )
+    )
+
+    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
+    generation_kwargs = dict(pair.split("=", 1) for pair in command[command.index("--gen_kwargs") + 1].split(","))
+
+    assert generation_kwargs["reasoning_effort"] == (effort if use_chat else "high")
+
+
 def test_parent_rejects_endpoint_model_arg_overrides():
     # Endpoint identity is Marin-owned; a config must not reroute the isolated child to another model.
     with pytest.raises(ValueError):
