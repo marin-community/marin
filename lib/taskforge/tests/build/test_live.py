@@ -47,9 +47,11 @@ def scripted(turns: tuple[dict, ...]):
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(5400)
-async def test_authored_program_builds_a_task_its_positive_control_passes(glm_settings, parallel_key, proposal):
+async def test_authored_program_builds_a_task_its_positive_control_passes(
+    glm_settings, parallel_key, image_cache, proposal
+):
     run_dir = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
-    factories = machine_factories(MachineHost.LAPTOP, controller_url=None)
+    factories = machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=image_cache)
     endpoint = GlmEndpoint(base_url=glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
     async with GlmClient(endpoint) as client, httpx.AsyncClient() as http:
         services = BuildServices(

@@ -35,6 +35,8 @@ PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
 PARALLEL_KEY = "PARALLEL_KEY"
 EVIDENCE_DIR_ENV = "TASKFORGE_EVIDENCE_DIR"
 DEFAULT_EVIDENCE_ROOT = Path(tempfile.gettempdir()) / "taskforge-evidence"
+# Kept across runs so live tests do not re-pull the registry images the laptop Docker factory prepares.
+LIVE_IMAGE_CACHE = Path("~/.cache/taskforge/images").expanduser()
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,12 @@ class ListLedger:
 @pytest.fixture
 def ledger() -> ListLedger:
     return ListLedger()
+
+
+@pytest.fixture(scope="session")
+def image_cache() -> Path:
+    """The ``image_cache`` live tests pass to ``machine_factories`` on a laptop."""
+    return LIVE_IMAGE_CACHE
 
 
 @dataclass
