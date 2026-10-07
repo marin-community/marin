@@ -41,7 +41,8 @@ logger = logging.getLogger(__name__)
 AXIS = "x"
 OPS = ("all_gather", "reduce_scatter", "all_reduce", "all_to_all")
 DTYPES = {"bfloat16": jnp.bfloat16, "float32": jnp.float32}
-# Row width of the June model's EP all-gather output (262,144 tokens x 2,560 hidden at batch 64).
+# Row width of the EP all-gather output in the June 67B-A2B MoE model (experiments/june_tpu_67b_a2b):
+# 262,144 tokens x 2,560 hidden at batch 64.
 MODEL_HIDDEN_DIM = 2560
 MATMUL_DIM = 8192
 # Chained matmuls in the overlap test: about 4-5 ms on MI350X, close to a 1.3 GB all-gather.
@@ -174,7 +175,7 @@ def main() -> None:
         type=float,
         nargs="+",
         default=[8, 16, 32, 64, 128, 256, 512, 1024, 1342.177, 2048],
-        help="Message sizes in MB (1e6 bytes); 1342.177 is the June EP all-gather at batch 64.",
+        help="Message sizes in MB (1e6 bytes); 1342.177 is the June 67B-A2B EP all-gather at batch 64.",
     )
     parser.add_argument("--overlap", action="store_true", help="Also time each op next to an independent matmul.")
     parser.add_argument(
