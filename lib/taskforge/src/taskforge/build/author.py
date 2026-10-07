@@ -29,13 +29,13 @@ from types import ModuleType
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
-from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, record_completions, sdk_reference
+from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, sdk_reference
 from taskforge.build.step import SDK_VERSION, Step, StepRole, code_names
 from taskforge.canonical import sha256_hex, write_atomic
-from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion
 from taskforge.llm.policy import Message
-from taskforge.llm.structured import StructuredTool, complete_structured
+from taskforge.llm.recording import CallLedger, recorded_structured
+from taskforge.llm.structured import StructuredTool
 from taskforge.proposal.model import TaskProposal, render
 
 PROGRAM_FILE = "program.py"
@@ -338,11 +338,10 @@ async def author(
     record_dir = attempts / f"{len(list(attempts.iterdir())):02d}"
     record_dir.mkdir()
     write_atomic(record_dir / "request.json", json.dumps(messages, indent=2).encode())
-    with span(services.ledger, EntryKind.LLM_CALL, item_id=item_id, round=round, step="author") as fields:
-        fields.model = services.client.endpoint.model
-        fields.attrs["revision"] = str(revision is not None)
-        result = await complete_structured(services.client, messages, services.policy, tool)
-        record_completions(fields, result.completions)
+    record = CallLedger(ledger=services.ledger, item_id=item_id, round=round, step="author")
+    result = await recorded_structured(
+        services.client, messages, services.policy, tool, record, {"revision": str(revision is not None)}
+    )
     write_atomic(record_dir / "completions.json", _COMPLETIONS.dump_json(result.completions, indent=2))
     program = compile_program(result.value.source, proposal.digest)
     write_atomic(record_dir / PROGRAM_FILE, program.source.encode())

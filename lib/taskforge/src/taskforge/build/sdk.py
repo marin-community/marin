@@ -43,13 +43,13 @@ from taskforge.build.step import (
     step,
 )
 from taskforge.canonical import canonical_json, digest
-from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
+from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentRun, AgentTool, run_agent
 from taskforge.llm.agent import shell_tool as agent_shell_tool
 from taskforge.llm.client import Completion, GlmClient
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.llm.recording import CallLedger
-from taskforge.llm.structured import StructuredTool, complete_structured
+from taskforge.llm.recording import CallLedger, recorded_complete, recorded_structured
+from taskforge.llm.structured import StructuredTool
 from taskforge.proposal.model import TaskProposal, render
 from taskforge.spec import controls as controls_module
 from taskforge.spec import draft as draft_module
@@ -157,15 +157,6 @@ class BuildServices:
     web_tools: tuple[AgentTool, ...] = ()
 
 
-def record_completions(fields: SpanFields, completions: Sequence[Completion]) -> None:
-    """Fill an ``LLM_CALL`` span with the summed token usage, last finish reason and request count."""
-    fields.tokens_in = sum(c.usage.prompt_tokens for c in completions)
-    fields.tokens_out = sum(c.usage.completion_tokens for c in completions)
-    fields.tokens_reasoning = sum(c.usage.reasoning_tokens for c in completions)
-    fields.finish_reason = completions[-1].finish_reason
-    fields.attrs["requests"] = str(len(completions))
-
-
 class BuildLLM:
     """GLM access for steps. Every call is recorded in the ledger under the running step."""
 
@@ -181,17 +172,14 @@ class BuildLLM:
         """The policy digest that every step key includes."""
         return digest({"model": self.client.endpoint.model, "policy": self.policy})
 
-    def _step(self) -> str:
+    def _record(self) -> CallLedger:
         frame = CURRENT_STEP.get()
-        return "program" if frame is None else frame.name
+        step = "program" if frame is None else frame.name
+        return CallLedger(ledger=self._ledger, item_id=self._item_id, round=self._round, step=step)
 
     async def complete(self, messages: Sequence[Message]) -> Completion:
         """One chat completion (no tools) with the build policy."""
-        with span(self._ledger, EntryKind.LLM_CALL, item_id=self._item_id, round=self._round, step=self._step()) as f:
-            completion = await self.client.complete(messages, self.policy)
-            f.model = self.client.endpoint.model
-            record_completions(f, (completion,))
-        return completion
+        return await recorded_complete(self.client, messages, self.policy, {}, self._record(), {})
 
     async def structured[T: BaseModel](self, messages: Sequence[Message], output_type: type[T], name: str) -> T:
         """Force one call of a strict tool named ``name`` whose arguments ``output_type`` validates.
@@ -200,17 +188,12 @@ class BuildLLM:
         ``StructuredOutputError``. Put checks the model can fix in ``output_type`` validators.
         """
         tool = StructuredTool(name=name, description=inspect.getdoc(output_type) or name, output_type=output_type)
-        with span(self._ledger, EntryKind.LLM_CALL, item_id=self._item_id, round=self._round, step=self._step()) as f:
-            f.model = self.client.endpoint.model
-            f.attrs["tool"] = name
-            result = await complete_structured(self.client, messages, self.policy, tool)
-            record_completions(f, result.completions)
+        result = await recorded_structured(self.client, messages, self.policy, tool, self._record(), {"tool": name})
         return result.value
 
     async def agent(self, messages: Sequence[Message], tools: Sequence[AgentTool], max_turns: int) -> AgentRun:
         """Run the Taskforge agent loop (``taskforge.llm.agent.run_agent``) with ``tools``."""
-        record = CallLedger(ledger=self._ledger, item_id=self._item_id, round=self._round, step=self._step())
-        return await run_agent(self.client, self.policy, messages, tools, max_turns, record)
+        return await run_agent(self.client, self.policy, messages, tools, max_turns, self._record())
 
 
 class Build:
