@@ -19,10 +19,14 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import auto_axes
+from jax import random
+from jax.sharding import PartitionSpec as P
+from jax.sharding import auto_axes, reshard
 from jaxtyping import Array, Float, Int
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
+
+from experiments.grug.fast_track.key_offset import shifted_channels
 
 _QUERY_CHUNK = 256
 
@@ -49,6 +53,16 @@ class IndexSpec(NamedTuple):
     """> 0: candidates only this far back."""
     score_only: bool = False
     """Weight the picks by the low-rank score alone (no head q.k, Inkling bias or local window)."""
+
+
+class Compose(NamedTuple):
+    """Pre-softmax head composition: ``logit_h = sum_g mix[h, g] Z_g (+ u_h(x_i) sum_g w_g(x_i) Z_g)`` over the
+    ``2H`` sub-head scores ``Z`` (each head's offset-channel score, then each head's current-channel score)."""
+
+    mix: Float[Array, "H H2"]
+    u: Float[Array, "B S H"] | None
+    w: Float[Array, "B S H2"] | None
+    offset_mask: jax.Array  # [H, D] channels whose key is the previous token's
 
 
 class Lightning(NamedTuple):
@@ -98,6 +112,7 @@ def _sparse_math(
     lam,
     lightning,
     tap_weights,
+    compose,
     *,
     spec: "IndexSpec",
     tap_offsets: tuple[int, ...],
@@ -133,7 +148,19 @@ def _sparse_math(
     def one_chunk(c0):
         qi = c0 + jnp.arange(chunk)  # [C]
         qc = jax.lax.dynamic_slice_in_dim(q, c0, chunk, axis=1).astype(jnp.float32)
-        logits = jnp.einsum("bqhd,bkhd->bhqk", qc * scale, k.astype(jnp.float32))  # [B, H, C, S]
+        if compose is None:
+            logits = jnp.einsum("bqhd,bkhd->bhqk", qc * scale, k.astype(jnp.float32))  # [B, H, C, S]
+        else:
+            mask = compose.offset_mask.astype(jnp.float32)  # [H, D]
+            kf = k.astype(jnp.float32)
+            z_prev = jnp.einsum("bqhd,bkhd->bhqk", qc * scale * mask, kf)
+            z_cur = jnp.einsum("bqhd,bkhd->bhqk", qc * scale * (1.0 - mask), kf)
+            z = jnp.concatenate([z_prev, z_cur], axis=1)  # [B, 2H, C, S]
+            logits = jnp.einsum("hg,bgqk->bhqk", compose.mix.astype(jnp.float32), z)
+            if compose.u is not None and compose.w is not None:
+                uc = jax.lax.dynamic_slice_in_dim(compose.u, c0, chunk, axis=1).astype(jnp.float32)
+                wc = jax.lax.dynamic_slice_in_dim(compose.w, c0, chunk, axis=1).astype(jnp.float32)
+                logits = logits + jnp.einsum("bqh,bqg,bgqk->bhqk", uc, wc, z)
         if rel_bias is not None:
             band = jax.lax.dynamic_slice_in_dim(rel_bias, c0, chunk, axis=2).astype(jnp.float32)
             column = keys[None, :] - (qi[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent
@@ -261,6 +288,7 @@ def sparse_index_attention(
     lam: Float[Array, " H"],
     lightning: Lightning | None = None,
     tap_weights: jax.Array | None = None,
+    compose: Compose | None = None,
     *,
     window: int,
     topk: int,
@@ -289,10 +317,10 @@ def sparse_index_attention(
     )
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights)
+        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
-    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights)
+    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose)
 
 
 def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
@@ -315,6 +343,20 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         lq = project(cfg, xs, attn.w_lq)
         lq = lq.reshape(*lq.shape[:-1], cfg.mla_sparse_index_heads, -1)
         light = Lightning(lq, project(cfg, xs, attn.w_lk), project(cfg, xs, attn.w_lw), cfg.mla_sparse_kl_weight)
+    compose = None
+    if attn.logit_mix is not None:
+        heads, head_dim = q.shape[2], q.shape[3]
+        dynamic = attn.logit_mix_u is not None and attn.logit_mix_w is not None
+        compose = Compose(
+            attn.logit_mix,
+            project(cfg, x, attn.logit_mix_u) if dynamic else None,
+            project(cfg, x, attn.logit_mix_w) if dynamic else None,
+            (
+                shifted_channels(heads, head_dim, cfg.mla_key_offset_channels)
+                if cfg.mla_key_offset
+                else jnp.zeros((heads, head_dim), bool)
+            ),
+        )
     spec = IndexSpec(
         untied=cfg.mla_sparse_untied,
         anchor_match=cfg.mla_sparse_anchor_match,
@@ -331,6 +373,7 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         lam,
         light,
         attn.sparse_taps,
+        compose,
         window=cfg.mla_sparse_window,
         spec=spec,
         tap_offsets=cfg.mla_sparse_taps,
@@ -340,4 +383,36 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         block=cfg.mla_sparse_block,
         compress=cfg.mla_sparse_compress,
         block_select=cfg.mla_sparse_index == SparseIndex.BLOCK,
+    )
+
+
+def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, init_weight) -> dict:
+    """The MLA module's sparse-index, value-tap, previous-token gate and logit-composition parameters (None when off)."""
+
+    def matrix(i: int, width: int) -> jax.Array:
+        return reshard(init_weight(random.fold_in(key, i), (d, width), std), P(None, None))
+
+    follow = cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.FOLLOW
+    lightning = cfg.mla_sparse_dsa_topk > 0 or (
+        cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.LIGHTNING
+    )
+    groups = n if cfg.mla_sparse_index_per_head else 1
+    r = cfg.mla_sparse_index_dim
+    taps = None
+    if cfg.mla_sparse_taps:
+        shape = (n, len(cfg.mla_sparse_taps)) + ((h,) if cfg.mla_sparse_taps_per_channel else ())
+        taps = jnp.zeros(shape).at[:, cfg.mla_sparse_taps.index(0)].set(1.0)
+    return dict(
+        w_sidx=matrix(0, groups * r * (2 if cfg.mla_sparse_untied else 1)) if follow else None,
+        w_lq=matrix(1, cfg.mla_sparse_index_heads * r) if lightning else None,
+        w_lk=matrix(2, r) if lightning else None,
+        w_lw=matrix(3, cfg.mla_sparse_index_heads) if lightning else None,
+        sparse_lam=jnp.ones((n,), jnp.float32) if follow else None,
+        sparse_taps=taps,
+        prev_gate=jnp.zeros((d, n), jnp.float32) if cfg.mla_prev_gate else None,
+        logit_mix=(
+            jnp.concatenate([jnp.eye(n), jnp.eye(n)], axis=1).astype(jnp.float32) if cfg.mla_logit_compose else None
+        ),
+        logit_mix_u=jnp.zeros((d, n), jnp.float32) if cfg.mla_logit_compose_dynamic else None,
+        logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
     )

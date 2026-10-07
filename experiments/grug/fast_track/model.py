@@ -82,7 +82,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.fast_track.sparse_attention import SparseIndex, mla_sparse_attention
+from experiments.grug.fast_track.sparse_attention import SparseIndex, mla_sparse_attention, mla_sparse_params
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -1000,6 +1000,12 @@ class GrugModelConfig:
     mla_sparse_anchor_match: bool = False
     mla_sparse_lookback: int = 0
     mla_sparse_score_only: bool = False
+    mla_prev_gate: bool = False
+    """With ``mla_key_offset``: a per-head, per-token gate ``2 sigmoid(x . w)`` on the query's offset channels."""
+    mla_logit_compose: bool = False
+    """MLA heads' scores composed before the softmax from every head's offset-channel and current-channel score
+    (``sparse_attention``, identity-pair init; needs ``mla_sparse_window``). Dynamic: also a rank-1 query-wise mix."""
+    mla_logit_compose_dynamic: bool = False
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -2347,6 +2353,10 @@ class CausalSelfAttention(eqx.Module):
     w_lk: Float[Array, "D R"] | None
     w_lw: Float[Array, "D G"] | None
     sparse_taps: jax.Array | None  # mla_sparse_taps: [N, T] or [N, T, D] value-tap weights
+    prev_gate: Float[Array, "D N"] | None  # mla_prev_gate
+    logit_mix: Float[Array, "N N2"] | None  # mla_logit_compose: [N, 2N] mix of the offset / current scores
+    logit_mix_u: Float[Array, "D N"] | None  # mla_logit_compose_dynamic: rank-1 query-wise mix
+    logit_mix_w: Float[Array, "D N2"] | None
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2377,9 +2387,6 @@ class CausalSelfAttention(eqx.Module):
             kv_mix = "kv" in cfg.latent_mix_sites
             match_dim = cfg.mla_shared_match_dim
             appended = cfg.mla_match_append != MatchAppend.OFF
-            lightning = cfg.mla_sparse_dsa_topk > 0 or (
-                cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.LIGHTNING
-            )
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             shared_kvl = cfg.kv_shared_latent_dim
             kvl = cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)  # what w_uk / w_uv read
@@ -2466,49 +2473,7 @@ class CausalSelfAttention(eqx.Module):
                     if cfg.mla_future_heads
                     else None
                 ),
-                w_sidx=(
-                    reshard(
-                        _init_weight(
-                            random.fold_in(k_q, 10),
-                            (
-                                d,
-                                (n if cfg.mla_sparse_index_per_head else 1)
-                                * cfg.mla_sparse_index_dim
-                                * (2 if cfg.mla_sparse_untied else 1),
-                            ),
-                            std,
-                        ),
-                        P(None, None),
-                    )
-                    if cfg.mla_sparse_topk and cfg.mla_sparse_index == SparseIndex.FOLLOW
-                    else None
-                ),
-                **{
-                    name: (
-                        reshard(_init_weight(random.fold_in(k_q, 11 + i), (d, width), std), P(None, None))
-                        if lightning
-                        else None
-                    )
-                    for i, (name, width) in enumerate(
-                        [
-                            ("w_lq", cfg.mla_sparse_index_heads * cfg.mla_sparse_index_dim),
-                            ("w_lk", cfg.mla_sparse_index_dim),
-                            ("w_lw", cfg.mla_sparse_index_heads),
-                        ]
-                    )
-                },
-                sparse_lam=(
-                    jnp.ones((n,), jnp.float32)
-                    if cfg.mla_sparse_topk and cfg.mla_sparse_index == SparseIndex.FOLLOW
-                    else None
-                ),
-                sparse_taps=(
-                    jnp.zeros((n, len(cfg.mla_sparse_taps)) + ((h,) if cfg.mla_sparse_taps_per_channel else ()))
-                    .at[:, cfg.mla_sparse_taps.index(0)]
-                    .set(1.0)
-                    if cfg.mla_sparse_taps
-                    else None
-                ),
+                **mla_sparse_params(cfg, d, n, h, random.fold_in(k_q, 10), std, _init_weight),
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2657,6 +2622,10 @@ class CausalSelfAttention(eqx.Module):
             w_lk=None,
             w_lw=None,
             sparse_taps=None,
+            prev_gate=None,
+            logit_mix=None,
+            logit_mix_u=None,
+            logit_mix_w=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2973,6 +2942,11 @@ class CausalSelfAttention(eqx.Module):
         # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
+        if self.prev_gate is not None:
+            # Per head and token, how much the query relies on its previous-token match: 2 sigmoid(x . w), 1 at init.
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.prev_gate).astype(jnp.float32))
+            shifted = shifted_channels(q.shape[2], q.shape[3], self.cfg.mla_key_offset_channels)
+            q = jnp.where(shifted, q * gate[..., None].astype(q.dtype), q)
         head_probe_attn = _head_attention_stats(q, k, mask, rel_bias, sconv_segment_ids) if _HEAD_PROBE else None
         if _HEAD_PROBE:
             stats[HEAD_QCOS_STAT] = _query_head_cosines(q, sconv_segment_ids)
