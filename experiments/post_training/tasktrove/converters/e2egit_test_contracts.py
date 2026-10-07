@@ -35,6 +35,18 @@ def test_item_underflow_preserves_positive_quantity():
     except ValueError:
         pass
     assert item.quantity == 3
+
+
+def test_inventory_records_preserve_names_quantities_and_prices():
+    inventory = Inventory()
+    inventory.add_item(Item(name='Apple', quantity=4, price=0.5))
+    inventory.add_item(Item(name='Banana', quantity=3, price=1.25))
+    inventory.add_item(Item(name='Apple', quantity=2, price=0.5))
+    inventory.remove_item('Banana', 1)
+    assert sorted(inventory.get_inventory(), key=lambda row: row['name']) == [
+        {'name': 'Apple', 'quantity': 6, 'price': 0.5},
+        {'name': 'Banana', 'quantity': 2, 'price': 1.25},
+    ]
 """
 CALCULATOR_INTERFACE = "\n\nPlace the `Calculator` class in `/app/calculator.py`.\n"
 CALCULATOR_TESTS = """

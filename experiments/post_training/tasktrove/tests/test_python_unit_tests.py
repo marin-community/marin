@@ -13,6 +13,7 @@ from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
+from experiments.post_training.tasktrove.converters.e2egit_test_contracts import INVENTORY_TESTS
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML, VERIFY_TEST_SH
@@ -122,6 +123,28 @@ def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tm
     assert (oracle.status, oracle.reward) == (Status.SCORED, 1.0)
 
 
+@pytest.mark.parametrize("variant", ["correct", "missing-price", "wrong-price"])
+def test_inventory_contract_checks_price_fields(tmp_path, variant):
+    # Only authored assertions and control programs execute on the host.
+    fixtures = Path(__file__).parents[1] / "fixtures"
+    program = (fixtures / "inventory_control.py").read_text()
+    if variant == "missing-price":
+        program = program.replace("quantity=i.quantity, price=i.price", "quantity=i.quantity")
+    elif variant == "wrong-price":
+        program = program.replace("price=i.price", "price=0.0")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_inventory.py").write_text("import pytest\nfrom inventory import Item, Inventory\n" + INVENTORY_TESTS)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "inventory.py").write_text(program)
+    spec = PytestSpec(paths=(str(tests / "test_inventory.py"),), python=sys.executable)
+    spec_path = tests / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    verdict = run(spec_path, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, float(variant == "correct"))
+
+
 @pytest.mark.docker
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("module", ["inventory", "calculator", "factorial"])
@@ -141,6 +164,8 @@ def test_e2egit_contracts_accept_valid_implementations_and_reject_reported_defec
         controls += [
             ("no-op", program.replace('raise ValueError("underflow")', "return"), 1.0),
             ("clamps", program.replace('raise ValueError("underflow")', "self.quantity = 0; return"), 0.0),
+            ("missing-price", program.replace("quantity=i.quantity, price=i.price", "quantity=i.quantity"), 0.0),
+            ("wrong-price", program.replace("price=i.price", "price=0.0"), 0.0),
         ]
     elif module == "calculator":
         controls += [
