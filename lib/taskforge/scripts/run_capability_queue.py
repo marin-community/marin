@@ -7,14 +7,15 @@ Every catalog capability (or each ``--capability`` named) becomes a ``Capability
 proposes from it with ``CapabilitySource``, triages with the structural checks and a ``GlmRubric``
 of ``--rubric-samples`` samples that is shown each capability's catalog record, and carries every
 proposal through ``queue.run.run_queue``. ``CONFIG`` is a ``queue.config.RunConfig`` file
-(``docs/policy.example.json`` is the committed unattended configuration). The run writes
-``summary.json`` into the run root and exits non-zero when any item ended ``FAILED``.
+(``docs/policy.example.json`` is the committed unattended configuration; set its ``relay_job``).
+The run writes ``summary.json`` into the run root and exits non-zero when any item ended ``FAILED``.
 
 Laptop, through the GLM port-forward on the interactive pool (a copy of the example with
-``"host": "laptop"`` and ``"glm": {"kind": "laptop", ..., "pool": "high"}``)::
+``"host": "laptop"``, ``"image_cache"`` a local directory and
+``"glm": {"kind": "laptop", ..., "pool": "high"}``)::
 
     cd lib/taskforge && uv run python scripts/run_capability_queue.py run.json \\
-      --catalog ~/new_catalog.json --rubric-samples 3 --capability d01.algebra.linear-transformations
+      --catalog <catalog file> --rubric-samples 3 --capability d01.algebra.linear-transformations
 
 Iris takes the same arguments in place of ``scripts/run_queue.py``'s ``--inputs`` (see that
 script's docstring for the job command); the catalog is not checked in, so ``--catalog`` names a

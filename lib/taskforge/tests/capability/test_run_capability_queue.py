@@ -87,6 +87,7 @@ async def test_a_named_capability_is_proposed_triaged_against_its_catalog_record
         example,
         root=tmp_path / "run",
         host=MachineHost.LAPTOP,
+        image_cache=tmp_path / "images",
         glm=LaptopGlm(fake_glm.base_url, tmp_path / "glm.txt", Pool.HIGH),
         web=None,
         policy=replace(example.policy, proposals_per_idea=1, max_idea_reproposals=0),
