@@ -14,7 +14,7 @@ from experiments.post_training.tasktrove.converters.converted_task import Conver
 PLUGIN = "pytest-json-report"
 SWESMITH_REPO = re.compile(r"https://github\.com/swesmith/(?P<repo>[^\s/]+)")
 PYTEST_CONSTRAINT = "/opt/verifyit-pytest-constraints.txt"
-SWESMITH_PYTEST = "pytest>=8.4,<9"
+SWESMITH_PYTEST = "pytest<9"
 CONFIG_JSON = "tests/config.json"
 TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
 TESTBED = "/testbed"
@@ -174,6 +174,8 @@ def swe_test_environment(dockerfile: str, instruction: str) -> str:
     packages = f'"{SWESMITH_PYTEST}"'
     if match["repo"] == "marshmallow-code__marshmallow.9716fc62":
         packages += " simplejson"
+    elif match["repo"] == "conan-io__conan.86f29e13":
+        packages += " mock webtest PyJWT bottle parameterized"
     return (
         dockerfile.rstrip("\n")
         + f"\nRUN printf '{SWESMITH_PYTEST}\\n' > {PYTEST_CONSTRAINT}\n"

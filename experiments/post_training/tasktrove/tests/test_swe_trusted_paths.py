@@ -204,7 +204,7 @@ def test_swesmith_keeps_compatible_pytest_constraint_for_agent_installs(reposito
     constraint_line = next(line for line in dockerfile.splitlines() if line.endswith(f"> {constraint_path}"))
     requirement = constraint_line.split("'")[1].removesuffix(r"\n")
     versions = SpecifierSet(requirement.removeprefix("pytest"))
-    assert "8.4.2" in versions and "9.0.0" not in versions
+    assert "8.3.4" in versions and "8.4.2" in versions and "9.0.0" not in versions
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in dockerfile
     assert parse_spec(converted.text(VERIFIER_TOML)).must_pass == tuple(
         json.loads(task.text("tests/config.json"))["FAIL_TO_PASS"]
@@ -249,6 +249,43 @@ def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(
                 "--json-report-file=/probe/report.json",
                 "test_probe.py",
             ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("repository", ["seperman__deepdiff.ed252022", "conan-io__conan.86f29e13"])
+def test_swesmith_preserves_project_pytest_and_installs_conan_dependencies(repository, tmp_path):
+    task = read_task_binary(_fixture())
+    task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
+    task.files[DOCKERFILE] = b"FROM python:3.10-bookworm\nRUN pip install pytest pytest-json-report\n"
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    dockerfile = read_task_binary(record.task_binary).text(DOCKERFILE).split(INSTALL_MARKER)[0]
+    probe = "import pytest\n\ndef test_compatible_collection():\n    assert pytest.version_tuple[0] < 9\n"
+    if repository.startswith("seperman__"):
+        # The actual DeepDiff development requirements pin this version. The
+        # shared upper bound must allow that subsequent project installation.
+        dockerfile += "\nRUN python -m pip install pytest==8.3.4\n"
+        probe += "    assert pytest.__version__ == '8.3.4'\n"
+    else:
+        probe += (
+            "\ndef test_project_dependencies():\n"
+            "    import mock, webtest, jwt, bottle, parameterized\n"
+            "    assert jwt.decode(jwt.encode({'ok': True}, 'key', algorithm='HS256'), "
+            "'key', algorithms=['HS256']) == {'ok': True}\n"
+        )
+    (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
+    (tmp_path / "test_probe.py").write_text(probe)
+    image = f"atlas-swesmith-project-regression:{uuid.uuid4().hex}"
+    try:
+        subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", image, "python", "-m", "pytest", "test_probe.py"],
             capture_output=True,
             text=True,
         )
