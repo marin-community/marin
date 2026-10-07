@@ -18,7 +18,7 @@ from taskcompendium.submission import PlainText
 from taskforge.llm.client import GlmUnavailable
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.draft import file, shell_verifier
-from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole, run_adversaries
+from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, run_adversaries
 from taskforge.validate.calibration import FindingKind, RoleStats, summarize
 from taskforge.validate.controls import ControlVerdict
 from taskforge.validate.outcome import Cause, Ungraded
@@ -181,7 +181,7 @@ class HonestAdversary:
     work: dict[str, Any]
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
-        role = next(r for r in AdversaryRole if request.messages[0]["content"].startswith(ROLE_PREAMBLES[r]))
+        role = next(r for r in AdversaryRole if SENTINEL_REPLIES[r] in request.messages[0]["content"])
         done = any(message["role"] == "assistant" for message in request.messages)
         message = {"role": "assistant", "content": SENTINEL_REPLIES[role]} if done else self.work
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)

@@ -339,11 +339,16 @@ def draft_of(task: TaskSpec, controls: tuple[Control, ...], convention: Submissi
 
 
 def validation_policy(
-    k: int = 3, adversary_k: int = 2, max_retries: int = 0, token_contract_retries: int = 0
+    k: int = 3,
+    adversary_k: int = 2,
+    max_retries: int = 0,
+    token_contract_retries: int = 0,
+    adversary_output_tokens: int = 32768,
 ) -> ValidationPolicy:
     return ValidationPolicy(
         k=k,
         adversary_k=adversary_k,
+        adversary_output_tokens=adversary_output_tokens,
         roles=tuple(AdversaryRole),
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),

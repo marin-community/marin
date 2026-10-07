@@ -47,9 +47,11 @@ pytestmark = pytest.mark.live_glm
 EVIDENCE_ROOT = Path(__file__).resolve().parents[2] / ".evidence" / "validate"
 LIVE_TIMEOUT = 2400
 PLAIN = PlainText(id="plain")
+ADVERSARY_OUTPUT_TOKENS = 32768
 POLICY = ValidationPolicy(
     k=3,
     adversary_k=2,
+    adversary_output_tokens=ADVERSARY_OUTPUT_TOKENS,
     roles=tuple(AdversaryRole),
     band=CalibrationBand(0.125, 0.875),
     sampling=LLMPolicy(temperature=0.7, max_continuations=0),
