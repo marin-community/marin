@@ -10,6 +10,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, IfevalSpec
 
 from taskcompendium.grader import grader_package
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -28,7 +29,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 NON_LATIN_LANGUAGES = frozenset({"ar", "bg", "bn", "he", "hi", "ja", "ko", "ne", "ru", "ta", "te", "th", "zh"})
 LATIN_WORD = re.compile(r"[A-Za-z]+")

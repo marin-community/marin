@@ -7,6 +7,7 @@ from verifyit.grade import negative_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec
 
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AssistantToolCalls,
@@ -17,7 +18,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
-from taskcompendium.runtime.task_grading import grade_task, resolve_verifier
+from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import FinalAction, PlainText
 
 PLAIN = PlainText(id="pipeline-plain")

@@ -18,12 +18,12 @@ from uuid import uuid4
 from harbor_config.env import resolve_env_vars
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
-from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission
+from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission, resolve_verifier
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, TaskResource
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import grade_task, resolve_verifier
+from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.shell_verifier import (
     ArtifactKind,
     ExitCodeReward,

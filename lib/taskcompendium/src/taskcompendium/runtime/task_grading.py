@@ -4,17 +4,15 @@
 """Grade acquired runtime evidence with packaged VerifyIT specifications."""
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from rigging.filesystem.path_validation import validate_relative_file_path
 from shellbox.backends.docker.machine import DockerMachineFactory
-from verifyit.candidate import candidate_spec, supports_candidate_mode
+from verifyit.candidate import supports_candidate_mode
 from verifyit.grade import InvalidTask, Reward, Status
 from verifyit.grade import grade as verifyit_grade
-from verifyit.json_objects import unique_object
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -27,7 +25,6 @@ from verifyit.spec import (
     ScriptSpec,
     Spec,
     StdioSpec,
-    spec_from_table,
 )
 
 from taskcompendium.grading import grade_answer
@@ -37,6 +34,7 @@ from taskcompendium.grading_contract import (
     SubmissionFailure,
     TextSubmission,
     decode_json_value,
+    resolve_verifier,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
@@ -45,25 +43,11 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskResource,
     TaskSpec,
-    VerifierSpec,
 )
 from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import SubmissionConvention
-
-
-def resolve_verifier(specification: VerifierSpec) -> Spec:
-    """Read a candidate or file-based verifier without acquiring runtime evidence."""
-    try:
-        parameters = json.loads(specification.parameters_json, object_pairs_hook=unique_object)
-        if "mode" in parameters:
-            raise ValueError("Verifier parameters must not override the mode")
-        if supports_candidate_mode(specification.kind):
-            return candidate_spec(specification.kind, parameters)
-        return spec_from_table({"mode": specification.kind, **parameters})
-    except (ValueError, InvalidTask) as error:
-        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
 
 def grade_task(

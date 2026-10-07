@@ -8,8 +8,8 @@ from collections.abc import Callable, Mapping
 from pathlib import PurePosixPath
 
 from shellbox.machine import Machine, MachineFactory
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import AnswerType, EnvironmentRequirements, TaskSpec
-from taskcompendium.runtime.task_grading import resolve_verifier
 from taskcompendium.shell_verifier import ShellVerifierSpec
 from verifyit.spec import (
     DEFAULT_OUTPUT,

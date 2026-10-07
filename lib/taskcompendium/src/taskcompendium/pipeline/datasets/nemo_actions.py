@@ -7,6 +7,7 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from verifyit.spec import PredictedActionSpec
 
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import (
@@ -20,7 +21,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:

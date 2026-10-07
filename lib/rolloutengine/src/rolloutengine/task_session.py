@@ -12,7 +12,6 @@ from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import AnswerType, AssistantToolCalls, TaskSpec
-from taskcompendium.runtime.task_grading import resolve_verifier
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
     AnswerCall,
@@ -69,7 +68,7 @@ def session_start(task: TaskSpec, convention: SubmissionConvention) -> SessionSt
         AnswerType.WORKSPACE_STATE,
     }:
         if task.verifier.kind not in {"shell", "skipped"}:
-            compatibility = submission_compatibility(task, convention, resolved_verifier=resolve_verifier(task.verifier))
+            compatibility = submission_compatibility(task, convention)
             if not compatibility.compatible:
                 raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
         elif not convention.supports(task.answer_type):

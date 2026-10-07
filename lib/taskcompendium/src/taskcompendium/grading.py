@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from verifyit.candidate import (
     CandidateSpec,
     grade_text_candidate,
+    supports_candidate_mode,
 )
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
@@ -43,6 +44,7 @@ from taskcompendium.grading_contract import (
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AssistantToolCalls,
+    EnvironmentRequirements,
     TaskSpec,
     VerifierSpec,
 )
@@ -80,7 +82,12 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
 
 def grade_answer(specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt) -> GradeResult:
     """Extract one submission and score it through the shared candidate contract."""
+    if specification.verifier.environment_requirements != EnvironmentRequirements():
+        raise NotImplementedError("Pure grading cannot satisfy private environment requirements")
+    if not supports_candidate_mode(specification.verifier.kind):
+        raise NotImplementedError("This verifier requires runtime grading")
     verifier = resolve_verifier(specification.verifier)
+    assert isinstance(verifier, CandidateSpec)
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
