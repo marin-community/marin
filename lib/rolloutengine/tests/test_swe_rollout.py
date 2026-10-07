@@ -15,6 +15,8 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import EnvironmentRequirements, Source, TaskSpec, TextMessage
 
+from rolloutengine.task_session import WORKSPACE_INSTRUCTION
+
 from .test_rollout import ReplayModel, engine, lowered, machine_runtime
 
 
@@ -127,7 +129,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages[0] == {"role": "user", "content": "Repair value.txt."}
     assert len(model.requests[0].messages) == 2
-    assert model.requests[0].messages[1]["role"] == "user"
+    assert model.requests[0].messages[1] == {"role": "user", "content": WORKSPACE_INSTRUCTION}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2

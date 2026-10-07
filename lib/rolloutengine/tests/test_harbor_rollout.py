@@ -14,6 +14,7 @@ from taskcompendium.importers.harbor import harbor_task
 from taskcompendium.models import EnvironmentRequirements, Source, TaskSpec
 
 from rolloutengine.lowering import lower_task
+from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
 from .test_rollout import RecordingShellSimFactory, ReplayModel, engine, lowered, machine_runtime, shell_call
 
@@ -94,6 +95,11 @@ async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_
         )
     )
     assert (record.grade.status, record.grade.reward, record.grade.passed) == (Outcome.GRADED, reward, reward > 0)
+    assert len(task.context.events) == 1
+    assert model.requests[0].messages == (
+        {"role": "user", "content": (directory / "instruction.md").read_text()},
+        {"role": "user", "content": WORKSPACE_INSTRUCTION},
+    )
     assert record.grade.diagnostics["exit_code"] == 7
     assert record.loss_mask == (1, 0, 0, 1)
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0

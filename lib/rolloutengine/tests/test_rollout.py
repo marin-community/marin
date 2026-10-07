@@ -54,6 +54,7 @@ from rolloutengine.contracts import (
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.lowering import lower_task
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 
@@ -453,7 +454,7 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
     )
     assert record.grade.reward == 1.0
     assert model.requests[0].messages[:-1] == ({"role": "user", "content": "What is six plus six?"},)
-    assert model.requests[0].messages[-1]["role"] == "user"
+    assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
 
 
