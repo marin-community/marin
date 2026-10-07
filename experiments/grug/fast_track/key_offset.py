@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MLA previous-token matching: the partial key offset and the appended shared match score."""
+"""MLA token-shift features: the partial key offset, the appended shared match score and the value lookahead."""
 
 import math
 from enum import StrEnum
@@ -81,3 +81,30 @@ def append_shared_match(
     q = jnp.concatenate([reshard(q * math.sqrt(padded / head_dim), head_spec), q_tail.astype(q.dtype)], axis=-1)
     k = jnp.concatenate([reshard(k, head_spec), k_tail.astype(k.dtype)], axis=-1)
     return q, k, reshard(jnp.pad(v, ((0, 0), (0, 0), (0, 0), (0, match_dim))), head_spec)
+
+
+def next_token(x: jax.Array, segment_ids: Int[Array, "B S"] | None) -> jax.Array:
+    """``x`` shifted one token earlier along axis 1, zero at document ends."""
+    nxt = jnp.pad(x[:, 1:], ((0, 0), (0, 1)) + ((0, 0),) * (x.ndim - 2))
+    if segment_ids is None:
+        return nxt
+    ends = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (0, 1)), constant_values=True)
+    return jnp.where(ends.reshape(ends.shape + (1,) * (x.ndim - 2)), 0, nxt)
+
+
+@named_call
+def value_lookahead(
+    k: Float[Array, "B S N D"],
+    v: Float[Array, "B S N E"],
+    ahead: Float[Array, "N E"],
+    segment_ids: Int[Array, "B S"] | None,
+) -> tuple[jax.Array, jax.Array]:
+    """Each key token's value also reads the next token's, ``v'_t = v_t + ahead * v_{t+1}``; keys and values then
+    move one slot later (zero at document starts), so under the causal mask query ``i`` sees tokens ``t <= i - 1``
+    (never itself, so ``v_{t+1}`` never leaks the future) and every document's first slot is an all-zero sink."""
+    spec_k, spec_v = jax.typeof(k).sharding.spec, jax.typeof(v).sharding.spec
+    mixed = v + ahead.astype(v.dtype) * next_token(v, segment_ids)
+    return (
+        reshard(previous_token(k, segment_ids), spec_k),
+        reshard(previous_token(mixed, segment_ids).astype(v.dtype), spec_v),
+    )

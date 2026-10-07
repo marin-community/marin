@@ -66,7 +66,13 @@ from experiments.grug.fast_track.activations import polynorm, polynorm_over_inpu
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
 from experiments.grug.fast_track.head_loss import prototype_target_logits, reduce_token_loss
-from experiments.grug.fast_track.key_offset import MatchAppend, append_shared_match, partial_key_offset, shifted_channels
+from experiments.grug.fast_track.key_offset import (
+    MatchAppend,
+    append_shared_match,
+    partial_key_offset,
+    shifted_channels,
+    value_lookahead,
+)
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
@@ -974,6 +980,8 @@ class GrugModelConfig:
     mla_shared_match_dim: int = 0
     """M > 0: one shared match space per layer, ``m = kv_latent W_match``, used as ``mla_match_append`` says."""
     mla_match_append: MatchAppend = MatchAppend.OFF
+    mla_value_lookahead: bool = False
+    """MLA values also read the next token (``key_offset.value_lookahead``); attention then skips the query itself."""
     mla_tie_prev_qk: bool = False
     """With ``mla_key_offset``: the query's shifted half is the token's own un-shifted key half (a symmetric match)."""
     final_num_experts: int = 0
@@ -1218,15 +1226,11 @@ class GrugModelConfig:
     mla_v_filter_bias_init: float = 4.0
     """Initial ``b_h`` of ``mla_v_filter`` (the paper's +4: every gate starts at ~0.982)."""
     mla_forget_gate: bool = False
-    """Forgetting Transformer forget gate (FoX, arXiv 2503.02130) on the MLA layers: per head a scalar
-    ``f_t = sigmoid(w_h . x_t + b_h)`` (``w`` [D, N] zero-init, ``b`` [N] init ``mla_forget_gate_bias_init``;
-    both Adam) adds ``sum_{k=j+1..i} log f_k = c_i - c_j`` to logit (i, j), ``c`` the per-document cumsum of
-    ``log f``. The row term ``c_i`` cancels in the softmax; the kernel takes no per-key bias, so ``-c_j`` rides
-    in extra q/k channels (q: 1, k: a bf16 hi/mid/lo split of ``-c_j``) and q/k/v are zero-padded to the
-    kernel's 32-channel granule (head_dim 128 -> 160, ~1.25x attention FLOPs on these layers)."""
+    """FoX forget gate (arXiv 2503.02130) on the MLA layers: per head ``f_t = sigmoid(w_h . x_t + b_h)`` adds
+    ``c_i - c_j`` (``c`` the per-document cumsum of ``log f``) to logit (i, j); ``-c_j`` rides in extra q/k
+    channels (``_fox_augment``, head_dim 128 -> 160)."""
     mla_forget_gate_bias_init: float = 0.0
-    """Initial ``b_h`` of ``mla_forget_gate``. The paper uses 0 (f = 0.5: a strongly local start); larger
-    values start closer to plain attention (+4: f ~0.982)."""
+    """Initial ``b_h`` of ``mla_forget_gate`` (paper: 0, f = 0.5)."""
     zero_centered_gains: bool = False
     """Zero-centered norm gains (Qwen3-Next; arXiv 2608.30320 sec. 2.1.1): every learned-gain RMSNorm scales by
     ``1 + gamma`` with ``gamma`` zero-init (identical at init), so the optimizer's ``gain_weight_decay`` pulls
@@ -1450,12 +1454,9 @@ class GrugModelConfig:
     MLP input ``x``: its weight is ``[latent_dim, E]`` and routing gradients reach the latent projection."""
     router_embed_tie: tuple[str, ...] = ()
     """Router-embedding ties ``"L:E:V"`` (``L`` a layer index or ``*`` for every layer): layer ``L``'s router
-    column for expert ``E`` is ``alpha * token_embed[V]``, so its logit is ``alpha * token_embed[V] . x`` on
-    the normed MLP input ``x``. The embedding row is the shared input-embedding parameter (the LM gradient
-    reaches it through the tie); ``alpha`` is a learnable scalar per tie, initialized to
-    ``||router[:, E]|| / ||token_embed[V]||`` so the tied column starts at the untied column's scale. The
-    replaced router column gets no gradient. ``"L:E:V1|V2|..."`` ties to the centroid
-    ``alpha * mean(token_embed[V1], token_embed[V2], ...)`` of the current rows (every row gets gradient).
+    column for expert ``E`` is ``alpha * token_embed[V]``, so its logit is ``alpha * token_embed[V] . x``
+    on the normed MLP input ``x``; ``alpha`` is learnable, initialized to the untied column's scale.
+    ``"L:E:V1|V2|..."`` ties to the centroid ``alpha * mean(token_embed[V1], ...)`` of the current rows.
     Seeds expert specialization (expert-specialization study); parsed once by ``_router_ties``."""
     router_embed_tie_release_step: int | None = None
     """Release the ``router_embed_tie`` ties at this step: the router columns take their tied value (so the
@@ -2357,6 +2358,7 @@ class CausalSelfAttention(eqx.Module):
     match_scale: Float[Array, " N"] | None  # per-head weight on the shared match (M == half the head)
     match_head: Float[Array, "M NC"] | None  # per-head map of the shared match to the shifted half (M > half)
     match_gate: Float[Array, "D N"] | None  # MatchAppend.TOKEN
+    v_ahead: Float[Array, "N D"] | None  # mla_value_lookahead
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2465,6 +2467,7 @@ class CausalSelfAttention(eqx.Module):
                     else None
                 ),
                 match_gate=jnp.zeros((d, n), jnp.float32) if cfg.mla_match_append == MatchAppend.TOKEN else None,
+                v_ahead=jnp.zeros((n, h), jnp.float32) if cfg.mla_value_lookahead else None,
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2603,6 +2606,7 @@ class CausalSelfAttention(eqx.Module):
             match_scale=None,
             match_head=None,
             match_gate=None,
+            v_ahead=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2951,6 +2955,8 @@ class CausalSelfAttention(eqx.Module):
                 gate = gate * 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.match_gate).astype(jnp.float32))
             head_spec = P(*_padded_spec(q)[:3], None)
             q, k, kernel_v = append_shared_match(q, k, kernel_v, match, gate, sconv_segment_ids, head_spec)
+        if self.v_ahead is not None:
+            k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids)
         attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
             assert self.gda_lambda is not None
