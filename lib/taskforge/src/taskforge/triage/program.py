@@ -6,7 +6,7 @@
 ``evaluate`` runs the checks; a FATAL failure rejects with no model call, and so does a null
 proposal (it describes no task to score). Otherwise the rubric program scores the proposal on seven
 axes with the structural results in context, in several independent samples. ``sample_decision``
-applies the accept rule ported from the capability pipeline's portfolio review to each sample
+applies the accept rule to each sample
 (every axis at least 4, no critical failure, no required change) and ``rubric_decision`` takes the
 majority. Two live runs of one sample each at temperature 0.7 agreed on only 31 of 43 proposals
 (2026-10-05), so the gate votes.
