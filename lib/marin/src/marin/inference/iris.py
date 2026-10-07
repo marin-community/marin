@@ -81,6 +81,7 @@ _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 BACKEND_PORT_NAME = "backend"
+DASHBOARD_PORT_NAME = "http"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 
 
@@ -188,7 +189,7 @@ class IrisServiceConfig:
     timeout_hours: float = 24.0
     # Covers both the Iris proxy and dashboard upstream client for long generations.
     controller_proxy_timeout_seconds: float = 12 * 60 * 60
-    port_name: str | None = "http"
+    port_name: str | None = DASHBOARD_PORT_NAME
 
     def __post_init__(self) -> None:
         RemoteInferenceConfig(
