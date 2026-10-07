@@ -136,11 +136,19 @@ modules, each of which keeps its types beside the code that checks their invaria
   GLM `partial(GlmRolloutModel, client, sampling)`) and build each trial's model with
   `site.call_ledger(kind, trial)`, so its `LLM_CALL` spans carry step `solver/<index>` or
   `adversary/<role>/<index>`. `replay_controls` resumes unsettled controls through
-  `ControlPlan.first_attempts`.
+  `ControlPlan.first_attempts`. Each adversary runs under `ValidationPolicy.adversary_output_tokens`:
+  `RoleModel` counts the served response tokens of the attempt and ends it with stop reason
+  `length` when they are spent, graded on the state left. `role_preamble(role, output_tokens)`
+  renders the role's system preamble; it is in the policy digest.
 - `validate.calibration.summarize(evidence, policy) -> CalibrationSummary`: pure. It records the
   policy digest and band, the solver's `RewardStats`, the control verdicts, `RoleStats` per role
   and a closed set of `Finding`s (`FindingKind`; `DECISIVE` ones cannot improve by retrying).
-  `write_summary`/`load_summary` round-trip it as `calibration.json`.
+  `write_summary`/`load_summary` round-trip it as `calibration.json`. `summarize` assesses every
+  graded adversary trial into a `DefectTier` (`REPAIR`, `NOTED`, `NONE`) from coded transcript
+  signals (`AdversarySignals`, read against the draft's `TaskFacts`); REPAIR passes are findings
+  with controls, NOTED passes are `CalibrationSummary.notes`, every assessment is in
+  `CalibrationSummary.assessments`, and `RoleStats` counts give-ups (`gave_up`: the sentinel on the
+  last line of the final reply), budget stops and tiers.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -244,15 +252,24 @@ solver's engine path, task, grader, machine and convention. The preamble is the 
 turn, so the served token prefix holds. Adversary rollouts are evidence, never training data. The
 engine installs verifier files only after the final response, so the leak role looks for answer
 keys in the instruction, the environment files and the build context rather than reading the
-grader. A shortcut or leak pass becomes a negative control with concern `shortcut`
+grader. Every adversary is forbidden from completing the task, including by submitting an answer
+it came to know while inspecting the environment, may give up by ending its final reply with its
+sentinel line, and runs under an output-token budget the policy sets; a spent budget ends the
+attempt with stop reason `length` and grades the state left. The first fifteen live rounds showed
+why: told only not to do the work, the shortcut role read the input during reconnaissance and
+submitted the sum in 18 of 30 trials, and the ambiguity role submitted the same answer under a
+cosmetic reading in 13 of 30; every one of those passes was a decisive finding against a correct
+task, and each shortcut control would have contradicted the positive control. A pass is therefore
+tiered by a coded rule table over the transcript, never by the adversary's own account and never by
+a model: a pass that wrote a protected file, ran no shell command on a machine-graded task, never
+read an input file, or submitted text no honest run produced is a defect to repair, and except for
+an ambiguity mismatch ships its transcript as a negative control with concern `shortcut`
 (`reward_max = REJECTION_CEILING`) that the revised program must ship, so the next round's control
-replay proves the fix. Every role has
-a sentinel reply for finding nothing. A shortcut or leak pass is a finding whatever the adversary
-replied last: the grade is the evidence, and the adversary's own conclusion is not trusted over it.
-Only an ambiguity pass that ends on its sentinel is no finding, because no reading changed the
-answer and the role solved the task as intended. `RoleStats` counts passes and sentinel replies per
-role, which measures each role's false-positive rate. Review consumes findings through rules; no
-model judges legitimacy.
+replay proves the fix. A pass that read the inputs and submitted the real answer, or an ambiguity
+pass whose answer cannot be told apart from the honest one, is at most a note. Notes travel with
+the summary and never block an accept. `RoleStats` counts passes, give-ups, budget stops and tiers
+per role, which measures each role's behaviour. Review consumes findings through rules; no model
+judges legitimacy.
 
 `ValidationPolicy.retry_backoff` is a `RetryBackoff` dataclass (`ExponentialBackoff`'s four
 constructor arguments) rather than an `ExponentialBackoff`, so the policy digests and serializes it
