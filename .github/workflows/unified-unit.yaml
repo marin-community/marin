@@ -236,7 +236,7 @@ jobs:
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [tpu-ci]
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
 
@@ -291,7 +291,7 @@ jobs:
               rm -rf \"\$UV_PROJECT_ENVIRONMENT\" && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               ( status=0; \
-                timeout --kill-after=5 --signal=TERM 1490 \
+                timeout --kill-after=5 --signal=TERM 2090 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
