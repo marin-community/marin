@@ -29,9 +29,6 @@ from dataclasses import dataclass
 import click
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
-MAIN_BRANCH = "main"
-BASE_REF = f"origin/{MAIN_BRANCH}"
-FETCH_REFSPEC = f"+refs/heads/{MAIN_BRANCH}:refs/remotes/{BASE_REF}"
 sys.path.insert(0, str(ROOT_DIR))
 from infra.codehealth import complexity as complexity_leads  # noqa: E402
 from infra.lint.catalog import LintLane, catalog_sha, load_catalog, render_lane  # noqa: E402
@@ -546,16 +543,17 @@ def _resolve_review_stat() -> tuple[str, str] | None:
     language), not a pasted diff, and probe each file themselves.
     """
     fetched = subprocess.run(
-        ["git", "fetch", "--quiet", "origin", FETCH_REFSPEC],
+        ["git", "fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main"],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
     )
     if fetched.returncode != 0:
-        raise RuntimeError(f"could not refresh {BASE_REF}: {fetched.stderr.strip() or fetched.stdout.strip()}")
-    base = subprocess.run(["git", "merge-base", BASE_REF, "HEAD"], cwd=ROOT_DIR, capture_output=True, text=True)
+        raise RuntimeError(f"could not refresh origin/main: {fetched.stderr.strip() or fetched.stdout.strip()}")
+    base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT_DIR, capture_output=True, text=True)
     if base.returncode != 0:
-        click.echo(f"  ⚠ Lint review skipped: could not resolve merge-base with {BASE_REF}: {base.stderr.strip()}")
+        click.echo("  ⚠ Lint review skipped: could not resolve merge-base with origin/main")
+        click.echo(f"    (run `git fetch origin main` first; git said: {base.stderr.strip()})")
         return None
     merge_base = base.stdout.strip()
     # Stat the working tree against the merge-base: covers all branch work, committed and
