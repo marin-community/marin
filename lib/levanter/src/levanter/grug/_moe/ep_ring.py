@@ -197,7 +197,7 @@ def _moe_mlp_ep_ring_local(
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
-    with jax.named_scope("scatter"):
+    with jax.named_scope("combine"):
         weighted = out_dispatch * weight_dispatch[:, None]
         if gather_combine:
             out_global = _combine_rows(weighted, token_local, valid, slots)
