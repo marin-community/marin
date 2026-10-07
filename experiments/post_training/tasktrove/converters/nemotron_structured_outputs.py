@@ -14,7 +14,8 @@ property names.
 
 Format validation alone cannot establish correct extraction from the supplied document. Every
 retained format is therefore graded by a script composition: the existing format check runs
-first, then a labels judge compares field values against the unchanged instruction and document.
+first, then a labels judge compares field values against the document and the instruction augmented
+with an explicit missing-data convention.
 Both checks must pass. Judge transport or configuration errors remain unscored infrastructure
 failures. The task image installs the schema and judge extras required by the composition.
 

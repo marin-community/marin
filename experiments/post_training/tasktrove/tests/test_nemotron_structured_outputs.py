@@ -410,3 +410,24 @@ def test_missing_marker_cannot_replace_an_available_fact(tmp_path, fake_judge):
     verdict = grade(spec, tmp_path / "tests", workspace)
     assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
     assert candidate in fake_judge.prompts[0]
+
+
+@pytest.mark.parametrize("control", ["missing_facts", "invented_temperature", "missing_available_facts"])
+def test_original_exemplar_can_be_graded_without_inventing_required_values(tmp_path, fake_judge, control):
+    record = _convert()
+    assert record.status == ConvertStatus.CONVERTED
+    task = read_task_binary(record.task_binary)
+    task.write_to(tmp_path)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    candidate = {**_VALID_CANDIDATE, "tanninLevel": MISSING_VALUE, "servingTemperature": MISSING_VALUE}
+    if control == "invented_temperature":
+        candidate["servingTemperature"] = 12
+    elif control == "missing_available_facts":
+        candidate = {name: MISSING_VALUE for name in candidate}
+    expected = control == "missing_facts"
+    fake_judge.replies = ["PASS" if expected else "FAIL"]
+    (workspace / "answer.txt").write_text(json.dumps(candidate))
+    verdict = grade(parse_spec(task.text(VERIFIER_TOML)), tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, float(expected))
+    assert "When pairing wine with grilled salmon" in fake_judge.prompts[0]
