@@ -463,6 +463,7 @@ def test_cpu_only_levanter_files_stay_in_unit_lane_and_leave_tpu_lane(tmp_path: 
         "lib/levanter/tests/recovery/test_supervisor.py",
         "lib/levanter/tests/test_distributed.py",
         "lib/levanter/tests/test_sharded_dataset.py",
+        "lib/levanter/tests/test_snowball_cpu.py",
     }
     for path in cpu_only | {"lib/levanter/tests/test_model.py"}:
         write(tmp_path, path, "def test_behavior():\n    assert True\n")

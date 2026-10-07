@@ -204,6 +204,7 @@ TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
         "lib/levanter/tests/test_hf_gpt2_serialize.py",
         "lib/levanter/tests/test_gdn_layer.py",
         "lib/levanter/tests/test_sharded_dataset.py",
+        "lib/levanter/tests/test_snowball_cpu.py",
     }
 )
 
