@@ -9,18 +9,19 @@ example). ``--inputs MODULE:FUNCTION`` names a ``queue.job.InputsFactory``: a fu
 writes ``summary.json`` into the run root and exits non-zero when any item ended ``FAILED``.
 
 Laptop, through the GLM port-forward on the interactive pool (``"glm": {"kind": "laptop", ...,
-"pool": "high"}``, ``"host": "laptop"``)::
+"pool": "high"}``, ``"host": "laptop"``, ``"image_cache"`` a local directory)::
 
     cd lib/taskforge && uv run python scripts/run_queue.py run.json --inputs my_inputs:inputs
 
-Iris, with the committed example (relay, bulk pool, root under ``$IRIS_OUTPUT_DIR``). The token and
-the Parallel key travel in the job environment; ``queue.job`` removes them from what sandboxes inherit::
+Iris, with ``run.json`` a copy of the committed example whose ``relay_job`` names the cluster's GLM
+relay (relay, bulk pool, root under ``$IRIS_OUTPUT_DIR``). The token and the Parallel key travel in
+the job environment; ``queue.job`` removes them from what sandboxes inherit::
 
     lib/taskforge/.venv/bin/iris --cluster=marin job run --no-wait --no-sync \\
       --job-name taskforge-queue-NN --target-cluster cw-rno2a --priority batch \\
       --cpu 8 --memory 32GB --timeout 172800 \\
       -e GLM_API_TOKEN "$GLM_BULK_TOKEN" -e PARALLEL_KEY "$PARALLEL_KEY" -- \\
-      bash -c 'cd lib/taskforge && uv run --frozen python scripts/run_queue.py docs/policy.example.json \\
+      bash -c 'cd lib/taskforge && uv run --frozen python scripts/run_queue.py run.json \\
         --inputs <module>:<function>'
 
 A relaunch on the same root resumes every item from its event log; on Iris, set ``restore_from`` to

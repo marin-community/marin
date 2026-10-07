@@ -21,6 +21,7 @@ import os
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
 import httpx
@@ -215,7 +216,7 @@ async def loop_services[IdeaT](
     Builders sample at ``BUILD_POLICY``; the solver, adversaries and the control tokenizer at the
     validation policy's sampling.
     """
-    factories = machine_factories(config.host, controller_url(config.host))
+    factories = machine_factories(config.host, controller_url(config.host), config.image_cache)
     sampling = config.policy.validation.sampling
     async with AsyncExitStack() as stack:
         client = await stack.enter_async_context(GlmClient(endpoint))
@@ -233,7 +234,7 @@ async def loop_services[IdeaT](
             template=standard,
             build=BuildServices(client=client, policy=BUILD_POLICY, factories=factories, ledger=ledger, web_tools=tools),
             engine=config.engine.settings(factories, factory_capabilities(config.host)),
-            rollout_model=GlmRolloutModel(client, sampling),
+            rollout_models=partial(GlmRolloutModel, client, sampling),
             tokenize=ServerTokenizer(client, sampling),
             ledger=ledger,
             root=root,

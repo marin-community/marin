@@ -25,7 +25,14 @@ def test_the_committed_example_queues_on_the_bulk_pool():
 
 @pytest.mark.parametrize(
     ("path", "removed"),
-    [((), "width"), (("glm",), "kind"), (("glm",), "pool"), (("web",), "kind"), (("engine",), "max_turns")],
+    [
+        ((), "width"),
+        ((), "image_cache"),
+        (("glm",), "kind"),
+        (("glm",), "pool"),
+        (("web",), "kind"),
+        (("engine",), "max_turns"),
+    ],
 )
 def test_every_field_is_required(path, removed):
     obj = example()
@@ -72,13 +79,23 @@ def test_the_pool_is_explicit():
 
 def test_a_laptop_config_reads_a_token_file_path_and_a_local_root():
     obj = example()
-    obj |= {"host": "laptop", "root": "~/runs/a"}
+    obj |= {"host": "laptop", "root": "~/runs/a", "image_cache": "~/images"}
     obj["glm"] = {"kind": "laptop", "base_url": "http://127.0.0.1:18000/v1", "token_file": "~/t.txt", "pool": "high"}
 
     config = run_config(obj)
 
     assert config.glm == LaptopGlm("http://127.0.0.1:18000/v1", Path("~/t.txt").expanduser(), Pool.HIGH)
     assert config.root == Path("~/runs/a").expanduser()
+    assert config.image_cache == Path("~/images").expanduser()
+
+
+@pytest.mark.parametrize(("host", "image_cache"), [("laptop", None), ("iris", "/images")])
+def test_only_a_laptop_run_names_an_image_cache(host, image_cache):
+    obj = example()
+    obj |= {"host": host, "root": "run", "image_cache": image_cache}
+
+    with pytest.raises(ValueError, match="image_cache only on a laptop"):
+        run_config(obj)
 
 
 def test_an_iris_root_is_relative_to_the_attempt_output_dir():

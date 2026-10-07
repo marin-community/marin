@@ -2,9 +2,10 @@
   "run_id": "capability-run-001",
   "root": "taskforge_run",
   "host": "iris",
+  "image_cache": null,
   "glm": {
     "kind": "relay",
-    "relay_job": "/muchanem/glm53-relay-rno2a",
+    "relay_job": "<relay-job>",
     "token_env": "GLM_API_TOKEN",
     "pool": "bulk"
   },
