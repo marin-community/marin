@@ -65,6 +65,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.fast_track.attention_rows_probe import attention_rows_probe
 from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.fact_probe import (
     EMA,
@@ -110,7 +111,6 @@ from experiments.grug.fast_track.model import (
     Transformer,
     ZeroCenteredRMSNorm,
     _long_layer_schedule,
-    attention_rows_probe,
     forward_probe,
     head_probe,
     ngram_stat_table_add,

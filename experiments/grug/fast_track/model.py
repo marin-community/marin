@@ -61,6 +61,7 @@ from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
+from experiments.grug.fast_track import attention_rows_probe
 from experiments.grug.fast_track.activations import polynorm, polynorm_over_input
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
@@ -136,7 +137,6 @@ _FORWARD_PROBE: ForwardProbe | None = None
 ATTN_ROWS_STAT = f"{_LAYER_KNOB_PREFIX}probe_attn_rows"
 # Under ``attention_rows_probe``: each query's Inkling bias by distance back, ``[Q, H, rel_extent]``.
 RELPOS_ROWS_STAT = f"{_LAYER_KNOB_PREFIX}probe_relpos_rows"
-_ATTN_ROWS_PROBE: tuple[jax.Array, jax.Array] | None = None
 
 # Per-token, per-query-head attention statistics (``head_probe``), ``[B, S, H, len(HEAD_PROBE_FIELDS)]`` per layer:
 # softmax mass on the document's first token and on the query's own position, attention entropy (nats), the head's
@@ -968,6 +968,11 @@ class GrugModelConfig:
     final_intermediate_dim: int = 0
     final_experts_per_token: int = 0
     """> 0: the final layer's routed top-k (it must be the only layer of the softmax tail stack)."""
+    mla_key_offset_channels: tuple[int, ...] = ()
+    """Per MLA head, how many leading key channels come from the previous token (``mla_key_offset``). Empty: half."""
+    mla_shared_match_dim: int = 0
+    """M > 0: one shared match space per layer, ``m = kv_latent W_match``, is every head's shifted half for the key
+    (shifted) and the query (unshifted); per head a learned scale (M = half) or a ``match_head`` map (M > half)."""
     mla_tie_prev_qk: bool = False
     """With ``mla_key_offset``: the MLA query's first half (the channels scored against the previous token's key)
     is the current token's own un-shifted key half, so those channels score ``k_prev(x_i) · k_prev(x_{j-1})``
@@ -1909,6 +1914,12 @@ class GrugModelConfig:
                 "final_intermediate_dim / final_experts_per_token need attn_res and the final layer alone in the "
                 "softmax tail stack"
             )
+        if (self.mla_key_offset_channels or self.mla_shared_match_dim) and not (self.mla and self.mla_key_offset):
+            raise ValueError("mla_key_offset_channels / mla_shared_match_dim need mla and mla_key_offset")
+        if self.mla_shared_match_dim and (
+            self.mla_key_offset_channels or self.mla_shared_match_dim < self.inferred_head_dim // 2
+        ):
+            raise ValueError("mla_shared_match_dim needs the default half-head offset and M >= half the head")
         if self.mla_tie_prev_qk and not (self.mla and self.mla_key_offset):
             raise ValueError("mla_tie_prev_qk needs mla and mla_key_offset")
         if self.final_shared_only and (
@@ -2336,6 +2347,9 @@ class CausalSelfAttention(eqx.Module):
     switch_v_gate: Float[Array, "W ME"] | None  # SwitchHead value-expert gate, from the source token
     switch_o_gate: Float[Array, "D NE"] | None  # SwitchHead output-expert gate, from the destination token
     kv_mix_gate: Float[Array, "W E"] | None  # mixture of latents on the MLA KV latent ("kv" in cfg.latent_mix_sites)
+    match_up: Float[Array, "L M"] | None  # cfg.mla_shared_match_dim: the shared match space from the KV latent
+    match_scale: Float[Array, " N"] | None  # per-head weight on the shared match (M == half the head)
+    match_head: Float[Array, "M NC"] | None  # per-head map of the shared match to the shifted half (M > half)
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2364,6 +2378,7 @@ class CausalSelfAttention(eqx.Module):
             # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
             k_q2, k_uk2, k_lam = random.split(random.fold_in(key, 1), 3)
             kv_mix = "kv" in cfg.latent_mix_sites
+            match_dim = cfg.mla_shared_match_dim
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             shared_kvl = cfg.kv_shared_latent_dim
             kvl = cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)  # what w_uk / w_uv read
@@ -2431,6 +2446,20 @@ class CausalSelfAttention(eqx.Module):
                     else None
                 ),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
+                match_up=(
+                    reshard(_init_weight(random.fold_in(k_uk, 7), (kvl, match_dim), std), P(None, None))
+                    if match_dim
+                    else None
+                ),
+                match_scale=jnp.ones((n,), jnp.float32) if match_dim and match_dim == h // 2 else None,
+                match_head=(
+                    reshard(
+                        _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
+                        P(None, None),
+                    )
+                    if match_dim > h // 2
+                    else None
+                ),
                 w_uv=reshard(_init_weight(k_uv, (kvl, n_v * h), std), P(None, "model")),
                 value_embed=(
                     reshard(_init_weight(k_ve, (cfg.vocab_size, n_v * h), std), P(None, None)) if use_ve else None
@@ -2557,6 +2586,9 @@ class CausalSelfAttention(eqx.Module):
             ),
             switch_o_gate=reshard(_init_weight(k_so, (d, n * switch_o), std), P(None, None)) if switch_o else None,
             kv_mix_gate=None,
+            match_up=None,
+            match_scale=None,
+            match_head=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2648,6 +2680,20 @@ class CausalSelfAttention(eqx.Module):
             return rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
 
         k = project_k(self.w_uk)
+        if self.match_up is not None:
+            # The shared match space replaces every head's shifted half, for the key and (unshifted) the query.
+            half = head_dim // 2
+            m = _proj(self.cfg, k_latent, self.match_up.astype(k_latent.dtype))
+            if self.match_head is not None:
+                mk = rearrange(_proj(self.cfg, m, self.match_head.astype(m.dtype)), "... (n d) -> ... n d", d=half)
+                mq = mk
+            else:
+                assert self.match_scale is not None
+                mk = jnp.broadcast_to(m[..., None, :], (*m.shape[:-1], k.shape[2], half))
+                mq = mk * self.match_scale.astype(m.dtype)[:, None]
+            spec = _partition_spec_of(k)
+            k = jnp.concatenate([reshard(mk.astype(k.dtype), spec), k[..., half:]], axis=-1)
+            q = jnp.concatenate([reshard(mq.astype(q.dtype), _partition_spec_of(q)), q[..., half:]], axis=-1)
         second_qk = None
         if self.w_q2 is not None and self.w_uk2 is not None:
             second_qk = (project_q(self.w_q2), project_k(self.w_uk2))
@@ -2759,9 +2805,8 @@ class CausalSelfAttention(eqx.Module):
         if self.cfg.mla:
             q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
             if self.cfg.mla_tie_prev_qk:
-                half = q.shape[-1] // 2
-                tied = reshard(k[..., :half].astype(q.dtype), _partition_spec_of(q))
-                q = jnp.concatenate([tied, q[..., half:]], axis=-1)
+                shifted = _shifted_channels(q.shape[2], q.shape[3], self.cfg.mla_key_offset_channels)
+                q = jnp.where(shifted, reshard(k.astype(q.dtype), _partition_spec_of(q)), q)
             if self.kv_mix_gate is not None:
                 kv_stats = _mixture_load_stats(self._kv_mix_weights(x if kv_input is None else kv_input))
             if self.vres_lambda is not None:
@@ -2811,7 +2856,7 @@ class CausalSelfAttention(eqx.Module):
         def _transform_qk(q: jax.Array, k: jax.Array) -> tuple[jax.Array, jax.Array]:
             """Key offset, q/k norms, RoPE, qk_mult and SSMax: everything between the projections and the kernel."""
             if self.cfg.mla and self.cfg.mla_key_offset:
-                k = _partial_key_offset(k, sconv_segment_ids)
+                k = _partial_key_offset(k, sconv_segment_ids, self.cfg.mla_key_offset_channels)
             if self.cfg.qk_norm:
                 q = rms_norm(q)
                 k = rms_norm(k)
@@ -2862,16 +2907,11 @@ class CausalSelfAttention(eqx.Module):
             if fox_key_bias is not None or second_qk is not None:
                 raise ValueError("forward_probe attention supports MLA without FoX or differential attention")
             stats[ATTN_PROBE_STAT] = _probe_attention(q, k, mask, rel_bias, _FORWARD_PROBE.attn_queries)
-        if _ATTN_ROWS_PROBE is not None and self.cfg.mla:
-            stats[ATTN_ROWS_STAT] = _probe_attention_rows(q, k, mask, rel_bias, *_ATTN_ROWS_PROBE)
+        if attention_rows_probe.ROWS_PROBE is not None and self.cfg.mla:
+            rows, positions = attention_rows_probe.ROWS_PROBE
+            stats[ATTN_ROWS_STAT] = attention_rows_probe.probe_attention_rows(q, k, mask, rel_bias, rows, positions)
             if rel_bias is not None:
-                rows, positions = _ATTN_ROWS_PROBE
-                band = rel_bias.at[rows, :, positions].get(out_sharding=P(None, None, None))  # [Q, H, W]
-                extent = rel_extent_of_band(rel_bias)
-                column = (positions % REL_BIAS_BLOCK)[:, None] + extent - jnp.arange(extent)[None, :]
-                stats[RELPOS_ROWS_STAT] = jax.lax.stop_gradient(
-                    jnp.take_along_axis(band, column[:, None, :], axis=-1).astype(jnp.float32)
-                )
+                stats[RELPOS_ROWS_STAT] = attention_rows_probe.relpos_rows(rel_bias, rows, positions)
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
@@ -5937,14 +5977,25 @@ def _positions_in_document(segment_ids: Int[Array, "B S"] | None, seq_len: int) 
     return idx - jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
 
 
-def _partial_key_offset(k: Float[Array, "B S H D"], segment_ids: Int[Array, "B S"] | None) -> jax.Array:
-    """Replace the first half of each key's channels with the previous token's (zero at document starts)."""
-    half = k.shape[-1] // 2
-    prev = jnp.pad(k[:, :-1, :, :half], ((0, 0), (1, 0), (0, 0), (0, 0)))
+def _shifted_channels(heads: int, head_dim: int, counts: tuple[int, ...]) -> jax.Array:
+    """``[H, D]`` mask of the key channels taken from the previous token (the first ``counts[h]``; half by default)."""
+    counts_arr = jnp.asarray(counts if counts else (head_dim // 2,) * heads)
+    if counts_arr.shape[0] != heads:
+        raise ValueError(f"mla_key_offset_channels needs one entry per head ({heads}), got {counts}")
+    return jnp.arange(head_dim)[None, :] < counts_arr[:, None]
+
+
+def _partial_key_offset(
+    k: Float[Array, "B S H D"], segment_ids: Int[Array, "B S"] | None, counts: tuple[int, ...] = ()
+) -> jax.Array:
+    """Replace each head's leading key channels (``_shifted_channels``) with the previous token's (zero at
+    document starts)."""
+    prev = jnp.pad(k[:, :-1], ((0, 0), (1, 0), (0, 0), (0, 0)))
     if segment_ids is not None:
         starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
         prev = jnp.where(starts[..., None, None], 0, prev)
-    return reshard(jnp.concatenate([prev.astype(k.dtype), k[..., half:]], axis=-1), _partition_spec_of(k))
+    shifted = _shifted_channels(k.shape[2], k.shape[3], counts)
+    return reshard(jnp.where(shifted, prev.astype(k.dtype), k), _partition_spec_of(k))
 
 
 def _smear(
@@ -6157,51 +6208,6 @@ def forward_probe(probe: ForwardProbe) -> Iterator[None]:
         yield
     finally:
         _FORWARD_PROBE = previous
-
-
-@contextmanager
-def attention_rows_probe(rows: jax.Array, positions: jax.Array) -> Iterator[None]:
-    """MLA layers traced inside this context record each query ``(rows[i], positions[i])``'s full softmax row over the
-    sequence (``ATTN_ROWS_STAT``, ``[Q, H, S]``). The arrays may be traced, so one compile serves any queries."""
-    global _ATTN_ROWS_PROBE
-    previous, _ATTN_ROWS_PROBE = _ATTN_ROWS_PROBE, (rows, positions)
-    try:
-        yield
-    finally:
-        _ATTN_ROWS_PROBE = previous
-
-
-def _probe_attention_rows(
-    q: Float[Array, "B S H D"],
-    k: Float[Array, "B S Hk D"],
-    mask: AttentionMask | jax.Array,
-    rel_bias: Float[Array, "B H S W"] | None,
-    rows: Int[Array, " Q"],
-    positions: Int[Array, " Q"],
-) -> Float[Array, "Q H S"]:
-    """``_probe_attention`` over every key and for traced queries: scale ``1/sqrt(head_dim)``, the banded Inkling
-    bias, causal, document-masked."""
-    if not isinstance(mask, AttentionMask):
-        raise ValueError("attention_rows_probe needs an AttentionMask")
-    k = align_kv_heads(k, num_q_heads=q.shape[2])
-    seq = q.shape[1]
-    rep = P(None, None, None)
-    q_rows = q.at[rows, positions].get(out_sharding=rep).astype(jnp.float32)  # [Q, H, D]
-    k_rows = k.at[rows].get(out_sharding=P(None, None, None, None)).astype(jnp.float32)  # [Q, S, H, D]
-    logits = jnp.einsum("qhd,qkhd->qhk", q_rows, k_rows) / math.sqrt(q.shape[-1])
-    keys = jnp.arange(seq)
-    valid = keys[None, :] <= positions[:, None]
-    if rel_bias is not None:
-        band = rel_bias.at[rows, :, positions].get(out_sharding=rep)  # [Q, H, W]
-        column = keys[None, :] - (positions[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent_of_band(rel_bias)
-        in_band = (column >= 0) & (column < band.shape[-1])
-        gathered = jnp.take_along_axis(band, jnp.clip(column, 0, band.shape[-1] - 1)[:, None, :], axis=-1)
-        logits = logits + jnp.where(in_band[:, None, :], gathered, 0.0)
-    if mask.segment_ids is not None:
-        segments = mask.segment_ids[1].at[rows].get(out_sharding=P(None, None))  # [Q, S]
-        own = jnp.take_along_axis(segments, positions[:, None], axis=1)
-        valid &= segments == own
-    return jax.lax.stop_gradient(jax.nn.softmax(jnp.where(valid[:, None, :], logits, -jnp.inf), axis=-1))
 
 
 def _probe_spot() -> tuple[int, int] | None:

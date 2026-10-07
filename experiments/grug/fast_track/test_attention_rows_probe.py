@@ -10,12 +10,12 @@ import numpy as np
 from levanter.grug.attention import AttentionMask
 
 import experiments.grug.fast_track.test_ngram_stat as t
+from experiments.grug.fast_track.attention_rows_probe import attention_rows_probe
 from experiments.grug.fast_track.model import (
     ATTN_PROBE_KEYS,
     ATTN_PROBE_STAT,
     ATTN_ROWS_STAT,
     ForwardProbe,
-    attention_rows_probe,
     forward_probe,
 )
 
