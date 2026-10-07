@@ -21,7 +21,7 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
-from levanter.grug._moe.routing_top_k import is_rocm_backend
+from levanter.utils.jax_utils import is_rocm_backend
 
 
 def _assignment_slots(
