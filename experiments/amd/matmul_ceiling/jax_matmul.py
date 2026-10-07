@@ -69,14 +69,11 @@ def parse_shape(text: str) -> Shape:
     return Shape(m, n, k)
 
 
-def parse_range(values: list[int]) -> list[int]:
-    """Expand ``START STOP [STEP]`` (STOP inclusive) or a single value."""
-    if len(values) == 1:
+def dim_values(values: list[int] | None, value_range: list[int] | None) -> list[int] | None:
+    """Return the values given for one dimension, expanding ``START STOP STEP`` with STOP inclusive."""
+    if value_range is None:
         return values
-    if len(values) not in (2, 3):
-        raise ValueError(f"expected START STOP [STEP], got {values}")
-    start, stop = values[0], values[1]
-    step = values[2] if len(values) == 3 else 1
+    start, stop, step = value_range
     return list(range(start, stop + 1, step))
 
 
@@ -124,10 +121,16 @@ def time_shape(shape: Shape, dtype: str, *, warmup_seconds: float, window_second
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dtype", choices=sorted(DTYPES), required=True)
-    parser.add_argument("--m", type=int, nargs="+", help="M values, or START STOP [STEP] with --ranges")
-    parser.add_argument("--n", type=int, nargs="+", help="N values, or START STOP [STEP] with --ranges")
-    parser.add_argument("--k", type=int, nargs="+", help="K values, or START STOP [STEP] with --ranges")
-    parser.add_argument("--ranges", action="store_true", help="read --m/--n/--k as START STOP [STEP] ranges")
+    for dim in ("m", "n", "k"):
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument(f"--{dim}", type=int, nargs="+", help=f"{dim.upper()} values")
+        group.add_argument(
+            f"--{dim}-range",
+            type=int,
+            nargs=3,
+            metavar=("START", "STOP", "STEP"),
+            help=f"{dim.upper()} values from START to STOP inclusive",
+        )
     parser.add_argument("--shapes-file", type=Path, help="file with one MxNxK shape per line; # starts a comment")
     parser.add_argument("--warmup-seconds", type=float, default=1.0)
     parser.add_argument("--window-seconds", type=float, default=0.2)
@@ -137,10 +140,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     shapes: list[Shape] = []
-    if args.m or args.n or args.k:
-        if not (args.m and args.n and args.k):
-            parser.error("--m, --n and --k must be given together")
-        dims = [parse_range(d) if args.ranges else d for d in (args.m, args.n, args.k)]
+    dims = [dim_values(getattr(args, dim), getattr(args, f"{dim}_range")) for dim in ("m", "n", "k")]
+    if any(dims):
+        if not all(dims):
+            parser.error("give M, N and K together, each with --<dim> or --<dim>-range")
         shapes.extend(Shape(m, n, k) for m, n, k in itertools.product(*dims))
     if args.shapes_file:
         shapes.extend(read_shapes_file(args.shapes_file))
