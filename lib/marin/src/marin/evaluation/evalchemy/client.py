@@ -188,7 +188,11 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
     # it keys "max_gen_toks", which the registry does not.
     budget_kwargs, budget_args = budget_arguments(config, task, max_length)
-    gen_kwargs = budget_kwargs + [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
+    generation_kwargs = dict(config.get("extra_gen_kwargs", {}))
+    if use_chat and (effort := config["chat_template_kwargs"].get("reasoning_effort")) is not None:
+        # vLLM's GPT-OSS Harmony renderer reads the top-level request field.
+        generation_kwargs["reasoning_effort"] = effort
+    gen_kwargs = budget_kwargs + [f"{key}={value}" for key, value in generation_kwargs.items()]
     cmd = [
         str(Path(python).with_name("evalchemy")),
         "--model",
