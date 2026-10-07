@@ -39,7 +39,6 @@ class ProbeSettings:
 def probe_block(settings: ProbeSettings) -> dict:
     """Render collection and scoring controls for a synchronous Megatron recipe."""
     block = {
-        "environment": {"skyrl_gym": {"gsm8k": {"structured_chat": True}}},
         "trainer": {
             "mismatch_probe": {
                 "enabled": True,

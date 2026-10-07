@@ -16,7 +16,7 @@ required-markers = [
 prerelease-mode = "allow"
 
 [manifest]
-overrides = [{ name = "marin-rigging", extras = ["secrets"], specifier = ">=0.2.139.dev37117265303" }]
+overrides = [{ name = "marin-rigging", extras = ["secrets", "prometheus"], specifier = "==0.2.144.dev37540375919" }]
 
 [[package]]
 name = "absl-py"
@@ -1424,7 +1424,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=main" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=60d430cc9f36adfe40a017c71eccb02ba6978c97" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1436,7 +1436,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pyyaml" },
@@ -1476,21 +1476,21 @@ wheels = [
 
 [[package]]
 name = "marin-finestore"
-version = "0.2.149.dev37775727576"
+version = "0.2.144.dev37540375919"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/e9/4c3ae36832170945c1fe7386b80ba4e4917b8d00ab6ce9528dda46d855fb/marin_finestore-0.2.149.dev37775727576.tar.gz", hash = "sha256:d2e005af38ddec400bd3e412b25e0393176dd02ee6690ea58209a4001d127a00", size = 60786, upload-time = "2026-10-08T12:18:36.005Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a8/7c/1ead18cdd66a198a335115829528053b31e84edda67cd9aca457aeffb570/marin_finestore-0.2.144.dev37540375919.tar.gz", hash = "sha256:898f7bb1a9c4ef5e6e7ea17c8fa05b29b54e67b955b53e2f02a3fc61f8eea05c", size = 55455, upload-time = "2026-10-06T22:27:33.044Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/f0/5c7bcf63f6346398879d5317095baec1297563304338228da0fdef14cf25/marin_finestore-0.2.149.dev37775727576-py3-none-any.whl", hash = "sha256:389a4a5ef4c6f234b1687ff74093710577b854c212afdc745a3cb68c6f93e37d", size = 47333, upload-time = "2026-10-08T12:18:20.079Z" },
+    { url = "https://files.pythonhosted.org/packages/30/b4/df6d2834f2548543b08846c3b023ab79a7597a7a1bb9348ee3e8ec11f9aa/marin_finestore-0.2.144.dev37540375919-py3-none-any.whl", hash = "sha256:3c8d0001b9944cea3fef2df412983501db3dd8f023ed7724e6986868aee1f5c6", size = 45001, upload-time = "2026-10-06T22:27:18.743Z" },
 ]
 
 [[package]]
 name = "marin-iris"
-version = "0.2.149.dev37775727576"
+version = "0.2.144.dev37540375919"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -1508,7 +1508,7 @@ dependencies = [
     { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyqwest" },
@@ -1521,9 +1521,9 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/a4/97693b2dcba4460cc4ccdd618ac2510bda04c0f82406aab7bfbb9f415411/marin_iris-0.2.149.dev37775727576.tar.gz", hash = "sha256:d36cae72deb5d3fe3fce768d0b1cce20a50381e99463bd8889532e502fa6e3cc", size = 950526, upload-time = "2026-10-08T12:18:40.029Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/84/8b3138ba3c8f3041a0974fd35c6680b5edfb070dda4304826f95966e4a0f/marin_iris-0.2.144.dev37540375919.tar.gz", hash = "sha256:6c84464c02cb02c1e218e9c7a87c182be21766040577211cc55bbcef05ef0a6c", size = 945637, upload-time = "2026-10-06T22:27:36.523Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/3e/34ad7f9044bc440d8257f4c0d26f9a541bd82f3440a6ff30d4cb17c7c6b1/marin_iris-0.2.149.dev37775727576-py3-none-any.whl", hash = "sha256:2d73e99cea4a89f8388f9f5a52bd8ee44913727c411b6a135fec85678b210cda", size = 1148093, upload-time = "2026-10-08T12:18:25.681Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/96/2bb463e308da31c6519fb56cd4ee8af745f3fabdd0f831920922b4b503f2/marin_iris-0.2.144.dev37540375919-py3-none-any.whl", hash = "sha256:1f340ba7b7be44ba027574199c7ce571fb3b47113c30c9b46133c54819487947", size = 1142503, upload-time = "2026-10-06T22:27:23.308Z" },
 ]
 
 [[package]]
@@ -1540,7 +1540,7 @@ wheels = [
 
 [[package]]
 name = "marin-rigging"
-version = "0.2.149.dev37775727576"
+version = "0.2.144.dev37540375919"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiobotocore" },
@@ -1561,12 +1561,15 @@ dependencies = [
     { name = "starlette" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/61/4b/c8917a74dc65f26f7218f233ec46b376a56c3fce22e547aa657ba7bc6561/marin_rigging-0.2.149.dev37775727576.tar.gz", hash = "sha256:790e5d2b01260a3b1384852041c67056d92648181b9c792873a7020c4da4b8af", size = 224417, upload-time = "2026-10-08T12:18:43.421Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/d1/b36fb0328c3c68ed660dca7d951fc33641b3f4252784d895b2e1df6a31b7/marin_rigging-0.2.144.dev37540375919.tar.gz", hash = "sha256:d34f2d44d89fd4874bab7e57819a929b9e988079300b43f73c7fb1995d7d9032", size = 224421, upload-time = "2026-10-06T22:27:39.571Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/8e/2464e0a33fd06d0f121f1286bac1033fd0f28efe8351d86e5d8340bf414f/marin_rigging-0.2.149.dev37775727576-py3-none-any.whl", hash = "sha256:62b5c596465a7344de2cec478bdbba20e4ff3a034802d4ac9d116a5bff6777f6", size = 527709, upload-time = "2026-10-08T12:18:29.586Z" },
+    { url = "https://files.pythonhosted.org/packages/22/f6/9d4117580a6a0ef8e104ca869d76dfec5d0828539d2e4414911a2db5ea8d/marin_rigging-0.2.144.dev37540375919-py3-none-any.whl", hash = "sha256:72e2566837fa0b3709a738101aa2884c5f4879ad90247c1cecbbf9c17309b191", size = 527724, upload-time = "2026-10-06T22:27:27.357Z" },
 ]
 
 [package.optional-dependencies]
+prometheus = [
+    { name = "prometheus-client" },
+]
 secrets = [
     { name = "google-cloud-secret-manager" },
 ]
@@ -1594,10 +1597,10 @@ dependencies = [
 [package.optional-dependencies]
 daytona = [
     { name = "daytona" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
 ]
 shellsim = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "shellsim" },
 ]
 
@@ -1629,7 +1632,7 @@ dependencies = [
     { name = "marin-finestore" },
     { name = "marin-iris" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "math-verify" },
@@ -2199,6 +2202,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/5a/2deb8eac70e9a2ac26d88a66ae7cf52612865026f4f4a5e7ab11ad9d52bf/polars_runtime_32-1.43.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:452b400e59e7f56e4c6437f435e796903272a9388feee12de2bea049ae87025e", size = 55204471, upload-time = "2026-08-01T06:27:33.886Z" },
     { url = "https://files.pythonhosted.org/packages/29/9e/647401ae8a607bc0cc40ed7b8592d5b1be90ded0dc9b9d6d3aeb03f9524b/polars_runtime_32-1.43.2-cp310-abi3-win_amd64.whl", hash = "sha256:00e33c28e321410c8d66e814a90043101e3bdd9ed2c6dabda07565aa8adbbdf1", size = 52572176, upload-time = "2026-08-01T06:27:37.048Z" },
     { url = "https://files.pythonhosted.org/packages/96/8d/60a50c3f36c85218a7ffcb48c6fe2ce1f7bec799152d68b8658ebed2179c/polars_runtime_32-1.43.2-cp310-abi3-win_arm64.whl", hash = "sha256:350a4868cae85bf8b3f81b33ba47927c15256bd9264dfc8c0753f1b927eac9d3", size = 46582513, upload-time = "2026-08-01T06:27:40.025Z" },
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.26.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/73/f1334c29c2af4cd9dba6c7817e61b611bd0215e2eb5565c6064a4de18802/prometheus_client-0.26.0.tar.gz", hash = "sha256:04a91bcf94e2cf74a44a1a874d651a2e853ed354b6e822f3b7487751465d5c2b", size = 92910, upload-time = "2026-07-24T19:36:41.893Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/a3/b69efbf4143b5b9859b977770bbbabcc2796b702fa69dc40271e45cd5a56/prometheus_client-0.26.0-py3-none-any.whl", hash = "sha256:fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6", size = 64494, upload-time = "2026-07-24T19:36:40.854Z" },
 ]
 
 [[package]]
@@ -2923,7 +2935,7 @@ name = "taskcompendium"
 version = "0.1.0"
 source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=2ef4786903053025ca7fcee40ea76476276ca872#2ef4786903053025ca7fcee40ea76476276ca872" }
 dependencies = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox" },
     { name = "pydantic" },
     { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
