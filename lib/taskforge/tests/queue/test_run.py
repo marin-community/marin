@@ -7,15 +7,18 @@ from shellbox.machine import Machine, MachineSpec
 from taskcompendium.environment import EnvironmentKind
 
 from taskforge.build.infrastructure import InfrastructureCause
+from taskforge.build.run import load_draft
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
 from taskforge.loop.events import Terminal
 from taskforge.loop.program import LEDGER_DIR
-from taskforge.queue.run import FailedItems, item_terminal
+from taskforge.queue.run import BandOutcome, FailedItems, item_terminal
 from taskforge.triage.verdict import TriageDecision
+from taskforge.validate.adversary import AdversaryRole
 from taskforge.validate.outcome import Cause
 
 ACCEPT, REJECT = TriageDecision.ACCEPT, TriageDecision.REJECT
+SHORTCUT = AdversaryRole.SHORTCUT
 
 
 async def test_a_run_takes_every_item_to_a_terminal_and_a_relaunch_runs_none_again(
@@ -191,3 +194,40 @@ async def test_an_item_with_an_inconsistent_log_is_recorded_and_its_siblings_fin
 
     assert summary.items == {"a--0": Terminal.REJECTED, "b--0": Terminal.FAILED}
     assert summary.failed == {"b--0": "ValueError"}
+
+
+async def test_an_accepted_item_exports_its_synthesis_pass_rate_and_noted_passes_across_relaunches(
+    queue_run, author_replies, fakes
+):
+    author_replies(1)
+    run = queue_run(rubric=fakes.rubric(ACCEPT, decisions={"b/0": REJECT}), model=fakes.model(solves={SHORTCUT}))
+    policy = fakes.policy(k=4)
+
+    first = await run({"a": "a", "b": "b"}, policy, width=4)
+
+    assert first.items == {"a--0": Terminal.ACCEPTED, "b--0": Terminal.REJECTED}
+    accepted = first.accepted["a--0"]
+    assert (accepted.solved, accepted.k, accepted.solve_rate, accepted.band) == (2, 4, 0.5, BandOutcome.IN_BAND)
+    assert load_draft(run.root / accepted.draft).task.id == "a--0"
+    assert list(first.accepted) == ["a--0"]
+    [note] = first.noted["a--0"]
+    assert (note.role, note.trial, note.rule) == (SHORTCUT, 0, "7")
+    assert "b--0" not in first.noted
+
+    exported = first.summary_json()
+    assert exported["accepted"] == {
+        "a--0": {
+            "round": accepted.round,
+            "task_digest": accepted.task_digest,
+            "draft": accepted.draft,
+            "solved": 2,
+            "k": 4,
+            "solve_rate": 0.5,
+            "band": "in_band",
+        }
+    }
+    assert exported["noted"] == {"a--0": [{"role": "shortcut", "trial": 0, "rule": "7", "reason": note.reason}]}
+
+    relaunched = await run({"a": "a", "b": "b"}, policy, width=4)
+
+    assert (relaunched.accepted, relaunched.noted) == (first.accepted, first.noted)

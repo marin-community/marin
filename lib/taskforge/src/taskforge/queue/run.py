@@ -17,31 +17,96 @@ out on an infrastructure cause, or build retries on a machine host failure, whic
 not hit). Inside an item ``run_item`` resumes
 from the sub-phase its log names, and validation only from the trials not settled on disk. An idea
 whose batch is in its log is not proposed again.
+
+``RunSummary`` is where a run exports its accepted tasks: every ``ACCEPTED`` item is listed as an
+``AcceptedTask`` with its draft and the synthesis pass rate (solved of ``k``, solve rate, band outcome)
+from the calibration summary it was accepted on. Every item whose final decision carries a calibration
+summary lists its noted-tier adversary passes (``NotedPass``). Both are read from the item directories,
+so a relaunch exports items an earlier launch finished.
 """
 
 import asyncio
 import logging
 from collections import Counter
 from collections.abc import Coroutine, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from taskforge.build.infrastructure import InfrastructureCause
-from taskforge.build.run import item_id_for
+from taskforge.build.run import DRAFT_DIR, item_id_for
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
-from taskforge.ledger.records import EntryKind
+from taskforge.ledger.records import EntryKind, LedgerEntry
 from taskforge.llm.client import GlmUnavailable
-from taskforge.loop.events import FINAL, Terminal, build_host_failures, derive_state
+from taskforge.loop.events import FINAL, EventKind, Terminal, build_host_failures, derive_state, events
 from taskforge.loop.policy import LoopPolicy
-from taskforge.loop.program import LEDGER_DIR, LoopServices, idea_item_id, run_idea, run_item
+from taskforge.loop.program import (
+    DIGEST_CHARS,
+    ITEMS_DIR,
+    LEDGER_DIR,
+    ROUNDS_DIR,
+    LoopServices,
+    idea_item_id,
+    run_idea,
+    run_item,
+)
 from taskforge.proposal.model import TaskProposal
+from taskforge.review.decision import DECISION_FILE, Accept, Reject, load_decision
+from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.calibration import CalibrationSummary, DefectTier, FindingKind
 from taskforge.validate.outcome import Cause
 
 logger = logging.getLogger(__name__)
 
 CAUSES = frozenset(str(cause) for cause in Cause)
+
+
+class BandOutcome(StrEnum):
+    """Where the solver's solve rate fell against the calibrated band."""
+
+    IN_BAND = "in_band"
+    TOO_EASY = "too_easy"
+    TOO_HARD = "too_hard"
+
+
+BAND_OUTCOMES: Mapping[FindingKind, BandOutcome] = {
+    FindingKind.TOO_EASY: BandOutcome.TOO_EASY,
+    FindingKind.TOO_HARD: BandOutcome.TOO_HARD,
+}
+
+
+@dataclass(frozen=True)
+class AcceptedTask:
+    """The exported record of one ``ACCEPTED`` item.
+
+    Attributes:
+        round: The round whose task was accepted.
+        task_digest: The accepted draft's task digest.
+        draft: The accepted draft's directory, relative to the run root.
+        solved: Solver trials that passed in the accepted round (the synthesis pass count).
+        k: Solver trials the validation policy asks for.
+        solve_rate: ``solved`` over the graded solver trials.
+        band: Where ``solve_rate`` fell against the calibrated band, as the summary's band finding records it.
+    """
+
+    round: int
+    task_digest: str
+    draft: str
+    solved: int
+    k: int
+    solve_rate: float
+    band: BandOutcome
+
+
+@dataclass(frozen=True)
+class NotedPass:
+    """One adversary trial the calibration tiered ``NOTED``: recorded, never blocking an accept."""
+
+    role: AdversaryRole
+    trial: int
+    rule: str
+    reason: str
 
 
 class FailedItems(StrEnum):
@@ -66,6 +131,9 @@ class RunSummary:
             ``LoopPolicy.max_build_retries`` times, then ends the item ``ABANDONED``, and the next launch
             re-enters its build. A cause in ``HOST_REJECTIONS`` records no such event: it ends the item
             ``REJECTED`` as ``HOST``.
+        accepted: Item id to its ``AcceptedTask``, for every item that ended ``ACCEPTED``.
+        noted: Item id to its noted-tier adversary passes, for every item whose final decision carries a
+            calibration summary with at least one.
     """
 
     items: Mapping[str, Terminal]
@@ -73,6 +141,8 @@ class RunSummary:
     ungraded_causes: Counter[Cause]
     model_unavailable: int
     build_infrastructure: Counter[InfrastructureCause]
+    accepted: Mapping[str, AcceptedTask]
+    noted: Mapping[str, tuple[NotedPass, ...]]
 
     def summary_json(self) -> dict[str, object]:
         """The summary as ``summary.json`` holds it, with terminal counts first."""
@@ -83,6 +153,8 @@ class RunSummary:
             "ungraded_causes": {str(c): n for c, n in sorted(self.ungraded_causes.items())},
             "model_unavailable": self.model_unavailable,
             "build_infrastructure": {str(c): n for c, n in sorted(self.build_infrastructure.items())},
+            "accepted": {item: asdict(task) for item, task in sorted(self.accepted.items())},
+            "noted": {item: [asdict(note) for note in notes] for item, notes in sorted(self.noted.items())},
         }
 
 
@@ -114,12 +186,74 @@ def ungraded_causes(ledger_dir: Path) -> Counter[Cause]:
     )
 
 
+@dataclass(frozen=True)
+class DecidedRound:
+    """The round of an item's last ``DECIDED`` event and the calibration summary its decision carries."""
+
+    round: int
+    summary: CalibrationSummary
+
+
+def final_round(root: Path, item_id: str, entries: Sequence[LedgerEntry]) -> DecidedRound | None:
+    """The item's last decision when it accepts, or rejects with a calibration summary; ``None`` for an item
+    that never decided, or whose last decision repairs, retries, or rejects without a summary (a staged
+    draft)."""
+    decided = [entry for entry in events(entries) if entry.step == EventKind.DECIDED]
+    if not decided:
+        return None
+    last = decided[-1]
+    assert last.input_hash is not None
+    evidence = root / ITEMS_DIR / item_id / ROUNDS_DIR / str(last.round) / f"evidence-{last.input_hash[:DIGEST_CHARS]}"
+    match load_decision(evidence / DECISION_FILE):
+        case Accept(summary=summary):
+            return DecidedRound(last.round, summary)
+        case Reject(summary=CalibrationSummary() as summary):
+            return DecidedRound(last.round, summary)
+        case _:
+            return None
+
+
+def accepted_task(item_id: str, round: int, summary: CalibrationSummary) -> AcceptedTask:  # noqa: A002
+    """The exported record of an item accepted on ``summary`` in ``round``."""
+    if summary.solve_rate is None:
+        raise ValueError(f"{item_id}: accepted on a summary with no graded solver trial")
+    bands = [BAND_OUTCOMES[finding.kind] for finding in summary.findings if finding.kind in BAND_OUTCOMES]
+    return AcceptedTask(
+        round=round,
+        task_digest=summary.task_digest,
+        draft=str(Path(ITEMS_DIR) / item_id / ROUNDS_DIR / str(round) / DRAFT_DIR),
+        solved=summary.solver.solved,
+        k=summary.k,
+        solve_rate=summary.solve_rate,
+        band=bands[0] if bands else BandOutcome.IN_BAND,
+    )
+
+
+def noted_passes(summary: CalibrationSummary) -> tuple[NotedPass, ...]:
+    return tuple(NotedPass(a.role, a.index, a.rule, a.reason) for a in summary.assessments if a.tier is DefectTier.NOTED)
+
+
 @dataclass
 class _Tally:
     items: dict[str, Terminal] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
     model_unavailable: int = 0
     build_infrastructure: Counter[InfrastructureCause] = field(default_factory=Counter)
+    accepted: dict[str, AcceptedTask] = field(default_factory=dict)
+    noted: dict[str, tuple[NotedPass, ...]] = field(default_factory=dict)
+
+    def record(self, root: Path, item_id: str, terminal: Terminal, entries: Sequence[LedgerEntry]) -> None:
+        """Record a finished item's terminal, build host failures, accepted record and noted passes."""
+        self.items[item_id] = terminal
+        self.build_infrastructure += build_host_failures(entries)
+        final = final_round(root, item_id, entries) if terminal in FINAL else None
+        if final is None:
+            return
+        if terminal is Terminal.ACCEPTED:
+            self.accepted[item_id] = accepted_task(item_id, final.round, final.summary)
+        notes = noted_passes(final.summary)
+        if notes:
+            self.noted[item_id] = notes
 
     def failure(self, key: str, error: Exception) -> None:
         logger.error("%s failed", key, exc_info=error)
@@ -146,8 +280,7 @@ async def _item(
         if enters(terminal, failed):
             terminal = await run_item(proposal, policy, services)
         assert terminal is not None
-        tally.items[item_id] = terminal
-        tally.build_infrastructure += build_host_failures(read_entries(JsonlLedger(ledger_dir).path_for(item_id)))
+        tally.record(services.root, item_id, terminal, list(read_entries(JsonlLedger(ledger_dir).path_for(item_id))))
     except Exception as error:
         tally.items[item_id] = Terminal.FAILED
         tally.failure(item_id, error)
@@ -180,4 +313,6 @@ async def run_queue[IdeaT](
         ungraded_causes=ungraded_causes(services.root / LEDGER_DIR),
         model_unavailable=tally.model_unavailable,
         build_infrastructure=tally.build_infrastructure,
+        accepted=tally.accepted,
+        noted=tally.noted,
     )

@@ -192,7 +192,12 @@ or on a package the order does not name.
   re-enters. One item's exception is recorded in `RunSummary.failed` and never cancels a sibling.
   `RunSummary` also counts ungraded trial attempts by cause, `GlmUnavailable` outside trials, and
   build host failures by `InfrastructureCause` over its items' `BUILD_INFRASTRUCTURE` events
-  (`build_infrastructure`).
+  (`build_infrastructure`). `RunSummary` is the run's export of accepted tasks, written as
+  `summary.json`: `accepted` maps every `ACCEPTED` item to an `AcceptedTask` (its round, task digest
+  and draft directory, and the synthesis pass rate of the calibration summary it was accepted on:
+  `solved`, `k`, `solve_rate` and a `BandOutcome`), and `noted` maps every item whose final decision
+  carries a calibration summary to its `NOTED`-tier adversary passes (role, trial, rule, reason).
+  Both are read from the item directories, so a relaunch exports items an earlier launch finished.
 - `queue.job.run_job(config, inputs, failed)`: the laptop and Iris boundary. `queue.config.RunConfig`
   (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
   laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or
@@ -406,6 +411,12 @@ waiting out a retry backoff holds no slot, and there is no request limiter: `Glm
 connections and holds while the router drains. A throttle is added only after `RunSummary` shows a
 failure that needs it. Item status is the item's event log, so a relaunch on the same run root, or on
 an Iris attempt restored from the previous attempt's archive (`restore_from`), resumes every item.
+
+`summary.json` is the one place a run lists its accepted tasks for consumers; there is no separate
+export file. Each accepted record carries the synthesis pass rate (solved of `k`, solve rate, band
+outcome) from the calibration summary it was accepted on, because until now that rate lived only in
+the round's `calibration.json`. The band outcome comes from the summary's band finding, so a record
+stays correct once a band policy may accept a task outside the band.
 
 The GLM pool is always named. Validation we drive ourselves (live tests, probes, laptop runs) uses
 the interactive `high` pool; the committed unattended configuration (`docs/policy.example.json`)
