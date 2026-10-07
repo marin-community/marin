@@ -86,12 +86,10 @@ def test_snowball_load_path_multidevice_sharding():
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
-        print("OK")
         """
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    assert "OK" in result.stdout
 
 
 @pytest.mark.timeout(120)
