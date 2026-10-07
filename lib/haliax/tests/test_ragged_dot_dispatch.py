@@ -176,11 +176,7 @@ _GROUP_SIZE_CASES = {
 }
 # Odd sizes: rows, contraction and columns are not multiples of the tile-map blocks below.
 _ROWS, _K, _N, _GROUPS = 300, 96, 200, 4
-_LAYOUT_DIM_NUMS = {
-    "fwd": ragged_dot_module._DEFAULT_DIM_NUMS,
-    "dlhs": ragged_dot_module._DLHS_DIM_NUMS,
-    "drhs": ragged_dot_module._DRHS_DIM_NUMS,
-}
+_LAYOUTS = [layout.value for layout in ragged_dot_module.RaggedLayout]
 
 
 def _require_triton_gpu():
@@ -246,7 +242,7 @@ def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
 
 @pytest.mark.parametrize("dtype, rtol", [(jnp.float32, 1e-4), (jnp.bfloat16, 1e-2)], ids=["f32", "bf16"])
 @pytest.mark.parametrize("group_sizes", list(_GROUP_SIZE_CASES.values()), ids=list(_GROUP_SIZE_CASES))
-@pytest.mark.parametrize("layout", list(_LAYOUT_DIM_NUMS))
+@pytest.mark.parametrize("layout", _LAYOUTS)
 @pytest.mark.parametrize("family", ["group_grid", "tile_map"])
 def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_sizes, dtype, rtol):
     _require_kernel_family(family)
@@ -257,7 +253,9 @@ def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_s
     lhs, rhs, sizes = _layout_operands(layout, dtype, group_sizes)
 
     actual = _run_kernel_family(family, lhs, rhs, sizes, layout)
-    expected = _cpu_f32_reference(lhs, rhs, sizes, _LAYOUT_DIM_NUMS[layout])
+    expected = _cpu_f32_reference(
+        lhs, rhs, sizes, ragged_dot_module._LAYOUT_DIM_NUMS[ragged_dot_module.RaggedLayout(layout)]
+    )
 
     if family == "group_grid" and layout != "drhs":
         # The group-grid kernels leave rows past sum(group_sizes) unwritten; the tile-map kernels zero them.

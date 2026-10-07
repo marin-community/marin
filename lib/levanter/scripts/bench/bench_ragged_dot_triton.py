@@ -13,8 +13,9 @@ local experts and an expert weight ``[G, K, N]``:
 Each case is timed for both Triton kernel families (``tile_map``, used on AMD Instinct GPUs, and
 ``group_grid``, used on every other GPU), for XLA's ``ragged_dot_general`` (in ``--xla-dtype``,
 since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense ``jnp.matmul`` with the
-same FLOPs. Tile-map blocks follow this device's table, so on NVIDIA they are the generic blocks. Timing follows ``experiments/amd_matmul_ceiling/jax_matmul.py``: warm up for
-``--warmup-seconds``, then report the median of ``--repeats`` windows of back-to-back calls.
+same FLOPs. Tile-map blocks follow this device's table, so on NVIDIA they are the generic blocks.
+Each timing warms up for ``--warmup-seconds``, then reports the median of ``--repeats`` windows of
+back-to-back calls.
 
 With ``--sweep``, the script instead times the tile-map kernel for every block configuration in a
 bounded grid, optionally sharded across processes with ``--shard i/n`` so one node's GPUs can
@@ -49,11 +50,7 @@ logger = logging.getLogger(__name__)
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
 DTYPES = {"bfloat16": jnp.bfloat16, "float16": jnp.float16}
-LAYOUT_DIM_NUMS = {
-    "fwd": ragged_dot_module._DEFAULT_DIM_NUMS,
-    "dlhs": ragged_dot_module._DLHS_DIM_NUMS,
-    "drhs": ragged_dot_module._DRHS_DIM_NUMS,
-}
+LAYOUTS = [layout.value for layout in ragged_dot_module.RaggedLayout]
 KERNEL_FAMILIES = [family.value for family in ragged_dot_module.TritonKernelFamily]
 # June expert MLP per GPU: hidden 2560, expert intermediate 1280 with gate and up fused.
 DEFAULT_WEIGHTS = ("w13:2560x2560", "w2:1280x2560")
@@ -82,6 +79,17 @@ class Case:
     @property
     def flops(self) -> int:
         return 2 * self.rows * self.k * self.n
+
+
+@dataclasses.dataclass(frozen=True)
+class Timed:
+    """One implementation of one case, ready to time."""
+
+    name: str
+    dtype: str
+    fn: Callable
+    inputs: tuple
+    block_sizes: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -155,27 +163,42 @@ def time_call(fn: Callable, args, *, warmup_seconds: float, window_seconds: floa
     return compile_time, sorted(windows)[len(windows) // 2]
 
 
-def implementations(case: Case, args) -> list[tuple[str, str, Callable, tuple, str]]:
-    """(name, dtype, fn, inputs, block_sizes) for every implementation of one case."""
-    dim_nums = LAYOUT_DIM_NUMS[case.layout]
+def implementations(case: Case, args) -> list[Timed]:
+    """Both Triton kernel families, plus XLA and a dense matmul unless skipped."""
     layout = ragged_dot_module.RaggedLayout(case.layout)
     bf16_inputs = case_inputs(case, jnp.bfloat16)
-    xla = jax.jit(lambda lhs, rhs, gs: jax.lax.ragged_dot_general(lhs, rhs, gs, ragged_dot_dimension_numbers=dim_nums))
-    key_a, key_b = jax.random.split(jax.random.key(1))
-    dense_inputs = (
-        jax.random.normal(key_a, (case.rows, case.k), jnp.bfloat16),
-        jax.random.normal(key_b, (case.k, case.n), jnp.bfloat16),
-    )
-    rows = []
+    timed = []
     for family in args.kernel_families:
         kernels = ragged_dot_module._TRITON_KERNELS[ragged_dot_module.TritonKernelFamily(family)]
         fn = jax.jit(lambda lhs, rhs, gs, kernels=kernels: kernels(lhs, rhs, gs, layout))
-        rows.append((f"triton_{family}", "bfloat16", fn, bf16_inputs, describe_triton_config(case, family)))
+        timed.append(Timed(f"triton_{family}", "bfloat16", fn, bf16_inputs, describe_triton_config(case, family)))
     if not args.skip_xla:
-        rows.append(("xla", args.xla_dtype, xla, case_inputs(case, DTYPES[args.xla_dtype]), ""))
+        dim_nums = ragged_dot_module._LAYOUT_DIM_NUMS[layout]
+        xla = jax.jit(
+            lambda lhs, rhs, gs: jax.lax.ragged_dot_general(lhs, rhs, gs, ragged_dot_dimension_numbers=dim_nums)
+        )
+        timed.append(Timed("xla", args.xla_dtype, xla, case_inputs(case, DTYPES[args.xla_dtype]), ""))
     if not args.skip_dense:
-        rows.append(("dense_matmul", "bfloat16", jax.jit(jnp.matmul), dense_inputs, ""))
-    return rows
+        key_a, key_b = jax.random.split(jax.random.key(1))
+        dense_inputs = (
+            jax.random.normal(key_a, (case.rows, case.k), jnp.bfloat16),
+            jax.random.normal(key_b, (case.k, case.n), jnp.bfloat16),
+        )
+        timed.append(Timed("dense_matmul", "bfloat16", jax.jit(jnp.matmul), dense_inputs, ""))
+    return timed
+
+
+def sweep_implementations(case: Case, configs: list) -> list[Timed]:
+    """The tile-map kernel once per block config."""
+    layout = ragged_dot_module.RaggedLayout(case.layout)
+    inputs = case_inputs(case, jnp.bfloat16)
+    timed = []
+    for config in configs:
+        fn = jax.jit(
+            lambda lhs, rhs, gs, config=config: ragged_dot_module._tile_map_pallas_call(lhs, rhs, gs, layout, config)
+        )
+        timed.append(Timed("triton_tile_map", "bfloat16", fn, inputs, str(dataclasses.asdict(config))))
+    return timed
 
 
 def describe_triton_config(case: Case, family: str) -> str:
@@ -216,12 +239,49 @@ def git_sha() -> str:
         return "unknown"
 
 
-def main() -> None:
+def run_metadata() -> dict:
+    """The ``BenchRow`` fields that describe the run rather than the case."""
+    device = jax.devices()[0]
+    return dict(
+        kernel="ragged_dot",
+        backend=device.platform,
+        device_type=device.device_kind,
+        device_count=1,
+        git_sha=git_sha(),
+        xla_flags=os.environ.get("XLA_FLAGS", ""),
+        backend_env=f"jax={jax.__version__} RAGGED_DOT_IMPL={os.environ.get('RAGGED_DOT_IMPL', '')}",
+    )
+
+
+def bench_row(case: Case, timed: Timed, metadata: dict, timing: dict) -> BenchRow:
+    compile_time = steady = tflops = None
+    error = None
+    try:
+        compile_time, steady = time_call(timed.fn, timed.inputs, **timing)
+        tflops = case.flops / steady / 1e12
+    except Exception as exc:  # A failing config is a result to record, not a reason to stop the sweep.
+        error = f"{type(exc).__name__}: {str(exc)[:500]}"
+    return BenchRow(
+        implementation=timed.name,
+        weight=case.weight,
+        layout=case.layout,
+        shape=f"M={case.rows} G={case.groups} K={case.k} N={case.n}",
+        dtype=timed.dtype,
+        block_sizes=timed.block_sizes,
+        compile_time=compile_time,
+        steady_state_time=steady,
+        tflops=tflops,
+        error=error,
+        **metadata,
+    )
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rows", type=int, nargs="+", default=[16384, 131072])
     parser.add_argument("--groups", type=int, default=32)
     parser.add_argument("--weights", nargs="+", default=list(DEFAULT_WEIGHTS), help="name:KxN")
-    parser.add_argument("--layouts", nargs="+", default=list(LAYOUT_DIM_NUMS), choices=list(LAYOUT_DIM_NUMS))
+    parser.add_argument("--layouts", nargs="+", default=LAYOUTS, choices=LAYOUTS)
     parser.add_argument("--kernel-families", nargs="+", default=KERNEL_FAMILIES, choices=KERNEL_FAMILIES)
     parser.add_argument("--xla-dtype", choices=sorted(DTYPES), default="float16")
     parser.add_argument("--skip-xla", action="store_true")
@@ -234,20 +294,14 @@ def main() -> None:
     parser.add_argument("--window-seconds", type=float, default=0.2)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    return parser.parse_args()
 
-    device = jax.devices()[0]
-    common = dict(
-        kernel="ragged_dot",
-        backend=device.platform,
-        device_type=device.device_kind,
-        device_count=1,
-        git_sha=git_sha(),
-        xla_flags=os.environ.get("XLA_FLAGS", ""),
-        backend_env=f"jax={jax.__version__} RAGGED_DOT_IMPL={os.environ.get('RAGGED_DOT_IMPL', '')}",
-    )
-    logger.info("%s", common)
+
+def main() -> None:
+    args = parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    metadata = run_metadata()
+    logger.info("%s", metadata)
     cases = [
         Case(name, layout, rows, args.groups, k, n)
         for rows in args.rows
@@ -255,62 +309,20 @@ def main() -> None:
         for layout in args.layouts
     ]
     timing = dict(warmup_seconds=args.warmup_seconds, window_seconds=args.window_seconds, repeats=args.repeats)
+    index, count = (int(x) for x in args.shard.split("/"))
+    configs = sweep_configs({field: tuple(getattr(args, field)) for field in SWEEP_GRID})[index::count]
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a") as out:
-
-        def record(case: Case, name: str, dtype: str, block_sizes: str, fn: Callable, inputs) -> None:
-            compile_time = steady = tflops = None
-            error = None
-            try:
-                compile_time, steady = time_call(fn, inputs, **timing)
-                tflops = case.flops / steady / 1e12
-            except Exception as exc:  # A failing config is a result to record, not a reason to stop the sweep.
-                error = f"{type(exc).__name__}: {str(exc)[:500]}"
-            row = BenchRow(
-                implementation=name,
-                weight=case.weight,
-                layout=case.layout,
-                shape=f"M={case.rows} G={case.groups} K={case.k} N={case.n}",
-                dtype=dtype,
-                block_sizes=block_sizes,
-                compile_time=compile_time,
-                steady_state_time=steady,
-                tflops=tflops,
-                error=error,
-                **common,
-            )
-            out.write(json.dumps(dataclasses.asdict(row)) + "\n")
-            out.flush()
-            logger.info(
-                "%s %s %s M=%d %s: %s",
-                case.weight,
-                case.layout,
-                name,
-                case.rows,
-                block_sizes,
-                error or f"{steady * 1e3:.3f} ms {tflops:.1f} TFLOP/s",
-            )
-
-        if args.sweep:
-            index, count = (int(x) for x in args.shard.split("/"))
-            grid = {field: tuple(getattr(args, field)) for field in SWEEP_GRID}
-            configs = sweep_configs(grid)[index::count]
-            for case in cases:
-                layout = ragged_dot_module.RaggedLayout(case.layout)
-                inputs = case_inputs(case, jnp.bfloat16)
-                for config in configs:
-                    fn = jax.jit(
-                        lambda lhs, rhs, gs, layout=layout, config=config: ragged_dot_module._tile_map_pallas_call(
-                            lhs, rhs, gs, layout, config
-                        )
-                    )
-                    record(case, "triton_tile_map", "bfloat16", str(dataclasses.asdict(config)), fn, inputs)
-            return
-
         for case in cases:
-            for name, dtype, fn, inputs, block_sizes in implementations(case, args):
-                record(case, name, dtype, block_sizes, fn, inputs)
+            for timed in sweep_implementations(case, configs) if args.sweep else implementations(case, args):
+                row = bench_row(case, timed, metadata, timing)
+                out.write(json.dumps(dataclasses.asdict(row)) + "\n")
+                out.flush()
+                result = row.error or f"{row.steady_state_time * 1e3:.3f} ms {row.tflops:.1f} TFLOP/s"
+                logger.info(
+                    "%s %s %s M=%d %s: %s", case.weight, case.layout, timed.name, case.rows, timed.block_sizes, result
+                )
 
 
 if __name__ == "__main__":

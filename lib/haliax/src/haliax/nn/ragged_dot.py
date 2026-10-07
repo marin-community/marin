@@ -733,12 +733,11 @@ _DRHS_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
     rhs_group_dimensions=[],
 )
 
-# Pairs, not a dict: the drhs dimension numbers hold a list and are not hashable.
-_DIM_NUMS_LAYOUTS = (
-    (_DEFAULT_DIM_NUMS, RaggedLayout.FWD),
-    (_DLHS_DIM_NUMS, RaggedLayout.DLHS),
-    (_DRHS_DIM_NUMS, RaggedLayout.DRHS),
-)
+_LAYOUT_DIM_NUMS: dict[RaggedLayout, jax.lax.RaggedDotDimensionNumbers] = {
+    RaggedLayout.FWD: _DEFAULT_DIM_NUMS,
+    RaggedLayout.DLHS: _DLHS_DIM_NUMS,
+    RaggedLayout.DRHS: _DRHS_DIM_NUMS,
+}
 
 
 def _triton_pallas_call(
@@ -748,7 +747,7 @@ def _triton_pallas_call(
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts, with this GPU's kernel family."""
-    for dim_nums, layout in _DIM_NUMS_LAYOUTS:
+    for layout, dim_nums in _LAYOUT_DIM_NUMS.items():
         if ragged_dot_dimension_numbers == dim_nums:
             return _TRITON_KERNELS[_triton_kernel_family()](lhs, rhs, group_sizes, layout)
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
