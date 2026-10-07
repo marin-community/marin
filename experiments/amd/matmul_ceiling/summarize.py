@@ -38,7 +38,8 @@ def main() -> None:
     snowball = snowball_shape_names()
     for path in args.results:
         header, results = read_results(path)
-        print(f"== {path.name}: {header.device_kind} {results[0].dtype} XLA_FLAGS={header.xla_flags.strip()!r}")
+        xla_flags = header.xla_flags.strip()
+        print(f"== {path.name}: {header.hostname} {header.device_kind} {results[0].dtype} XLA_FLAGS={xla_flags!r}")
         ranked = sorted(results, key=lambda r: r.median_tflops, reverse=True)
         print(f"  {len(results)} shapes; top {args.top} by median TFLOP/s:")
         for r in ranked[: args.top]:

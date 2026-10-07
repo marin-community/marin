@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import socket
 import statistics
 import time
 from pathlib import Path
@@ -45,6 +46,7 @@ class Shape:
 
 @dataclasses.dataclass(frozen=True)
 class RunHeader:
+    hostname: str
     jax: str
     device_kind: str
     platform: str
@@ -148,6 +150,7 @@ def main() -> None:
 
     device = jax.devices()[0]
     header = RunHeader(
+        hostname=socket.gethostname(),
         jax=jax.__version__,
         device_kind=device.device_kind,
         platform=device.platform,
