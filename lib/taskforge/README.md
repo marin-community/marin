@@ -437,10 +437,11 @@ an Iris attempt restored from the previous attempt's archive (`restore_from`), r
 
 The GLM pool is always named. Validation we drive ourselves (live tests, probes, laptop runs) uses
 the interactive `high` pool; the committed unattended configuration (`docs/policy.example.json`)
-names `bulk`, with a `<relay-job>` placeholder the launcher sets per cluster. A config holds no secret: `LaptopGlm` names a token file and `RelayGlm` the environment
-variable that holds the token, and the Parallel key is a file or a variable name in the same way.
-Under Iris, `queue.job.host_secrets` removes those variables and the submitter keys Iris forwards
-from the process environment and from `IRIS_JOB_ENV` before any sandbox exists, because Iris copies
+names `bulk`, with a `<relay-job>` placeholder the launcher sets per cluster. A config holds no
+secret: `LaptopGlm` names a token file and `RelayGlm` the environment variable that holds the token,
+and the Parallel key is a file or a variable name in the same way. Under Iris,
+`queue.job.host_secrets` removes those variables and the submitter keys Iris forwards from the
+process environment and from `IRIS_JOB_ENV` before any sandbox exists, because Iris copies
 `IRIS_JOB_ENV` into every child job. First-run policy values (`k=8`, band `[0.125, 0.875]`,
 `adversary_k=2`, all three adversary roles, width 256) live in the policy example, not in code.
 

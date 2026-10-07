@@ -94,7 +94,7 @@ def test_only_a_laptop_run_names_an_image_cache(host, image_cache):
     obj = example()
     obj |= {"host": host, "root": "run", "image_cache": image_cache}
 
-    with pytest.raises(ValueError, match="image_cache only on a laptop"):
+    with pytest.raises(ValueError, match="image_cache is a directory on a laptop and null on Iris"):
         run_config(obj)
 
 
