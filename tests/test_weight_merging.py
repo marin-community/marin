@@ -9,6 +9,28 @@ import safetensors.torch
 import torch
 from marin.merging.arithmetic import MergeMethod, MergeParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource, merge_checkpoint
+from marin.merging.geometry import weight_update_gram
+
+
+@pytest.mark.parametrize("chunk_elements", [1, 2, 10])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_weight_geometry_distinguishes_opposing_updates(chunk_elements, dtype):
+    anchor = torch.tensor([1, 2, 0], dtype=dtype)
+    donors = [torch.tensor([3, 2, 0], dtype=dtype), torch.tensor([0, 2, 0], dtype=dtype)]
+    gram = weight_update_gram(anchor, donors, chunk_elements=chunk_elements)
+    expected = torch.tensor(
+        [[5, 7, 4, 2, -1], [7, 13, 4, 6, -3], [4, 4, 4, 0, 0], [2, 6, 0, 4, -2], [-1, -3, 0, -2, 1]], dtype=torch.float64
+    )
+    torch.testing.assert_close(gram, expected, rtol=0, atol=0)
+
+
+def test_weight_geometry_preserves_small_updates_and_zero_updates():
+    anchor = torch.tensor([2**20, 2**20], dtype=torch.float64)
+    donor = anchor + torch.tensor([2**-10, -(2**-10)], dtype=torch.float64)
+    gram = weight_update_gram(anchor, [donor, anchor], chunk_elements=1)
+    assert gram[3, 3].item() == 2**-19
+    assert gram[0, 3].item() == 0
+    assert torch.count_nonzero(gram[4]).item() == 0
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
