@@ -16,7 +16,10 @@ lag order -- fixes the rounding that the fused kernel is required to match.
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from .config import OOB_SEGMENT
+#: Segment id for positions outside the sequence. The reference pads its shifted segment ids
+#: with it and the kernel must match, which is what makes the first ``kernel_size - 1``
+#: positions of a sequence agree bit for bit.
+OOB_SEGMENT = -1
 
 
 def short_conv_reference(

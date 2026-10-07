@@ -278,7 +278,7 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
     # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
     # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
-    if resolved == job_pb2.CONTAINER_PROFILE_SANDBOX and not is_tpu_run:
+    if resolved in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX) and not is_tpu_run:
         return ["--runtime", "runsc"]
 
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run

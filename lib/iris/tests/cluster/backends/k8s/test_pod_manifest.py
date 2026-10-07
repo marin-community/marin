@@ -1029,6 +1029,38 @@ def test_docker_access_pod_manifest_raises():
     assert "DOCKER_ACCESS is not supported" in update.error
 
 
+def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = 5
+    req.environment.env_vars["TASK_VAR"] = "1"
+    config = pod_config(
+        controller_address="http://ctrl:8080",
+        task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        task_outputs=TaskOutputPolicy(),
+        env_secret_name="iris-task-env",
+        service_account="iris-task",
+        host_network=True,
+    )
+    manifest = _build_pod_manifest(req, config)
+    spec = manifest["spec"]
+    task = spec["containers"][0]
+    env = {e["name"]: e.get("value") for e in task["env"]}
+
+    assert spec["runtimeClassName"] == "gvisor"
+    assert "privileged" not in task["securityContext"]
+    assert env["TASK_VAR"] == "1"
+    assert env["MARIN_PREFIX"] == "s3://bucket/prefix"
+    assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
+    assert any(source["secretRef"]["name"] == "iris-task-env" for source in task["envFrom"])
+    assert spec["serviceAccountName"] == "iris-task"
+    assert "hostNetwork" not in spec
+    assert "dnsPolicy" not in spec
+    cache_mount = next(m for m in task["volumeMounts"] if m["mountPath"] == env["UV_CACHE_DIR"])
+    assert any(v["name"] == cache_mount["name"] and "hostPath" in v for v in spec["volumes"])
+    assert {c["name"] for c in spec["containers"]} == {"task", "output-uploader"}
+    assert any(c["name"] == "log-shipper" for c in spec["initContainers"])
+
+
 @pytest.mark.parametrize(
     "egress, label",
     [(job_pb2.EGRESS_POLICY_INTERNET, "internet"), (job_pb2.EGRESS_POLICY_NONE, "none")],

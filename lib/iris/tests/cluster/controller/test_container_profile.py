@@ -105,9 +105,10 @@ def test_non_admin_can_use_unprivileged_profile(service, profile):
     assert resp.job_id == "/alice/job"
 
 
-def test_sandbox_rejected_on_accelerator_task(service):
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_GVISOR, SANDBOX])
+def test_gvisor_profiles_rejected_on_accelerator_task(service, profile):
     """gVisor cannot pass a GPU/TPU through, so an accelerator task is rejected."""
-    req = _launch("/alice/job", SANDBOX)
+    req = _launch("/alice/job", profile)
     req.resources.device.gpu.count = 1
     with pytest.raises(ConnectError) as exc:
         _as("user", "alice", service.launch_job, req, None)
@@ -115,11 +116,24 @@ def test_sandbox_rejected_on_accelerator_task(service):
     assert "cpu-only" in str(exc.value.message).lower()
 
 
-def test_retired_gvisor_profile_rejected(service):
-    """The former GVISOR value (5) is unknown now, not silently run as DEFAULT."""
-    with pytest.raises(ConnectError) as exc:
-        _as("user", "alice", service.launch_job, _launch("/alice/job", 5), None)
-    assert exc.value.code == Code.INVALID_ARGUMENT
+def test_legacy_gvisor_submission_preserves_bundle_environment_and_profile(service):
+    # An already-running client sends the old wire value and a workspace bundle.
+    req = _launch("/alice/job", 5)
+    req.bundle_blob = b"legacy-workspace"
+    req.environment.env_vars["TASK_VAR"] = "legacy-value"
+    response = _as("user", "alice", service.launch_job, req, None)
+
+    stored = _as(
+        "user",
+        "alice",
+        service.get_job_status,
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id),
+        None,
+    ).request
+    assert stored.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
+    assert stored.egress_policy == job_pb2.EGRESS_POLICY_CLUSTER
+    assert service.bundle_zip(stored.bundle_id) == b"legacy-workspace"
+    assert stored.environment.env_vars["TASK_VAR"] == "legacy-value"
 
 
 def test_sandbox_rejects_workspace_bundle(service):

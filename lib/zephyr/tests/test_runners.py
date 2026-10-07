@@ -16,11 +16,18 @@ from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
 from fsspec.implementations.local import LocalFileSystem
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.types import JobName
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr import counters, runners, worker
 from zephyr.context import ZephyrContext
+from zephyr.coordinator import ZEPHYR_HISTORY_ENDPOINT_NAME
 from zephyr.dataset import Dataset
+from zephyr.plan import compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
@@ -30,6 +37,8 @@ from zephyr.stats import (
     StatsConfig,
     StatsWriter,
 )
+from zephyr.testing.coordinator import TEST_EXECUTION_ID, TEST_TASK_COST, make_test_coordinator, start_test_stage
+from zephyr.worker_context import CounterEntry, CounterSnapshot
 
 
 def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
@@ -202,6 +211,77 @@ def finelog_server(tmp_path):
     server = EmbeddedServer(log_dir=str(tmp_path / "finelog"))
     yield f"http://127.0.0.1:{server.port}"
     server.stop()
+
+
+@pytest.mark.parametrize("explicit_config", [False, True])
+def test_iris_coordinator_exports_live_counters(actor_context, tmp_path, finelog_server, explicit_config):
+    class EndpointRegistry:
+        def resolve_endpoint(self, name):
+            if name == ZEPHYR_HISTORY_ENDPOINT_NAME:
+                raise ConnectionError("optional history endpoint unavailable")
+            assert name == LOG_SERVER_ENDPOINT_NAME
+            return "http://127.0.0.1:1" if explicit_config else finelog_server
+
+    info = JobInfo(task_id=JobName.from_wire("/test/review/coordinator/0"), attempt_id=2)
+    client = IrisClient(EndpointRegistry())
+    telemetry.shutdown()
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info, client=client)):
+            config = StatsConfig(finelog_server) if explicit_config else None
+            coordinator = make_test_coordinator(tmp_path, stats_config=config)
+            try:
+                start_test_stage(coordinator, [], stage_name="review")
+                coordinator.heartbeat(
+                    "worker-0",
+                    {TEST_EXECUTION_ID: CounterSnapshot({"review/completed": CounterEntry(7)}, generation=1)},
+                )
+                coordinator._publish_telemetry()
+                assert telemetry.flush()
+                with closing(LogClient.connect(finelog_server)) as query:
+                    rows = []
+
+                    def exported():
+                        rows[:] = query.query(
+                            'SELECT service, name, value, resource_attributes_json FROM "telemetry_v1.zephyr" '
+                            "WHERE name = 'review_completed'"
+                        ).to_pylist()
+                        return bool(rows)
+
+                    assert ExponentialBackoff().wait_until(exported, timeout=Duration.from_seconds(10))
+                assert rows and all(row["value"] == 7 for row in rows)
+                assert rows[0]["service"] == "zephyr"
+                attributes = json.loads(rows[0]["resource_attributes_json"])
+                assert attributes["task_id"] == "/test/review/coordinator/0"
+                assert attributes["attempt"] == "2"
+            finally:
+                coordinator.shutdown()
+    finally:
+        set_job_info(None)
+        telemetry.shutdown()
+
+
+def test_coordinator_runs_when_finelog_discovery_fails(actor_context, tmp_path):
+    class EndpointRegistry:
+        def resolve_endpoint(self, name):
+            if name == ZEPHYR_HISTORY_ENDPOINT_NAME:
+                raise ConnectionError("optional history endpoint unavailable")
+            assert name == LOG_SERVER_ENDPOINT_NAME
+            raise OSError("endpoint registry unavailable")
+
+    info = JobInfo(task_id=JobName.from_wire("/test/review/coordinator/0"), attempt_id=2)
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info, client=IrisClient(EndpointRegistry()))):
+            coordinator = make_test_coordinator(tmp_path)
+            try:
+                coordinator.run_pipeline(
+                    compute_plan(Dataset.from_list([])), TEST_EXECUTION_ID, "review", TEST_TASK_COST, TEST_TASK_COST
+                )
+            finally:
+                coordinator.shutdown()
+    finally:
+        set_job_info(None)
 
 
 def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypatch):

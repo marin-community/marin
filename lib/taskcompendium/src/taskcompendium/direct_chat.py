@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Capability checks for the direct-chat execution environment."""
+"""Validate semantic requirements before presenting a task as chat."""
 
 from taskcompendium.models import AnswerType, EnvironmentRequirements, TaskSpec
 

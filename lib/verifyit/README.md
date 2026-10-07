@@ -135,3 +135,9 @@ uv run --group test pytest lib/verifyit/tests
 Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset policy belongs to the converter that emits a grader: source parsing conventions, calendar postconditions and abstention rules should be packaged as task-owned scripts.
 
 A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
+
+`StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
+Its TOML reference is encoded as a JSON string so null and nested JSON types survive
+`render_spec` and `parse_spec`; private JSON descriptors keep decoded values. Its `numeric_types`
+defaults to `"value"`; set `"strict"` to distinguish integers from floats. Structured and predicted-action
+candidate JSON rejects duplicate object keys.

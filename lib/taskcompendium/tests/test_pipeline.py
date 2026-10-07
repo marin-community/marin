@@ -17,7 +17,6 @@ from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import MathSpec
 
 from taskcompendium.grader import grader_config, grader_package
-from taskcompendium.grading import grade_answer, multiple_choice_answer
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -66,7 +65,9 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import PlainText
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 from .pipeline_stages import fixture_recipe, run_stages, stage_table
 
@@ -365,7 +366,19 @@ def test_conflicting_review_is_rejected_at_every_confidence(apple_row, confidenc
     assert decision.reasons == ["defect:wrong_reference"]
 
 
-@pytest.mark.parametrize("fault", ["missing", "duplicate", "wrong_id", "truncated", "wrong_tool", "provider_failure"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "duplicate",
+        "wrong_id",
+        "truncated",
+        "wrong_tool",
+        "provider_failure",
+        "malformed_arguments",
+        "duplicate_argument",
+    ],
+)
 def test_review_faults_never_admit_tasks(apple_row, fault):
     raw = RawRow("task-0", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), apple_row)
     task = normalize_svamp(raw)
@@ -385,6 +398,11 @@ def test_review_faults_never_admit_tasks(apple_row, fault):
         row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = "submit_answer"
     elif fault == "provider_failure":
         row["response"]["status_code"] = 503
+    elif fault in {"malformed_arguments", "duplicate_argument"}:
+        function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+        function["arguments"] = (
+            "{" if fault == "malformed_arguments" else '{"task_id":"wrong",' + function["arguments"][1:]
+        )
     text = "" if fault == "missing" else json.dumps(row) + "\n"
     if fault == "duplicate":
         text *= 2
@@ -447,12 +465,12 @@ def test_recipes_normalize_source_contract_and_keep_supervision_private(normaliz
     parameters = json.loads(task.verifier.parameters_json)
     if expected is not None:
         assert parameters["expected"] == expected
-        convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+        convention = PlainText(id="plain")
         for answer, reward in ((expected, 1.0), (str(int(expected) - 1), 0.0)):
             conversation = ConversationTrace(
                 events=(*task.context.events, TextMessage(role="assistant", content=answer))
             )
-            assert grade_answer(task, convention, conversation).reward == reward
+            assert grade_task(task, convention, conversation).reward == reward
     else:
         option = f"{parameters['expected']}. right"
         assert option in prompt

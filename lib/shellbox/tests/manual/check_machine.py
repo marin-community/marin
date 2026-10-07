@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 
@@ -23,10 +24,19 @@ async def check(factory: MachineFactory, spec: MachineSpec) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.txt"
             target = Path(directory) / "target.txt"
-            source.write_bytes(b"binary\x00content")
+            # Incompressible fixtures exceed Linux's single-argument limit even
+            # after encoding or archiving, as real TaskTrove uploads can.
+            source.write_bytes(os.urandom(256 * 1024))
             await machine.upload(source, "/tmp/machine-file.txt")
             await machine.download("/tmp/machine-file.txt", target)
             assert target.read_bytes() == source.read_bytes()
+            directory_source = Path(directory) / "fixtures"
+            directory_source.mkdir()
+            (directory_source / "fixture.bin").write_bytes(source.read_bytes())
+            await machine.upload(directory_source, "/tmp/machine-fixtures")
+            directory_target = Path(directory) / "download"
+            await machine.download("/tmp/machine-fixtures", directory_target)
+            assert (directory_target / "fixture.bin").read_bytes() == source.read_bytes()
     finally:
         await machine.close()
 

@@ -13,7 +13,7 @@ from jsonschema.validators import validator_for
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec
 
 from taskcompendium.grader import grader_package
-from taskcompendium.grading import resolve_verifier
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

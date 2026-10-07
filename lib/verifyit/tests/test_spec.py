@@ -18,6 +18,7 @@ from verifyit.spec import (
     PytestSpec,
     ReasoningGymSpec,
     StdioSpec,
+    StructuredExactSpec,
     parse_spec,
     render_spec,
     spec_from_table,
@@ -30,6 +31,8 @@ from verifyit.spec import (
 def test_round_trip_every_field_kind():
     specs = [
         McqSpec(expected="C", options=5),
+        StructuredExactSpec(expected={"values": [None, True, 1, 1.0, {"text": "value"}]}),
+        StructuredExactSpec(expected=None, empty_output=EmptyOutputPolicy.GRADE),
         PredictedActionSpec(
             expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
             numeric_tolerance=0.01,
@@ -116,3 +119,15 @@ def test_output_modes_materialize_and_render_explicit_empty_policy(mode, fields)
     assert parse_spec(render_spec(configured)) == configured
     with pytest.raises(ValueError):
         spec_from_table({"mode": mode, **fields, "empty_output": "reward_half"})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "mode = 'structured_exact'\nexpected = '{\"value\":1,\"value\":2}'\n",
+        "mode = 'predicted_action'\n[[expected_calls]]\nname = 'submit'\narguments = '{\"value\":1,\"value\":2}'\n",
+    ],
+)
+def test_embedded_private_json_rejects_duplicate_keys(text):
+    with pytest.raises(ValueError):
+        parse_spec(text)

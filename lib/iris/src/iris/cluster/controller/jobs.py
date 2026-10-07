@@ -604,12 +604,12 @@ def _validate_launch_profile(
             "host docker socket); this cluster's backend does not support it. Use a privileged "
             "profile with an in-pod runtime, or submit to a docker-worker cluster.",
         )
-    if request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and (
+    if request.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX) and (
         request.resources.device.WhichOneof("device") in ("gpu", "tpu")
     ):
         raise ConnectError(
             Code.INVALID_ARGUMENT,
-            "Container profile sandbox is CPU-only: the runsc runtime cannot pass a GPU or TPU "
+            "gVisor container profiles are CPU-only: the runsc runtime cannot pass a GPU or TPU "
             "through to the sandboxed guest. Use the default or privileged profile for "
             "accelerator tasks.",
         )
@@ -620,6 +620,11 @@ def _validate_launch_profile(
             "submit without a workspace.",
         )
     _resolve_egress_policy(request)
+    if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+        logger.warning(
+            "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",
+            launch.job_id.to_wire(),
+        )
 
 
 def _resolve_egress_policy(request: controller_pb2.Controller.LaunchJobRequest) -> None:

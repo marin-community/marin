@@ -90,6 +90,7 @@ class ContainerProfile(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONTAINER_PROFILE_DEFAULT: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_DOCKER_ACCESS: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_PRIVILEGED: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_GVISOR: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_SANDBOX: _ClassVar[ContainerProfile]
 
 class EgressPolicy(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
@@ -153,6 +154,7 @@ CONTAINER_PROFILE_RESTRICTED: ContainerProfile
 CONTAINER_PROFILE_DEFAULT: ContainerProfile
 CONTAINER_PROFILE_DOCKER_ACCESS: ContainerProfile
 CONTAINER_PROFILE_PRIVILEGED: ContainerProfile
+CONTAINER_PROFILE_GVISOR: ContainerProfile
 CONTAINER_PROFILE_SANDBOX: ContainerProfile
 EGRESS_POLICY_UNSPECIFIED: EgressPolicy
 EGRESS_POLICY_CLUSTER: EgressPolicy

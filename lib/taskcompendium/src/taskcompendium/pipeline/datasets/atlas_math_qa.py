@@ -13,7 +13,7 @@ from verifyit.numeric import numeric_literal
 from verifyit.spec import MathSpec, MathType, McqSpec, NumericSpec
 
 from taskcompendium.grader import grader_config, grader_package, script_package
-from taskcompendium.grading import resolve_verifier
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

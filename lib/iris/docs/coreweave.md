@@ -558,3 +558,59 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 - [`composer.py`](../src/iris/cluster/composer.py) — config-to-backend wiring.
 - [`infra/pulumi/src/iac/coreweave/cluster.py`](../../../infra/pulumi/src/iac/coreweave/cluster.py)
   — Pulumi ownership of CoreWeave prerequisites.
+
+### Node health
+
+The production `cw-rno2a`, `cw-us-east-02a`, and `cw-us-east-08a` clusters
+probe the shared `marin-us-east-02a` bucket. Each uses a separate scratch
+prefix under the bucket's one-day lifecycle rule. The `cw-us-west-04a` CI
+cluster does not enable the check.
+
+```yaml
+kubernetes_provider:
+  node_health:
+    storage:
+      scratch: s3://marin-us-east-02a/tmp/ttl=1d/iris-node-health/CLUSTER
+      interval: 60
+      timeout: 15
+      failure_threshold: 3
+      minimum_healthy_nodes: 2
+    max_cordoned_nodes: 1
+```
+
+The node agent uses the cluster task credentials and endpoint to write, read,
+and delete a 23-byte object at `<scratch>/<node UID>/<boot ID>`. It needs all
+three permissions. Job-specific environment overrides are outside this check.
+Use a dedicated prefix with lifecycle expiry; a node that never recovers can
+leave its object behind. The 15-second subprocess deadline bounds DNS and SDK
+retries. Configuration errors reset the failure streak. Deployment derives
+`environment_revision` from the task Secret revision and task literals, rolls
+agents when they change, and fences reports from older credentials. Do not set
+that field by hand.
+
+The controller cordons after three failed probes only when a fresh majority of
+nodes, at least `minimum_healthy_nodes`, succeeded on the same target after the
+failure began. Missing or stale reports count against the majority. Set
+`max_cordoned_nodes: 0` for observation only. Results and cordon evidence stay
+in the `iris.marin.community/storage-health` and
+`iris.marin.community/storage-health-cordon` node annotations even if Finelog
+is unavailable. The shared service account needs `patch` on Nodes. Cordoning
+does not evict running tasks, and the node-agent
+DaemonSet continues probing cordoned nodes.
+
+A fresh successful probe for the current node and target, started after its
+Iris cordon, uncordons the node and releases its budget annotation. Reboots and
+credential rotation do not prevent recovery. Operator cordons without that
+annotation remain. A manual uncordon alone keeps the budget reserved. If the
+probe cannot confirm recovery, first verify the node is healthy, then release
+it manually:
+
+```bash
+kubectl uncordon NODE
+kubectl annotate node NODE iris.marin.community/storage-health-cordon-
+```
+
+To keep a repaired node cordoned for maintenance, remove the Iris annotation
+while the node is still unschedulable. Inspect reports with
+`kubectl get node NODE -o json`. Do not release the budget during an unresolved
+shared storage outage.
