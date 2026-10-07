@@ -104,6 +104,7 @@ class InferenceRequest:
     stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
+    admission_epoch: int = 0
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
 
@@ -173,6 +174,9 @@ class InferenceContext:
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
         self.model_lock = threading.Lock()
+        self.admission_lock = threading.Lock()
+        self.pause_event = threading.Event()
+        self.admission_epoch = 0
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
@@ -198,6 +202,20 @@ class InferenceContext:
             self.model = None
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
+
+    def pause_generation(self) -> None:
+        """Abort unfinished requests and clear serving state before returning."""
+        with self.admission_lock:
+            self.pause_event.set()
+            self.admission_epoch += 1
+        # The active batch observes pause_event between device decode rounds.
+        with self.model_lock, self.config.trainer.use_device_mesh():
+            self.engine.reset()
+
+    def resume_generation(self) -> None:
+        """Allow new requests after a completed pause or weight replacement."""
+        with self.admission_lock:
+            self.pause_event.clear()
 
     def reload(self, weight_callback: WeightSource):
         """Reload the inference model using the given weight callback.
@@ -257,8 +275,28 @@ class InferenceContext:
         )
 
         logger.info("Enqueuing request %s", request)
-        self.request_queue.put(request)
+        with self.admission_lock:
+            request.admission_epoch = self.admission_epoch
+            if self.pause_event.is_set():
+                self._abort_request(request)
+            else:
+                self.request_queue.put(request)
         return request_id
+
+    def _abort_request(self, request: InferenceRequest) -> None:
+        responses = [
+            InferenceResponse(
+                request_id=request.request_id,
+                text="",
+                tokens=[],
+                prompt_tokens=len(request.prompt_tokens),
+                completion_tokens=0,
+                finish_reason=FinishReason.ABORT,
+                logprobs=[],
+            )
+            for _ in range(request.n_generations)
+        ]
+        request.future.get_loop().call_soon_threadsafe(request.future.set_result, responses)
 
     def _inference_loop(self) -> None:
         """Collect requests from the serving and batch them into batches of appropriate size for inference."""
@@ -334,6 +372,15 @@ class InferenceContext:
 
     def _execute_batch(self, requests: InferenceBatch):
         """Execute a batch of inference requests"""
+        admitted = InferenceBatch()
+        for request in requests:
+            if self.pause_event.is_set() or request.admission_epoch != self.admission_epoch:
+                self._abort_request(request)
+            else:
+                admitted.append(request)
+        requests = admitted
+        if not requests:
+            return
         service_requests = []
 
         if not self.engine:
@@ -371,7 +418,7 @@ class InferenceContext:
 
         # Generate responses
         start_time = time.time()
-        result = self.engine.generate(service_requests)
+        result = self.engine.generate(service_requests, should_abort=self.pause_event.is_set)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
 
@@ -448,7 +495,9 @@ def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Itera
         )
         if choice.model_extra and "token_ids" in choice.model_extra:
             content = content.model_copy(update={"token_ids": choice.model_extra["token_ids"]})
-        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
+        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta()).model_copy(
+            update={"finish_reason": choice.finish_reason}
+        )
         for chunk_choice in (content, finish):
             chunk = ChatCompletionChunk(
                 id=completion.id,
@@ -624,7 +673,10 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
                 # Format logprobs if available
                 logprobs = None
-                if request.logprobs is not None:
+                echo_unstarted = (
+                    request.echo and generation.finish_reason == FinishReason.ABORT and not generation.tokens
+                )
+                if request.logprobs is not None and not echo_unstarted:
                     if request.echo:
                         if generation.echo_token_ids is None or generation.echo_logprobs is None:
                             raise RuntimeError("Echo logprobs requested but missing from generation result.")
@@ -673,6 +725,8 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         logprobs=logprobs,
                     )
                 )
+                if generation.finish_reason == FinishReason.ABORT:
+                    choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
                 if request.return_token_ids:
                     choices[-1] = choices[-1].model_copy(
                         update={
@@ -838,6 +892,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                     logprobs=logprobs,
                 )
             )
+            if generation.finish_reason == FinishReason.ABORT:
+                choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
             if request.return_token_ids:
                 choices[-1] = choices[-1].model_copy(update={"token_ids": generation.tokens})
             total_completion_tokens += generation.completion_tokens
@@ -959,6 +1015,14 @@ class InferenceServer:
             return await _fetch_tokens(inference_context, request)
 
         return app
+
+    def pause_generation(self) -> None:
+        """Abort current requests and clear cache state before weight replacement."""
+        self.inference_context.pause_generation()
+
+    def resume_generation(self) -> None:
+        """Resume request admission after the pause barrier."""
+        self.inference_context.resume_generation()
 
     def unload(self):
         """Unload the inference model to free up resources."""
