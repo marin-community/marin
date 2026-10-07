@@ -16,14 +16,16 @@ src/taskforge/
   atomic_file.py   atomic file replacement
   llm/        GLM-5.3 transport, structured calls, call cache, agent loop, web tools, RolloutEngine model
   ledger/     timed spans to per-item JSONL and, on Iris, Finelog
-scripts/      ledger summary
+  spec/       TaskSpec assembly and fixed controls
+  sandbox/    MachineFactory selection per EnvironmentKind, up-front task refusals, image builds
+scripts/      Iris image builder, shellbox Iris probe, ledger summary
 ```
 
 Packages are totally ordered. A package imports only from packages to its left and from external
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> llm
+content_hash -> atomic_file -> ledger -> spec -> sandbox -> llm
 ```
 
 ## Seams
@@ -62,11 +64,27 @@ content-addressed cache and does not record to the ledger.
 
 ## Decisions
 
+Task specs are upstream's. A built task is a TaskCompendium `TaskSpec` plus the `TaskExecution` it
+runs with. TaskCompendium keeps execution settings out of the spec: deadlines, the agent user, and
+each stage's working files, setup and healthcheck are a `TaskExecution`. `spec.draft.assemble`
+checks the two together, a builder returns both, and validation passes both to RolloutEngine.
+#9623 proposes moving the environment, system prompt and concrete tools out of `TaskSpec` into a
+`TaskHarnessSpec` and `TaskSequence`, and renaming `TaskExecution` to `TaskExecutionSpec`. Until
+that lands, `spec.draft._presentation` alone builds the former and `spec.draft.task_execution` alone
+builds the latter, so each move is a single-site change.
+Task-specific grading is the task's own scripts, run as a `ShellVerifierSpec` (private files on its
+`VerifierSpec`; reward on stdout, by exit code, or in reward files; optionally in a separate
+grading environment). Generic verifier types
+(math, mcq, judge, pytest, aggregation) belong to `lib/verifyit`, which `TaskSpec` reaches
+through its verifier registry. A gap in either is fixed upstream. Interim code for one gap goes
+in `taskforge/spec/extensions/<issue>.py`.
+
 Execution is RolloutEngine's. `ShellboxRolloutEngine` creates one shellbox `Machine` per attempt
 from the caller's `MachineFactory` for the task's `EnvironmentKind`, installs files, runs setup
 and healthchecks, drives the shell tool, grades and closes. It grades the state an agent left when
 the agent deadline expires, and bounds every cleanup action by its `cleanup_timeout`. Taskforge supplies the model callable
-(`llm.rollout_model.GlmRolloutModel`).
+(`llm.rollout_model.GlmRolloutModel`) and the factories (`sandbox.factories.machine_factories`).
+Taskforge reaches a sandbox only through a `Machine` that the engine or a builder step created.
 
 The agent loop is Taskforge's own: `llm.agent.run_agent` over `GlmClient`, with the shell tool
 running through `Machine.run` and Parallel search and extract from `llm.web`. Builder agents run
@@ -132,6 +150,11 @@ Types and lint:
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check           # from lib/taskforge; checks src
 ./infra/pre-commit.py --fix --files lib/taskforge/<path>   # from the repository root
 ```
+
+The cluster scripts run on Iris and document their submit commands in their docstrings:
+`scripts/build_image_job.py` builds a `DockerBuild` context and pushes it to a registry digest
+through `scripts/push_image_task.py`, and `scripts/iris_machine_probe.py` probes the shellbox
+Iris backend.
 
 ## Evidence
 
