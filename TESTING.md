@@ -50,6 +50,18 @@ lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
 the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
 or manual runs without a base ref run every suite.
 
+The Levanter TPU lane selects affected files containing `pytest.mark.tpu`,
+then runs only marked cases, including scheduled and full-suite runs. Mark
+tests when they exercise real accelerator kernels, TPU numerical behavior, or
+device transfers and collectives that CPU coverage cannot validate. Use
+`@pytest.mark.tpu` on individual tests, `pytest.param(..., marks=pytest.mark.tpu)`
+for selected parameters, or `pytestmark = pytest.mark.tpu` for an entire module.
+Keep markers literal so [select_tests.py](infra/ci/select_tests.py) can find them
+without importing test dependencies. The marker also works on test classes.
+CPU CI continues to run these tests when supported; `tpu` opts into hardware
+coverage and does not imply a CPU skip. The TPU lane retains all default safety
+exclusions and excludes Torch tests.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an

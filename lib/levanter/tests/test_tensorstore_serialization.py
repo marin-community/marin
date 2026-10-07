@@ -49,6 +49,7 @@ def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
     assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
 
 
+@pytest.mark.tpu
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source = jnp.arange(8, dtype=jnp.float32)
 
@@ -102,6 +103,7 @@ def test_tensorstore_checkpoint_simple():
         assert all(np.isclose(rkey, initial_key))
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
     with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
@@ -119,6 +121,7 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             assert jnp.allclose(restored["x"], arr)
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
     # Regression for #8441. A run with offload_opt_state/FP32_PINNED_HOST holds its master and
     # optimizer leaves on `pinned_host`, so the restore template (produced by eval_shape, hence an
@@ -140,6 +143,7 @@ def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
             assert jnp.allclose(on_device, arr)
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_restores_mixed_memory_kinds_in_tree_order():
     with use_test_mesh() as mesh:
         first = jnp.arange(8, dtype=jnp.float32)

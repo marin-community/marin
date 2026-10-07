@@ -20,6 +20,9 @@ from levanter.layers.flash_attention import flash_attention
 from levanter.testing.helpers import use_test_mesh
 
 
+pytestmark = pytest.mark.tpu
+
+
 BLOCK_SIZE = 64
 
 

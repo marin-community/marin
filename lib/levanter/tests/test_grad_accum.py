@@ -17,6 +17,9 @@ from levanter.testing.helpers import use_test_mesh
 from levanter.grad_accum import microbatched
 
 
+pytestmark = pytest.mark.tpu
+
+
 class Mlp(eqx.Module):
     """
     Simple 1 hidden layer MLP implementation
