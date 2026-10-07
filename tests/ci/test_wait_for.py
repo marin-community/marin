@@ -2,12 +2,41 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from scripts.ci import wait_for
 
 PR_URL = "https://github.com/marin-community/marin/pull/123"
+
+
+def test_ci_source_unsupported_gh_json_flag_exits_with_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = tmp_path / "gh"
+    gh.write_text("#!/bin/sh\nprintf '%s\\n' 'unknown flag: --json' >&2\nexit 1\n")
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=":")
+
+    result = CliRunner().invoke(
+        wait_for.main,
+        [
+            "--repo",
+            "marin-community/marin",
+            "--timeout",
+            "1s",
+            "--initial-interval",
+            "0.001s",
+            "--max-interval",
+            "0.001s",
+            "--jitter",
+            "0",
+            "github.ci 123",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "unknown flag: --json" in result.output
 
 
 def _pr_snapshot(

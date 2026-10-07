@@ -171,8 +171,8 @@ def gh_pr_checks(pr: str, repo: str) -> list[dict]:
     """Return gh's check rows for the PR head (empty until any check registers)."""
     # `gh pr checks --json` prints the rows and exits 0 even while checks are pending.
     # We read stdout directly instead of via gh_json because a PR with no checks
-    # registered yet returns an empty body — which means "nothing to judge yet, keep
-    # polling", but which gh_json would raise on (json.loads("") fails / non-zero exit).
+    # registered yet returns an empty body. A nonzero exit with no output is a
+    # command failure, while a populated JSON result can describe failed checks.
     proc = subprocess.run(
         ["gh", "pr", "checks", pr, "--repo", repo, "--json", "name,bucket,state"],
         capture_output=True,
@@ -181,6 +181,8 @@ def gh_pr_checks(pr: str, repo: str) -> list[dict]:
     )
     out = proc.stdout.strip()
     if not out:
+        if proc.returncode != 0:
+            raise GhError(f"`gh pr checks {pr}` failed (exit {proc.returncode}): {proc.stderr.strip()}")
         return []
     try:
         return json.loads(out)
