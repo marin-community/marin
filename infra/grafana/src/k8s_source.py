@@ -29,7 +29,7 @@ failure class it watches.
 import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -337,24 +337,29 @@ class K8sSource:
                 raise K8sError(K8sErrorClass.AUTH, f"{path}: HTTP {response.status_code}")
             if response.status_code != 200:
                 raise K8sError(K8sErrorClass.HTTP, f"{path}: HTTP {response.status_code}")
-            return response.json()
+            try:
+                return response.json()
+            except json.JSONDecodeError as err:
+                raise K8sError(K8sErrorClass.HTTP, f"{path}: invalid JSON at position {err.pos}") from None
         raise AssertionError("unreachable")
 
     def _list(self, path: str, params: dict | None = None) -> list[dict]:
-        """LIST with limit/continue pagination, concatenating the pages' items."""
+        return list(self._iter_list(path, params))
+
+    def _iter_list(self, path: str, params: dict | None = None) -> Iterator[dict]:
+        """Yield a LIST page at a time so pod scans need not retain every pod."""
         params = dict(params or {})
         params["limit"] = _LIST_PAGE
-        items: list[dict] = []
         for _ in range(_MAX_LIST_PAGES):
             page = self._get(path, params)
             assert page is not None
-            items.extend(page.get("items", []))
+            yield from page.get("items", [])
             cont = (page.get("metadata") or {}).get("continue")
+            del page
             if not cont:
-                return items
+                return
             params["continue"] = cont
         logger.warning("%s: %s pagination stopped after %d pages", self._target.name, path, _MAX_LIST_PAGES)
-        return items
 
     def probe(self) -> int:
         """Round-trip /version (cheap, still authenticated) and return the latency in ms."""
@@ -556,12 +561,14 @@ class K8sSource:
         names = [(ns.get("metadata") or {}).get("name") or "" for ns in namespaces]
         return [name for name in names if name and not name.startswith(PROVIDER_NAMESPACE_PREFIXES)]
 
-    def _scan_pods(self, field_selector: str | None) -> list[dict]:
-        pods: list[dict] = []
-        params = {"fieldSelector": field_selector} if field_selector else None
+    def _scan_pods(self, field_selector: str | None, *, label_selector: str | None = None) -> Iterator[dict]:
+        params = {}
+        if field_selector:
+            params["fieldSelector"] = field_selector
+        if label_selector:
+            params["labelSelector"] = label_selector
         for namespace in self._scanned_namespaces():
-            pods.extend(self._list(f"/api/v1/namespaces/{namespace}/pods", params))
-        return pods
+            yield from self._iter_list(f"/api/v1/namespaces/{namespace}/pods", params)
 
     def crashloops(self) -> list[dict]:
         """One row per container sitting in a backoff waiting state, across the scanned namespaces."""
@@ -584,6 +591,20 @@ class K8sSource:
                     }
                 )
         return rows
+
+    def control_plane_crashloop_count(self) -> int:
+        """Count backoff containers only in the watched deployments."""
+        count = 0
+        for component in WATCHED_COMPONENTS:
+            deployment = self._deployment(component)
+            if deployment is None:
+                continue
+            for pod in self._deployment_pods(component.namespace, deployment):
+                count += sum(
+                    ((status.get("state") or {}).get("waiting") or {}).get("reason") in BACKOFF_REASONS
+                    for status in _container_statuses(pod)
+                )
+        return count
 
     def pending(self) -> list[dict]:
         """One row per Pending pod in the scanned namespaces, split into scheduling_gated vs pending, oldest first."""
@@ -608,7 +629,9 @@ class K8sSource:
     def workload_allocations(self) -> list[WorkloadAllocation]:
         """Live Iris task placement and requested resources, one row per pod."""
         rows: list[WorkloadAllocation] = []
-        for pod in self._scan_pods("status.phase!=Succeeded,status.phase!=Failed"):
+        for pod in self._scan_pods(
+            "status.phase!=Succeeded,status.phase!=Failed", label_selector=f"{_IRIS_MANAGED_LABEL}=true"
+        ):
             metadata = pod.get("metadata") or {}
             labels = metadata.get("labels") or {}
             if labels.get(_IRIS_MANAGED_LABEL) != "true":
@@ -1187,6 +1210,12 @@ class K8sFleet:
 
         return self._fan_out(
             counts, lambda err: [{"scope": s, "value": 0} for s in (SCOPE_CONTROL_PLANE, SCOPE_WORKLOAD)]
+        )
+
+    def alert_control_plane_crashloops(self) -> list[dict]:
+        return self._fan_out(
+            lambda source: [{"scope": SCOPE_CONTROL_PLANE, "value": source.control_plane_crashloop_count()}],
+            lambda _err: [{"scope": SCOPE_CONTROL_PLANE, "value": 0}],
         )
 
     def alert_webhook_ready(self) -> list[dict]:
