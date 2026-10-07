@@ -15,6 +15,7 @@ dependencies = [
     "marin-rigging",
     "marin-finelog",
     "marin-iris",
+    "connect-python>=0.9.0",
     "httpx>=0.27,<1",  # prerelease = "allow" otherwise resolves httpx 1.0.dev, which has no AsyncClient
     "pyyaml>=6.0",
     "pydantic>=2.0",

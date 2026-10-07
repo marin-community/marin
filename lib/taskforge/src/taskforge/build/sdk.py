@@ -20,7 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from rolloutengine.cleanup import Cleanup
-from rolloutengine.contracts import ModelRequest, ModelTurn, SuppliedState
+from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutInterrupted, SuppliedState
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.machines import task_machine
 from shellbox.machine import Machine, MachineFactory
@@ -31,6 +31,7 @@ from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
 from taskforge.build import step as step_module
+from taskforge.build.infrastructure import host_checked_factories, infrastructure_failure
 from taskforge.build.step import (
     CURRENT_STEP,
     SDK_VERSION,
@@ -65,6 +66,11 @@ NUMERIC_LITERALS = (
     "A numeric answer's expected value (verifyit `NumericSpec.expected`) is a literal string: an integer, "
     'decimal, scientific-notation number or integer fraction such as "42", "-0.125", "1.5e3" or "1/8". '
     'It is never a float or an expression (not 0.125, not "sqrt(2)").'
+)
+HOST_FAILURES = (
+    "When the host fails (no factory for the machine kind, the factory cannot schedule a machine, the machine "
+    "host is unreachable), `b.machine` and `b.try_grader` raise `BuildInfrastructureFailure`. Let it propagate: "
+    "the build is retried without a revision. A failing image build, setup or healthcheck is the program's."
 )
 TRY_GRADER_SOURCE = "taskforge.try_grader"
 """``Source.dataset`` of the provisional task ``Build.try_grader`` grades against."""
@@ -240,6 +246,7 @@ class Build:
         self.round = round
         self.resources: list[Resource] = []
         self._services = services
+        self._factories = host_checked_factories(services.factories)
         self._cache = cache
 
     @property
@@ -297,10 +304,13 @@ class Build:
 
         It is created and closed exactly as RolloutEngine would for a task attempt. Use it to
         prototype fixtures and graders; ``shell_tool(machine)`` gives ``llm.agent`` a shell in it.
+
+        Raises:
+            BuildInfrastructureFailure: the host failed to create or drive the machine.
         """
         self.check(environment.kind != EnvironmentKind.NULL, "a null environment has no machine")
         cleanup = Cleanup(MACHINE_CLEANUP_TIMEOUT)
-        async with task_machine(environment, self._services.factories, cleanup) as machine:
+        async with task_machine(environment, self._factories, cleanup) as machine:
             assert machine is not None
             yield machine
 
@@ -334,6 +344,7 @@ class Build:
         Raises:
             BuildFailure: ``spec.assemble`` rejects the task these arguments describe, or
                 ``convention`` cannot carry ``answer_type`` to ``verifier``.
+            BuildInfrastructureFailure: the host failed to create or drive a grading machine.
         """
         candidate = GradedCandidate(reply=reply, files=tuple(sorted(workspace, key=lambda f: f.path)))
         self.emit(f"{GRADED_RESOURCE_PREFIX}{digest(candidate)}.json", canonical_json(candidate).encode())
@@ -362,7 +373,7 @@ class Build:
             )
         engine = ShellboxRolloutEngine(
             _no_model,
-            self._services.factories,
+            self._factories,
             max_turns=1,
             command_timeout=MACHINE_CLEANUP_TIMEOUT,
             cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
@@ -372,7 +383,13 @@ class Build:
             messages=({"role": "user", "content": instruction}, {"role": "assistant", "content": reply}),
             files=candidate.files,
         )
-        return await engine.grade_state(task, state, execution=execution)
+        try:
+            return await engine.grade_state(task, state, execution=execution)
+        except RolloutInterrupted as error:
+            failure = infrastructure_failure(error)
+            if failure is None:
+                raise
+            raise failure from error
 
 
 async def _no_model(request: ModelRequest) -> ModelTurn:
@@ -431,7 +448,8 @@ def sdk_reference() -> str:
         lines += _describe(f"b.llm.{name}", getattr(BuildLLM, name), "  ")
     for name in ("Grader", "BuildOutput", "BuildFailure"):
         lines += _describe(name, SDK_EXPORTS[name])
-    lines += ["## Machines and answers", "", f"- {DOCKER_IMAGE_REQUIREMENTS}", f"- {NUMERIC_LITERALS}", ""]
+    lines += ["## Machines and answers", "", f"- {DOCKER_IMAGE_REQUIREMENTS}", f"- {NUMERIC_LITERALS}"]
+    lines += [f"- {HOST_FAILURES}", ""]
     lines += _module_reference("Steps", step_module, ("step", "StepRole", "Blob", "Resource"))
     lines += _module_reference(
         "Task spec helpers, available as `spec`",
