@@ -40,7 +40,7 @@ def test_traced_rows_match_the_static_probe_with_inkling_and_documents():
         dynamic = eqx.filter_jit(traced)(model, rows, positions)
     static_key = next(k for k in static if k.startswith(ATTN_PROBE_STAT))
     layer = static_key.rsplit("_L", 1)[1]
-    full = np.asarray(dynamic[f"{ATTN_ROWS_STAT}_L{layer}"])  # [Q, H, S]
+    full = np.asarray(dynamic[f"{ATTN_ROWS_STAT}_L{layer}"])[:, :, 0]  # [Q, H, S]: the softmax field
     window = np.asarray(static[static_key])  # [Q, H, ATTN_PROBE_KEYS], keys position-K+1 .. position
     for i, (_, position) in enumerate(queries):
         lo = position - ATTN_PROBE_KEYS + 1

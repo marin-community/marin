@@ -65,7 +65,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.fast_track.attention_rows_probe import attention_rows_probe
+from experiments.grug.fast_track.attention_rows_probe import ROW_FIELDS, attention_rows_probe
 from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.fact_probe import (
     EMA,
@@ -1952,7 +1952,7 @@ def _attn_distance_dump(
             _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
         return {k: v for k, v in metrics.items() if k.startswith((ATTN_ROWS_STAT, RELPOS_ROWS_STAT))}
 
-    attn, relpos, meta = [], [], []
+    rows_out, relpos, meta = [], [], []
     with set_mesh(mesh):
         for b, queries in sorted(by_batch.items()):
             ids = global_batch(tokens[b * batch : (b + 1) * batch])
@@ -1964,17 +1964,19 @@ def _attn_distance_dump(
                 positions = jnp.asarray([c for _, c, _ in padded], jnp.int32)
                 out = probe(params, ids, segs, rows, positions)
                 names = sorted((k for k in out if k.startswith(ATTN_ROWS_STAT)), key=lambda k: int(k.rsplit("_L", 1)[1]))
-                stacked = np.stack([np.asarray(out[k]) for k in names], axis=1)[: len(chunk)]  # [Q, L, H, S]
-                attn.append(stacked.astype(np.float16))
+                stacked = np.stack([np.asarray(out[k]) for k in names], axis=1)[: len(chunk)]  # [Q, L, H, F, S]
+                rows_out.append(stacked.astype(np.float16))
                 rel_names = [k.replace(ATTN_ROWS_STAT, RELPOS_ROWS_STAT) for k in names]
                 if all(k in out for k in rel_names):
                     relpos.append(np.stack([np.asarray(out[k]) for k in rel_names], axis=1)[: len(chunk)])
                 meta += chunk
     if jax.process_index() == 0:
+        rows_all = np.concatenate(rows_out, axis=0)
         with fsspec.open(path, "wb") as f:
             np.savez(
                 f,
-                attn=np.concatenate(attn, axis=0),
+                # [Q, L, H, S] each: ``attention_rows_probe.ROW_FIELDS``.
+                **{name: rows_all[:, :, :, i] for i, name in enumerate(ROW_FIELDS)},
                 tokens=tokens,
                 segments=segments,
                 query_seq=np.asarray([r for r, _, _ in meta]),

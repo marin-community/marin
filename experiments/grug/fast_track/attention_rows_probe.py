@@ -14,6 +14,10 @@ from jaxtyping import Array, Float, Int
 from levanter.grug.attention import AttentionMask, align_kv_heads
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
 
+ROW_FIELDS = ("attn", "logit_prev", "logit_cur", "logit_bias")
+"""Per key: the softmax weight, the q.k logit over the first (previous-token, under the default half
+``mla_key_offset``) and second half of the head channels, and the Inkling bias. Masked keys hold raw logits."""
+
 ROWS_PROBE: tuple[jax.Array, jax.Array] | None = None
 """Traced ``(rows, positions)`` ``[Q]`` set by ``attention_rows_probe``; read by the MLA layers at trace time."""
 
@@ -21,7 +25,8 @@ ROWS_PROBE: tuple[jax.Array, jax.Array] | None = None
 @contextmanager
 def attention_rows_probe(rows: jax.Array, positions: jax.Array) -> Iterator[None]:
     """MLA layers traced inside this context record each query ``(rows[i], positions[i])``'s full softmax row over the
-    sequence (``model.ATTN_ROWS_STAT``, ``[Q, H, S]``). The arrays may be traced, so one compile serves any queries."""
+    sequence and its logit parts (``model.ATTN_ROWS_STAT``, ``[Q, H, ROW_FIELDS, S]``). The arrays may be traced,
+    so one compile serves any queries."""
     global ROWS_PROBE
     previous, ROWS_PROBE = ROWS_PROBE, (rows, positions)
     try:
@@ -37,9 +42,9 @@ def probe_attention_rows(
     rel_bias: Float[Array, "B H S W"] | None,
     rows: Int[Array, " Q"],
     positions: Int[Array, " Q"],
-) -> Float[Array, "Q H S"]:
-    """``_probe_attention`` over every key and for traced queries: scale ``1/sqrt(head_dim)``, the banded Inkling
-    bias, causal, document-masked."""
+) -> Float[Array, "Q H F S"]:
+    """``_probe_attention`` over every key and for traced queries (scale ``1/sqrt(head_dim)``, the banded Inkling
+    bias, causal, document-masked), stacked with its logit parts (``ROW_FIELDS``)."""
     if not isinstance(mask, AttentionMask):
         raise ValueError("attention_rows_probe needs an AttentionMask")
     k = align_kv_heads(k, num_q_heads=q.shape[2])
@@ -47,7 +52,11 @@ def probe_attention_rows(
     rep = P(None, None, None)
     q_rows = q.at[rows, positions].get(out_sharding=rep).astype(jnp.float32)  # [Q, H, D]
     k_rows = k.at[rows].get(out_sharding=P(None, None, None, None)).astype(jnp.float32)  # [Q, S, H, D]
-    logits = jnp.einsum("qhd,qkhd->qhk", q_rows, k_rows) / math.sqrt(q.shape[-1])
+    half = q.shape[-1] // 2
+    scale = 1.0 / math.sqrt(q.shape[-1])
+    prev = jnp.einsum("qhd,qkhd->qhk", q_rows[..., :half], k_rows[..., :half]) * scale
+    cur = jnp.einsum("qhd,qkhd->qhk", q_rows[..., half:], k_rows[..., half:]) * scale
+    bias = jnp.zeros_like(prev)
     keys = jnp.arange(seq)
     valid = keys[None, :] <= positions[:, None]
     if rel_bias is not None:
@@ -55,12 +64,14 @@ def probe_attention_rows(
         column = keys[None, :] - (positions[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent_of_band(rel_bias)
         in_band = (column >= 0) & (column < band.shape[-1])
         gathered = jnp.take_along_axis(band, jnp.clip(column, 0, band.shape[-1] - 1)[:, None, :], axis=-1)
-        logits = logits + jnp.where(in_band[:, None, :], gathered, 0.0)
+        bias = jnp.where(in_band[:, None, :], gathered, 0.0)
+    logits = prev + cur + bias
     if mask.segment_ids is not None:
         segments = mask.segment_ids[1].at[rows].get(out_sharding=P(None, None))  # [Q, S]
         own = jnp.take_along_axis(segments, positions[:, None], axis=1)
         valid &= segments == own
-    return jax.lax.stop_gradient(jax.nn.softmax(jnp.where(valid[:, None, :], logits, -jnp.inf), axis=-1))
+    attn = jax.nn.softmax(jnp.where(valid[:, None, :], logits, -jnp.inf), axis=-1)
+    return jax.lax.stop_gradient(jnp.stack([attn, prev, cur, bias], axis=2))
 
 
 def relpos_rows(rel_bias: Float[Array, "B H S W"], rows: Int[Array, " Q"], positions: Int[Array, " Q"]) -> jax.Array:
