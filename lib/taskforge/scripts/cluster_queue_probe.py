@@ -69,6 +69,7 @@ from taskforge.ledger.finelog import LEDGER_NAMESPACE, CompositeLedger, FlushRes
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind, Ledger
 from taskforge.llm.client import AttemptOutcome, FinishReason, GlmClient, GlmEndpoint, Pool, Usage
+from taskforge.llm.endpoint import API_ROOT
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.loop.program import LEDGER_DIR
 from taskforge.proposal.model import TaskProposal, parse
@@ -148,7 +149,6 @@ class Probe:
     pool: Pool
     items: int
     image: str
-    results: Path
     report: dict[str, Any] = field(default_factory=dict)
 
 
@@ -237,7 +237,7 @@ def request_attempts(evidence_root: Path) -> dict[str, Any]:
 
 async def check_glm(probe: Probe, endpoint: GlmEndpoint) -> dict[str, Any]:
     async with httpx.AsyncClient() as http:
-        response = await http.get(f"{endpoint.base_url.removesuffix('/v1')}/health", timeout=HEALTH_TIMEOUT)
+        response = await http.get(f"{endpoint.base_url.removesuffix(API_ROOT)}/health", timeout=HEALTH_TIMEOUT)
     body = response.json()
     workers = body.get("workers") or {}
     report = {"base_url": endpoint.base_url, "status": response.status_code, "workers": workers}
@@ -455,7 +455,6 @@ def main() -> None:
         pool=args.pool,
         items=args.items,
         image=args.image,
-        results=results,
     )
     started = time.monotonic()
     probe.report["ok"] = False

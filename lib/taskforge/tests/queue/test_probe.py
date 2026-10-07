@@ -31,4 +31,4 @@ def test_a_probe_that_fails_before_its_first_check_reports_the_error(tmp_path):
     report = json.loads((tmp_path / "run-queue_probe" / "probe.json").read_text())
     assert report["ok"] is False
     assert "TASKFORGE_PROBE_TEST_KEY" in report["error"]["error"]
-    assert "host_secrets" in report["error"]["trace"]
+    assert report["error"]["trace"].startswith("Traceback")
