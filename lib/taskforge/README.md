@@ -2,8 +2,7 @@
 
 Taskforge turns task ideas into validated TaskCompendium `TaskSpec`s. A proposal source writes
 task proposals, triage scores them, a builder program turns an accepted proposal into a `TaskSpec`
-with fixed controls, and validation runs trials and control replays on RolloutEngine. It
-reimplements the `experiments/post_training/capability_env_gen` pipeline as a library.
+with fixed controls, and validation runs trials and control replays on RolloutEngine.
 
 Taskforge is a standalone uv project with its own `uv.lock` and `.venv`. It depends on
 `taskcompendium`, `rolloutengine`, `shellbox`, `verifyit`, `rigging`, `finelog` and `iris` through
