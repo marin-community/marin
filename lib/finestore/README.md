@@ -68,13 +68,13 @@ older value outrank a concurrent write.
 table and returns `finestore://blobs/<name>`. Named objects participate in the same
 transaction and commit token as ordinary table rows.
 
-Objects up to 8 MiB remain inline in the `blobs` row. Larger objects use an inline
-descriptor plus 8 MiB rows in the internal `_finestore_blob_parts` table. The
+Objects up to 10 KiB remain inline in the `blobs` row. Larger objects use a
+descriptor and up to 8 MiB rows in the internal `_finestore_blob_parts` table. The
 descriptor and parts become visible in one manifest commit, and `ReadView.open_blob`
 streams either encoding through one file interface. The first chunked-object commit adds the
 `chunked-blobs-v1` required manifest feature, so an older reader fails closed instead
 of returning a descriptor as an empty payload. Existing inline objects and archives
-need no migration.
+need no migration. Existing larger inline values remain readable.
 
 `write_object` still accepts a complete `bytes` value. `read_blob` remains the
 convenience API that returns a complete `bytes` value, while `open_blob` returns a
@@ -87,18 +87,19 @@ destination file to avoid another complete copy. A transaction's `max_bytes` lim
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
 
-Named-object lookups scan descriptors in 64-row batches with one batch and one
-fragment of readahead, without threaded decoding or Parquet pre-buffering. This
+Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
+their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
+with one batch and one fragment of readahead, without threaded decoding or Parquet pre-buffering. This
 bounds decoding of unrequested inline values after compaction. Descriptor and part
 files also disable fsspec read-ahead so a small column read does not fetch adjacent
 blob payloads. Ordinary table reads keep their filesystem caching behavior. Returned values
 still occupy memory, and dispersed keys can require reading most row groups;
-bounded decoding does not remove row-group read amplification. An optional
-`BlobKeyIndex` skips descriptor shards that contain none of the requested names.
+bounded decoding does not remove row-group read amplification. `read_blobs` reads
+all requested descriptors together and gathers chunked parts in one parts scan.
 
 Pass a `finestore.reader.BlobReadDiagnostics` instance as `diagnostics=` to
-`ReadView.read_blobs` or `PersistentKvCache.load_many` to accumulate index,
-descriptor-scan and payload-assembly seconds, indexed/scan/fallback counts,
+`ReadView.read_blobs` or `PersistentKvCache.load_many` to accumulate
+descriptor-scan and payload-assembly seconds, descriptor scan counts,
 selected descriptor-shard counts and returned value bytes. Returned bytes measure
 decoded output, not physical storage traffic. Memory hits do not add storage-read
 diagnostics.

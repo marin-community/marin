@@ -45,6 +45,7 @@ DEFAULT_FLUSH_INTERVAL = 5.0
 DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
 DEFAULT_COMPACTION_LEVELS = (16, 4, 4)
 OBJECT_PART_BYTES = 8 * 1024 * 1024
+INLINE_BLOB_BYTES = 10 * 1024
 _MAINTENANCE_BACKOFF_INITIAL = 1.0
 _MAINTENANCE_BACKOFF_MAXIMUM = 10 * 60.0
 
@@ -265,7 +266,7 @@ class DataStore:
             BlobColumns.SIZE: len(data),
             BlobColumns.METADATA: json.dumps(dict(metadata or {})),
         }
-        if len(data) <= OBJECT_PART_BYTES:
+        if len(data) <= INLINE_BLOB_BYTES:
             descriptor[BlobColumns.DATA] = data
             return descriptor, []
         parts = [

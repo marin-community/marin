@@ -5,18 +5,14 @@
 
 from __future__ import annotations
 
-import hashlib
 import heapq
 import io
 import itertools
-import logging
-import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator, Mapping, Sequence
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
-from pathlib import Path
 from typing import BinaryIO, ClassVar, Protocol
 
 import pyarrow as pa
@@ -41,26 +37,15 @@ from finestore.layout import (
 )
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
-_KEY_INDEX_BYTES = 128 * 1024 * 1024
-_KEY_INDEX_BATCH_ROWS = 4096
-logger = logging.getLogger(__name__)
 
 
 @dataclass
 class BlobReadDiagnostics:
     """Work performed by blob reads; returned bytes exclude storage read amplification."""
 
-    index_seconds: float = 0.0
     descriptor_seconds: float = 0.0
     payload_seconds: float = 0.0
-    indexed_reads: int = 0
     scan_reads: int = 0
-    index_fallbacks: int = 0
-    index_warm_reads: int = 0
-    # Valid name scans performed, including work rolled back after a later failure.
-    index_refreshed_shards: int = 0
-    index_lock_seconds: float = 0.0
-    index_refresh_seconds: float = 0.0
     selected_shards: int = 0
     bytes_returned: int = 0
 
@@ -77,11 +62,12 @@ class _ScanProfile:
     batch_rows: int
     batch_readahead: int
     fragment_readahead: int
+    pre_buffer: bool = True
 
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
-_BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1)
-_BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1)
+_BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 
 
 @dataclass(frozen=True)
@@ -258,36 +244,40 @@ def iter_shard_rows(
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
-) -> Iterator[VersionedRow]:
+) -> Generator[VersionedRow, None, None]:
     """Yield rows from one shard in primary-key order with version coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    if shard.primary_key_sorted:
-        batches = dataset.scanner(
-            columns=columns,
-            filter=_build_filter(where),
-            use_threads=False,
-            batch_size=scan_profile.batch_rows,
-            batch_readahead=scan_profile.batch_readahead,
-            fragment_readahead=scan_profile.fragment_readahead,
-        ).to_batches()
-    else:
-        source = dataset.to_table(columns=columns, filter=_build_filter(where))
-        sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-        batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
-    for batch in batches:
-        for row in batch.to_pylist():
-            commit_sequence = row.get(SystemColumns.COMMIT)
-            if commit_sequence is None:
-                commit_sequence = shard.commit_sequence
-            row[SystemColumns.COMMIT] = commit_sequence
-            key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
-            yield VersionedRow(
-                key=key,
-                commit_sequence=commit_sequence,
-                sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                generation=shard.generation,
-                row=row,
+    with ExitStack() as stack:
+        if shard.primary_key_sorted:
+            batches = stack.enter_context(
+                dataset.scanner(
+                    columns=columns,
+                    filter=_build_filter(where),
+                    use_threads=False,
+                    batch_size=scan_profile.batch_rows,
+                    batch_readahead=scan_profile.batch_readahead,
+                    fragment_readahead=scan_profile.fragment_readahead,
+                    fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+                ).to_reader()
             )
+        else:
+            source = dataset.to_table(columns=columns, filter=_build_filter(where))
+            sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
+            batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
+        for batch in batches:
+            for row in batch.to_pylist():
+                commit_sequence = row.get(SystemColumns.COMMIT)
+                if commit_sequence is None:
+                    commit_sequence = shard.commit_sequence
+                row[SystemColumns.COMMIT] = commit_sequence
+                key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+                yield VersionedRow(
+                    key=key,
+                    commit_sequence=commit_sequence,
+                    sequence=row.get(SystemColumns.SEQUENCE) or 0,
+                    generation=shard.generation,
+                    row=row,
+                )
 
 
 def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
@@ -444,29 +434,34 @@ class _ReadOperations:
         columns: Sequence[str] | None,
         where: list[tuple[str, str, object]] | None,
         scan_profile: _ScanProfile,
-    ) -> Iterator[dict]:
+    ) -> Generator[dict, None, None]:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return
-        streams = [
-            iter_shard_rows(
-                shard,
-                plan.schema,
-                plan.primary_key,
-                plan.filesystem,
-                plan.columns,
-                plan.pushdown_where,
-                scan_profile,
-            )
-            for shard in plan.shards
-        ]
-        for merged in merge_deduplicated_rows(streams):
-            row = merged.row
-            if not _matches_filter(row, plan.post_dedup_where):
-                continue
-            if columns is not None:
-                row = {name: row[name] for name in columns if name in row}
-            yield row
+        with ExitStack() as stack:
+            streams = [
+                stack.enter_context(
+                    closing(
+                        iter_shard_rows(
+                            shard,
+                            plan.schema,
+                            plan.primary_key,
+                            plan.filesystem,
+                            plan.columns,
+                            plan.pushdown_where,
+                            scan_profile,
+                        )
+                    )
+                )
+                for shard in plan.shards
+            ]
+            for merged in merge_deduplicated_rows(streams):
+                row = merged.row
+                if not _matches_filter(row, plan.post_dedup_where):
+                    continue
+                if columns is not None:
+                    row = {name: row[name] for name in columns if name in row}
+                yield row
 
     def point(self, table: str, **keys) -> dict | None:
         result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
@@ -500,12 +495,61 @@ class _ReadOperations:
         if rows is None:
             return {}
         started = time.monotonic()
-        values = {}
+        values: dict[str, bytes] = {}
+        chunked: dict[str, BlobDescriptor] = {}
         try:
             for row in rows.to_pylist():
                 descriptor = BlobDescriptor.from_row(row)
-                with io.BufferedReader(_BlobReader(self.blob_parts(descriptor))) as stream:
-                    values[descriptor.name] = stream.read()
+                if descriptor.part_count is None:
+                    data = descriptor.data
+                    if data is None:
+                        raise BlobCorruptionError(f"blob {descriptor.name!r} has neither inline data nor parts")
+                    if descriptor.size is not None and len(data) != descriptor.size:
+                        raise BlobCorruptionError(
+                            f"blob {descriptor.name!r} declares {descriptor.size} bytes but stores {len(data)}"
+                        )
+                    values[descriptor.name] = data
+                else:
+                    if descriptor.part_count <= 0:
+                        raise BlobCorruptionError(
+                            f"blob {descriptor.name!r} has invalid part count {descriptor.part_count!r}"
+                        )
+                    chunked[descriptor.name] = descriptor
+            if chunked:
+                parts: dict[str, list[bytes]] = {name: [] for name in chunked}
+                with closing(
+                    self._iter_rows(
+                        BlobTables.PARTS,
+                        columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
+                        where=[(BlobColumns.NAME, "in", list(chunked))],
+                        scan_profile=_BLOB_SCAN_PROFILE,
+                    )
+                ) as part_rows:
+                    for row in part_rows:
+                        name = row[BlobColumns.NAME]
+                        descriptor = chunked[name]
+                        assert descriptor.part_count is not None
+                        part = row[BlobColumns.PART]
+                        if part is not None and part >= descriptor.part_count:
+                            continue
+                        expected_part = len(parts[name])
+                        if part != expected_part:
+                            raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
+                        data = row[BlobColumns.DATA]
+                        if data is None:
+                            raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
+                        parts[name].append(bytes(data))
+                for name, descriptor in chunked.items():
+                    if len(parts[name]) != descriptor.part_count:
+                        raise BlobCorruptionError(
+                            f"blob {name!r} has {len(parts[name])} of {descriptor.part_count} parts"
+                        )
+                    value = b"".join(parts[name])
+                    if descriptor.size is not None and len(value) != descriptor.size:
+                        raise BlobCorruptionError(
+                            f"blob {name!r} declares {descriptor.size} bytes but stores {len(value)}"
+                        )
+                    values[name] = value
         finally:
             if diagnostics is not None:
                 diagnostics.payload_seconds += time.monotonic() - started
@@ -557,24 +601,27 @@ class _ReadOperations:
             raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
         expected_part = 0
         total_bytes = 0
-        for row in self._iter_rows(
-            BlobTables.PARTS,
-            columns=[BlobColumns.PART, BlobColumns.DATA],
-            where=[(BlobColumns.NAME, "==", name)],
-            scan_profile=_BLOB_SCAN_PROFILE,
-        ):
-            part = row.get(BlobColumns.PART)
-            if part is not None and part >= part_count:
-                break
-            if part != expected_part:
-                raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
-            data = row.get(BlobColumns.DATA)
-            if data is None:
-                raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
-            value = bytes(data)
-            total_bytes += len(value)
-            expected_part += 1
-            yield value
+        with closing(
+            self._iter_rows(
+                BlobTables.PARTS,
+                columns=[BlobColumns.PART, BlobColumns.DATA],
+                where=[(BlobColumns.NAME, "==", name)],
+                scan_profile=_BLOB_SCAN_PROFILE,
+            )
+        ) as part_rows:
+            for row in part_rows:
+                part = row.get(BlobColumns.PART)
+                if part is not None and part >= part_count:
+                    break
+                if part != expected_part:
+                    raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
+                data = row.get(BlobColumns.DATA)
+                if data is None:
+                    raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
+                value = bytes(data)
+                total_bytes += len(value)
+                expected_part += 1
+                yield value
         if expected_part != part_count:
             raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
         if descriptor.size is not None and total_bytes != descriptor.size:
@@ -590,168 +637,11 @@ class _ReadOperations:
         return self.read_blob(ref.key)
 
 
-def _key_index_read_plan(
-    connection: sqlite3.Connection,
-    shards: Sequence[Shard],
-    identities: Sequence[str],
-    indexed: Mapping[str, tuple[int, bytes]],
-    names: Sequence[str],
-    filesystem: PyFileSystem,
-) -> _ReadPlan | None:
-    matching_ids = set()
-    for start in range(0, len(names), _KEY_INDEX_BATCH_ROWS):
-        batch_names = names[start : start + _KEY_INDEX_BATCH_ROWS]
-        placeholders = ",".join("?" for _ in batch_names)
-        matching_ids.update(
-            row[0]
-            for row in connection.execute(
-                f"SELECT DISTINCT shard_id FROM names WHERE name IN ({placeholders})", batch_names
-            )
-        )
-    selected = []
-    schemas = []
-    # The local index may also contain another pinned view's identities.
-    # Only this manifest's shards participate in version selection.
-    for shard, identity in zip(shards, identities, strict=True):
-        shard_id, schema_bytes = indexed[identity]
-        if shard_id in matching_ids:
-            selected.append(shard)
-            schemas.append(pa.ipc.read_schema(pa.BufferReader(schema_bytes)))
-    if not selected:
-        return None
-    return _ReadPlan(
-        shards=tuple(selected),
-        primary_key=(BlobColumns.NAME,),
-        pushdown_where=[(BlobColumns.NAME, "in", list(names))],
-        post_dedup_where=[],
-        filesystem=filesystem,
-        schema=pa.unify_schemas(schemas, promote_options="permissive"),
-        columns=None,
-    )
-
-
-class BlobKeyIndex:
-    """Index descriptor names and schemas without caching payloads or row versions.
-
-    Reads select matching shards from the current manifest. Each archive's index
-    uses at most 128 MiB; refresh journals may consume another 128 MiB.
-    """
-
-    def __init__(self, directory: Path) -> None:
-        self.directory = directory
-
-    def read_plan(
-        self, view: ReadView, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
-    ) -> _ReadPlan | None:
-        """Select descriptor shards for names in this view, refreshing new identities."""
-        shards = view.list_shards(BlobTables.DESCRIPTORS)
-        primary_key = view.primary_key(BlobTables.DESCRIPTORS) if shards else (BlobColumns.NAME,)
-        if primary_key != (BlobColumns.NAME,):
-            raise ValueError(f"unexpected descriptor primary key: {primary_key}")
-        self.directory.mkdir(parents=True, exist_ok=True)
-        root_digest = hashlib.sha256(view.root.encode()).hexdigest()
-        database = self.directory / f"blob-keys-v1-{root_digest}.sqlite"
-        fs, _ = factory.url_to_fs(view.root)
-        filesystem = PyFileSystem(_BlobReadHandler(fs))
-        identities = [
-            hashlib.sha256(
-                f"{shard.path}\0{shard.content_sha256}\0{shard.rows}\0{shard.size_bytes}".encode()
-            ).hexdigest()
-            for shard in shards
-        ]
-        with closing(sqlite3.connect(database, timeout=10, isolation_level=None)) as connection, connection:
-            connection.execute("PRAGMA cache_size = -8192")
-            # A read transaction keeps membership and name selection consistent
-            # while another subprocess refreshes the shared local index.
-            connection.execute("BEGIN")
-            tables = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('shards', 'names')"
-                )
-            }
-            if tables == {"shards", "names"}:
-                indexed = {
-                    identity: (shard_id, schema)
-                    for shard_id, identity, schema in connection.execute("SELECT id, identity, schema FROM shards")
-                }
-                if all(identity in indexed for identity in identities):
-                    plan = _key_index_read_plan(connection, shards, identities, indexed, names, filesystem)
-                    if diagnostics is not None:
-                        diagnostics.index_warm_reads += 1
-                    return plan
-            connection.commit()
-            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
-            connection.execute(f"PRAGMA max_page_count = {_KEY_INDEX_BYTES // page_size}")
-            connection.execute("PRAGMA foreign_keys = ON")
-            started = time.monotonic()
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-            finally:
-                if diagnostics is not None:
-                    diagnostics.index_lock_seconds += time.monotonic() - started
-            refresh_started = time.monotonic()
-            try:
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS shards "
-                    "(id INTEGER PRIMARY KEY, identity TEXT UNIQUE, schema BLOB NOT NULL)"
-                )
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS names "
-                    "(name TEXT, shard_id INTEGER REFERENCES shards(id) ON DELETE CASCADE, "
-                    "PRIMARY KEY (name, shard_id)) WITHOUT ROWID"
-                )
-                connection.execute("CREATE INDEX IF NOT EXISTS names_by_shard ON names(shard_id)")
-                connection.execute("CREATE TEMP TABLE active (identity TEXT PRIMARY KEY)")
-                connection.executemany("INSERT INTO active VALUES (?)", ((identity,) for identity in identities))
-                connection.execute("DELETE FROM shards WHERE identity NOT IN (SELECT identity FROM active)")
-                indexed = {
-                    identity: (shard_id, schema)
-                    for shard_id, identity, schema in connection.execute("SELECT id, identity, schema FROM shards")
-                }
-                for shard, identity in zip(shards, identities, strict=True):
-                    if identity in indexed:
-                        continue
-                    # Avoid fsspec's payload readahead while indexing only the name column.
-                    with (
-                        filesystem.open_input_file(shard.path) as source,
-                        pq.ParquetFile(source, pre_buffer=False) as parquet,
-                    ):
-                        schema = parquet.schema_arrow.serialize().to_pybytes()
-                        cursor = connection.execute(
-                            "INSERT INTO shards(identity, schema) VALUES (?, ?)", (identity, schema)
-                        )
-                        shard_id = cursor.lastrowid
-                        row_count = 0
-                        for batch in parquet.iter_batches(
-                            columns=[BlobColumns.NAME], batch_size=_KEY_INDEX_BATCH_ROWS, use_threads=False
-                        ):
-                            keys = batch.column(0).to_pylist()
-                            if any(not isinstance(key, str) for key in keys):
-                                raise BlobCorruptionError(f"invalid descriptor name in {shard.path}")
-                            row_count += len(keys)
-                            connection.executemany(
-                                "INSERT OR IGNORE INTO names VALUES (?, ?)", ((key, shard_id) for key in keys)
-                            )
-                        if row_count != shard.rows:
-                            raise BlobCorruptionError(f"descriptor row count differs from manifest for {shard.path}")
-                        indexed[identity] = (shard_id, schema)
-                        if diagnostics is not None:
-                            diagnostics.index_refreshed_shards += 1
-            finally:
-                if diagnostics is not None:
-                    diagnostics.index_refresh_seconds += time.monotonic() - refresh_started
-            return _key_index_read_plan(connection, shards, identities, indexed, names, filesystem)
-
-
 class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
-    def __init__(
-        self, root: str, snapshot: ArchiveSnapshot | None = None, *, blob_key_index: BlobKeyIndex | None = None
-    ) -> None:
+    def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
         self.root = root
-        self._blob_key_index = blob_key_index
         self._layout = FineStoreLayout(self.root)
         # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
         # HEAD, and read_snapshot validates the format version HEAD carries. A missing marker
@@ -760,35 +650,6 @@ class ReadView(_ReadOperations):
         validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
-
-    def _blob_descriptors(
-        self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
-    ) -> pa.Table | None:
-        if self._blob_key_index is None:
-            return super()._blob_descriptors(names, diagnostics=diagnostics)
-        started = time.monotonic()
-        try:
-            plan = self._blob_key_index.read_plan(self, names, diagnostics=diagnostics)
-        except Exception as exc:
-            # Local index failure must not hide a valid expensive inference completion.
-            logger.warning("FineStore key index is unavailable, falling back to descriptor scan: %s", exc)
-            if diagnostics is not None:
-                diagnostics.index_seconds += time.monotonic() - started
-                diagnostics.index_fallbacks += 1
-            return super()._blob_descriptors(names, diagnostics=diagnostics)
-        if diagnostics is not None:
-            diagnostics.index_seconds += time.monotonic() - started
-            diagnostics.indexed_reads += 1
-        if plan is None:
-            return None
-        started = time.monotonic()
-        if diagnostics is not None:
-            diagnostics.selected_shards += len(plan.shards)
-        try:
-            return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
-        finally:
-            if diagnostics is not None:
-                diagnostics.descriptor_seconds += time.monotonic() - started
 
     @property
     def token(self) -> CommitToken | None:

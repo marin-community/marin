@@ -30,7 +30,14 @@ from finestore.layout import (
 )
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
-from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
+from finestore.store import (
+    INLINE_BLOB_BYTES,
+    OBJECT_PART_BYTES,
+    DataStore,
+    DataTable,
+    PrimaryKeyConflict,
+    TransactionTooLarge,
+)
 from fsspec.core import OpenFile
 from fsspec.implementations.memory import MemoryFileSystem
 from rigging import timing
@@ -407,6 +414,53 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
 
 
+def test_blob_inline_boundary_and_batch_parts_survive_rewrites(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 4096)
+    inline = b"a" * INLINE_BLOB_BYTES
+    first = b"b" * (INLINE_BLOB_BYTES + 1)
+    second = b"c" * (INLINE_BLOB_BYTES + 2)
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.write_object("inline", inline)
+        store.write_object("first", first)
+        store.write_object("second", second)
+        store.flush()
+        store.write_object("first", b"d" * (INLINE_BLOB_BYTES + 3))
+        store.flush()
+
+    view = ReadView(root)
+    assert view.read_blobs(["missing", "first", "inline", "second", "first"]) == {
+        "first": b"d" * (INLINE_BLOB_BYTES + 3),
+        "inline": inline,
+        "second": second,
+    }
+    descriptors = view.scan(BlobTables.DESCRIPTORS, columns=[BlobColumns.NAME, BlobColumns.PART_COUNT])
+    assert descriptors is not None
+    assert {row["name"]: row["part_count"] for row in descriptors.to_pylist()} == {
+        "first": 3,
+        "inline": None,
+        "second": 3,
+    }
+
+
+def test_blob_descriptor_row_groups_remain_bounded_after_compaction(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        for index in range(513):
+            store.write_object(f"{index:04d}", b"value")
+        store.flush()
+        for index in range(513, 1025):
+            store.write_object(f"{index:04d}", b"value")
+        store.flush()
+
+    compact_table(root, BlobTables.DESCRIPTORS)
+    shard = ReadView(root).list_shards(BlobTables.DESCRIPTORS)[0].path
+    metadata = pq.ParquetFile(shard).metadata
+    assert metadata.num_rows == 1025
+    assert metadata.num_row_groups == 2
+    assert all(metadata.row_group(index).num_rows <= 1024 for index in range(metadata.num_row_groups))
+
+
 def test_open_blob_reads_incrementally_across_parts(tmp_path):
     root = str(tmp_path / "run")
     payload = b"a" * (OBJECT_PART_BYTES - 2) + b"bcdef"
@@ -443,6 +497,8 @@ def test_chunked_blob_stream_detects_missing_parts_at_eof(tmp_path):
     with stream:
         with pytest.raises(BlobCorruptionError):
             stream.read()
+    with pytest.raises(BlobCorruptionError):
+        ReadView(root).read_blobs(["large"])
 
 
 def test_chunked_blob_rewrite_ignores_stale_tail_parts(tmp_path):
