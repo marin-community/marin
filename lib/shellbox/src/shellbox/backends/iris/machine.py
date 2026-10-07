@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 from connectrpc.code import Code
@@ -24,10 +25,12 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSED
+from rigging.secrets import SecretSpec, resolve_secret_spec
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
 from shellbox.image import RegistryImage
 from shellbox.machine import (
+    Backend,
     Command,
     ExitReason,
     MachineSpec,
@@ -228,7 +231,7 @@ class IrisMachine:
             return
         self._closed = True
         try:
-            await asyncio.to_thread(self.job.terminate)
+            await asyncio.to_thread(self.job.cancel)
         finally:
             try:
                 await asyncio.to_thread(self.client.shutdown)
@@ -237,7 +240,13 @@ class IrisMachine:
 
 
 class IrisMachineFactory:
-    """Submit a CPU-only gVisor job from a registry image."""
+    """Submit a CPU-only gVisor job from a registry image.
+
+    Secret references are resolved only at job submission. A factory configured
+    with secrets must be reserved for trusted private grading, never actor jobs.
+    """
+
+    backend: Backend = Backend.GVISOR
 
     def __init__(
         self,
@@ -247,6 +256,7 @@ class IrisMachineFactory:
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
         job_ttl: int = DEFAULT_JOB_TTL,
         disk_mb: int = DEFAULT_DISK_MB,
+        secret_env: Mapping[str, SecretSpec] | None = None,
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
@@ -255,6 +265,7 @@ class IrisMachineFactory:
         self.scheduling_timeout = scheduling_timeout
         self.job_ttl = job_ttl
         self.disk_mb = disk_mb
+        self.secret_env = dict(secret_env or {})
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
         if spec.gpus:
@@ -280,7 +291,10 @@ class IrisMachineFactory:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("sleep", "infinity"),
                 name=f"shellbox-{uuid.uuid4().hex}",
-                environment=EnvironmentSpec(setup_scripts=[]),
+                environment=EnvironmentSpec(
+                    setup_scripts=[],
+                    env_vars={name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
+                ),
                 resources=ResourceSpec(
                     cpu=spec.cpus or 1,
                     memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
@@ -299,24 +313,24 @@ class IrisMachineFactory:
                 tasks = job.tasks()
                 if tasks:
                     status = tasks[0].status()
-                    if status.state == job_pb2.TASK_STATE_RUNNING:
+                    if status.state == TaskState.RUNNING:
                         machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
                         created = machine._exec_sync(["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
                         return machine
                     if status.state not in (
-                        job_pb2.TASK_STATE_PENDING,
-                        job_pb2.TASK_STATE_BUILDING,
-                        job_pb2.TASK_STATE_ASSIGNED,
+                        TaskState.PENDING,
+                        TaskState.BUILDING,
+                        TaskState.ASSIGNED,
                     ):
-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error}")
+                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
                 time.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
         except BaseException:
             try:
                 if job is not None:
-                    job.terminate()
+                    job.cancel()
             finally:
                 try:
                     if client is not None:

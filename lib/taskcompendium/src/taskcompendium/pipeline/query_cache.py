@@ -29,6 +29,7 @@ def cached_batch_output(
     evidence = output_path / "query-cache"
     evidence.mkdir(parents=True, exist_ok=True)
     keys = {}
+    keyed_requests = []
     completed = {}
     misses = {}
     try:
@@ -37,7 +38,11 @@ def cached_batch_output(
             identity = {"format": 1, "model_revision": model_revision, "request": request}
             key = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             keys[task_id] = key
-            saved = cache.load(key)
+            keyed_requests.append((request, identity, key))
+        saved_by_key = cache.load_many([key for _request, _identity, key in keyed_requests])
+        for request, identity, key in keyed_requests:
+            task_id = request["custom_id"]
+            saved = saved_by_key.get(key)
             if saved is None:
                 misses[task_id] = request
                 continue
