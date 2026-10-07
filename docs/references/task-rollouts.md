@@ -165,6 +165,8 @@ The session's verifier deadline controls the full grading phase.
 `FileReward` accepts a number or a JSON object with the configured numeric key.
 A malformed first file is a verifier failure. The engine does not try a lower-priority file.
 The optional `pass_above` threshold supplies a separate pass/fail result.
+Harbor task packages contain instructions, environment configuration, and private test scripts.
+Their reward files use `reward.json` before `reward.txt` and treat a positive reward as a pass.
 The engine removes existing reward files before the private grader executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
 
@@ -172,34 +174,11 @@ A valid reward file can supply a grade after a nonzero exit code. A command time
 An incorrect answer receives a numeric grade. A verifier failure has no reward.
 Score bounds describe the verifier's native range.
 
-### Harbor inheritances and design choices
-
-Harbor task packages contain instructions, environment configuration, and private test scripts.
-The Harbor importer converts a package into a `ShellVerifierSpec` with a `FileReward`.
-Some file-reward behaviors copy the [Harbor verifier](https://github.com/marin-community/harbor/blob/main/src/harbor/verifier/verifier.py), so that imported tasks keep their Harbor rewards.
-Change these behaviors only together with the Harbor importer:
-
-- The private test script is `/tests/test.sh`. It writes its reward to `/logs/verifier`.
-- `reward.json` has priority over `reward.txt`. A malformed `reward.json` does not fall back to `reward.txt`.
-- A reward file can supply a grade after a nonzero exit code.
-- Empty reward files and unparsable reward files are different failures.
-- A positive reward is a pass (`pass_above=0`).
-- Artifacts use the Harbor source and exclusion fields. The importer always collects `/logs/artifacts`.
-
-These behaviors are Marin design choices. Harbor does not supply them:
-
-- The shell verifier contract does not depend on Harbor. `StdoutReward` is the default. The SWE importer uses `ExitCodeReward`.
-- The grader command receives the conversation as JSON on standard input.
-- `FileReward` makes the reward paths, file formats, and JSON key configurable. Harbor keeps the full JSON object. The engine reads one numeric key.
-- `pass_above` is optional and separate from the grade.
-- A missing reward file is a missing-reward failure for each exit code. Harbor reports a nonzero exit code without a reward file as a verifier runtime error.
-- The engine removes existing reward files before the grader executes. Thus a reward file from the agent cannot supply the grade.
-- Shell grading requires a separate verifier machine and a prebuilt, digest-pinned image. Harbor also permits shared verifier environments and image builds.
-- The caller selects backend settings, users, and deadlines during lowering. The package does not select them.
-
 The Harbor importer reads the package environment and private verifier.
+The caller selects backend settings, users, and deadlines during lowering.
 The Harbor importer accepts only separate verifier environments.
 An unset verifier mode without a separate environment selects shared mode and causes rejection.
+Shell grading requires a prebuilt, digest-pinned verifier image and a separate machine.
 The Shellbox session's Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so this Harbor path is unsupported on Iris.
 Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.
