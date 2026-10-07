@@ -19,7 +19,9 @@ src/taskforge/
   spec/       TaskSpec assembly and fixed controls
   sandbox/    MachineFactory selection per host, up-front task refusals, image builds
   proposal/   the TaskProposal document (model.py), the ProposalSource protocol (source.py), sources/
-scripts/      Iris image builder, shellbox Iris probe, ledger summary
+  triage/     structural checks, the GLM rubric, verdicts
+  validate/   trials, the failure classifier, control replay, evidence aggregation
+scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
 ```
 
@@ -27,14 +29,15 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> validate
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
 only each other and external packages. A later stage reaches an earlier one through its seam
 modules, each of which keeps its types beside the code that checks their invariants:
-`proposal.model` (`TaskProposal`) and `proposal.source` (`ProposalBatch`, `SlotFailure`,
-`ProposalSource`).
+`proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
+`ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `validate.outcome` and
+`validate.evidence`.
 
 ## Seams
 
@@ -85,6 +88,12 @@ modules, each of which keeps its types beside the code that checks their invaria
 - `proposal.model.TaskProposal`: YAML front matter (`ProposalHeader`) plus a markdown body with
   required section headings. `parse` and `render` round-trip it; `digest` is the sha256 of the
   canonical form.
+- `triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict`: structural checks run
+  first, and a fatal failure or a null proposal rejects without a model call. The rubric scores
+  independent samples, and the decision is ACCEPT or REJECT by strict majority, otherwise REPAIR.
+- `validate.trials.run_trials(task, execution, plan, settings, model)`: runs k trials through
+  `ShellboxRolloutEngine`. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+  `validate.classify.classify` is the only failure classifier.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -205,8 +214,8 @@ uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check           # from lib/taskforge;
 
 The cluster scripts run on Iris and document their submit commands in their docstrings:
 `scripts/build_image_job.py` builds a `DockerBuild` context and pushes it to a registry digest
-through `scripts/push_image_task.py`, and `scripts/iris_machine_probe.py` probes the shellbox
-Iris backend.
+through `scripts/push_image_task.py`, `scripts/iris_machine_probe.py` probes the shellbox Iris
+backend, and `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task.
 
 ## Evidence
 
