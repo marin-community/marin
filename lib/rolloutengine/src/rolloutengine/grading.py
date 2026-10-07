@@ -18,6 +18,7 @@ from uuid import uuid4
 from harbor_config.env import resolve_env_vars
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
+from taskcompendium.grading import parse_grade_result
 from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission, resolve_verifier
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, TaskResource
@@ -171,33 +172,7 @@ async def _verifyit_grade(
     with TemporaryDirectory(prefix="rollout-verdict-") as directory:
         path = Path(directory) / "verdict.json"
         await machine.download(VERDICT_PATH, path)
-        try:
-            verdict = json.loads(path.read_bytes())
-        except (ValueError, UnicodeError):
-            return GradeResult(
-                Outcome.INFRA_ERROR, None, "Invalid verifier verdict", failure=GradingFailure.INVALID_REWARD
-            )
-    if not isinstance(verdict, dict):
-        return GradeResult(Outcome.INFRA_ERROR, None, "Invalid verifier verdict", failure=GradingFailure.INVALID_REWARD)
-    statuses = {"scored": Outcome.GRADED, "invalid_task": Outcome.INVALID_TASK, "infra_error": Outcome.INFRA_ERROR}
-    status = statuses.get(verdict["status"]) if isinstance(verdict.get("status"), str) else None
-    reward = verdict.get("reward")
-    detail = verdict.get("detail")
-    if (
-        status is None
-        or not isinstance(detail, dict)
-        or isinstance(reward, bool)
-        or not isinstance(reward, (int, float))
-        or not math.isfinite(reward)
-        or not 0 <= reward <= 1
-    ):
-        return GradeResult(Outcome.INFRA_ERROR, None, "Invalid verifier reward", failure=GradingFailure.INVALID_REWARD)
-    return GradeResult(
-        status,
-        float(reward) if status == Outcome.GRADED else None,
-        detail.get("error"),
-        detail=detail,
-    )
+        return parse_grade_result(path.read_bytes())
 
 
 async def _remove_archive(machine: Machine, path: str, timeout: float | None) -> None:

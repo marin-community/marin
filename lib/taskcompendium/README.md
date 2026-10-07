@@ -58,6 +58,8 @@ A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` 
 
 A numeric task uses `answer_type=number` and can use the same submission conventions as text. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` verifier reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
 
+TaskCompendium normalizes VerifyIT verdicts through the same grading contract for candidate, local-file, and isolated-file execution. Malformed numeric text remains `submission_failure` with reward `0.0`, independent of the verifier runtime.
+
 ### Final function calls
 
 A task whose result is a function call uses `answer_type=native_action`. Its `final_tools` field declares the available functions. `FinalAction` defines whether a call is required and the maximum call count. The final-action submission convention captures the assistant's calls, and `predicted_action` compares their function names and decoded argument objects with the private expected calls. The scoring boundary compares the submitted calls without dispatching them.

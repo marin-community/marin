@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from rigging.filesystem.path_validation import validate_relative_file_path
 from shellbox.backends.docker.machine import DockerMachineFactory
 from verifyit.candidate import supports_candidate_mode
-from verifyit.grade import InvalidTask, Reward, Status
+from verifyit.grade import InvalidTask
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import (
     DEFAULT_OUTPUT,
@@ -27,7 +27,7 @@ from verifyit.spec import (
     StdioSpec,
 )
 
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_answer, grade_result
 from taskcompendium.grading_contract import (
     GradingAttempt,
     StateSubmission,
@@ -107,13 +107,6 @@ def grade_task(
     return _grade_files(specification, verifier, candidate, evidence)
 
 
-def _grade_result(verdict: Reward) -> GradeResult:
-    if verdict.status == Status.SCORED:
-        return GradeResult(Outcome.GRADED, verdict.reward, detail=verdict.detail)
-    status = Outcome.INVALID_TASK if verdict.status == Status.INVALID_TASK else Outcome.INFRA_ERROR
-    return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
-
-
 def _answer_output(verifier: Spec) -> Path:
     if isinstance(verifier, ScriptSpec):
         return Path(DEFAULT_OUTPUT)
@@ -186,7 +179,7 @@ def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence
         except ValueError as error:
             return GradeResult(Outcome.INVALID_TASK, None, str(error))
         try:
-            return _grade_result(verifyit_grade(verifier, tests, workspace))
+            return grade_result(verifyit_grade(verifier, tests, workspace))
         except InvalidTask as error:
             return GradeResult(Outcome.INVALID_TASK, None, str(error))
         except Exception as error:

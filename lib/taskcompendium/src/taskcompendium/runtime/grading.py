@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from shellbox.machine import Command, DockerImage, MachineFactory, MachineSpec, NetworkPolicy
 from verifyit.spec import GotestSpec, JunitSpec, PytestSpec, ScriptSpec, StdioSpec, render_spec, spec_from_table
 
+from taskcompendium.grading import parse_grade_result
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
@@ -131,17 +132,6 @@ async def _sandbox_grade(
                 return GradeResult(Outcome.INFRA_ERROR, None, result.stderr.decode(errors="replace"))
             verdict_file = root / "verdict.json"
             await machine.download(VERDICT_PATH, verdict_file)
-            verdict = json.loads(verdict_file.read_text())
-            status = {
-                "scored": Outcome.GRADED,
-                "invalid_task": Outcome.INVALID_TASK,
-                "infra_error": Outcome.INFRA_ERROR,
-            }[verdict["status"]]
-            return GradeResult(
-                status,
-                verdict["reward"] if status == Outcome.GRADED else None,
-                verdict["detail"].get("error"),
-                verdict["detail"],
-            )
+            return parse_grade_result(verdict_file.read_bytes())
     finally:
         await machine.close()

@@ -7,6 +7,8 @@ import asyncio
 import json
 import tarfile
 from dataclasses import dataclass, field, replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -35,7 +37,7 @@ from taskcompendium.shell_verifier import (
     VerifierArtifact,
 )
 from taskcompendium.submission import AnswerCall, FinalAction, PlainText
-from verifyit.candidate import grade_text_candidate
+from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import NumericSpec, StdioSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.cleanup import finish_cleanup
@@ -1068,9 +1070,11 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
     [
         (AnswerType.FILE, "12", "scored", Outcome.GRADED, 1.0),
         (AnswerType.FILE, "13", "scored", Outcome.GRADED, 0.0),
+        (AnswerType.FILE, "garbage", "scored", Outcome.SUBMISSION_FAILURE, 0.0),
         (AnswerType.FILE, "12", "unknown", Outcome.INFRA_ERROR, None),
         (AnswerType.NUMBER, "12", "scored", Outcome.GRADED, 1.0),
         (AnswerType.NUMBER, "13", "scored", Outcome.GRADED, 0.0),
+        (AnswerType.NUMBER, "garbage", "scored", Outcome.SUBMISSION_FAILURE, 0.0),
         (AnswerType.NUMBER, "12", "unknown", Outcome.INFRA_ERROR, None),
         (AnswerType.NUMBER, " ", "scored", Outcome.SUBMISSION_FAILURE, 0.0),
     ],
@@ -1100,7 +1104,10 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
             assert visibility.exit_code == 0
             spec = await self.machine.run(Command(("cat", "/tests/verifier.toml")))
             candidate = await self.machine.run(Command(("cat", "/app/answer.txt")))
-            reward = grade_text_candidate(parse_spec(spec.stdout.decode()), candidate.stdout.decode())
+            with TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                (workspace / "answer.txt").write_bytes(candidate.stdout)
+                reward = verifyit_grade(parse_spec(spec.stdout.decode()), workspace, workspace)
             self.verdict = {"status": status, "reward": reward.reward, "detail": reward.detail}
             return Result(0, b"", b"", False, False, ExitReason.EXITED)
 
@@ -1153,6 +1160,15 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert (record.grade.status, record.grade.reward) == (expected_status, expected_reward)
+    if answer_type == AnswerType.NUMBER and status == "scored":
+        candidate_record = await engine(ReplayModel([{"role": "assistant", "content": answer}])).run(
+            lowered(arithmetic_task())
+        )
+        assert (record.grade.status, record.grade.reward, record.grade.error) == (
+            candidate_record.grade.status,
+            candidate_record.grade.reward,
+            candidate_record.grade.error,
+        )
     if expected_status == Outcome.INFRA_ERROR:
         assert record.grade.failure == GradingFailure.INVALID_REWARD
     if answer_type == AnswerType.FILE:
