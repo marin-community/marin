@@ -284,7 +284,8 @@ def openai_chat_messages(
 
     Interpret source role aliases, reasoning tags, and function calls here.
     Source reasoning XML is interpreted only in assistant content; other roles
-    retain it as literal text, while target chat control tokens remain rejected.
+    retain it as literal text. PRESERVE_LITERAL also retains chat control tokens
+    quoted in tool observations; their training masks follow the source role.
     Source IDs link observations before being discarded; parallel observations
     are emitted in call order, including repeated calls to the same function.
     An explicit template prefill restores a reasoning opener absent from the
@@ -325,12 +326,10 @@ def openai_chat_messages(
             case Role.TOOL:
                 if content is None:
                     raise ValueError("Tool observations must contain text")
-                _check_source_markup(content)
-                if (
-                    tool_observation_markup_policy is ToolObservationMarkupPolicy.REJECT_PROTOCOL_WRAPPERS
-                    and TOOL_WRAPPER.search(content)
-                ):
-                    raise ValueError("Tool observations must not contain chat protocol wrappers")
+                if tool_observation_markup_policy is ToolObservationMarkupPolicy.REJECT_PROTOCOL_WRAPPERS:
+                    _check_source_markup(content)
+                    if TOOL_WRAPPER.search(content):
+                        raise ValueError("Tool observations must not contain chat protocol wrappers")
                 call_id = message.get("tool_call_id")
                 unanswered = pending.keys() - observations.keys()
                 if call_id is None and len(unanswered) == 1:

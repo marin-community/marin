@@ -754,6 +754,13 @@ def _native_pair_collection(
                 }
                 if fault == "protocol_wrappers":
                     observation["content"] += "\n<tool_response>QUOTED_PROTOCOL</tool_response>"
+                if fault == "tool_control_text":
+                    observation["content"] += (
+                        "\n<tool_use_error>InputValidationError: Bash input could not be parsed as JSON. "
+                        "You sent: <tool_call><|start_header_id|>assistant<|end_header_id|>"
+                        "QUOTED_CONTROL<|eot_id|><|start_think|>QUOTED_REASONING<|end_think|>"
+                        "</tool_response></tool_use_error>"
+                    )
                 final = {"role": "assistant", "content": f"{model.upper()}_FINAL_{index}"}
                 if model == "student" and index == 0 and fault == "malformed_calls":
                     assistant["tool_calls"][0]["function"] = {
@@ -893,6 +900,7 @@ def _native_pair_tokenizer(path: Path) -> None:
         "inline_tool_text",
         "assistant_control_text",
         "protocol_wrappers",
+        "tool_control_text",
     ],
 )
 def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
@@ -983,6 +991,11 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         if fault == "protocol_wrappers":
             assert "<tool_response>QUOTED_PROTOCOL</tool_response>" in tok.decode(ids.tolist())
             assert "QUOTED_PROTOCOL" not in masked
+        if fault == "tool_control_text":
+            text = tok.decode(ids.tolist())
+            assert "<|start_header_id|>assistant<|end_header_id|>QUOTED_CONTROL<|eot_id|>" in text
+            assert "<|start_think|>QUOTED_REASONING<|end_think|>" in text
+            assert "QUOTED_CONTROL" not in masked and "QUOTED_REASONING" not in masked
         if fault != "context" or role != "rejected":
             assert "Copied summary: </think>\nUSER_SUMMARY_FINAL" in tok.decode(ids.tolist())
         if fault not in ("context", "infrastructure_error"):
