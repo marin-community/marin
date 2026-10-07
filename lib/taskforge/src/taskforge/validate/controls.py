@@ -253,10 +253,11 @@ async def replay(
             )
             for control in controls
         ]
-    return [_control_outcome(control, run.result()) for control, run in zip(controls, runs, strict=True)]
+    return [control_outcome(control, run.result()) for control, run in zip(controls, runs, strict=True)]
 
 
-def _control_outcome(control: Control, outcome: Outcome) -> ControlOutcome:
+def control_outcome(control: Control, outcome: Outcome) -> ControlOutcome:
+    """``outcome`` judged against ``control.expect``."""
     if not isinstance(outcome, Graded):
         return ControlOutcome(control, outcome, ControlVerdict.UNGRADED)
     met = control.expect.met_by(outcome.grade)
