@@ -377,6 +377,7 @@ class _FakeCompletionContext:
                     prompt_tokens=len(prompt_tokens),
                     completion_tokens=1,
                     finish_reason=FinishReason.LENGTH,
+                    model_version=0,
                     logprobs=[-123.0],
                     echo_token_ids=echo_token_ids,
                     echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
@@ -553,7 +554,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     def _new_model(old_model):
         return jax.tree_util.tree_map(lambda x: x * 0, old_model)
 
-    server.reload(_new_model)
+    server.reload(_new_model, expected_version=server.model_version)
 
     # Make a request after reload - should get all zero tokens in theory
     response2 = client.post(
@@ -581,7 +582,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     def _original_model(old_model):
         return original_model
 
-    server.reload(_original_model)
+    server.reload(_original_model, expected_version=server.model_version)
     response3 = client.post(
         "/v1/completions",
         json={
@@ -931,4 +932,106 @@ def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
             )
     finally:
         release.set()
+        server.inference_context.shutdown()
+
+
+class _WeightedTokenModel(_TokenSensitiveCompletionModel):
+    bias: jax.Array
+
+    def __init__(self):
+        super().__init__()
+        self.bias = jnp.zeros(4)
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        logits, _ = super().decode(input_ids, cache, batch_info, pos_ids)
+        cache = dataclasses.replace(cache, kv_pages=cache.kv_pages + 1)
+        return logits + hax.named(self.bias, self.Vocab), cache
+
+
+def test_weight_publication_stages_before_install_and_preserves_failed_version():
+    config = _exact_token_config()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _WeightedTokenModel(), _AliasingChatTokenizer())
+    request = {
+        "model": "gpt2",
+        "prompt": [0, 1],
+        "max_tokens": 2,
+        "temperature": 0,
+        "return_token_ids": True,
+        "logprobs": 0,
+    }
+
+    def staging_failure(model):
+        raise ValueError("checkpoint staging failed")
+
+    try:
+        with TestClient(server.app) as client:
+            before = client.post("/v1/completions", json=request).json()["choices"][0]
+            assert before["token_ids"] == [3, 1]
+            assert before["model_version"] == 0
+            assert bool(jnp.any(server.inference_context.engine.gen_state.cache.kv_pages.array))
+            with pytest.raises(ValueError, match="checkpoint staging failed"):
+                server.reload(staging_failure, expected_version=0)
+            with pytest.raises(ValueError, match="shape, dtype, and sharding"):
+                server.reload(lambda model: eqx.tree_at(lambda m: m.bias, model, jnp.ones(8)), expected_version=0)
+            assert server.model_version == 0
+            assert not server.inference_context.pause_event.is_set()
+            assert client.post("/v1/completions", json=request).json()["choices"][0] == before
+
+            def replacement(model):
+                return eqx.tree_at(lambda m: m.bias, model, model.bias.at[0].set(8))
+
+            server.pause_generation()
+            assert server.reload(replacement, expected_version=0) == 1
+            assert server.inference_context.pause_event.is_set()
+            assert not bool(jnp.any(server.inference_context.engine.gen_state.cache.kv_pages.array))
+            server.resume_generation()
+            after = client.post("/v1/completions", json=request).json()["choices"][0]
+            assert after["token_ids"] == [0, 0]
+            assert after["model_version"] == 1
+            with pytest.raises(ValueError, match="Expected model version 0, serving 1"):
+                server.reload(staging_failure, expected_version=0)
+            assert client.post("/v1/completions", json=request).json()["choices"][0] == after
+
+            staging, release = threading.Event(), threading.Event()
+
+            def delayed_replacement(model):
+                staging.set()
+                assert release.wait(30)
+                return replacement(model)
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(server.reload, delayed_replacement, expected_version=1)
+                try:
+                    assert staging.wait(5)
+                    assert client.post("/v1/completions", json=request).json()["choices"][0] == after
+                    assert (
+                        server.reload(
+                            lambda model: eqx.tree_at(lambda m: m.bias, model, model.bias * 0), expected_version=1
+                        )
+                        == 2
+                    )
+                finally:
+                    release.set()
+                with pytest.raises(ValueError, match="Expected model version 1, serving 2"):
+                    pending.result(timeout=30)
+            restored = client.post("/v1/completions", json=request).json()["choices"][0]
+            assert restored["token_ids"] == before["token_ids"]
+            assert restored["model_version"] == 2
+            chat_request = {
+                "model": "gpt2",
+                "messages": [{"role": "user", "content": "A"}],
+                "max_completion_tokens": 1,
+                "temperature": 0,
+                "return_token_ids": True,
+            }
+            assert client.post("/v1/chat/completions", json=chat_request).json()["model_version"] == 2
+            streamed = client.post("/v1/chat/completions", json={**chat_request, "stream": True})
+            chunks = [
+                json.loads(line[6:])
+                for line in streamed.text.splitlines()
+                if line.startswith("data: ") and line != "data: [DONE]"
+            ]
+            assert all(chunk["model_version"] == 2 for chunk in chunks)
+    finally:
         server.inference_context.shutdown()
