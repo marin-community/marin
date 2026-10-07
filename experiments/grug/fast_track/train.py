@@ -801,7 +801,11 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     new_bias = -qb_betas
     new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
     # qb_betas are in layer order; each stack takes the rows of its own layers.
-    per_stack = [new_bias[np.asarray(indices)] for indices in model.stack_layer_indices()]
+    # A stack with fewer experts than the widest layer (final_num_experts) takes only its own columns.
+    per_stack = [
+        new_bias[np.asarray(indices)][:, : stack.stacked.mlp.router_bias.shape[-1]]
+        for stack, indices in zip(model.layer_stacks(), model.stack_layer_indices(), strict=True)
+    ]
     return eqx.tree_at(lambda t: [stack.stacked.mlp.router_bias for stack in t.layer_stacks()], model, per_stack)
 
 
@@ -933,7 +937,7 @@ def initial_state(
         master_params=master_params,
         ema_params=params if ema_beta is not None else None,
         opt_state=opt_state,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts + model_config.num_null_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.qb_num_experts)),
         **_empty_head_replay(head_replay_shape, mp),
         newton_muon=_initial_newton_muon(model_config),
     )

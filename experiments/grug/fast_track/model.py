@@ -61,8 +61,11 @@ from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
+from experiments.grug.fast_track.activations import polynorm, polynorm_over_input
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
+from experiments.grug.fast_track.head_loss import prototype_target_logits, reduce_token_loss
+from experiments.grug.fast_track.qb_balancing import qb_beta_hist
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
     reduce_router_stats,
@@ -960,6 +963,11 @@ class GrugModelConfig:
     final_intermediate_dim: int = 0
     final_experts_per_token: int = 0
     """> 0: the final layer's routed top-k (it must be the only layer of the softmax tail stack)."""
+    final_num_experts: int = 0
+    """> 0: the final layer's routed expert count (same top-k and width; it must be the only layer of the softmax tail
+    stack). Per-expert router stats and the QB biases are padded to the widest layer (``stats_num_experts``)."""
+    stats_num_experts: int = 0
+    """Internal: the per-expert stats width (the widest layer's expert count, null experts included); 0: this layer's."""
     final_routing_renorm_sum: float = 0.0
     """> 0: the final layer's ``routing_renorm_sum`` (e.g. scaled by sqrt(k / 8) with ``final_experts_per_token``)."""
     """> 0: the final layer's routed experts use this ``intermediate_dim`` (it must be the only layer of the softmax
@@ -1882,9 +1890,12 @@ class GrugModelConfig:
             or self.lm_head_unigram_bias
         ):
             raise ValueError("lm_head_prototypes needs no MTP, aux LM layer, output bigram prior or lm_head bias")
-        if (self.final_intermediate_dim or self.final_experts_per_token or self.final_routing_renorm_sum) and (
-            not self.attn_res or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
-        ):
+        if (
+            self.final_intermediate_dim
+            or self.final_experts_per_token
+            or self.final_routing_renorm_sum
+            or self.final_num_experts
+        ) and (not self.attn_res or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)):
             raise ValueError(
                 "final_intermediate_dim / final_experts_per_token need attn_res and the final layer alone in the "
                 "softmax tail stack"
@@ -2075,6 +2086,11 @@ class GrugModelConfig:
     def expert_out_dim(self) -> int:
         """Width the routed experts write (``latent_out_dim``)."""
         return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim - self.expert_private_dim
+
+    @property
+    def qb_num_experts(self) -> int:
+        """Width of the per-layer QB betas: the widest layer's expert count, null experts included."""
+        return max(self.num_experts, self.final_num_experts) + self.num_null_experts
 
     @property
     def routed_write_extra(self) -> int:
@@ -3790,75 +3806,6 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
-def _bincount_upper_quantile(
-    s_local: jax.Array,
-    *,
-    num_experts: int,
-    n_bins: int,
-    lo: jax.Array,
-    hi: jax.Array,
-    target_rank: float | jax.Array,
-) -> jax.Array:
-    """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
-
-    ``target_rank`` is the number of tokens at or above each expert's threshold: a scalar, or one per expert.
-
-    Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
-    (``expert*n_bins + bin``, clip-to-edge) builds the local per-expert histogram, one integer ``psum``
-    pools it globally, and beta is read from the top-cumulative counts, interpolated in the crossing bin.
-    """
-    bin_width = (hi - lo) / n_bins
-    expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
-    idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
-    flat = (expert_ids * n_bins + idx).reshape(-1)
-    local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
-    counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
-    cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
-    target_rank = jnp.broadcast_to(jnp.asarray(target_rank, jnp.float32), (num_experts,))
-    bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank[:, None]).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
-    ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
-    h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
-    lower_edge = lo + bstar.astype(jnp.float32) * bin_width
-    return lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
-
-
-def _qb_beta_hist(
-    s_ma: jax.Array,
-    mesh: jax.sharding.AbstractMesh,
-    *,
-    target_share: float | jax.Array,
-    num_experts: int,
-    n_bins: int,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Global (1-K/E)-quantile of the logit margins over the live ``[min, max]`` grid (this step's).
-
-    A ``pmin``/``pmax`` sets the grid to the exact current range of the margins, then
-    ``_bincount_upper_quantile`` reads the per-expert threshold. Replaces the per-device ``top_k`` +
-    ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
-    ``target_share`` is the fraction of tokens each expert should take (``K/E``), or one per expert.
-
-    Returns ``(beta, margin_min, margin_max)``: the per-expert threshold plus the live margin range
-    (the grid ``lo``/``hi``), surfaced for logging.
-    """
-    # Tokens at/above beta per expert.
-    target_rank = jnp.broadcast_to(jnp.asarray(float(s_ma.shape[0]) * target_share, jnp.float32), (num_experts,))
-
-    def _fn(s_local: jax.Array, target_rank: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
-        # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
-        # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
-        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
-        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
-        hi_grid = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
-        beta = _bincount_upper_quantile(
-            s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi_grid, target_rank=target_rank
-        )
-        return beta, lo, hi  # surface the live margin range for logging
-
-    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P()), out_specs=(P(), P(), P()))(
-        s_ma, reshard(target_rank, P())
-    )
-
-
 def _local_input_gram(z: Float[Array, "T L"]) -> Float[Array, "shards L L"]:
     """Per-shard ``Z^T Z`` of the expert input (fp32 accumulation, no gradient) for ``newton_muon``.
 
@@ -4284,12 +4231,22 @@ class MoEMLP(eqx.Module):
             share = jnp.concatenate(
                 [jnp.full((num_real,), k * (1.0 - frac) / num_real), jnp.full((num_null,), k * frac / num_null)]
             )
-            return _qb_beta_hist(
-                margins, mesh, target_share=share, num_experts=num_real + num_null, n_bins=_QB_HIST_BINS
+            return qb_beta_hist(
+                margins,
+                mesh,
+                target_share=share,
+                num_experts=num_real + num_null,
+                n_bins=_QB_HIST_BINS,
+                batch_axes=_BATCH_AXES,
             )
         real_slots = jax.lax.stop_gradient(jnp.mean(jnp.sum(selected_experts < num_real, axis=-1, dtype=jnp.float32)))
-        beta, lo, hi = _qb_beta_hist(
-            margins[:, :num_real], mesh, target_share=real_slots / num_real, num_experts=num_real, n_bins=_QB_HIST_BINS
+        beta, lo, hi = qb_beta_hist(
+            margins[:, :num_real],
+            mesh,
+            target_share=real_slots / num_real,
+            num_experts=num_real,
+            n_bins=_QB_HIST_BINS,
+            batch_axes=_BATCH_AXES,
         )
         beta = jnp.concatenate([beta - jnp.mean(beta), jnp.zeros((num_null,), beta.dtype)])
         return beta, lo, hi
@@ -4520,12 +4477,13 @@ class MoEMLP(eqx.Module):
             bank_stats = [self._null_qb_stats(router_logits - bank_alpha[0], selected_experts, mesh)]
         else:
             bank_stats = [
-                _qb_beta_hist(
+                qb_beta_hist(
                     reshard(router_logits[:, start : start + size] - alpha, P(_BATCH_AXES, None)),
                     mesh,
                     target_share=bank_k / size,
                     num_experts=size,
                     n_bins=_QB_HIST_BINS,
+                    batch_axes=_BATCH_AXES,
                 )
                 for (start, size, bank_k), alpha in zip(banks, bank_alpha, strict=True)
             ]
@@ -4533,6 +4491,12 @@ class MoEMLP(eqx.Module):
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
+        if self.cfg.stats_num_experts:
+            # Pad the per-expert stats to the widest layer so every layer's stats stack (the extra columns read 0).
+            pad = self.cfg.stats_num_experts - beta.shape[-1]
+            for key in ("qb_beta", "routing_counts_local", "router_prob_sum_local"):
+                widths = [(0, 0)] * (router_stats[key].ndim - 1) + [(0, pad)]
+                router_stats[key] = jnp.pad(router_stats[key], widths)
         if self.cfg.router_history:
             router_stats[ROUTER_PROBS_KEY] = jax.lax.stop_gradient(
                 jax.nn.softmax(router_logits, axis=-1).reshape(b, s, -1)
@@ -6129,29 +6093,6 @@ def _drop_renorm_factor(
     return factor, stats
 
 
-_POLYNORM_POWERS = 3
-
-
-def _power_rms_terms(u: jax.Array) -> list[tuple[jax.Array, jax.Array]]:
-    """``(u^n, RMS(u^n))`` for n = 1..3 in float32, the RMS over the last (hidden-unit) axis per token."""
-    z = u.astype(jnp.float32)
-    powers = [z, z * z, z * z * z]
-    return [(p, jnp.sqrt(jnp.mean(jnp.square(p), axis=-1, keepdims=True) + 1e-6)) for p in powers]
-
-
-def polynorm(u: jax.Array) -> jax.Array:
-    """PolyNorm with equal fixed coefficients (``UngatedExpertActivation.POLYNORM``)."""
-    return (sum(p / rms for p, rms in _power_rms_terms(u)) / _POLYNORM_POWERS).astype(u.dtype)
-
-
-def polynorm_over_input(u: jax.Array) -> jax.Array:
-    """``polynorm(u) / u``, defined at 0 (no bias term): the gate activation for backends that tie the gate to
-    ``W_up`` and compute ``act(u) * u``."""
-    (_, rms1), (_, rms2), (_, rms3) = _power_rms_terms(u)
-    z = u.astype(jnp.float32)
-    return ((1.0 / rms1 + z / rms2 + z * z / rms3) / _POLYNORM_POWERS).astype(u.dtype)
-
-
 def _ungated_expert_activation(cfg: "GrugModelConfig"):
     """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0), or PolyNorm."""
     if cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
@@ -6172,39 +6113,6 @@ def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
         slope_sq = cfg.expert_leaky_slope**2
         return lambda u: jax.nn.leaky_relu(u, slope_sq)
     return em.activation
-
-
-def _prototype_target_logits(
-    head_in: Float[Array, "B S E"], lm_head: Float[Array, "E KV"], labels: Int[Array, "B S"], cfg: "GrugModelConfig"
-) -> Float[Array, "B S K"]:
-    """The soft-capped logits of each label's ``lm_head_prototypes`` columns (``k V + label``)."""
-    columns = labels[..., None] + cfg.vocab_size * jnp.arange(cfg.lm_head_prototypes)  # [B, S, K]
-    head_t = reshard(lm_head.T, P(None, None))
-    rows = head_t.at[columns].get(out_sharding=P(_BATCH_AXES, None, None, None))  # [B, S, K, E]
-    logits = jnp.einsum("bse,bske->bsk", head_in.astype(jnp.float32), rows.astype(jnp.float32))
-    cap = _logit_cap(cfg)
-    if cap is None:
-        return logits
-    if isinstance(cap, tuple):
-        a, b, c = cap
-        return a * jax.nn.sigmoid((logits + b) / c)
-    return jnp.tanh(logits / cap) * cap
-
-
-def _reduce_token_loss(loss: jax.Array, reduction: str | None, weight: jax.Array | None) -> jax.Array:
-    """The fused CE kernel's reduction (weighted mean / sum / none) for an externally adjusted per-token loss."""
-    if weight is not None:
-        loss = loss * weight.astype(loss.dtype)
-    if reduction in (None, "none"):
-        return loss
-    if reduction == "sum":
-        return jnp.sum(loss)
-    if reduction != "mean":
-        raise ValueError(f"Unsupported reduction: {reduction}")
-    if weight is None:
-        return jnp.mean(loss)
-    denom = jnp.sum(weight.astype(loss.dtype))
-    return jnp.where(denom != 0, jnp.sum(loss) / denom, jnp.zeros_like(denom))
 
 
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
@@ -7169,7 +7077,12 @@ class Transformer(eqx.Module):
             _LM_HEAD_PARTITION_SPEC,
         )
 
-        def stack(layers: tuple[int, ...], use_kda: bool, layer_cfg: GrugModelConfig = cfg) -> ArrayStacked[Block]:
+        # With a wider final layer every layer pads its per-expert stats to the widest layer's expert count.
+        layer_base = dataclasses.replace(cfg, stats_num_experts=cfg.qb_num_experts) if cfg.final_num_experts else cfg
+
+        def stack(
+            layers: tuple[int, ...], use_kda: bool, layer_cfg: GrugModelConfig = layer_base
+        ) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
             layer_index = jnp.asarray(layers, dtype=jnp.int32)
             return ArrayStacked.init(len(layers), Block)(layer_cfg, key=keys, layer_index=layer_index, use_kda=use_kda)
@@ -7178,7 +7091,7 @@ class Transformer(eqx.Module):
         softmax_tail, kda_tail = _tail_stack_layer_indices(cfg)
         # The tail layers' config override is static per layer (MoEMLP.cfg); without tail layers there is none
         # (and dense models could not even build one).
-        tail_cfg = _tail_layer_config(cfg) if softmax_tail or kda_tail else cfg
+        tail_cfg = _tail_layer_config(layer_base) if softmax_tail or kda_tail else layer_base
         model = Transformer(
             token_embed=token_embed,
             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed"),
@@ -8537,9 +8450,17 @@ class Transformer(eqx.Module):
             if prototypes == 1:
                 return ce(weight=loss_weight, reduction=reduction)
             # The kernel gives lse(all K V) - logit(v, 0); add logit(v, 0) - lse_k logit(v, k) for the summed target.
-            target = _prototype_target_logits(head_in, lm_head, labels, self.config)  # [B, S, K]
+            target = prototype_target_logits(
+                head_in,
+                lm_head,
+                labels,
+                vocab_size=self.config.vocab_size,
+                prototypes=prototypes,
+                cap=_logit_cap(self.config),
+                batch_axes=_BATCH_AXES,
+            )  # [B, S, K]
             per_token = ce(weight=None, reduction="none") + target[..., 0] - jax.nn.logsumexp(target, axis=-1)
-            return _reduce_token_loss(per_token.astype(loss_dtype), reduction, loss_weight)
+            return reduce_token_loss(per_token.astype(loss_dtype), reduction, loss_weight)
 
         cross_entropy_loss = lm_loss(hidden)
         replay_loss = None
@@ -8870,6 +8791,8 @@ def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> Grug
         out = dataclasses.replace(out, intermediate_dim=cfg.final_intermediate_dim)
     if cfg.final_experts_per_token:
         out = dataclasses.replace(out, num_experts_per_token=cfg.final_experts_per_token)
+    if cfg.final_num_experts:
+        out = dataclasses.replace(out, num_experts=cfg.final_num_experts)
     if cfg.final_routing_renorm_sum:
         out = dataclasses.replace(out, routing_renorm_sum=cfg.final_routing_renorm_sum)
     if cfg.final_shared_only:
@@ -8911,6 +8834,7 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         final_shared_only=False,  # model-level: the final layer's config carries routed_off
         final_intermediate_dim=0,
         final_experts_per_token=0,
+        final_num_experts=0,
         final_routing_renorm_sum=0.0,
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,

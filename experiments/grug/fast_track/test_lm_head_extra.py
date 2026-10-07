@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import experiments.grug.fast_track.test_ngram_stat as t
+from experiments.grug.fast_track.train import _apply_qb_betas
 
 
 def test_final_layer_writes_a_head_only_slice_read_by_a_wider_lm_head():
@@ -108,4 +109,20 @@ def test_final_experts_per_token_changes_only_the_final_layers_top_k():
     tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
     with jax.set_mesh(mesh):
         loss = eqx.filter_jit(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))(model)
+    assert np.isfinite(float(loss))
+
+
+def test_final_num_experts_pads_stats_and_qb_betas_to_the_widest_layer():
+    mesh, model = t._model(ngram_stat_rows=0, mla=True, num_layers=4, latent_out_full_layers=(3,), final_num_experts=8)
+    cfg = model.config
+    assert model.stacked_blocks_tail.stacked.mlp.router.shape[-1] == 8
+    assert model.stacked_blocks.stacked.mlp.router.shape[-1] == cfg.num_experts
+    assert cfg.qb_num_experts == 8
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        _, metrics = eqx.filter_jit(lambda m: m(tokens))(model)
+        assert metrics["qb_beta_per_layer"].shape == (cfg.num_layers, 8)
+        biased = _apply_qb_betas(model, jnp.ones((cfg.num_layers, 8)))
+        loss = eqx.filter_jit(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))(biased)
+    assert biased.stacked_blocks.stacked.mlp.router_bias.shape[-1] == cfg.num_experts
     assert np.isfinite(float(loss))
