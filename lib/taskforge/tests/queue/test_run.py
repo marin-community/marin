@@ -125,24 +125,24 @@ async def test_a_run_killed_mid_validation_resumes_without_reproposing_or_rebuil
     assert len(fake_glm.requests) == 1
 
 
-async def test_a_build_host_failure_is_counted_by_cause_and_a_retrying_launch_rebuilds(
+async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch_rebuilds(
     queue_run, author_replies, fake_glm, fakes
 ):
     author_replies(1, fakes.machine_program)
     hostless = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={})
-    policy = fakes.policy()
+    policy = fakes.policy(max_build_retries=1)
 
     first = await hostless({"a": "a"}, policy, width=2)
 
-    assert first.items == {"a--0": Terminal.FAILED}
-    assert first.failed == {"a--0": "BuildInfrastructureFailure"}
-    assert first.build_infrastructure == {InfrastructureCause.NO_FACTORY: 1}
-    assert first.summary_json()["build_infrastructure"] == {"no_factory": 1}
+    assert first.items == {"a--0": Terminal.ABANDONED}
+    assert first.failed == {}
+    assert first.build_infrastructure == {InfrastructureCause.NO_FACTORY: 2}
+    assert first.summary_json()["build_infrastructure"] == {"no_factory": 2}
 
-    retried = await queue_run(rubric=hostless.rubric)({"a": "a"}, policy, width=2, failed=FailedItems.RETRY)
+    relaunched = await queue_run(rubric=hostless.rubric)({"a": "a"}, policy, width=2)
 
-    assert retried.items == {"a--0": Terminal.ACCEPTED}
-    assert retried.build_infrastructure == {}
+    assert relaunched.items == {"a--0": Terminal.ACCEPTED}
+    assert relaunched.build_infrastructure == {InfrastructureCause.NO_FACTORY: 2}
     assert len(fake_glm.requests) == 1
 
 

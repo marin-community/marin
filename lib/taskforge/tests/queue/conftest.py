@@ -39,7 +39,7 @@ from taskforge.sandbox.factories import SHELLSIM
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
-from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole
+from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
@@ -272,11 +272,7 @@ class SolverModel:
             raise self.unavailable()
         first = request.messages[0]
         role = next(
-            (
-                r
-                for r in AdversaryRole
-                if first["role"] == "system" and str(first["content"]).startswith(ROLE_PREAMBLES[r])
-            ),
+            (r for r in AdversaryRole if first["role"] == "system" and SENTINEL_REPLIES[r] in str(first["content"])),
             None,
         )
         if role is None:
@@ -288,10 +284,11 @@ class SolverModel:
         return ModelTurn({"role": "assistant", "content": text}, prompt, (20,), (-0.5,), "stop")
 
 
-def loop_policy(k: int = 4, max_validation_retries: int = 0) -> LoopPolicy:
+def loop_policy(k: int = 4, max_validation_retries: int = 0, max_build_retries: int = 0) -> LoopPolicy:
     validation = ValidationPolicy(
         k=k,
         adversary_k=1,
+        adversary_output_tokens=32768,
         roles=tuple(AdversaryRole),
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
@@ -307,6 +304,7 @@ def loop_policy(k: int = 4, max_validation_retries: int = 0) -> LoopPolicy:
         max_build_revisions=1,
         max_repairs=1,
         max_validation_retries=max_validation_retries,
+        max_build_retries=max_build_retries,
         retry_backoff=FAST,
         output_token_budget=1_000_000,
         validation=validation,
