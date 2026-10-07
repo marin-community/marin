@@ -836,7 +836,12 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
-    host_network = config.host_network and isolation.network is TaskNetwork.CLUSTER
+    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
+    host_network = (
+        config.host_network
+        and isolation.network is TaskNetwork.CLUSTER
+        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
+    )
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(

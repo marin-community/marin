@@ -116,20 +116,24 @@ def test_gvisor_profiles_rejected_on_accelerator_task(service, profile):
     assert "cpu-only" in str(exc.value.message).lower()
 
 
-def test_legacy_gvisor_submission_preserves_bundle_environment_and_runtime(service, state):
+def test_legacy_gvisor_submission_preserves_bundle_environment_and_profile(service):
     # An already-running client sends the old wire value and a workspace bundle.
     req = _launch("/alice/job", 5)
     req.bundle_blob = b"legacy-workspace"
     req.environment.env_vars["TASK_VAR"] = "legacy-value"
     response = _as("user", "alice", service.launch_job, req, None)
 
-    with state._db.read_snapshot() as snap:
-        template = snap.caches[RunTemplatesProjection].get(snap, JobName.from_wire(response.job_id))
-    assert template is not None
-    assert template.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
-    assert template.egress_policy == job_pb2.EGRESS_POLICY_CLUSTER
-    assert service.bundle_zip(template.bundle_id) == b"legacy-workspace"
-    assert template.environment.env_vars["TASK_VAR"] == "legacy-value"
+    stored = _as(
+        "user",
+        "alice",
+        service.get_job_status,
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id),
+        None,
+    ).request
+    assert stored.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
+    assert stored.egress_policy == job_pb2.EGRESS_POLICY_CLUSTER
+    assert service.bundle_zip(stored.bundle_id) == b"legacy-workspace"
+    assert stored.environment.env_vars["TASK_VAR"] == "legacy-value"
 
 
 def test_sandbox_rejects_workspace_bundle(service):

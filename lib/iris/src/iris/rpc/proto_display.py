@@ -119,7 +119,9 @@ CONTAINER_PROFILE_VALUES: list[int] = [
     job_pb2.CONTAINER_PROFILE_SANDBOX,
 ]
 
-CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]
+CONTAINER_PROFILE_NAMES: list[str] = [
+    job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES if p != job_pb2.CONTAINER_PROFILE_GVISOR
+]
 
 # User-selectable egress policies (UNSPECIFIED picks the profile's default).
 EGRESS_POLICY_NAMES: list[str] = [

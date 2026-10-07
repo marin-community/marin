@@ -21,7 +21,8 @@ in [`job.proto`](../src/iris/rpc/job.proto):
 clients that predate `SANDBOX`. It keeps the gVisor runtime and the original
 behavior: workspace bundles, inherited environment, cluster credentials,
 shared caches, service account, and `CLUSTER` egress by default. On Kubernetes
-it also keeps the log-shipper and output-uploader sidecars. It is CPU-only and
+it uses CNI pod networking for cluster egress, even when GPU tasks use host
+networking, and keeps the log-shipper and output-uploader sidecars. It is CPU-only and
 does not require an elevated role. It does not provide `SANDBOX`'s isolation
 from cluster services or credentials.
 

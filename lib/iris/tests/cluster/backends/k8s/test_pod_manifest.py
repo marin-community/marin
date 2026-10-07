@@ -1053,7 +1053,8 @@ def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
     assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
     assert any(source["secretRef"]["name"] == "iris-task-env" for source in task["envFrom"])
     assert spec["serviceAccountName"] == "iris-task"
-    assert spec["hostNetwork"] is True
+    assert "hostNetwork" not in spec
+    assert "dnsPolicy" not in spec
     cache_mount = next(m for m in task["volumeMounts"] if m["mountPath"] == env["UV_CACHE_DIR"])
     assert any(v["name"] == cache_mount["name"] and "hostPath" in v for v in spec["volumes"])
     assert {c["name"] for c in spec["containers"]} == {"task", "output-uploader"}
