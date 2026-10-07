@@ -48,6 +48,13 @@ MATMUL_CHAIN = 4
 
 
 @dataclasses.dataclass(frozen=True)
+class Timing:
+    warmup_seconds: float
+    window_seconds: float
+    repeats: int
+
+
+@dataclasses.dataclass(frozen=True)
 class OpResult:
     op: str
     dtype: str
@@ -84,18 +91,18 @@ def _input_rows_per_rank(op: str, size_bytes: int, row_bytes: int, n: int) -> in
     return max(n, rows - rows % n)
 
 
-def _time(fn: Callable[[], object], *, warmup_seconds: float, window_seconds: float, repeats: int) -> tuple[float, int]:
+def _time(fn: Callable[[], object], timing: Timing) -> tuple[float, int]:
     jax.block_until_ready(fn())
     calls = 0
     start = time.perf_counter()
-    while time.perf_counter() - start < warmup_seconds:
+    while time.perf_counter() - start < timing.warmup_seconds:
         out = fn()
         calls += 1
     jax.block_until_ready(out)
     seconds_per_call = (time.perf_counter() - start) / calls
-    iterations = max(5, math.ceil(window_seconds / seconds_per_call))
+    iterations = max(5, math.ceil(timing.window_seconds / seconds_per_call))
     windows = []
-    for _ in range(repeats):
+    for _ in range(timing.repeats):
         start = time.perf_counter()
         for _ in range(iterations):
             out = fn()
@@ -104,7 +111,7 @@ def _time(fn: Callable[[], object], *, warmup_seconds: float, window_seconds: fl
     return statistics.median(windows), iterations
 
 
-def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, timing: dict) -> OpResult:
+def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, timing: Timing) -> OpResult:
     n = mesh.size
     hidden = MODEL_HIDDEN_DIM
     row_bytes = hidden * jnp.dtype(DTYPES[dtype]).itemsize
@@ -135,11 +142,11 @@ def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, t
 
         both_jit = jax.jit(both)
         mm_jit = jax.jit(mm)
-        matmul_alone, _ = _time(lambda: mm_jit(a, b), **timing)
-        seconds, iterations = _time(lambda: both_jit(x, a, b), **timing)
+        matmul_alone, _ = _time(lambda: mm_jit(a, b), timing)
+        seconds, iterations = _time(lambda: both_jit(x, a, b), timing)
     else:
         fn = jax.jit(jax.shard_map(collective, mesh=mesh, in_specs=spec, out_specs=spec, check_vma=False))
-        seconds, iterations = _time(lambda: fn(x), **timing)
+        seconds, iterations = _time(lambda: fn(x), timing)
 
     algbw = actual_bytes / seconds / 1e9
     return OpResult(
@@ -176,7 +183,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     mesh = Mesh(np.array(jax.devices()), (AXIS,))
-    timing = dict(warmup_seconds=args.warmup_seconds, window_seconds=args.window_seconds, repeats=args.repeats)
+    timing = Timing(warmup_seconds=args.warmup_seconds, window_seconds=args.window_seconds, repeats=args.repeats)
     header = {
         "label": args.label,
         "jax": jax.__version__,
