@@ -13,6 +13,13 @@ INVENTORY_ALLOWED_UNDERFLOW = """    try:
     except ValueError:
         pass  # Rejecting an underflow is allowed if the quantity stays unchanged.
 """.rstrip()
+INVENTORY_INTERFACE = """
+
+If `Item.decrease_quantity` would reduce stock below zero, leave the quantity
+unchanged; either return without changes or raise `ValueError`. Invalid amounts
+(zero, negative, or non-integer) passed to `Item.increase_quantity` or
+`Inventory.remove_item` must raise `ValueError` or `TypeError` and preserve stock.
+"""
 INVENTORY_TESTS = """
 
 @pytest.mark.parametrize('amount', [0, -1, 1.5, '2'])
@@ -85,7 +92,7 @@ def repair_contract(test: bytes, instruction: str) -> tuple[bytes, str]:
         assert INVENTORY_UNDERFLOW in original
         return (
             (original.replace(INVENTORY_UNDERFLOW, INVENTORY_ALLOWED_UNDERFLOW) + INVENTORY_TESTS).encode(),
-            instruction,
+            instruction + INVENTORY_INTERFACE,
         )
     if digest == CALCULATOR_TEST_SHA and "class called `Calculator`" in instruction:
         return test + CALCULATOR_TESTS.encode(), instruction + CALCULATOR_INTERFACE
