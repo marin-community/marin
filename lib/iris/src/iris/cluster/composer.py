@@ -131,6 +131,7 @@ def make_task_backend(
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
             ),
+            node_health=kp.node_health,
             task_event_table=task_event_table,
             profile_table=profile_table,
         )
