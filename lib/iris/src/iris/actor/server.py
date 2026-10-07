@@ -105,7 +105,13 @@ class OperationState:
 
 
 class ActorServer:
-    """Server for hosting actor instances and handling RPC calls."""
+    """Host actors for peers trusted to execute Python code in this process.
+
+    RPC arguments use cloudpickle and can execute code during deserialization.
+    This listener has no authentication middleware; restrict network access to
+    trusted peers or route external calls through the authenticated controller
+    endpoint proxy. Sharing an actor endpoint delegates the same trust.
+    """
 
     def __init__(
         self,
