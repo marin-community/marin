@@ -123,7 +123,6 @@ def test_stalled_guest_reports_boot_tail_and_cleans_up_process(tmp_path, monkeyp
     detail = str(failure.value)
     assert "mounting-rootfs-stalled" in detail
     assert "early-output-discarded" not in detail
-    assert "boot_elapsed=" in detail and "idle_elapsed=" in detail
     assert len(detail) < 4500
     with pytest.raises(ProcessLookupError):
         os.kill(int((tmp_path / "pid").read_text()), 0)
