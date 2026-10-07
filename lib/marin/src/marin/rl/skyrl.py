@@ -630,6 +630,7 @@ def _launcher_command(requirement: str, config_path: str) -> list[str]:
         "run",
         "--isolated",
         "--no-project",
+        "--no-sources",
         "--prerelease=allow",
         "--python",
         _LAUNCHER_PYTHON,

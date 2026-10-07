@@ -387,6 +387,8 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     launch_configs = []
 
     def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
+        # Git dependencies must not inherit Marin's development sources.
+        assert "--no-sources" in command
         config_path = command[command.index("--config") + 1]
         launch_configs.append(yaml.safe_load(Path(config_path).read_text()))
         return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
