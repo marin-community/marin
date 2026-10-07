@@ -11,8 +11,8 @@ covers the fleet.
 The pod-level scans (crashloops, pending, workload allocations, termination
 candidates) cover every namespace except the provider-managed prefixes in
 PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node daemons are thousands of
-pods of someone else's infrastructure, while the namespaces we operate hold
-about a hundred.
+pods of someone else's infrastructure. Workload pod counts in our namespaces
+grow with the Iris fleet.
 
 Failure semantics: a cluster that cannot be queried becomes labeled rows inside
 the aggregate response — never an empty result — so healthy clusters keep
@@ -347,7 +347,7 @@ class K8sSource:
         return list(self._iter_list(path, params))
 
     def _iter_list(self, path: str, params: dict | None = None) -> Iterator[dict]:
-        """Yield a LIST page at a time so pod scans need not retain every pod."""
+        """Yield resource dictionaries while retaining only the current LIST page."""
         params = dict(params or {})
         params["limit"] = _LIST_PAGE
         for _ in range(_MAX_LIST_PAGES):
