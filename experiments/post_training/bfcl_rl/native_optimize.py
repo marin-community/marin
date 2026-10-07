@@ -18,7 +18,7 @@ from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCa
 
 def native_optimizer_step(
     preference_version: str,
-    seed: int,
+    preference_name: str,
     recovery_version: str,
     policy_export_version: str,
     policy_checkpoint_step: int,
@@ -26,7 +26,7 @@ def native_optimizer_step(
     learning_rate: float,
     hf_save_steps: int,
 ) -> ArtifactStep:
-    name = user_owned_name(f"data/bfcl-rl-native-preferences-seed-{seed}")
+    name = user_owned_name(preference_name)
     cache = ArtifactStep.adopt(
         f"{name}-input", preference_version, f"{name}/{preference_version}", kind=RecoveryPreferenceCache
     )
@@ -50,7 +50,7 @@ def native_optimizer_step(
 
 @click.command(help=__doc__)
 @click.option("--preference-version", required=True)
-@click.option("--seed", type=click.IntRange(min=0, max=2**31 - 1), required=True)
+@click.option("--preference-name", required=True, help="Preference cache artifact name without version.")
 @click.option("--recovery-version", required=True)
 @click.option("--policy-export-version", required=True)
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
@@ -60,7 +60,7 @@ def native_optimizer_step(
 @rl_build_options
 def main(
     preference_version: str,
-    seed: int,
+    preference_name: str,
     recovery_version: str,
     policy_export_version: str,
     policy_checkpoint_step: int,
@@ -70,7 +70,7 @@ def main(
 ) -> ArtifactStep:
     return native_optimizer_step(
         preference_version,
-        seed,
+        preference_name,
         recovery_version,
         policy_export_version,
         policy_checkpoint_step,
