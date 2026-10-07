@@ -13,12 +13,14 @@ import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from harbor_config.errors import ErrorCategory
 
 from verifyit.file_ops.read import read_text
+from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
     RUBRIC_REFERENCE,
@@ -58,6 +60,14 @@ class Aggregation(StrEnum):
 
 class InvalidTask(Exception):
     """The task is malformed: a reference is missing or its grading contract is invalid."""
+
+
+class GradingInfraError(RuntimeError):
+    """A grading failure with diagnostic fields for the unscored verdict."""
+
+    def __init__(self, message: str, **detail: object) -> None:
+        super().__init__(message)
+        self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -210,21 +220,22 @@ def finalize_preparation_failure(
     )
 
 
-def numeric_tolerance(spec: NumericSpec) -> float:
-    """Return the finite effective tolerance for a valid numeric grading spec."""
-    if not math.isfinite(spec.expected):
-        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
-    for name, value in (("tolerance_abs", spec.tolerance_abs), ("tolerance_rel", spec.tolerance_rel)):
-        if not math.isfinite(value) or value < 0:
-            raise InvalidTask(f"numeric {name} must be a finite nonnegative number, got {value}")
-    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
-    if not math.isfinite(tolerance):
-        raise InvalidTask(f"numeric effective tolerance must be finite, got {tolerance}")
-    return tolerance
+def numeric_tolerance(spec: NumericSpec) -> Fraction:
+    """Validate the reference and return exact tolerance from float decimal spellings."""
+    try:
+        expected = numeric_literal(spec.expected)
+        for tolerance in (spec.tolerance_abs, spec.tolerance_rel):
+            if type(tolerance) not in (int, float) or not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError("numeric tolerances must be finite nonnegative numbers")
+        absolute = Fraction(str(spec.tolerance_abs))
+        relative = Fraction(str(spec.tolerance_rel))
+    except (ValueError, OverflowError) as error:
+        raise InvalidTask(f"invalid numeric contract: {error}") from error
+    return max(absolute, relative * abs(expected))
 
 
-def infra_error(message: str) -> Reward:
-    return Reward(0.0, Status.INFRA_ERROR, {"error": message})
+def infra_error(message: str, **detail: object) -> Reward:
+    return Reward(0.0, Status.INFRA_ERROR, {"error": message, **detail})
 
 
 def write_reward(logs_dir: Path, reward: Reward) -> None:
@@ -288,7 +299,7 @@ def positive_candidate(spec: Spec) -> str | None:
 
 
 def negative_candidate(spec: Spec) -> str | None:
-    """Return a candidate that must score zero, when a safe perturbation exists."""
+    """Return a zero-scoring negative control when available."""
     if isinstance(spec, McqSpec):
         other = "B" if spec.expected.upper() != "B" else "A"
         return f"Answer: {other}"
@@ -297,11 +308,14 @@ def negative_candidate(spec: Spec) -> str | None:
             tolerance = numeric_tolerance(spec)
         except InvalidTask:
             return None
-        offset = max(2 * tolerance, 1.0)
-        for candidate in (spec.expected + offset, spec.expected - offset):
-            if math.isfinite(candidate) and abs(candidate - spec.expected) > tolerance:
+        expected = numeric_literal(spec.expected)
+        step = max(2 * tolerance, 1)
+        limit = 10**MAX_NUMERIC_DIGITS
+        for candidate in (expected + step, expected - step):
+            if abs(candidate.numerator) < limit and candidate.denominator < limit:
                 return f"\\boxed{{{candidate}}}"
-        return "not a number"
+        # If both perturbations exceed literal bounds, use a malformed submission as the negative control.
+        return r"\boxed{not a number}"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None
@@ -314,6 +328,7 @@ Grader = Callable[[Any, Path, Path], Reward]
 # reasoning-gym, openai) that only the images needing that mode install. A missing extra
 # surfaces as an ImportError from the grader, which the CLI records as infra_error.
 MODE_MODULES: dict[Mode, str] = {
+    Mode.STRUCTURED_EXACT: "grade_structured_exact",
     Mode.PREDICTED_ACTION: "grade_predicted_action",
     Mode.MCQ: "grade_mcq",
     Mode.MATH: "grade_math",
@@ -360,6 +375,9 @@ def run(spec_path: Path, workspace: Path) -> Reward:
         return invalid_task(f"cannot read verifier spec {spec_path}: {error}")
     try:
         return _validated_reward(grade(spec, tests_dir=spec_path.parent, workspace=workspace))
+    except GradingInfraError as error:
+        logger.error("grader failed: %s", error)
+        return infra_error(f"{type(error).__name__}: {error}", **error.detail)
     except Exception as error:
         logger.error("grader crashed: %s", traceback.format_exc())
         return infra_error(f"{type(error).__name__}: {error}")

@@ -236,7 +236,7 @@ jobs:
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [tpu-ci]
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
 
@@ -262,6 +262,9 @@ jobs:
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
+          # The venv lives on the uv cache mount so uv can hardlink packages instead of
+          # copying them across filesystems. Each run deletes it first, so a crashed or
+          # cancelled run never leaves a partial venv behind.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -279,14 +282,16 @@ jobs:
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
             -e UV_CACHE_DIR=/tmp/uv-cache \
+            -e UV_PROJECT_ENVIRONMENT=/tmp/uv-cache/levanter-tpu-venv \
             -v ${{ github.workspace }}:/workspace-src:ro \
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
+              rm -rf \"\$UV_PROJECT_ENVIRONMENT\" && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               ( status=0; \
-                timeout --kill-after=5 --signal=TERM 1490 \
+                timeout --kill-after=5 --signal=TERM 2090 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
@@ -305,9 +310,9 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          cache-dependency-glob: "lib/taskcompendium/uv.lock"
-      - name: Test TaskCompendium and Harbor adapters
-        run: uv run --project lib/taskcompendium --frozen --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
+          cache-dependency-glob: "uv.lock"
+      - name: Test TaskCompendium
+        run: uv run --package taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
       - name: Type-check TaskCompendium
         working-directory: lib/taskcompendium

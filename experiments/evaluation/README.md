@@ -302,9 +302,9 @@ resume policy; each benchmark retains its own retry count and exception taxonomy
 expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
 tree with Harbor's DS-1000 adapter before launching it.
 
-Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
-install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
-Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+The root workspace locks an optional Harbor dependency for TaskCompendium's adapters. Evaluation
+preflight and execution install the exact `marin.external_dependencies.HARBOR` revision in an isolated
+uv environment. Every Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
 Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
 the digest.
 

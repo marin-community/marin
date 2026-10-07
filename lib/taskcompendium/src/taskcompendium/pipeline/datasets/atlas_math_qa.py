@@ -9,10 +9,10 @@ from pathlib import Path
 
 from verifyit.grade import InvalidTask
 from verifyit.modes.grade_judge import normalize as normalize_reference
+from verifyit.numeric import numeric_literal
 from verifyit.spec import MathSpec, MathType, McqSpec, NumericSpec
 
 from taskcompendium.grader import grader_config, grader_package, script_package
-from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -33,6 +33,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.task_grading import resolve_verifier
 
 REFERENCE_SCRIPT = (Path(__file__).with_name("grader_scripts") / "references.py").read_bytes()
 
@@ -96,6 +97,14 @@ def _instruction(instruction: str, name: str, options: int | None = None) -> str
     return instruction.strip()
 
 
+def _numeric_reference(value: object) -> str:
+    """Retain the source-facing literal of an already decoded JSON value."""
+    # A decoded float cannot recover decimal precision lost upstream.
+    literal = str(value)
+    numeric_literal(literal)
+    return literal
+
+
 def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
@@ -109,7 +118,11 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             spec = grader_package(MathSpec(expected=expected, math_type=MathType(data["answer_type"])))
         elif name == "advanced_calculations":
             spec = grader_package(
-                NumericSpec(float(data["expected_value"]), float(data["tolerance_abs"]), float(data["tolerance_rel"]))
+                NumericSpec(
+                    _numeric_reference(data["expected_value"]),
+                    data["tolerance_abs"],
+                    data["tolerance_rel"],
+                )
             )
         elif name in {"knowledge_mcqa", "web_search_mcqa"}:
             supported_patterns = {

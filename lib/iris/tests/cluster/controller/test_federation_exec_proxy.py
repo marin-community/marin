@@ -312,6 +312,40 @@ def test_process_status_scopes_a_federated_peer_to_the_jobs_it_handed_off(tmp_pa
         peer_service._controller.backend.get_process_status.assert_not_called()
 
 
+def test_exec_admits_the_federating_peer_despite_the_owner_check(tmp_path, log_client):
+    """A federation peer's identity names the parent cluster, not the job's user.
+    The owner check must not reject it; the handoff scope admits only the peer that
+    federated the job."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
+        job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
+
+        enforcing_peer = ControllerServiceImpl(
+            controller=peer_service._controller,
+            bundle_store=BundleStore(storage_dir=str(tmp_path / "peer" / "bundles")),
+            log_client=log_client,
+            db=peer_state._db,
+            endpoint_service=peer_service._endpoint_service,
+            auth=ControllerAuth(provider="iap"),
+        )
+        peer_service._controller.backend.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
+            exit_code=0, stdout="ran"
+        )
+        request = controller_pb2.Controller.ExecInContainerRequest(task_id=job_id.task(0).to_wire(), command=["true"])
+
+        with identity_scope(VerifiedIdentity(user_id="parent", role=FEDERATION_PEER_ROLE)):
+            assert enforcing_peer.exec_in_container(request, None).stdout == "ran"
+
+        peer_service._controller.backend.exec_in_container.reset_mock()
+        with identity_scope(VerifiedIdentity(user_id="intruder", role=FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                enforcing_peer.exec_in_container(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+        peer_service._controller.backend.exec_in_container.assert_not_called()
+
+
 def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):
     """A ':' in a job-name component is a legal name char, not an attempt separator
     for an exec task id — the parent must parse it as a JobName (not a TaskAttempt)
