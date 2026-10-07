@@ -68,7 +68,7 @@ class ValidationSite:
             first_attempt=first_attempt,
         )
 
-    def control_plan(self, policy: TrialPolicy) -> ControlPlan:
+    def control_plan(self, policy: TrialPolicy, first_attempts: Mapping[str, int]) -> ControlPlan:
         return ControlPlan(
             item_id=self.item_id,
             round=self.round,
@@ -77,6 +77,7 @@ class ValidationSite:
             retry_backoff=policy.retry_backoff.schedule(),
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,
+            first_attempts=first_attempts,
         )
 
 
