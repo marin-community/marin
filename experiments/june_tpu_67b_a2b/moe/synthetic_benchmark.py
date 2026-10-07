@@ -130,7 +130,8 @@ def parse_args() -> argparse.Namespace:
         "--step-timeout",
         type=float,
         default=300.0,
-        help="Exit with status 1 if a step after the first takes longer than this many seconds (0 disables).",
+        help="Exit with status 1 if a step takes longer than this many seconds (0 disables). "
+        "The first step and watch steps have no timeout.",
     )
     return parser.parse_args()
 

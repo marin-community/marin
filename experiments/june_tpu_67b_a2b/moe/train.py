@@ -87,10 +87,11 @@ class GrugTrainerConfig:
     """False skips the checkpointer entirely, including the forced final save; for benchmarks."""
 
     step_timeout: float | None = None
-    """Seconds after which a train step, other than the first one in this process (which compiles), counts as hung:
-    every thread's traceback is dumped and the process exits with status 1. When one device fails inside a step,
-    for example an allocator OOM, the other devices wait in a collective that never times out, and without this the
-    job sits until its scheduler time limit. None disables it."""
+    """Seconds after which a train step counts as hung: every thread's traceback is dumped and the process exits
+    with status 1. The first step in this process and gradient-watch steps, both of which can compile, have no
+    timeout. When one device fails inside a step, for example an allocator OOM, the other devices wait in a
+    collective that never times out, and without this the job sits until its scheduler time limit. None disables
+    it."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
