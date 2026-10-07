@@ -34,7 +34,7 @@ def test_span_records_caller_fields_and_timing():
 def test_span_records_exception_class_as_cause_and_reraises():
     ledger = ListLedger()
     with pytest.raises(TimeoutError):
-        with span(ledger, EntryKind.SANDBOX_OP, item_id="i1", round=0, step="run") as s:
+        with span(ledger, EntryKind.STEP, item_id="i1", round=0, step="run") as s:
             s.attrs["cmd"] = "pytest"
             raise TimeoutError("stalled")
 
@@ -94,7 +94,7 @@ def test_record_failure_does_not_replace_in_flight_cancellation():
 def test_caller_classified_cause_wins_over_exception_class():
     ledger = ListLedger()
     with pytest.raises(TimeoutError):
-        with span(ledger, EntryKind.SANDBOX_OP, item_id="i1", round=0, step="run") as s:
+        with span(ledger, EntryKind.STEP, item_id="i1", round=0, step="run") as s:
             s.cause = "sandbox_timeout"
             raise TimeoutError("stalled")
     assert [e.cause for e in ledger.entries] == ["sandbox_timeout"]

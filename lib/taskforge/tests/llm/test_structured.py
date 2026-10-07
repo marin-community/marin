@@ -57,3 +57,18 @@ def test_second_failure_raises_with_both_completions(fake_glm):
     with pytest.raises(StructuredOutputError) as error:
         run(fake_glm)
     assert [c.content for c in error.value.completions] == ["no tool call", "still none"]
+
+
+def test_valid_but_length_cut_call_is_repaired(fake_glm):
+    fake_glm.stream(tool_calls=(("answer", '{"city": "Paris", "millions": 2.1}'),), finish="length")
+    fake_glm.stream(tool_calls=(("answer", '{"city": "Paris", "millions": 2.14}'),))
+    result = run(fake_glm)
+    assert result.value.millions == 2.14
+    assert "cut off" in fake_glm.requests[1]["messages"][-1]["content"]
+
+
+def test_length_cut_repair_raises(fake_glm):
+    fake_glm.stream(content="no tool call")
+    fake_glm.stream(tool_calls=(("answer", '{"city": "Paris", "millions": 2.1}'),), finish="length")
+    with pytest.raises(StructuredOutputError):
+        run(fake_glm)

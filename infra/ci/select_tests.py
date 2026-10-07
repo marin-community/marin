@@ -152,7 +152,7 @@ SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
 # Suites outside the root workspace's import-selected Python matrix.
-# TaskCompendium and rolloutengine have separate uv locks; Iris smoke
+# TaskCompendium, rolloutengine and Taskforge have separate uv locks; Iris smoke
 # drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
@@ -170,6 +170,18 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "lib/rigging/",
         "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
+    "taskforge-unit": (
+        "lib/taskforge/",
+        "lib/taskcompendium/",
+        "lib/rolloutengine/",
+        "lib/shellbox/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "lib/finelog/",
+        "lib/iris/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),

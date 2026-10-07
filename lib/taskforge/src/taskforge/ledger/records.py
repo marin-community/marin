@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ledger entries: provenance and timing for LLM calls, sandbox operations, steps, trials and stages.
+"""Ledger entries: provenance and timing for LLM calls, steps, trials, stages and events.
 
 Callers time work with :func:`span`, which records an entry when the block exits, including when
 it raises (the exception propagates unchanged).
@@ -22,7 +22,6 @@ from typing import Any, Protocol
 
 class EntryKind(StrEnum):
     LLM_CALL = "llm_call"
-    SANDBOX_OP = "sandbox_op"
     STEP = "step"
     TRIAL = "trial"
     STAGE = "stage"

@@ -30,8 +30,8 @@ def run_store(fake_glm, root, calls):
     return asyncio.run(go())
 
 
-def ask(text, policy=LLMPolicy()):
-    return lambda store: store.complete("draft", [{"role": "user", "content": text}], policy)
+def ask(text, policy=LLMPolicy(), sample=0):
+    return lambda store: store.complete("draft", [{"role": "user", "content": text}], policy, sample=sample)
 
 
 def test_identical_request_is_served_from_disk(fake_glm, tmp_path):
@@ -49,6 +49,15 @@ def test_any_request_difference_misses_the_cache(fake_glm, tmp_path):
         fake_glm.stream(content=content)
     results = run_store(fake_glm, tmp_path, [ask("q"), ask("other q"), ask("q", LLMPolicy(temperature=0.1))])
     assert [r.content for r in results] == ["a", "b", "c"]
+
+
+def test_samples_of_one_request_are_cached_separately_across_restarts(fake_glm, tmp_path):
+    for content in ("a", "b"):
+        fake_glm.stream(content=content)
+    first = run_store(fake_glm, tmp_path, [ask("q", sample=0), ask("q", sample=1)])
+    again = run_store(fake_glm, tmp_path, [ask("q", sample=0), ask("q", sample=1)])
+    assert [c.content for c in first] == [c.content for c in again] == ["a", "b"]
+    assert len(fake_glm.requests) == 2
 
 
 def test_stall_timeout_does_not_change_the_key(fake_glm, tmp_path):

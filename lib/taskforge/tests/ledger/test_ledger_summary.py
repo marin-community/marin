@@ -29,7 +29,7 @@ def test_summary_totals_wall_time_and_tokens_per_kind_and_step(tmp_path):
             )
         )
     ledger.record(
-        LedgerEntry(item_id="a", round=0, step="run", kind=EntryKind.SANDBOX_OP, started=4.0, ended=6.0, cause="Exit1")
+        LedgerEntry(item_id="a", round=0, step="run", kind=EntryKind.STEP, started=4.0, ended=6.0, cause="Exit1")
     )
 
     out = subprocess.run(
@@ -40,5 +40,5 @@ def test_summary_totals_wall_time_and_tokens_per_kind_and_step(tmp_path):
     llm = summary["by_kind"]["llm_call"]
     assert (llm["count"], llm["busy"], llm["elapsed"]) == (2, 8.0, 5.0)
     assert (llm["tokens_in"], llm["tokens_out"], llm["tokens_reasoning"]) == (200, 20, 10)
-    sandbox = summary["by_step"]["sandbox_op/run"]
-    assert (sandbox["count"], sandbox["failed"], sandbox["busy"]) == (1, 1, 2.0)
+    step = summary["by_step"]["step/run"]
+    assert (step["count"], step["failed"], step["busy"]) == (1, 1, 2.0)
