@@ -97,7 +97,10 @@ modules, each of which keeps its types beside the code that checks their invaria
   A step's memo key covers its code, arguments, the data globals it reads, `SDK_VERSION`, the
   proposal and the model policy. The verifier must come from a GRADER step and the controls from
   a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The draft holds
-  the task, its `TaskExecution` and its controls.
+  the task, its `TaskExecution` and its controls. A host failure during the build raises
+  `build.infrastructure.BuildInfrastructureFailure` with a `cause` of `no_factory`,
+  `scheduling_timeout` or `host_unreachable`, even when the program wrapped it; it is never a
+  `BuildFailure`, and the caller does not charge it to the program.
 - `validate.trials.run_trials(lowered, plan, settings, model)`: runs k trials of a
   `LoweredTaskSpec` through `ShellboxRolloutEngine`. `TrialPlan.deadlines` (`total_turn_timeout`,
   `attempt_timeout`) and `EngineSettings` (turn, command, tool-turn, model-turn and cleanup limits)
@@ -185,6 +188,15 @@ think block before prefilled assistant text, and vLLM's reasoning parser then fi
 continuation under `reasoning`; the call therefore sends `enable_thinking: false`, which keeps the
 same prompt tokens and returns the continuation as `content` (measured live). The template strips
 prefilled text, so a prefix with surrounding whitespace is rejected rather than silently changed.
+
+A build tells host failures from program failures by where the error was raised, not by its
+message. `Build` wraps its machine factories (`build.infrastructure.host_checked_factories`): a
+missing factory for the machine kind, a `TimeoutError` from the factory's own wait, and a
+connection or controller transport error from creating or driving a machine are infrastructure.
+Everything else is the program's, including an image it built or named that fails, a spec the
+backend refuses, and a deadline the program set with `startup_timeout`. Shellbox raises a bare
+`RuntimeError` for both a failed Docker build and an unreachable Docker daemon, so the daemon case
+is charged to the program until shellbox types it.
 
 ## Testing
 
