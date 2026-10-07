@@ -175,14 +175,18 @@ or on a package the order does not name.
   `CalibrationSummary.notes`) it shows as information, and the rendered `failure`;
   `review.rules.render_brief(findings, notes)` builds it.
 - `loop.policy.LoopPolicy`: every bound of a run (proposals per idea, idea re-proposals, triage
-  repairs, build revisions, review repairs, validation retries and their backoff, the output-token
+  repairs, build revisions, review repairs, validation retries, build host-failure retries
+  (`max_build_retries`) and their shared backoff, the output-token
   budget, the `ValidationPolicy`), with no defaults. `loop.policy.POLICY` reads and writes it as the
   run's `policy.json`; a missing or unknown key is an error.
 - `loop.events`: `record_event(ledger, item_id, round, kind, seq, input_hash, **attrs)` writes one
   `EntryKind.EVENT` row with `attrs["seq"]` and `attrs["schema"] = EVENT_SCHEMA`.
   `derive_state(entries) -> ItemState` folds a proposal item's events (phase, round, digests,
   counters, `Terminal`); `derive_idea_state` folds an idea's; `item_tokens_out` sums the item's
-  `LLM_CALL` output tokens.
+  `LLM_CALL` output tokens. A build the machine host failed is a `BUILD_INFRASTRUCTURE` event
+  (`cause`, an `InfrastructureCause`); `build_host_failures(entries) -> Counter[InfrastructureCause]`
+  counts an item's over every launch, and an `ABANDONED` terminal carries `causes`
+  (`cause:count` pairs) for the retries it spent.
 - `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
   `run_item(proposal, policy, services) -> Terminal`: one idea's proposals, and one proposal carried
   to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `LoopServices[IdeaT]` holds what a run's items
@@ -359,9 +363,14 @@ different `policy.json` is refused.
 
 The loop keeps a run's bounds separate because their costs differ: a build revision is one author
 call, a review repair is a whole validation round. A build failure, or any exception the builder
-program raises, goes back to the author as a revision. `GlmUnavailable` (the endpoint's failure) and
-`build.infrastructure.BuildInfrastructureFailure` (the machine host's) are not the program's: they
-propagate, record `FAILED` without spending a revision, and a relaunch rebuilds the same program. A
+program raises, goes back to the author as a revision. A
+`build.infrastructure.BuildInfrastructureFailure` (no factory for the machine kind, a scheduling
+timeout, an unreachable host) is the machine host's failure, not the program's: it spends no
+revision and the author never sees it. The loop records `BUILD_INFRASTRUCTURE` with the cause, waits
+out the retry backoff without holding a slot and rebuilds the same program; `max_build_retries`
+consecutive host failures end the item `ABANDONED` with its cause counts, and the next launch
+rebuilds the same program with a fresh count. `GlmUnavailable` (the endpoint's failure) propagates
+and records `FAILED`. A
 repair whose rebuild produces the same task digest counts as a failed revision whose failure text is
 the brief again, so the author cannot spend the repair budget returning the same program. The
 output-token budget sums the item's `LLM_CALL` entries (triage, authoring, build steps) and is
