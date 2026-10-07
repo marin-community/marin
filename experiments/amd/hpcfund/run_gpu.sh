@@ -5,7 +5,6 @@
 #   sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh \
 #       experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
 # README.md in this directory has the venv recipe and known issues.
-set -o pipefail
 cd "$SLURM_SUBMIT_DIR" || exit 1
 
 # On GPU, Haliax's ragged_dot otherwise picks its Triton kernel, which targets CUDA.
@@ -21,5 +20,7 @@ export XLA_FLAGS="--xla_gpu_enable_command_buffer= $XLA_FLAGS"
 # executables but autotunes each new compilation.
 export JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=${JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES:-none}
 
-# Drop ROCm runtime log lines that repeat on every step.
+# Drop ROCm runtime log lines that repeat on every step. Exit with Python's status: grep exits 1
+# when it prints nothing.
 uv run --no-sync python "$@" 2>&1 | grep --line-buffered -v -E "rocm_pcie_bandwidth|rocm_executor"
+exit "${PIPESTATUS[0]}"
