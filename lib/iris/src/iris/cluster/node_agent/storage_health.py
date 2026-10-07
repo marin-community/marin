@@ -204,13 +204,7 @@ def reconcile_storage_health(k8s: K8sService, config: NodeStorageHealthConfig, m
                 cordon = StorageHealthReport.model_validate_json(raw_cordon)
             except ValidationError:
                 continue
-            if (
-                cordon.result != ProbeResult.FAILED
-                or report.node_uid != cordon.node_uid
-                or report.boot_id != cordon.boot_id
-                or report.target != cordon.target
-                or report.started_at <= cordon.checked_at
-            ):
+            if cordon.result != ProbeResult.FAILED or report.started_at <= cordon.checked_at:
                 continue
             k8s.patch_node(
                 metadata["name"],

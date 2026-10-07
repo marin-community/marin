@@ -121,6 +121,33 @@ def test_recovery_requires_fresh_matching_node_probe(config, recovery_fault):
     assert CORDON_ANNOTATION in node["metadata"]["annotations"]
 
 
+@pytest.mark.parametrize("repair", ["reboot", "node_replacement", "environment_change"])
+def test_repaired_node_releases_cordon_after_incarnation_or_target_change(config, repair):
+    k8s = InMemoryK8sService()
+    seed_node(k8s, config, "bad", ProbeResult.FAILED, failures=3)
+    for name in ("p1", "p2"):
+        seed_node(k8s, config, name)
+    reconcile_storage_health(k8s, config, 1)
+    node = k8s.get_json(K8sResource.NODES, "bad")
+    recovery, recovery_time = recovery_report_and_time(k8s, "bad")
+    current_config = config
+    if repair == "reboot":
+        node["status"]["nodeInfo"]["bootID"] = "new-boot"
+        recovery.boot_id = "new-boot"
+    elif repair == "node_replacement":
+        node["metadata"]["uid"] = "new-uid"
+        recovery.node_uid = "new-uid"
+    else:
+        current_config = config.model_copy(update={"environment_revision": "rotated-credentials"})
+        recovery.target = target_id(current_config)
+    k8s.patch_node("bad", {"metadata": {"annotations": {HEALTH_ANNOTATION: recovery.model_dump_json()}}})
+    with patch.object(Timestamp, "now", return_value=recovery_time):
+        reconcile_storage_health(k8s, current_config, 1)
+    node = k8s.get_json(K8sResource.NODES, "bad")
+    assert not node["spec"]["unschedulable"]
+    assert CORDON_ANNOTATION not in node["metadata"]["annotations"]
+
+
 @pytest.mark.parametrize("peer_fault", ["outage", "stale", "reboot", "wrong_target", "before_failure", "missing"])
 def test_unreliable_peer_evidence_does_not_cordon(config, peer_fault):
     k8s = InMemoryK8sService()

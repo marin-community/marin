@@ -605,19 +605,19 @@ cordoning the fleet. Set `max_cordoned_nodes: 0` for observation only.
 The controller writes `spec.unschedulable=true` and records the supporting
 report in `iris.marin.community/storage-health-cordon`. It does not evict tasks
 or restart gangs. The node-agent DaemonSet tolerates all taints, so probes
-continue while a node is cordoned. After a fresh successful probe on the same
-node incarnation and target, started after the cordon report, the controller
-uncordons the node and removes its budget annotation. Existing operator cordons
-without the Iris annotation stay untouched. The shared controller/node-agent
-service account needs `patch` on Nodes in addition to its existing read
-permissions. Cordons can reduce topology-constrained gang capacity; inspect
-rack capacity before restarting a job.
+continue while a node is cordoned. After a fresh successful probe for the
+current node and configured target that started after the cordon report, the
+controller uncordons the node and removes its budget annotation. Reboots and
+credential or endpoint changes do not prevent recovery. Existing operator
+cordons without the Iris annotation stay untouched. The shared
+controller/node-agent service account needs `patch` on Nodes in addition to its
+existing read permissions. Cordons can reduce topology-constrained gang
+capacity; inspect rack capacity before restarting a job.
 
 The cluster-wide budget counts cordon annotations even after a manual uncordon
 and survives controller restarts. Automatic recovery releases the budget. If
-the probe target or node incarnation changes, the old cordon cannot be cleared
-by a probe of the new target. After confirming the node is healthy, release it
-manually:
+automatic recovery cannot observe a fresh successful probe, investigate and
+release the cordon manually after confirming the node is healthy:
 
 ```bash
 kubectl uncordon NODE
