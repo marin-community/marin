@@ -387,3 +387,30 @@ Atlas's default Terminus-2 runner permits tools and requires a separate adapter
 before evaluating this population. The GLM teacher traces retain their task
 v1.2.0 prompts and scores and do not establish difficulty for the registered
 v1.3.0 release.
+
+### Skill2Env
+
+`Registered releases:skill2env` pins the official
+[Skill2Env Harbor Hub release](https://hub.harborframework.com/datasets/skill2env/skill2env)
+at digest `sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c`.
+It contains 7,496 tasks; Harbor revision 2, version `1.0.1`, and the tags `latest`
+and `v1.0` refer to that release. Project-owned code is Apache-2.0; third-party
+skills and assets retain their own terms.
+
+These tasks use multi-turn terminal interaction. Preserve their resource limits
+and network restrictions. The Atlas scoring contract retains the executable
+grader's component rewards, reports their arithmetic mean, and requires every
+component to reach one within numerical tolerance for a full pass. The paper's
+additional LLM rubric reward is separate from those scores and Atlas's quality
+audit. The component-reward adapter and offline Terminus tooling in
+[PR #9632](https://github.com/marin-community/marin/pull/9632) remain separate
+runner work.
+
+[Issue #9630](https://github.com/marin-community/marin/issues/9630) records a
+three-task assessment and a confirmed grader defect supporting a prepared
+"Some issues" rating. Two attempts exhausted a 50-turn budget. Those results do
+not establish corpus-wide difficulty, and the rating is not published by this
+registration. Atlas's "Good"-only eligibility rule excludes a source rated
+"Some issues" from the standard difficulty comparison. The registration starts
+unreviewed; publishing the prepared assessment requires binding its evidence to
+the deployed source ID and registration contract.
