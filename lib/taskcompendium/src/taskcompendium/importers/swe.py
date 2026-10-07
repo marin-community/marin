@@ -30,26 +30,13 @@ BASE_REF = "refs/taskcompendium/base"
 
 
 class SWEInstance(BaseModel):
-    """Source fields that define the problem, task image, and private grader."""
+    """Source fields that define the problem and private grader."""
 
     model_config = ConfigDict(frozen=True)
 
     instance_id: str = Field(min_length=1)
     problem_statement: str = Field(min_length=1)
     eval_script: str = Field(min_length=1)
-    image_name: str | None = None
-
-
-def swe_image(instance: SWEInstance, dataset: str) -> str:
-    """Resolve the image name stored in the source row or its dataset convention."""
-    if instance.image_name:
-        return instance.image_name
-    instance_id = instance.instance_id
-    if "swe-gym" in dataset.lower():
-        return f"docker.io/xingyaoww/sweb.eval.x86_64.{instance_id.replace('__', '_s_')}:latest".lower()
-    if "swe-bench" in dataset.lower():
-        return f"docker.io/swebench/sweb.eval.x86_64.{instance_id.replace('__', '_1776_')}:latest".lower()
-    raise ValueError(f"SWE tasks require image_name for dataset {dataset!r}")
 
 
 def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentRequirements) -> TaskSpec:

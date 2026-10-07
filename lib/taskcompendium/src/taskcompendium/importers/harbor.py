@@ -76,7 +76,7 @@ def _environment(config: EnvironmentConfig, *, capabilities: tuple[str, ...] = (
     )
 
 
-def harbor_task(directory: Path, *, source: Source, verifier_override: VerifierSpec | None = None) -> TaskSpec:
+def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     """Preserve task semantics and keep verifier files outside the agent workspace.
 
     Multi-stage packages, image builds, and healthchecks are unsupported.
@@ -111,46 +111,40 @@ def harbor_task(directory: Path, *, source: Source, verifier_override: VerifierS
         )
     elif config.verifier.env:
         raise NotImplementedError("Private verifier environment variables on a shared Harbor machine are unsupported")
-    if verifier_override is None:
-        if not separate and not any(resource.path == "test.sh" for resource in private):
-            raise ValueError("A shared Harbor verifier requires tests/test.sh")
-        if config.verifier.collect:
-            raise NotImplementedError("Harbor collect hooks with per-hook users and deadlines are unsupported")
-        artifacts = [ArtifactConfig(source=item) if isinstance(item, str) else item for item in config.artifacts]
-        if not any(artifact.source.rstrip("/") == ARTIFACTS_PATH for artifact in artifacts):
-            artifacts.append(ArtifactConfig(source=ARTIFACTS_PATH))
-        verifier = ShellVerifierSpec(
-            argv=("bash", GRADER_PATH),
-            artifacts=(
-                tuple(
-                    VerifierArtifact(
-                        source=artifact.source,
-                        target=artifact.source,
-                        kind=ArtifactKind.AUTO,
-                        exclude=tuple(artifact.exclude),
-                        missing=MissingArtifactPolicy.SKIP,
-                    )
-                    for artifact in artifacts
+    if config.verifier.collect:
+        raise NotImplementedError("Harbor collect hooks with per-hook users and deadlines are unsupported")
+    artifacts = [ArtifactConfig(source=item) if isinstance(item, str) else item for item in config.artifacts]
+    if not any(artifact.source.rstrip("/") == ARTIFACTS_PATH for artifact in artifacts):
+        artifacts.append(ArtifactConfig(source=ARTIFACTS_PATH))
+    verifier = ShellVerifierSpec(
+        argv=("bash", GRADER_PATH),
+        artifacts=(
+            tuple(
+                VerifierArtifact(
+                    source=artifact.source,
+                    target=artifact.source,
+                    kind=ArtifactKind.AUTO,
+                    exclude=tuple(artifact.exclude),
+                    missing=MissingArtifactPolicy.SKIP,
                 )
-                if separate
-                else ()
+                for artifact in artifacts
+            )
+            if separate
+            else ()
+        ),
+        reward=FileReward(
+            pass_above=0,
+            files=(
+                RewardFile(path=f"{REWARD_PATH}/reward.json", format=RewardFileFormat.JSON),
+                RewardFile(path=f"{REWARD_PATH}/reward.txt", format=RewardFileFormat.NUMBER),
             ),
-            reward=FileReward(
-                pass_above=0,
-                files=(
-                    RewardFile(path=f"{REWARD_PATH}/reward.json", format=RewardFileFormat.JSON),
-                    RewardFile(path=f"{REWARD_PATH}/reward.txt", format=RewardFileFormat.NUMBER),
-                ),
-            ),
-        )
-        specification = VerifierSpec(
-            kind="shell",
-            parameters_json=verifier.model_dump_json(),
-            environment_requirements=verifier_requirements,
-        )
-    else:
-        specification = verifier_override
-        private = ()
+        ),
+    )
+    specification = VerifierSpec(
+        kind="shell",
+        parameters_json=verifier.model_dump_json(),
+        environment_requirements=verifier_requirements,
+    )
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
         context=ConversationInput(
