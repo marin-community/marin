@@ -72,6 +72,15 @@ grant access to other accounts or authorize deleting unclassified snapshots.
 Report what was removed and whether rebuilding is possible; deletion is not a
 recoverable local-cache operation.
 
+Do not assume launcher cleanup enforces this rule. MarinSkyRL campaign revision
+`f8d6cf25235c20cb8365069c7561026100231ca7`, in
+[`cloud/iris/iris_backend.py`](https://github.com/marin-community/MarinSkyRL/blob/f8d6cf25235c20cb8365069c7561026100231ca7/cloud/iris/iris_backend.py),
+uses a two-hour cutoff, selects only names starting with `harbor__`, falls back
+to creation time for never-used snapshots, and skips cleanup when the optional
+Daytona SDK is unavailable. That implementation does not satisfy the newer
+one-hour, all-stale-account-snapshots policy. Run the account-wide check above
+with an installed SDK until the selected launcher implements the current rule.
+
 Use the pinned provider SDK or its supported management interface for remote
 snapshot operations. Harbor's `cache clean` command cleans local Docker images
 and the local Harbor cache; it is not a Daytona snapshot-quota remedy.
