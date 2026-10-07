@@ -28,6 +28,17 @@ canonical -> ledger -> llm
 
 ## Seams
 
+- `llm.recording.recorded_complete(client, messages, policy, request_fields, record, attrs)` is the
+  one path that records a GLM call: an `LLM_CALL` span under `record` (a `CallLedger`: ledger,
+  item, round, step) with tokens, finish reason, and the call's attempt record (`attempts`,
+  `attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `run_agent` and
+  `GlmRolloutModel` both use it, so a rollout's 429s, retries and holds reach the ledger.
+  `GlmRolloutModel(client, policy, record)` takes its `CallLedger`; derive one model per item,
+  round and step with `dataclasses.replace`.
+- `llm.client.complete_prefilled(client, messages, policy, prefix, request_fields=None)` sends
+  `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
+  with it. Use it to force an output format such as proposal front matter.
+
 ## Decisions
 
 Execution is RolloutEngine's. `ShellboxRolloutEngine` creates one shellbox `Machine` per attempt
@@ -53,6 +64,12 @@ rollout with stop reason `length`.
 
 `GlmClient` reports a tool-call reply that used its whole output budget as `length`, because
 vLLM's GLM tool parser reports such a reply as `tool_calls`.
+
+A prefilled reply (`complete_prefilled`) does not think. GLM's chat template renders an empty
+think block before prefilled assistant text, and vLLM's reasoning parser then files the whole
+continuation under `reasoning`; the call therefore sends `enable_thinking: false`, which keeps the
+same prompt tokens and returns the continuation as `content` (measured live). The template strips
+prefilled text, so a prefix with surrounding whitespace is rejected rather than silently changed.
 
 ## Testing
 

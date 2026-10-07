@@ -18,9 +18,23 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, field_validator
+from rolloutengine.contracts import ModelRequest
 
-from taskforge.llm.client import AttemptOutcome, Completion, FinishReason, GlmClient, GlmEndpoint, Pool, request_body
+from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.records import EntryKind
+from taskforge.llm.client import (
+    AttemptOutcome,
+    Completion,
+    FinishReason,
+    GlmClient,
+    GlmEndpoint,
+    Pool,
+    complete_prefilled,
+    request_body,
+)
 from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, ReasoningEffort
+from taskforge.llm.recording import CallLedger
+from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import StructuredTool, complete_structured
 
 EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".evidence" / "llm"
@@ -246,3 +260,64 @@ def test_structured_repair_keeps_prior_output(glm_settings):
     )
     assert result.value.city == "PARIS"
     promote(run, "d_structured_repair")
+
+
+@pytest.mark.live_glm
+@pytest.mark.timeout(900)
+def test_prefilled_answer_continues_the_prefix_without_thinking(glm_settings):
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Propose one programming task. Reply as a markdown document that starts with YAML front "
+                "matter holding id, title and difficulty, followed by a one-paragraph description."
+            ),
+        }
+    ]
+    policy = LLMPolicy()
+    prefix = "---\nid:"
+
+    async def go() -> Completion:
+        async with GlmClient(endpoint(glm_settings)) as client:
+            return await complete_prefilled(client, messages, policy, prefix)
+
+    completion = asyncio.run(go())
+    run = record(
+        "g_prefilled",
+        "front matter prefilled as the start of the assistant turn; the model continues it as content, no reasoning",
+        request_body(
+            glm_settings.model, [*messages, {"role": "assistant", "content": prefix}], policy.max_tokens, policy, {}
+        ),
+        [completion],
+    )
+    assert completion.finish_reason is FinishReason.STOP
+    assert completion.content.startswith(prefix)
+    assert "\ntitle:" in completion.content and completion.content.count("---") >= 2
+    assert (completion.reasoning, completion.usage.reasoning_tokens) == ("", 0)
+    promote(run, "g_prefilled")
+
+
+@pytest.mark.live_glm
+@pytest.mark.timeout(900)
+def test_rollout_model_turn_is_recorded_in_the_ledger(glm_settings):
+    ledger = JsonlLedger(EVIDENCE_DIR / "ledger" / "h_rollout_model_record")
+    record_to = CallLedger(
+        ledger=ledger, item_id=f"live-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}", round=0, step="solver"
+    )
+    request = ModelRequest(
+        ({"role": "user", "content": "Name the largest planet in the solar system in one word."},),
+        {},
+        prefix_token_ids=(),
+        assistant_message_index=None,
+    )
+
+    async def go():
+        async with GlmClient(endpoint(glm_settings)) as client:
+            return await GlmRolloutModel(client, LLMPolicy(max_continuations=0), record_to)(request)
+
+    turn = asyncio.run(go())
+    [entry] = list(read_entries(ledger.path_for(record_to.item_id)))
+    assert turn.response_token_ids and turn.prompt_token_ids
+    assert (entry.kind, entry.step, entry.cause) == (EntryKind.LLM_CALL, "solver", None)
+    assert (entry.tokens_in, entry.tokens_out) == (len(turn.prompt_token_ids), len(turn.response_token_ids))
+    assert entry.attrs["turn"] == "0" and int(entry.attrs["attempts"]) >= 1
