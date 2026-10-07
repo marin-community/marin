@@ -92,7 +92,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config = load_run_config(args.config)
-    ideas = selected_ideas(args.catalog.expanduser(), args.capability)
+    ideas = selected_ideas(args.catalog, args.capability)
     failed = FailedItems.RETRY if args.retry_failed else FailedItems.SKIP
     summary = asyncio.run(run_job(config, partial(capability_inputs, ideas, args.rubric_samples), failed))
     print("RUN_SUMMARY " + json.dumps(summary.summary_json()), flush=True)
