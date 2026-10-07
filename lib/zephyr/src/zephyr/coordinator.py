@@ -501,8 +501,9 @@ class ZephyrCoordinator:
     def register_worker(self, worker_id: str, worker_handle: ActorHandle, task_id: str = "") -> None:
         """Called by workers when they come online to register with coordinator.
 
-        Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state.
+        Handles a worker that registers again under the same ID by updating the
+        stale handle and resetting worker state. A new Iris attempt of a worker
+        task registers under a new ID (see ``attempt_worker_id``).
         """
         with self._lock:
             if worker_id in self._worker_handles:
