@@ -6,7 +6,8 @@
 ``math_task`` is a null-environment numeric task graded by verifyit through TaskCompendium's
 registry; ``json_task`` is a null-environment task with a JSON answer. ``file_task`` is a ShellSim
 task whose private ``ShellVerifierSpec`` script checks a file the agent must create. ``rounds`` builds
-validation-round inputs: a ``TaskDraft`` around a task, a ``ValidationPolicy`` and a ``ValidationSite``.
+validation-round inputs: a ``TaskDraft`` around a task, a ``ValidationPolicy``, a ``ValidationSite`` and a
+``ValidationEvidence``; ``file_facts`` and ``math_facts`` are the ``TaskFacts`` of the file and math tasks.
 """
 
 import asyncio
@@ -43,8 +44,10 @@ from taskforge.spec.controls import (
 )
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
 from taskforge.validate.adversary import AdversaryRole
-from taskforge.validate.calibration import CalibrationBand
-from taskforge.validate.run import ValidationPolicy
+from taskforge.validate.calibration import CalibrationBand, TaskFacts
+from taskforge.validate.controls import ControlOutcome
+from taskforge.validate.outcome import Outcome as TrialOutcome
+from taskforge.validate.run import ValidationEvidence, ValidationPolicy
 from taskforge.validate.solver import ValidationSite
 from taskforge.validate.trials import Deadlines, RetryBackoff
 
@@ -363,6 +366,16 @@ def validation_site(directory: Path) -> ValidationSite:
     return ValidationSite("item", 0, directory / "evidence", JsonlLedger(directory / "ledger"))
 
 
+def round_evidence(
+    task_digest: str,
+    controls: tuple[ControlOutcome, ...],
+    solver: tuple[TrialOutcome, ...],
+    adversaries: dict[AdversaryRole, tuple[TrialOutcome, ...]],
+    facts: TaskFacts,
+) -> ValidationEvidence:
+    return ValidationEvidence(task_digest, tuple(controls), tuple(solver), adversaries, facts)
+
+
 @dataclass(frozen=True)
 class Rounds:
     """Builders for validation-round inputs, handed to tests through the ``rounds`` fixture."""
@@ -370,8 +383,21 @@ class Rounds:
     draft: Callable[..., TaskDraft] = draft_of
     policy: Callable[..., ValidationPolicy] = validation_policy
     site: Callable[[Path], ValidationSite] = validation_site
+    evidence: Callable[..., ValidationEvidence] = round_evidence
 
 
 @pytest.fixture
 def rounds() -> Rounds:
     return Rounds()
+
+
+@pytest.fixture
+def file_facts() -> TaskFacts:
+    """The ``TaskFacts`` of ``file_task``."""
+    return TaskFacts(True, ("/workspace/numbers.txt",), ("/workspace/numbers.txt", "/grader/check.sh"))
+
+
+@pytest.fixture
+def math_facts() -> TaskFacts:
+    """The ``TaskFacts`` of ``math_task``."""
+    return TaskFacts(False, (), ())

@@ -6,7 +6,7 @@ adversary role, read back from the attempt files, summarized, and resumed withou
 
 Writes ``lib/taskforge/.evidence/validate/e_evidence_round-<utc>/``: the round's attempt files and ledger,
 ``calibration.json``, and ``summary.json`` (per-trial outcome, reward, stop reason, shell commands and final
-reply, role statistics, findings, wall time).
+reply, role statistics, each adversary trial's tier and signals, findings, notes, wall time).
 """
 
 import asyncio
@@ -29,7 +29,17 @@ from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.validate.adversary import AdversaryRole, run_adversaries
 from taskforge.validate.attempts import trial_files
-from taskforge.validate.calibration import CalibrationBand, commands, final_reply, load_summary, summarize, write_summary
+from taskforge.validate.calibration import (
+    CalibrationBand,
+    CalibrationSummary,
+    DefectTier,
+    commands,
+    final_reply,
+    load_summary,
+    summarize,
+    task_facts,
+    write_summary,
+)
 from taskforge.validate.controls import ServerTokenizer
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.run import (
@@ -73,6 +83,29 @@ def trial_summary(outcome: Outcome) -> dict[str, object]:
     if isinstance(outcome, Graded):
         return {"outcome": "graded", "reward": outcome.reward, "timed_out": outcome.timed_out, **common}
     return {"outcome": "ungraded", "cause": outcome.cause, "detail": outcome.detail[-400:], **common}
+
+
+def assessment_summary(summary: CalibrationSummary) -> dict[str, list[dict[str, object]]]:
+    """Per adversary trial: its tier, the row that fired, why, and the signals the row read."""
+    record: dict[str, list[dict[str, object]]] = {}
+    for a in summary.assessments:
+        s = a.signals
+        record.setdefault(a.role, []).append(
+            {
+                "index": a.index,
+                "tier": a.tier,
+                "rule": a.rule,
+                "reason": a.reason,
+                "passed": s.passed,
+                "gave_up": s.gave_up,
+                "output_tokens": s.output_tokens,
+                "budget_exhausted": s.budget_exhausted,
+                "inputs_consumed": s.inputs_consumed,
+                "inputs_written": s.inputs_written,
+                "comparison": s.comparison,
+            }
+        )
+    return record
 
 
 def attempt_counts(evidence_dir: Path) -> dict[str, int]:
@@ -141,7 +174,9 @@ async def test_a_validation_round_on_shellsim(client, file_task, file_controls, 
         "status": repr(summary.status),
         "solve_rate": summary.solve_rate,
         "roles": {role: vars(stats) for role, stats in summary.roles.items()},
+        "assessments": assessment_summary(summary),
         "findings": [{"kind": f.kind, "roles": f.roles, "new_controls": len(f.new_controls)} for f in summary.findings],
+        "notes": [{"kind": n.kind, "roles": n.roles} for n in summary.notes],
         "unsettled_before_resume": sorted(unsettled),
         "attempts_before_resume": before,
         "attempts_after_resume": after,
@@ -150,7 +185,13 @@ async def test_a_validation_round_on_shellsim(client, file_task, file_controls, 
 
     assert len(solver) == POLICY.k
     assert {role: len(o) for role, o in adversaries.items()} == {role: POLICY.adversary_k for role in AdversaryRole}
-    assert summary == summarize(ValidationEvidence(digest, controls, solver, adversaries), POLICY)
+    assert summary == summarize(
+        ValidationEvidence(digest, controls, solver, adversaries, task_facts(draft.task)), POLICY
+    )
+    # The file task's grader admits no shortcut, so no adversary pass is a defect to repair.
+    assert all(a.tier is not DefectTier.REPAIR for a in summary.assessments), assessment_summary(summary)
+    assert all(stats.exhausted == 0 for stats in summary.roles.values())
+    assert not [f for f in summary.findings if f.new_controls]
     assert load_summary(site.evidence_dir / "calibration.json") == summary
     assert summary.policy_digest == POLICY.digest and summary.controls_met == tuple(c.id for c in file_controls)
     assert {name: count for name, count in after.items() if name not in unsettled} == {
