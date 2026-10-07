@@ -18,18 +18,18 @@ from jaxtyping import Array, Float, Int
 
 from levanter.sharding import partitioning_axes, partition_spec_of
 
-from .config import OOB_SEGMENT, ShortConvBlockSizes
-from .pallas_gpu import (
-    pallas_short_conv_available,
-    short_conv_pallas_bwd_local,
-    short_conv_pallas_fwd_local,
-    short_conv_shapes_supported,
+from .reference import OOB_SEGMENT, short_conv_reference
+from .triton_gpu import (
+    SEQUENCE_MULTIPLE as TRITON_SEQUENCE_MULTIPLE,
+    short_conv_triton_bwd_local,
+    short_conv_triton_fwd_local,
+    triton_short_conv_available,
+    triton_short_conv_shapes_supported,
 )
-from .reference import short_conv_reference
 
 logger = logging.getLogger(__name__)
 
-Implementation: TypeAlias = Literal["reference", "pallas_gpu"]
+Implementation: TypeAlias = Literal["reference", "triton_gpu"]
 
 #: Mesh axes the activation batch is sharded over in the grug MoE models. The kernel is
 #: shard-local along every one of them. The sequence may be sharded over one further axis
@@ -38,8 +38,8 @@ DEFAULT_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def _default_implementations() -> tuple[Implementation, ...]:
-    if pallas_short_conv_available():
-        return ("pallas_gpu", "reference")
+    if triton_short_conv_available():
+        return ("triton_gpu", "reference")
     return ("reference",)
 
 
@@ -78,61 +78,44 @@ def _assert_local_axes(name: str, array: jax.Array, axes: Sequence[int], mesh) -
             )
 
 
-# --------------------------------------------------------------------------------------
-# custom_vjp around the Pallas kernels.
-#
-# JAX must never autodiff *through* a pallas_call, and -- much more to the point here --
-# we specifically do not want reverse-mode AD to invent the backward. The whole cost of
-# this op lives in the backward, so the backward is hand-written.
-# --------------------------------------------------------------------------------------
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(3, 4))
-def _short_conv_pallas_local(
+# The whole cost of this op is in the backward, so the backward is the kernel's own rather than
+# whatever reverse-mode AD would derive. Residuals are the primal inputs only.
+@functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
+def _short_conv_triton_local(
     weight: Float[Array, "W C"],
     x: Float[Array, "B S C"],
     segment_ids: Int[Array, "B S"],
-    block_sizes: ShortConvBlockSizes,
     exact_reference_rounding: bool,
 ) -> Float[Array, "B S C"]:
-    return short_conv_pallas_fwd_local(
-        weight,
-        x,
-        segment_ids,
-        block_sizes=block_sizes,
-        exact_reference_rounding=exact_reference_rounding,
-    )
+    return short_conv_triton_fwd_local(weight, x, segment_ids, exact_reference_rounding=exact_reference_rounding)
 
 
-def _short_conv_pallas_local_fwd(weight, x, segment_ids, block_sizes, exact_reference_rounding):
-    out = short_conv_pallas_fwd_local(
-        weight,
-        x,
-        segment_ids,
-        block_sizes=block_sizes,
-        exact_reference_rounding=exact_reference_rounding,
-    )
-    # Residuals are the primal inputs only: `x` is needed for dw, `segment_ids` for both
-    # masks, `weight` for dx. Nothing shifted or masked is saved -- that is the 4.84 GB of
-    # fp32 scratch the XLA backward allocates and this one does not.
+def _short_conv_triton_local_fwd(weight, x, segment_ids, exact_reference_rounding):
+    out = short_conv_triton_fwd_local(weight, x, segment_ids, exact_reference_rounding=exact_reference_rounding)
     return out, (weight, x, segment_ids)
 
 
-def _short_conv_pallas_local_bwd(block_sizes, exact_reference_rounding, residuals, dy):
+def _short_conv_triton_local_bwd(exact_reference_rounding, residuals, dy):
     weight, x, segment_ids = residuals
-    dx, dw_partials = short_conv_pallas_bwd_local(
-        weight,
-        x,
-        segment_ids,
-        dy,
-        block_sizes=block_sizes,
-        exact_reference_rounding=exact_reference_rounding,
+    dx, dw_partials = short_conv_triton_bwd_local(
+        weight, x, segment_ids, dy, exact_reference_rounding=exact_reference_rounding
     )
-    dw = jnp.sum(dw_partials, axis=0).astype(weight.dtype)
-    return dw, dx, None  # segment_ids is integer metadata: no cotangent
+    return jnp.sum(dw_partials, axis=0).astype(weight.dtype), dx, None
 
 
-_short_conv_pallas_local.defvjp(_short_conv_pallas_local_fwd, _short_conv_pallas_local_bwd)
+_short_conv_triton_local.defvjp(_short_conv_triton_local_fwd, _short_conv_triton_local_bwd)
+
+
+def _triton_local_call(
+    weight: jax.Array,
+    x: jax.Array,
+    segment_ids: jax.Array | None,
+    *,
+    exact_reference_rounding: bool,
+) -> jax.Array:
+    if segment_ids is None:
+        segment_ids = jnp.zeros(x.shape[:2], jnp.int32)
+    return _short_conv_triton_local(weight, x, segment_ids, exact_reference_rounding)
 
 
 def _sequence_shard_axis(array: jax.Array, mesh) -> str | None:
@@ -153,18 +136,23 @@ def _round_up(value: int, multiple: int) -> int:
 LocalCall: TypeAlias = Callable[[jax.Array, jax.Array, jax.Array | None], jax.Array]
 
 
-def _pallas_local_call(
-    weight: jax.Array,
-    x: jax.Array,
-    segment_ids: jax.Array | None,
-    *,
-    block_sizes: ShortConvBlockSizes,
-    exact_reference_rounding: bool,
+def _call_right_padded(
+    local_call: LocalCall, weight: jax.Array, x: jax.Array, segment_ids: jax.Array | None, padded_seq: int
 ) -> jax.Array:
+    """``local_call`` on ``x`` right-padded to ``padded_seq`` rows.
+
+    The padded rows carry the out-of-range segment id, so they read and contribute as the zeros past
+    the end of a sequence do. Causality keeps them from affecting earlier outputs; the caller drops
+    their own outputs.
+    """
+    tail = padded_seq - x.shape[1]
+    if not tail:
+        return local_call(weight, x, segment_ids)
     if segment_ids is None:
-        # A constant segment ID makes every tap valid for unpacked inputs.
         segment_ids = jnp.zeros(x.shape[:2], jnp.int32)
-    return _short_conv_pallas_local(weight, x, segment_ids, block_sizes, exact_reference_rounding)
+    x = jnp.pad(x, ((0, 0), (0, tail), (0, 0)))
+    segment_ids = jnp.pad(segment_ids, ((0, 0), (0, tail)), constant_values=OOB_SEGMENT)
+    return local_call(weight, x, segment_ids)
 
 
 def _short_conv_sharded(
@@ -180,16 +168,17 @@ def _short_conv_sharded(
 ) -> Float[Array, "B S C"]:
     """Run ``local_call`` inside an explicit ``shard_map``.
 
-    Sequence shards prepend a left halo and right-pad to ``padded_local_seq`` before
-    convolution, then discard halo and padding outputs. Causality keeps right padding
-    from affecting retained outputs. An unsharded sequence needs no communication.
+    Sequence shards prepend a left halo. The local block is right-padded to ``padded_local_seq``
+    before convolution, and the halo and padding outputs are discarded. An unsharded sequence needs
+    no communication.
     """
+    seq_len = x.shape[1]
     if mesh is None:
-        return local_call(weight, x, segment_ids)
+        return _call_right_padded(local_call, weight, x, segment_ids, padded_local_seq)[:, :seq_len, :]
     # An axis that shards the sequence cannot also shard the batch of the same array.
     active = tuple(axis for axis in _active_batch_axes(mesh, batch_axes) if axis != seq_axis)
     if seq_axis is None and not active:
-        return local_call(weight, x, segment_ids)
+        return _call_right_padded(local_call, weight, x, segment_ids, padded_local_seq)[:, :seq_len, :]
 
     # The sequence axis is sharded by design on the halo path; any other sharded axis would
     # be a hidden all-gather, including a batch axis the caller did not name.
@@ -232,12 +221,8 @@ def _short_conv_sharded(
                 first = jax.lax.axis_index(seq_axis) == 0
                 seg_halo = jnp.where(first, jnp.full_like(seg_halo, OOB_SEGMENT), seg_halo)
                 seg_block = jnp.concatenate([seg_halo, seg_block], axis=1)
-        tail = padded_local_seq - x_block.shape[1]
-        if tail:
-            x_block = jnp.pad(x_block, ((0, 0), (0, tail), (0, 0)))
-            if seg_block is not None:
-                seg_block = jnp.pad(seg_block, ((0, 0), (0, tail)), constant_values=OOB_SEGMENT)
-        return local_call(weight_local, x_block, seg_block)[:, halo : halo + local_seq, :]
+        out = _call_right_padded(local_call, weight_local, x_block, seg_block, padded_local_seq)
+        return out[:, halo : halo + local_seq, :]
 
     # pyrefly: ignore[bad-argument-count]  # jax.shard_map decorator erases _local's real signature
     return _local(weight, x, segment_ids)
@@ -249,7 +234,6 @@ def short_conv(
     segment_ids: Int[Array, "B S"] | None = None,
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: ShortConvBlockSizes | None = None,
     exact_reference_rounding: bool = True,
     batch_axes: Sequence[str] = DEFAULT_BATCH_AXES,
 ) -> Float[Array, "B S C"]:
@@ -262,7 +246,8 @@ def short_conv(
     A sequence sharded over one mesh axis exchanges a left halo before local
     convolution. Each shard must contain at least ``kernel_size - 1`` tokens.
     With ``exact_reference_rounding=True``, the bf16 forward matches the unsharded
-    reference bitwise. FP32 forward results can differ due to compiler fusion.
+    reference bitwise, and so does the Triton kernel's fp32 forward. On the reference
+    path, XLA fusion can change fp32 results.
     Input gradients near shard boundaries combine separately rounded local and
     neighboring contributions, so they can differ from the unsharded reference.
 
@@ -271,8 +256,9 @@ def short_conv(
       x: ``[batch, seq_len, channels]`` activations.
       segment_ids: ``[batch, seq_len]`` packed-document ids, or None for an unpacked batch.
       implementation: a single name (fail fast if unsupported) or an ordered sequence to
-        try in turn. Defaults to the Pallas kernel on GPU, the reference elsewhere.
-      block_sizes: GPU tile configuration.
+        try in turn. Defaults to the Triton kernel on GPU and the reference elsewhere, or when
+        the kernel cannot take the call: it needs kernel size 4, a channel count that is a
+        multiple of 64, and bfloat16 or float32 inputs.
       exact_reference_rounding: keep the reference's per-op bf16 rounding, which makes the
         forward and, with the sequence whole, ``dx`` bit-identical to ``short_conv_reference``.
         Setting False keeps a single fp32 accumulator across taps -- more accurate, not
@@ -281,14 +267,13 @@ def short_conv(
     """
     if weight.dtype != x.dtype:
         # The reference promotes mixed dtypes via standard JAX rules (fp32 for fp32 weight /
-        # bf16 x) while the Pallas kernel outputs x.dtype, so mixed inputs would give
+        # bf16 x) while the kernel outputs x.dtype, so mixed inputs would give
         # backend-dependent dtypes and values. Normalise at the boundary instead.
         raise ValueError(
             f"short_conv requires weight and x to share a dtype; got weight={weight.dtype}, "
             f"x={x.dtype}. Cast to a common dtype before calling."
         )
 
-    block_sizes = block_sizes or ShortConvBlockSizes.get_default()
     requested = _as_sequence(implementation)
     explicit_single = isinstance(implementation, str)
 
@@ -305,9 +290,8 @@ def short_conv(
         local_seq //= shards
         if halo > local_seq:
             raise ValueError(f"short_conv halo size {halo} exceeds the local sequence length {local_seq}")
-    # Pallas tiles the local sequence plus halo; the reference needs no block padding.
-    pallas_local_seq = _round_up(local_seq + halo, block_sizes.s_block_size) if seq_axis else local_seq
-    pallas_local_shape = (x.shape[0], pallas_local_seq, x.shape[2])
+    # The kernel walks the local sequence, plus the halo when sharded, in whole chunks.
+    triton_local_seq = _round_up(local_seq + halo if seq_axis else local_seq, TRITON_SEQUENCE_MULTIPLE)
     sharded = functools.partial(
         _short_conv_sharded,
         weight,
@@ -324,28 +308,23 @@ def short_conv(
             if seq_axis is None:
                 return short_conv_reference(weight, x, segment_ids)
             return sharded(local_call=short_conv_reference, padded_local_seq=local_seq + halo)
-        if name != "pallas_gpu":
-            raise ValueError(f"Unknown short_conv implementation {name!r}")
-
-        reason = None
-        if not pallas_short_conv_available():
-            reason = "Pallas Triton backend unavailable or not running on a GPU"
-        else:
-            reason = short_conv_shapes_supported(weight.shape, pallas_local_shape, block_sizes)
-        if reason is not None:
-            if explicit_single:
-                raise RuntimeError(f"short_conv implementation 'pallas_gpu' is unusable: {reason}")
-            errors.append(f"pallas_gpu: {reason}")
-            warnings.warn(f"short_conv falling back from 'pallas_gpu' ({reason})", stacklevel=2)
-            continue
-
-        return sharded(
-            local_call=functools.partial(
-                _pallas_local_call,
-                block_sizes=block_sizes,
-                exact_reference_rounding=exact_reference_rounding,
-            ),
-            padded_local_seq=pallas_local_seq,
-        )
+        if name == "triton_gpu":
+            if not triton_short_conv_available():
+                reason = "Triton backend unavailable or not running on a GPU"
+            else:
+                reason = triton_short_conv_shapes_supported(
+                    weight.shape, (x.shape[0], triton_local_seq, x.shape[2]), x.dtype, exact_reference_rounding
+                )
+            if reason is not None:
+                if explicit_single:
+                    raise RuntimeError(f"short_conv implementation 'triton_gpu' is unusable: {reason}")
+                errors.append(f"triton_gpu: {reason}")
+                warnings.warn(f"short_conv falling back from 'triton_gpu' ({reason})", stacklevel=2)
+                continue
+            return sharded(
+                local_call=functools.partial(_triton_local_call, exact_reference_rounding=exact_reference_rounding),
+                padded_local_seq=triton_local_seq,
+            )
+        raise ValueError(f"Unknown short_conv implementation {name!r}")
 
     raise RuntimeError("No usable short_conv implementation: " + "; ".join(errors))
