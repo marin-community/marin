@@ -87,8 +87,8 @@ from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
 from taskforge.validate.run import load_validation, replay_controls
-from taskforge.validate.solver import ValidationSite, run_solver
-from taskforge.validate.trials import EngineSettings, RetryBackoff, RolloutModel, task_digest
+from taskforge.validate.solver import ModelFactory, ValidationSite, run_solver
+from taskforge.validate.trials import EngineSettings, RetryBackoff, task_digest
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,8 @@ class LoopServices[IdeaT]:
         template: The builder template the author adapts (``build.template.standard``).
         build: The author's and builder's services; its ledger is ``ledger``.
         engine: Run-wide engine settings; each draft's trials run under its own convention alone.
-        rollout_model: The solver; every adversary role wraps it.
+        rollout_models: Builds each validation trial's solver model, recording under the trial's step;
+            every adversary role wraps one.
         tokenize: The server tokenizer control replay renders transcripts with.
         ledger: The run's ledger; its local JSONL root must be ``root / "ledger"``.
         root: The run root.
@@ -142,7 +143,7 @@ class LoopServices[IdeaT]:
     template: ModuleType
     build: BuildServices
     engine: EngineSettings
-    rollout_model: RolloutModel
+    rollout_models: ModelFactory
     tokenize: Tokenize
     ledger: Ledger
     root: Path
@@ -539,7 +540,7 @@ async def _trials(item: _Item, state: ItemState) -> None:
     draft, site = item.draft(state), item.site(state)
 
     async def solver() -> None:
-        outcomes = await run_solver(draft, validation, site, services.engine, services.rollout_model)
+        outcomes = await run_solver(draft, validation, site, services.engine, services.rollout_models)
         stats = Evidence({TrialKind.SOLVER: outcomes}).reward_stats(TrialKind.SOLVER)
         item.log.append(
             state.round,
@@ -552,7 +553,7 @@ async def _trials(item: _Item, state: ItemState) -> None:
         )
 
     async def adversaries() -> None:
-        by_role = await run_adversaries(draft, validation, site, services.engine, services.rollout_model)
+        by_role = await run_adversaries(draft, validation, site, services.engine, services.rollout_models)
         attrs: dict[str, str] = {}
         for role, outcomes in by_role.items():
             graded = [outcome for outcome in outcomes if isinstance(outcome, Graded)]

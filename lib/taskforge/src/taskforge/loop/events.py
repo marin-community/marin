@@ -30,6 +30,7 @@ from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
 from taskforge.review.decision import RejectKind
 from taskforge.triage.verdict import TriageDecision
 from taskforge.validate.calibration import DECISIVE, FindingKind
+from taskforge.validate.outcome import TrialKind
 
 EVENT_SCHEMA = "1"
 SEQ = "seq"
@@ -239,9 +240,20 @@ def events(entries: Iterable[LedgerEntry]) -> list[LedgerEntry]:
     return found
 
 
+UNBUDGETED_TRIALS = frozenset({TrialKind.SOLVER, TrialKind.ADVERSARY})
+"""Trial kinds whose rollout-model calls the validation policy bounds (``k``, ``adversary_k``) instead."""
+
+
 def item_tokens_out(entries: Iterable[LedgerEntry]) -> int:
-    """The output tokens of every ``LLM_CALL`` entry: what the item's budget counts."""
-    return sum(entry.tokens_out or 0 for entry in entries if entry.kind is EntryKind.LLM_CALL)
+    """The output tokens the item's budget counts: ``LLM_CALL`` entries outside validation trials.
+
+    A trial's calls are recorded under step ``<kind>/<trial>`` (``validate.solver.ValidationSite.call_ledger``).
+    """
+    return sum(
+        entry.tokens_out or 0
+        for entry in entries
+        if entry.kind is EntryKind.LLM_CALL and entry.step.partition("/")[0] not in UNBUDGETED_TRIALS
+    )
 
 
 def split(value: str) -> tuple[str, ...]:

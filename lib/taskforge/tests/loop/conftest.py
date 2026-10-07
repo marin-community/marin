@@ -138,11 +138,12 @@ async def assemble(b: Build, env: EnvironmentSpec, graded: Grader) -> TaskSpec:
     )
 
 
-def control(id, kind, category, text, stage, **expect):
+def control(id, kind, category, concern, text, stage, **expect):
     return controls.Control(
         id=f"{id}-{stage}",
         kind=kind,
         category=category,
+        concern=concern,
         author="test",
         payload=controls.Transcript((controls.reply(text),)),
         expect=controls.Expectation(status=Outcome.GRADED, **expect),
@@ -156,15 +157,15 @@ async def fixed_controls(b: Build, task: TaskSpec) -> tuple[controls.Control, ..
         c
         for stage in range(max(1, len(STAGES)))
         for c in (
-            control("gold", K.POSITIVE, C.KNOWN_CORRECT, "ANSWER = 42", stage, reward_min=1.0),
-            control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, "", stage, reward_max=0.0),
-            control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, "ANSWER = 41", stage, reward_max=0.0),
-            control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, "ANSWER = 13", stage, reward_max=0.0),
+            control("gold", K.POSITIVE, C.KNOWN_CORRECT, N.REFERENCE, "ANSWER = 42", stage, reward_min=1.0),
+            control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, N.EXTRACTION, "", stage, reward_max=0.0),
+            control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE, "ANSWER = 41", stage, reward_max=0.0),
+            control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT, "ANSWER = 13", stage, reward_max=0.0),
         )
     )
 
 
-K, C = controls.ControlKind, controls.ControlCategory
+K, C, N = controls.ControlKind, controls.ControlCategory, controls.ControlConcern
 
 
 async def build(b: Build) -> BuildOutput:
@@ -385,7 +386,7 @@ class Loop:
                     cleanup_timeout=10,
                     conventions=(CONVENTION,),
                 ),
-                rollout_model=self.model,
+                rollout_models=lambda _: self.model,
                 tokenize=self.tokenizer,
                 ledger=ledger,
                 root=self.root,

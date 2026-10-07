@@ -153,12 +153,14 @@ def test_an_unknown_schema_is_refused(tmp_path):
         derive_state([*entries[:-1], future])
 
 
-def test_the_budget_counts_only_llm_call_output_tokens(tmp_path):
+def test_the_budget_counts_only_llm_call_output_tokens_outside_validation_trials(tmp_path):
     log = built_log(tmp_path)
     spans = [
         LedgerEntry(ITEM, 0, "author", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=700),
         LedgerEntry(ITEM, 0, "grader", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=None),
         LedgerEntry(ITEM, 0, "solver/0/0", EntryKind.TRIAL, 0.0, 1.0, tokens_out=9000),
+        LedgerEntry(ITEM, 0, "solver/0", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=9000),
+        LedgerEntry(ITEM, 0, "adversary/shortcut/1", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=9000),
     ]
     assert item_tokens_out([*log.entries(), *spans]) == 700
     assert derive_state([*log.entries(), *spans]).phase is Phase.CONTROLS

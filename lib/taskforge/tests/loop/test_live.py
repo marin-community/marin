@@ -16,6 +16,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import httpx
@@ -103,7 +104,7 @@ def llm_calls(root: Path, item_id: str) -> int:
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, parallel_key):
+async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, parallel_key, image_cache):
     proposal = parse((DATA / "d43.culinary.scaling-1.md").read_text())
     record = json.loads((DATA / "d43.culinary.scaling.json").read_text())
     root = EVIDENCE / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -115,7 +116,7 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
     started = time.monotonic()
 
     async with GlmClient(endpoint) as client, httpx.AsyncClient() as http:
-        factories = machine_factories(MachineHost.LAPTOP, controller_url=None)
+        factories = machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=image_cache)
 
         def services() -> LoopServices:
             return LoopServices(
@@ -146,7 +147,7 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
                         JsonValueAnswer(id="json_value"),
                     ),
                 ),
-                rollout_model=GlmRolloutModel(client, SAMPLING),
+                rollout_models=partial(GlmRolloutModel, client, SAMPLING),
                 tokenize=ServerTokenizer(client, SAMPLING),
                 ledger=ledger,
                 root=root,
