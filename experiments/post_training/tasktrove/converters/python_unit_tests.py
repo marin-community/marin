@@ -84,10 +84,10 @@ def convert(task: TaskFiles) -> ConvertedTask | Rejected:
         return solution_files
 
     test, instruction = repair_contract(task.files[test_file], task.text(INSTRUCTION))
-    test, instruction, extra_files = repair_factorial(test, instruction)
-    data_files = {test_file: test, **extra_files, **task.under("setup_files/")}
+    contract = repair_factorial(test, instruction)
+    data_files = {test_file: contract.test, **contract.extra_files, **task.under("setup_files/")}
     return ConvertedTask(
-        instruction=instruction,
+        instruction=contract.instruction,
         spec=PytestSpec(paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",), python=PYTEST_PYTHON),
         dockerfile=task.text(DOCKERFILE).rstrip() + "\n" + PYTEST_INSTALL,
         tags=("code", "python", "unit-test", "kata"),

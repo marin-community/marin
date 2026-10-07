@@ -4,6 +4,7 @@
 """Enforce the reproduced recursive factorial and student-test contract."""
 
 import hashlib
+from dataclasses import dataclass
 
 TEST_SHA = "0f00bf58569de0cb316f383aa81a7e8c9f92c85f500a3db1806955e0ee809d1d"
 STUDENT_TEST_PATH = "/app/tests/test_factorial.py"
@@ -31,7 +32,7 @@ def test_factorial_documentation_and_type_hints():
 def test_factorial_uses_recursion():
     source = Path(inspect.getfile(calculate_factorial)).resolve()
     recursive_calls = []
-    def observe(frame, event, argument):
+    def observe(frame, event, _argument):
         if event != 'call' or Path(frame.f_code.co_filename).resolve() != source:
             return
         caller = frame.f_back
@@ -50,8 +51,8 @@ def test_factorial_uses_recursion():
 
 
 def test_student_tests_detect_requested_factorial_errors():
-    path = Path('/app/tests/test_factorial.py')
-    assert path.is_file(), 'Write your tests at /app/tests/test_factorial.py'
+    path = Path('__STUDENT_TEST_PATH__')
+    assert path.is_file(), f'Write your tests at {path}'
     with tempfile.TemporaryDirectory() as temporary:
         for mutant in ['correct', 'negative', '0', '1', '2', '3', '4', '5']:
             report = Path(temporary) / (mutant + '.json')
@@ -72,7 +73,9 @@ def test_student_tests_detect_requested_factorial_errors():
             else:
                 assert process.returncode == 1 and summary.get('failed', 0) > 0, (mutant, summary)
                 assert summary.get('error', 0) == 0, summary
-"""
+""".replace(
+    "__STUDENT_TEST_PATH__", STUDENT_TEST_PATH
+)
 COVERAGE_PLUGIN = """import os
 
 import factorial
@@ -100,12 +103,19 @@ of each integer from 1 through 5. The verifier also checks the function independ
 """
 
 
-def repair_contract(test: bytes, instruction: str) -> tuple[bytes, str, dict[str, bytes]]:
+@dataclass(frozen=True)
+class FactorialContract:
+    test: bytes
+    instruction: str
+    extra_files: dict[str, bytes]
+
+
+def repair_contract(test: bytes, instruction: str) -> FactorialContract:
     """Repair the known factorial fixture without changing other Python tasks."""
     if hashlib.sha256(test).hexdigest() != TEST_SHA or "calculate_factorial" not in instruction:
-        return test, instruction, {}
+        return FactorialContract(test, instruction, {})
     instruction = instruction.replace("/tests/test_factorial.py", STUDENT_TEST_PATH) + TEST_INTERFACE
-    return (
+    return FactorialContract(
         IMPORTS.encode() + test + CONTRACT_TESTS.encode(),
         instruction,
         {"tests/factorial_coverage.py": COVERAGE_PLUGIN.encode()},

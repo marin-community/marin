@@ -2,18 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+INVALID_QUANTITY = "positive integer required"
+
+
 class Item:
     def __init__(self, name, quantity, price):
         self.name, self.quantity, self.price = name, quantity, price
 
     def increase_quantity(self, amount):
         if not isinstance(amount, int) or amount <= 0:
-            raise ValueError("positive integer required")
+            raise ValueError(INVALID_QUANTITY)
         self.quantity += amount
 
     def decrease_quantity(self, amount):
         if not isinstance(amount, int) or amount <= 0:
-            raise ValueError("positive integer required")
+            raise ValueError(INVALID_QUANTITY)
         if amount > self.quantity:
             raise ValueError("underflow")
         self.quantity -= amount
@@ -31,7 +34,7 @@ class Inventory:
 
     def remove_item(self, item_name, quantity):
         if not isinstance(quantity, int) or quantity <= 0:
-            raise ValueError("positive integer required")
+            raise ValueError(INVALID_QUANTITY)
         if item_name in self.items and quantity <= self.items[item_name].quantity:
             self.items[item_name].decrease_quantity(quantity)
 
