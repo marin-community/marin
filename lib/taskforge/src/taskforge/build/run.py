@@ -13,6 +13,9 @@ stages (``check_execution``), the submission convention can carry the task's ans
 controls include a candidate ``b.try_grader`` graded (other than a grader's reference answer or the
 empty answer) fails, so a program cannot fit its controls to its grader. The draft is written to
 ``<item_dir>/draft/``.
+
+A host failure during the build (``taskforge.build.infrastructure``) raises
+``BuildInfrastructureFailure`` rather than ``BuildFailure``, even when the program wrapped it.
 """
 
 import json
@@ -35,6 +38,7 @@ from taskcompendium.submission import (
     submission_compatibility,
 )
 
+from taskforge.build.infrastructure import BuildInfrastructureFailure, infrastructure_failure
 from taskforge.build.sdk import (
     GRADED_RESOURCE_PREFIX,
     Build,
@@ -219,6 +223,8 @@ async def run_build(
 
     Raises:
         BuildFailure: the program failed a check, or its output breaks a library rule.
+        BuildInfrastructureFailure: the host failed a machine the build used; anywhere in the cause
+            chain of what the program raised, it wins over the program's own error.
     """
     item_id = item_id_for(proposal)
     step_cache = StepCache(root=cache, item_id=item_id, invalidated=frozenset(invalidate))
@@ -227,7 +233,16 @@ async def run_build(
     b = Build(proposal, item_id, services, step_cache, scratch, round)
     with span(services.ledger, EntryKind.STAGE, item_id=item_id, round=round, step="build") as fields:
         fields.attrs["program"] = program.digest
-        output = await program.build(b)
+        try:
+            output = await program.build(b)
+        except Exception as error:
+            failure = infrastructure_failure(error)
+            if failure is None:
+                raise
+            fields.attrs["infrastructure"] = failure.cause
+            if isinstance(error, BuildInfrastructureFailure):
+                raise
+            raise failure from error
         if not isinstance(output, BuildOutput):
             raise BuildFailure(f"build(b) returned {type(output).__name__}, not BuildOutput", None)
         outputs = [_output(step_cache, record) for record in step_cache.records]
