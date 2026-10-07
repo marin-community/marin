@@ -93,7 +93,12 @@ modules, each of which keeps its types beside the code that checks their invaria
   independent samples, and the decision is ACCEPT or REJECT by strict majority, otherwise REPAIR.
 - `validate.trials.run_trials(task, execution, plan, settings, model)`: runs k trials through
   `ShellboxRolloutEngine`. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
-  `validate.classify.classify` is the only failure classifier.
+  `validate.classify.classify` is the only failure classifier. `TrialPlan.first_attempt` numbers
+  each trial's first attempt file and ledger step, so a re-entered trial continues after the
+  attempts on disk.
+- `validate.controls.replay(task, execution, controls, plan, settings, tokenize)`: replays each
+  control as one `CONTROL` trial named by its id. `ControlPlan.first_attempts` maps a control id
+  to its first attempt number (0 when absent), with the same re-entry contract as a trial.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 

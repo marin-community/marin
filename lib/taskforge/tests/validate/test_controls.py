@@ -63,7 +63,7 @@ def settings(factory, max_turns: int = 6) -> EngineSettings:
     )
 
 
-def plan(tmp_path) -> ControlPlan:
+def plan(tmp_path, first_attempts: dict[str, int] | None = None) -> ControlPlan:
     return ControlPlan(
         item_id="item",
         round=0,
@@ -72,6 +72,7 @@ def plan(tmp_path) -> ControlPlan:
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
         evidence_dir=tmp_path,
         ledger=JsonlLedger(tmp_path / "ledger"),
+        first_attempts=first_attempts or {},
     )
 
 
@@ -156,6 +157,29 @@ async def test_a_retried_control_replays_from_its_first_turn(tmp_path, file_task
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
     assert factory.creates == len(file_controls) + 1
+
+
+async def test_a_re_entered_control_numbers_attempts_after_the_ones_on_disk(tmp_path, file_task, file_controls, fakes):
+    earlier = tmp_path / "control" / "correct"
+    earlier.mkdir(parents=True)
+    for index in range(2):
+        (earlier / f"attempt-{index}.json").write_bytes(b"earlier attempt")
+
+    outcomes = await replay(
+        file_task,
+        EXECUTION,
+        file_controls,
+        plan(tmp_path, first_attempts={"correct": 2}),
+        settings(fakes.flaky_factory(0, RuntimeError)),
+        TemplateTokenizer(),
+    )
+
+    assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
+    assert [(earlier / f"attempt-{index}.json").read_bytes() for index in range(2)] == [b"earlier attempt"] * 2
+    written = sorted((path.parent.name, path.name) for path in (tmp_path / "control").glob("*/attempt-*.json"))
+    expected = [(c.id, "attempt-0.json") for c in file_controls if c.id != "correct"]
+    expected += [("correct", f"attempt-{index}.json") for index in range(3)]
+    assert written == sorted(expected)
 
 
 async def test_a_control_longer_than_max_turns_is_refused(tmp_path, file_task, file_controls, fakes):

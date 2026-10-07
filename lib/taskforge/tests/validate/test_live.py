@@ -83,6 +83,7 @@ def control_plan(directory: Path, item_id: str) -> ControlPlan:
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
         ledger=JsonlLedger(directory / "ledger"),
+        first_attempts={},
     )
 
 
