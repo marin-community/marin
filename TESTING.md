@@ -16,6 +16,11 @@ uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+The branch selector fetches `origin/main` before computing its merge-base diff,
+so the default run needs access to the Git remote. For an offline run, pass an
+explicit local ref with `--base-ref main` (or another known base ref). Refresh
+that ref yourself before relying on the selection.
+
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
 partial marker expression such as `-m "not slow"`; pytest replaces the default
