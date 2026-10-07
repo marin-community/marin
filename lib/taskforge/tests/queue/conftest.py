@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import MachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.submission import PlainText
 
@@ -156,6 +157,11 @@ async def build(b: Build) -> BuildOutput:
     return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=await fixed_controls(b, task))
 """.replace(
     "GRADE_SOURCE", repr(GRADE)
+)
+# PROGRAM, with a grader step that tries the reference reply on a machine.
+MACHINE_PROGRAM = PROGRAM.replace(
+    "    return Grader(",
+    '    await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")\n    return Grader(',
 )
 
 CALL = ModelCall(Usage(100, 50, 40, 0), wall_time=0.1, finish_reason=FinishReason.TOOL_CALLS)
@@ -309,13 +315,17 @@ def loop_policy(k: int = 4, max_validation_retries: int = 0) -> LoopPolicy:
 
 @dataclass
 class QueueRun:
-    """Runs a queue over ``root`` with the given fakes; the GLM server answers every author request."""
+    """Runs a queue over ``root`` with the given fakes; the GLM server answers every author request.
+
+    Builds run on ``build_factories``; trials always run on ShellSim.
+    """
 
     root: Path
     glm_base_url: str
     source: FakeSource
     rubric: FakeRubric
     model: SolverModel
+    build_factories: Mapping[EnvironmentKind, MachineFactory]
 
     async def __call__(
         self, ideas: Mapping[str, str], policy: LoopPolicy, width: int, failed: FailedItems = FailedItems.SKIP
@@ -331,7 +341,7 @@ class QueueRun:
                 rubric=self.rubric,
                 check_context=CheckContext(allowed_combinations=ALL_COMBINATIONS),
                 template=standard,
-                build=BuildServices(client=client, policy=LLMPolicy(), factories=factories, ledger=ledger),
+                build=BuildServices(client=client, policy=LLMPolicy(), factories=self.build_factories, ledger=ledger),
                 engine=EngineSettings(
                     factories=factories,
                     capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
@@ -351,10 +361,16 @@ class QueueRun:
 
 @pytest.fixture
 def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
-    """``queue_run(rubric=..., model=..., source=...)``: a ``QueueRun`` over ``tmp_path / "run"``."""
+    """``queue_run(rubric=..., model=..., source=..., build_factories=...)``: a ``QueueRun``.
+
+    Builds default to a ShellSim factory.
+    """
 
     def make(
-        rubric: FakeRubric | None = None, model: SolverModel | None = None, source: FakeSource | None = None
+        rubric: FakeRubric | None = None,
+        model: SolverModel | None = None,
+        source: FakeSource | None = None,
+        build_factories: Mapping[EnvironmentKind, MachineFactory] | None = None,
     ) -> QueueRun:
         return QueueRun(
             root=tmp_path / "run",
@@ -362,6 +378,9 @@ def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
             source=source or FakeSource(),
             rubric=rubric or FakeRubric(TriageDecision.ACCEPT),
             model=model or SolverModel(),
+            build_factories=(
+                {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()} if build_factories is None else build_factories
+            ),
         )
 
     return make
@@ -369,12 +388,12 @@ def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
 
 @pytest.fixture
 def author_replies(fake_glm) -> Callable[[int], None]:
-    """``author_replies(n)`` queues ``n`` author completions that submit ``PROGRAM``."""
+    """``author_replies(n, source=PROGRAM)`` queues ``n`` author completions that submit ``source``."""
 
-    def queue(n: int) -> None:
+    def queue(n: int, source: str = PROGRAM) -> None:
         for _ in range(n):
             fake_glm.stream(
-                tool_calls=((SUBMIT_TOOL, json.dumps({"source": PROGRAM, "notes": "builds 6*7"})),),
+                tool_calls=((SUBMIT_TOOL, json.dumps({"source": source, "notes": "builds 6*7"})),),
                 finish="tool_calls",
             )
 
@@ -387,6 +406,7 @@ class Fakes:
     source: type[FakeSource] = FakeSource
     model: type[SolverModel] = SolverModel
     policy: Callable[..., LoopPolicy] = loop_policy
+    machine_program: str = MACHINE_PROGRAM
 
 
 @pytest.fixture
