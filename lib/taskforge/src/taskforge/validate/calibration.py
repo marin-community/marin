@@ -16,7 +16,8 @@ wrote, whether any shell command ran, whether the final reply ends on the role's
 on text tasks whether the submission matches an honest one. The adversary's own account is never
 evidence and no model judges. A ``REPAIR`` pass is a decisive finding; a shortcut or leak repair,
 and every pass whose answer did not come from the task's work, is also rendered as a negative
-control the revised program must ship, so the next round's control replay proves the fix. A
+control the revised program must ship, so the next round's control replay proves the fix; a pass
+that submitted an honest answer is not, because no grader may refuse it. A
 ``NOTED`` pass (an adversary that read the inputs and submitted the real answer, or an ambiguity
 pass that cannot be compared) is a note: recorded beside the findings, never blocking an accept.
 
@@ -76,10 +77,11 @@ class FindingKind(StrEnum):
     CONTROL_VIOLATED = "control_violated"
     """A replayed control's grade missed its expectation: the grader or the controls are wrong."""
     SHORTCUT_PASSED = "shortcut_passed"
-    """An adversary pass whose answer did not come from the task's work (any role), or a shortcut pass on text
-    no honest run produced."""
+    """An adversary pass whose answer did not come from the task's work (shortcut or ambiguity role), or a
+    shortcut pass on text no honest run produced."""
     LEAK_PASSED = "leak_passed"
-    """A leak pass on text no honest run produced: what the machine or instruction revealed was accepted."""
+    """A leak pass that never read the task's inputs, or one on text no honest run produced: what the machine or
+    instruction revealed was accepted."""
     AMBIGUOUS = "ambiguous"
     """An ambiguity pass whose answer under its stated reading differs from the honest one."""
     TASK_DEFECT = "task_defect"
@@ -104,12 +106,22 @@ DECISIVE: frozenset[FindingKind] = frozenset(
 FINDING_ROLES: Mapping[FindingKind, tuple[StepRole, ...]] = {
     FindingKind.CONTROL_VIOLATED: (StepRole.GRADER, StepRole.CONTROLS),
     FindingKind.SHORTCUT_PASSED: (StepRole.GRADER, StepRole.CONTROLS),
-    FindingKind.LEAK_PASSED: (StepRole.FIXTURES, StepRole.ENVIRONMENT, StepRole.INSTRUCTIONS),
+    FindingKind.LEAK_PASSED: (
+        StepRole.FIXTURES,
+        StepRole.ENVIRONMENT,
+        StepRole.INSTRUCTIONS,
+        StepRole.GRADER,
+        StepRole.CONTROLS,
+    ),
     FindingKind.AMBIGUOUS: (StepRole.INSTRUCTIONS,),
     FindingKind.TOO_EASY: (StepRole.GRADER, StepRole.CONTROLS, StepRole.INSTRUCTIONS),
     FindingKind.TOO_HARD: (StepRole.INSTRUCTIONS, StepRole.FIXTURES),
 }
-"""The builder step roles each finding condemns; ``TASK_DEFECT`` takes its roles from ``DEFECT_ROLES``."""
+"""The builder step roles each finding condemns; ``TASK_DEFECT`` takes its roles from ``DEFECT_ROLES``.
+
+A leak repair condemns where the answer leaked from (fixtures, environment, instructions) and the grader and
+controls: from the transcript alone the code cannot tell a revealed answer key from a grader lenient enough to
+accept what the adversary submitted, and its negative control goes into the CONTROLS step."""
 
 _GRADER = (StepRole.GRADER,)
 DEFECT_ROLES: Mapping[Cause, tuple[StepRole, ...]] = {
@@ -642,8 +654,10 @@ def tier_of(
 ) -> tuple[DefectTier, FindingKind | None, str, str]:
     """(tier, finding kind, rule id, reason) of one graded adversary outcome; the first row that fires decides.
 
-    Rows 1, 2 and 4 say the answer did not come from the task's work, whatever the role, so they
-    condemn the grader (``SHORTCUT_PASSED``). Row 5 keeps the role's kind: lenient parsing or a hedge
+    Rows 1 and 2 say the answer did not come from the task's work, whatever the role, so they condemn the
+    grader (``SHORTCUT_PASSED``). Row 4 says the same for the shortcut and ambiguity roles; for the leak
+    role, whose orders forbid reading the inputs, it is the leak the role hunts for (``LEAK_PASSED``).
+    Row 5 keeps the role's kind: lenient parsing or a hedge
     for shortcut and leak, an instruction and grader that disagree for ambiguity. Row 7 is an honest
     solve the protocol forbids: recorded, never repaired.
     """
@@ -673,6 +687,13 @@ def tier_of(
             "solved under the intended reading and reported that no reading changes the answer",
         )
     if facts.input_paths and not s.inputs_consumed:
+        if role is AdversaryRole.LEAK:
+            return (
+                DefectTier.REPAIR,
+                FindingKind.LEAK_PASSED,
+                "4",
+                "passed without reading any input file: the environment or instruction revealed an accepted answer",
+            )
         return (
             DefectTier.REPAIR,
             FindingKind.SHORTCUT_PASSED,
@@ -761,7 +782,9 @@ def _adversary_findings(
                 notes.append(Finding(kind, "\n".join(lines), FINDING_ROLES[kind]))
                 continue
             new_controls: tuple[Control, ...] = ()
-            if rule in CONTROL_RULES or role in CONTROL_ROLES:
+            if signals.comparison is Comparison.MATCH:
+                lines.append("  (not rendered as a control: it submitted an honest answer, which no grader may refuse)")
+            elif rule in CONTROL_RULES or role in CONTROL_ROLES:
                 try:
                     new_controls = (transcript_control(role, index, evidence.task_digest, outcome.rollout),)
                 except ValueError as error:

@@ -232,9 +232,13 @@ task, and each shortcut control would have contradicted the positive control. A 
 tiered by a coded rule table over the transcript, never by the adversary's own account and never by
 a model: a pass that wrote a protected file, ran no shell command on a machine-graded task, never
 read an input file, or submitted text no honest run produced is a defect to repair, and except for
-an ambiguity mismatch ships its transcript as a negative control with concern `shortcut`
-(`reward_max = REJECTION_CEILING`) that the revised program must ship, so the next round's control
-replay proves the fix. A pass that read the inputs and submitted the real answer, or an ambiguity
+an ambiguity mismatch or a submission equal to an honest answer ships its transcript as a negative
+control with concern `shortcut` (`reward_max = REJECTION_CEILING`) that the revised program must
+ship, so the next round's control replay proves the fix. A leak pass that never read an input file
+is the leak the role hunts for: it condemns the fixtures, environment and instruction steps, and
+with them the grader and controls, because the transcript cannot tell a revealed answer key from a
+grader lenient enough to accept the submission. The same pass by the shortcut or ambiguity role
+condemns the grader and controls only. A pass that read the inputs and submitted the real answer, or an ambiguity
 pass whose answer cannot be told apart from the honest one, is at most a note. Notes travel with
 the summary and never block an accept. `RoleStats` counts passes, give-ups, budget stops and tiers
 per role, which measures each role's behaviour. Review consumes findings through rules; no model
