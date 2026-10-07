@@ -489,15 +489,23 @@ def write_vortex_file(
 _SENTINEL = object()
 
 
-def _queue_iterable(q: queue.Queue) -> Iterable:
+class WriterAbortedError(Exception):
+    """Raised into a ``ThreadedBatchWriter`` write function when the producer failed."""
+
+
+def _queue_iterable(q: queue.Queue, aborted: threading.Event) -> Iterable:
     """Yield items from a bounded queue until the sentinel is received.
 
     Designed for use with ``ThreadedBatchWriter``: the background thread passes
     this iterable to a writer function so the writer can consume items naturally
-    as they arrive through the queue.
+    as they arrive through the queue. Once ``aborted`` is set, the next read raises
+    instead of ending the stream, so the writer function does not finalize (for
+    example, commit an ``atomic_rename``) a partial output.
     """
     while True:
         item = q.get()
+        if aborted.is_set():
+            raise WriterAbortedError("producer failed; partial output discarded")
         if item is _SENTINEL:
             return
         yield item
@@ -512,6 +520,11 @@ class ThreadedBatchWriter:
     The ``write_fn`` receives an iterable that yields submitted items from the
     internal queue, allowing the writer to consume items as a natural stream
     rather than via per-item callbacks.
+
+    When the ``with`` block raises, the stream is aborted: ``write_fn``'s next read
+    raises :class:`WriterAbortedError`, so a write function such as
+    :func:`write_parquet_file` discards its temporary file instead of committing
+    a partial output.
     """
 
     def __init__(self, write_fn: Callable[[Iterable], None], maxsize: int = 128):
@@ -519,12 +532,13 @@ class ThreadedBatchWriter:
         self._queue_maxsize = maxsize
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._error: BaseException | None = None
+        self._aborted = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="ZephyrWriter")
         self._thread.start()
 
     def _run(self) -> None:
         try:
-            self._write_fn(_queue_iterable(self._queue))
+            self._write_fn(_queue_iterable(self._queue, self._aborted))
         except Exception as e:
             self._error = e
 
@@ -561,7 +575,11 @@ class ThreadedBatchWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         if exc_type is not None:
-            # Signal the thread to stop without blocking the caller.
+            # Abort, not end, the stream: the write function must not finalize a
+            # partial output. The sentinel only wakes a thread blocked on an empty
+            # queue; a full queue gives the thread an item to read, so it sees the
+            # abort without it. Do not block the caller on the thread.
+            self._aborted.set()
             try:
                 self._queue.put_nowait(_SENTINEL)
             except queue.Full:
