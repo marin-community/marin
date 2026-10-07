@@ -22,11 +22,15 @@ sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh
     experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
 ```
 
-The wrapper sets `RAGGED_DOT_IMPL=xla`, turns off XLA command buffers, keeps
-XLA autotune results out of the JAX compilation cache, and filters repeated
-ROCm log lines. Variables already set in the environment take precedence.
-XLA's `ragged_dot` rejects bf16 on MI350X, so bf16 runs there need
-`RAGGED_DOT_IMPL=triton`.
+The wrapper turns off XLA command buffers, keeps XLA autotune results out of
+the JAX compilation cache, and filters repeated ROCm log lines. Variables
+already set in the environment take precedence.
+
+The wrapper leaves `RAGGED_DOT_IMPL` unset, so Haliax picks the `ragged_dot`
+implementation: on GPU it tries Triton and falls back to XLA. Set
+`RAGGED_DOT_IMPL=triton` or `RAGGED_DOT_IMPL=xla` explicitly when
+benchmarking, so results stay comparable across runs. XLA's `ragged_dot`
+rejects bf16 on MI350X (gfx950).
 
 ## Build the venv
 
