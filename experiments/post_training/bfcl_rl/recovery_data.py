@@ -153,10 +153,14 @@ def generation_collection_config_receipt(
     if skyrl["generator"]["n_samples_per_prompt"] != 1:
         raise ValueError("initial recovery requires one paired rollout per model and task")
     harbor = skyrl["terminal_bench_config"]["harbor"]
-    if harbor["container_profile"] != "gvisor" or harbor["import_path"] != (
-        "marinskyrl.iris_harbor_environment:IrisEnvironment"
+    if harbor.get("environment_type") == "daytona":
+        if harbor.get("import_path"):
+            raise ValueError("Daytona collection must use the native Harbor environment")
+    elif (
+        harbor.get("container_profile") != "gvisor"
+        or harbor.get("import_path") != "marinskyrl.iris_harbor_environment:IrisEnvironment"
     ):
-        raise ValueError("recovery collection must use Iris gVisor task sandboxes")
+        raise ValueError("collection must use native Daytona or historical Iris gVisor task sandboxes")
     if not config["ingress"]["record_literal"] or not skyrl["trainer"]["algorithm"]["tito_full"]:
         raise ValueError("recovery requires literal model-token capture and full token evidence")
     model_info = skyrl["terminal_bench_config"]["model_info"]

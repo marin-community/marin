@@ -457,7 +457,7 @@ def test_context_forks_and_overlong_preferences_cannot_be_silently_rewritten():
         pretokenized_preference(teacher, changed_prompt, max_length=16)
 
 
-def _receipts(model: str) -> tuple[dict, dict]:
+def _receipts(model: str, *, backend: str = "daytona") -> tuple[dict, dict]:
     expected = MODELS[model]
     source = {
         "uri": DATA_URI,
@@ -517,13 +517,18 @@ def _receipts(model: str) -> tuple[dict, dict]:
                     "name": "pi",
                     "version": "0.87.0",
                     "thinking_format": "chat-template",
-                    "container_profile": "gvisor",
-                    "import_path": "marinskyrl.iris_harbor_environment:IrisEnvironment",
+                    "environment_type": "daytona",
+                    "auto_snapshot": True,
                 },
             },
         },
     }
     resolved["config"] = {"skyrl": resolved["config"]}
+    if backend == "gvisor":
+        harbor = resolved["config"]["skyrl"]["terminal_bench_config"]["harbor"]
+        del harbor["environment_type"]
+        del harbor["auto_snapshot"]
+        harbor.update(container_profile="gvisor", import_path="marinskyrl.iris_harbor_environment:IrisEnvironment")
     return terminal, resolved
 
 
@@ -1085,9 +1090,11 @@ def test_native_teacher_pool_matches_context_without_reweighting_student_traject
     assert "Today's date: Oct 5" in dated[f"fresh-collection/teacher-{tasks[0].name}"]
 
 
-def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp_path: Path):
+@pytest.mark.parametrize("backend", ["daytona", "gvisor"])
+def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp_path: Path, backend: str):
     receipts = [
-        collection_receipt(*_receipts(model), model=model, partition=PARTITION) for model in ("teacher", "student")
+        collection_receipt(*_receipts(model, backend=backend), model=model, partition=PARTITION)
+        for model in ("teacher", "student")
     ]
     teacher, student = [
         retained_rollout(_record(model, score), identity=receipt.identity, partition=PARTITION, trajectory_uri=model)
@@ -1206,14 +1213,16 @@ def test_two_wrong_rollouts_produce_no_optimizer_data(tmp_path: Path):
     assert not (tmp_path / "cache").exists()
 
 
-def test_collection_receipts_reject_holdout_sources_and_sampling_mismatches():
+@pytest.mark.parametrize("mismatch", ["sampling", "backend"])
+def test_collection_receipts_reject_holdout_sources_and_condition_mismatches(mismatch: str):
     terminal, resolved = _receipts("teacher")
     terminal["config"]["inputs"]["train_data"][0]["relative_path"] = f"bfcl_complement/{HOLDOUT.name}"
     with pytest.raises(ValueError, match="outside the BFCL complement"):
         collection_receipt(terminal, resolved, model="teacher", partition=PARTITION)
     teacher_receipt = collection_receipt(*_receipts("teacher"), model="teacher", partition=PARTITION)
-    terminal, resolved = _receipts("student")
-    resolved["config"]["skyrl"]["generator"]["sampling_params"]["temperature"] = 0.5
+    terminal, resolved = _receipts("student", backend="gvisor" if mismatch == "backend" else "daytona")
+    if mismatch == "sampling":
+        resolved["config"]["skyrl"]["generator"]["sampling_params"]["temperature"] = 0.5
     student_receipt = collection_receipt(terminal, resolved, model="student", partition=PARTITION)
     with pytest.raises(ValueError, match="different harness or sampling conditions"):
         recovery_preference_rows(
