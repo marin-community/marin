@@ -213,10 +213,30 @@ jobs:
           uv pip install \
             "https://download.pytorch.org/whl/cpu/torch-${TORCH_CPU_VERSION/+/%2B}-${CP_TAG}-${CP_TAG}-manylinux_2_28_x86_64.whl"
 
+      - name: Resolve runner image
+        id: runner-image
+        run: echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+
+      # The Ubuntu mirror sometimes serves the ~100 MB of FFmpeg packages at a few
+      # hundred kB/s, which alone can push this job past its timeout. Packages already
+      # in the cached archive directory are not downloaded again.
+      - name: Cache FFmpeg packages
+        uses: actions/cache@v6
+        with:
+          path: ~/apt-archives
+          key: apt-ffmpeg-${{ steps.runner-image.outputs.image }}
+          restore-keys: apt-ffmpeg-
+
       - name: Install FFmpeg runtime
         run: |
+          mkdir -p ~/apt-archives/partial
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y -o Dir::Cache::Archives="$HOME/apt-archives" -o APT::Sandbox::User=root ffmpeg
+          # Drop packages superseded since an older runner image's cache was restored.
+          sudo apt-get autoclean -o Dir::Cache::Archives="$HOME/apt-archives"
+          # apt leaves root-owned lock and partial files that the cache step cannot archive.
+          sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
+          sudo chown -R "$(id -u):$(id -g)" ~/apt-archives
 
       - name: Test torch-marked suite
         # Run directly on CPU to avoid GPU dependency issues.
