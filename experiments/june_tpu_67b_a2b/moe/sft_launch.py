@@ -47,7 +47,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
@@ -97,7 +97,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
 
     initialize_from = latest_checkpoint_path(config.init_from_path)
 
-    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, model) mesh for
+    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, context, expert, model) mesh for
     # the actual compute (train.py, via set_mesh + raw PartitionSpecs -- not the Trainer's logical axis
     # mapping), but the TrainerConfig still derives ``data_axis_size`` (and thus the batch-divisibility
     # check + per_device_parallelism) from this MeshConfig. With only ``expert`` declared, the

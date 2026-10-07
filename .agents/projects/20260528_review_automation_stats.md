@@ -122,7 +122,7 @@ Approximated as:
      option; off by default, on in CI.
 
 3. **Daily aggregator** — new script
-   `infra/codehealth/review.py` (cron'd via GHA):
+   `infra/codehealth/review_quality.py` (cron'd via GHA):
    - List PRs merged in the last 24h.
    - For each: pull review threads + inline comments via `gh api`
      (`/repos/{owner}/{repo}/pulls/{n}/comments`,

@@ -28,7 +28,7 @@ import gcsfs
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import marin_region
+from rigging.filesystem.cluster_config import marin_region
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)

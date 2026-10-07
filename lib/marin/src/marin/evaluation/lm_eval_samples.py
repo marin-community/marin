@@ -1,13 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert lm-eval's ``--log_samples`` output into the :mod:`finestore.eval` contract.
+"""Support legacy lm-eval exports and summarize native Evalchemy output.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
-evaluated question in its own native shape. This module normalizes those rows into
-:class:`~finestore.eval.EvalSample` and exports them into the run's finestore archive, preserving
-each source file it read so the archive can be rebuilt from itself. ``finestore.eval`` owns the
-contract and the archive tables; knowledge of lm-eval's row shape lives here.
+evaluated question in its own native shape. This module owns Marin's compatibility export and rebuild
+path for outputs produced without native FineStore writing. It preserves each source file it reads
+so an archive can be rebuilt from itself. For native runs, Marin reads Evalchemy's normalized table
+to calculate record coverage; Evalchemy owns conversion from the lm-eval row shape.
+
+The same pass combines the evaluator's benchmark metadata with the per-sample rows to measure each
+task's coverage and preserve its canonical metrics.
 """
 
 from __future__ import annotations
@@ -15,7 +18,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+from typing import Protocol
 
+import rigging.filesystem.factory as factory
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
@@ -28,22 +36,51 @@ from finestore.eval import (
     Grading,
     Message,
     SampleKind,
-    base_metric,
-    primary_metric,
+    sample_from_archive_row,
 )
-from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, SEALED_MARKER
-from finestore.reader import CompositeReader
-from rigging.filesystem import StoragePath, factory, prefix_join
+from finestore.layout import ARCHIVE_FILE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR, BlobTables
+from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
+from finestore.reader import ReadView
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
+from marin.evaluation.evaluation_config import eval_task_directory
+from marin.evaluation.metric_selection import (
+    REPEAT_MEAN_SUFFIX,
+    base_metric,
+    declared_metric,
+    declared_sample_metric,
+    primary_filter,
+)
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
+
+
+class TaskDeclaration(Protocol):
+    """Fields shared by launch-time and recorded task declarations."""
+
+    name: str
+    num_fewshot: int | None
+    task_alias: str | None
+    generation: bool
+    unsafe_code: bool
+    completion_only: bool
+
 
 logger = logging.getLogger(__name__)
 
-# Filename prefix of the aggregate results json lm-eval writes beside its per-sample jsonl.
-RESULTS_PREFIX = "results_"
-
 # The archive's own objects, which share the run's results root and must never be preserved into
 # themselves. See :func:`run_artifacts`.
-_ARCHIVE_TABLES = frozenset({ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE, BLOBS_TABLE})
-_ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, SEALED_MARKER})
+_ARCHIVE_DIRS = frozenset(
+    {
+        DATA_DIR,
+        MANIFESTS_DIR,
+        SCHEMAS_DIR,
+        ARCHIVE_SAMPLES_TABLE,
+        ARCHIVE_STEPS_TABLE,
+        BlobTables.DESCRIPTORS,
+    }
+)
+_ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, HEAD_FILE, LEGACY_SEAL_FILE})
 
 _CONTENT_TYPES = {
     ".jsonl": "application/x-ndjson",
@@ -55,6 +92,12 @@ _CONTENT_TYPES = {
 # A ``tempfile.mkdtemp`` directory name that ended up inside a results tree. See
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
+_INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
+# The pinned Evalchemy normalizer marks these failures in its native sample table. Preserve that
+# decision when Marin rebuilds the same rows from Evalchemy's raw source artifacts.
+_INFRASTRUCTURE_FAILURE_CATEGORIES = frozenset({"agent_timeout", "model_transport", "grader_infrastructure"})
+EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
+EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -62,21 +105,17 @@ def is_scratch_artifact(relative_path: str) -> bool:
 
     evalchemy runs the harness in a ``tempfile`` working directory and copies the tree into the
     results path, so a retried evaluation leaves a second complete tree under a ``tmp<random>/``
-    segment. Both trees are real, and their loglikelihoods differ because inference is not
-    deterministic, but only the canonical copy produced the metrics on the run's record. Indexing
-    both would put two different rows on one primary key; the scratch copy is still preserved as a
-    source blob, so nothing is discarded by leaving it out of the table.
+    segment. The canonical copy produced the metrics on the run's record. The scratch copy may have
+    different loglikelihoods, so it is preserved as a source blob and excluded from the sample table.
     """
     return _SCRATCH_SEGMENT.search(relative_path) is not None
 
 
-# --------------------------------------------------------------------------------------------------
-# lm-eval adapter: normalize one --log_samples row into the contract.
-# --------------------------------------------------------------------------------------------------
+# Live runs are normalized by Evalchemy. These conversion helpers remain for historical exports and
+# for rebuilding an archive's table from preserved sources after damage or an interrupted migration.
+# FineStore itself owns only the normalized schema and storage API.
+_FAILURE_CATEGORY_KEY = "failure_category"
 
-# lm-eval per-sample fields that are structural rather than metric values. ``schema_version`` is
-# lm-eval's own row-format stamp and ``metrics`` its list of metric *names*, so both would otherwise
-# be mistaken for scores by the numeric sweep below.
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -86,24 +125,33 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "resps",
         "filtered_resps",
         "filter",
+        "filter_variants",
         "metrics",
         "schema_version",
+        "sample_id",
+        "sample_namespace",
+        "sample_ordinal",
+        "sample_repeat",
+        "sample_shard",
+        "source_id",
         "task_name",
+        _FAILURE_CATEGORY_KEY,
         "doc_hash",
         "prompt_hash",
         "target_hash",
+        "completion_responses",
     }
 )
 
 
 def _loglikelihood_pair(entry) -> tuple[float, bool] | None:
-    """Unwrap a response entry to ``(loglikelihood, is_greedy)``, tolerating a singleton wrapper."""
+    """Unwrap a response entry to ``(loglikelihood, is_greedy)``."""
     if isinstance(entry, list) and len(entry) == 1:
         entry = entry[0]
     if (
         isinstance(entry, list)
         and len(entry) == 2
-        and isinstance(entry[0], (int, float))
+        and isinstance(entry[0], int | float)
         and not isinstance(entry[0], bool)
         and isinstance(entry[1], bool)
     ):
@@ -120,13 +168,11 @@ def _is_multiple_choice(arguments, responses) -> bool:
 
 
 def _choice_labels(doc, count: int) -> list[str]:
-    # arc-style docs carry {"choices": {"label": [...], "text": [...]}}; other tasks (mmlu,
-    # hellaswag) store choices as a plain list, which gets the A/B/C default.
     choices = doc.get("choices") if isinstance(doc, dict) else None
     labels = choices.get("label") if isinstance(choices, dict) else None
     if isinstance(labels, list) and len(labels) == count and all(isinstance(label, str) for label in labels):
         return labels
-    return [chr(ord("A") + i) for i in range(count)]
+    return [chr(ord("A") + index) for index in range(count)]
 
 
 def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
@@ -136,9 +182,9 @@ def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
         return target if 0 <= target < len(choices) else None
     if isinstance(target, str):
         trimmed = target.strip()
-        for i, choice in enumerate(choices):
+        for index, choice in enumerate(choices):
             if choice.label == trimmed or choice.text.strip() == trimmed:
-                return i
+                return index
         if trimmed.isdigit():
             index = int(trimmed)
             return index if 0 <= index < len(choices) else None
@@ -165,30 +211,24 @@ def _parse_chat_messages(text: str) -> list[Message] | None:
 
 
 def _sample_metrics(raw: dict) -> dict[str, float]:
-    metrics: dict[str, float] = {}
-    for key, value in raw.items():
-        if key in _LM_EVAL_STRUCTURAL_KEYS or isinstance(value, bool):
-            continue
-        if isinstance(value, (int, float)):
-            metrics[key] = float(value)
-    return metrics
+    return {
+        key: float(value)
+        for key, value in raw.items()
+        if key not in _LM_EVAL_STRUCTURAL_KEYS and not isinstance(value, bool) and isinstance(value, int | float)
+    }
 
 
-def _correct(metrics: dict[str, float]) -> bool | None:
-    picked = primary_metric(metrics)
-    if picked is None:
-        return None
-    return picked[1] >= 1.0
-
-
-def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
+def _lm_eval_grading(
+    metrics: dict[str, float], extraction_filter: str | None, primary_metric_name: str | None
+) -> Grading | None:
     """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag.
 
-    A per-sample row scores one extraction filter and names it in its own ``filter`` field, unlike an
-    aggregate result key which carries the filter as a ``,<filter>`` suffix. Both spellings are
-    accepted so the grading records the filter whichever shape the row uses.
+    Per-sample rows name the extraction filter in ``filter``. Aggregate metric keys use a
+    ``,<filter>`` suffix. This accepts both encodings.
     """
-    picked = primary_metric(metrics)
+    picked = declared_sample_metric(metrics, primary_metric_name)
+    if picked is None and primary_metric_name is not None and primary_metric_name.endswith(REPEAT_MEAN_SUFFIX):
+        picked = declared_metric(metrics, primary_metric_name.removesuffix(REPEAT_MEAN_SUFFIX))
     if picked is None:
         return None
     name, value = picked
@@ -202,31 +242,31 @@ def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -
     )
 
 
-def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
-    """Normalize one lm-eval ``--log_samples`` row into an :class:`EvalSample`.
-
-    Multiple-choice rows carry one ``arguments`` entry per choice (``[context, continuation]``,
-    context identical across entries) and per-choice ``[loglikelihood, is_greedy]`` responses; the
-    model's pick is the loglikelihood argmax and the gold index is resolved from ``target`` (an
-    index, a label, or the choice text). Generation rows carry a single prompt -- raw text, or a
-    JSON-encoded chat message list when the chat API served the request.
-
-    A task that applies several extraction filters emits one row per (document, filter), each with
-    its own responses and score. The row's filter is recorded on the grading and forms part of the
-    sample's archive identity, so the variants coexist instead of overwriting one another.
-    """
+def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = None) -> EvalSample:
+    """Normalize one historical lm-eval ``--log_samples`` filter row."""
     arguments = raw.get("arguments")
     responses = raw.get("resps")
     doc = raw.get("doc")
     target = raw.get("target")
     metrics = _sample_metrics(raw)
     extraction_filter = raw.get("filter")
+    grading = _lm_eval_grading(
+        metrics,
+        extraction_filter if isinstance(extraction_filter, str) else None,
+        primary_metric_name,
+    )
+    failure_category = raw.get(_FAILURE_CATEGORY_KEY)
+    failure_marker = (
+        f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
+        if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES
+        else None
+    )
     common = {
         "task": task,
         "doc_id": str(raw.get("doc_id")),
         "metrics": metrics,
-        "correct": _correct(metrics),
-        "grading": _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None),
+        "correct": grading.passed if grading is not None else None,
+        "grading": grading,
         "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
         "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
     }
@@ -234,19 +274,23 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     if isinstance(arguments, list) and isinstance(responses, list) and _is_multiple_choice(arguments, responses):
         labels = _choice_labels(doc, len(arguments))
         choices = []
-        for i, entry in enumerate(arguments):
+        for index, entry in enumerate(arguments):
             text = entry[1] if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], str) else ""
-            pair = _loglikelihood_pair(responses[i])
+            pair = _loglikelihood_pair(responses[index])
             loglikelihood, is_greedy = pair if pair is not None else (None, None)
-            choices.append(Choice(label=labels[i], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
-        scored = [(choice.loglikelihood, i) for i, choice in enumerate(choices) if choice.loglikelihood is not None]
+            choices.append(Choice(label=labels[index], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
+        scored = [
+            (choice.loglikelihood, index) for index, choice in enumerate(choices) if choice.loglikelihood is not None
+        ]
         context = arguments[0][0] if isinstance(arguments[0], list) and isinstance(arguments[0][0], str) else ""
         return EvalSample(
             kind=SampleKind.MULTIPLE_CHOICE,
             prompt_text=context,
             choices=choices,
-            model_choice=max(scored)[1] if scored else None,
+            model_choice=max(scored)[1] if scored and failure_marker is None else None,
             target_choice=_resolve_target_choice(target, choices),
+            output=failure_marker,
+            extracted=failure_marker,
             **common,
         )
 
@@ -254,6 +298,10 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     if isinstance(arguments, list) and arguments:
         first = arguments[0]
         candidate = first[0] if isinstance(first, list) and first else first
+        # Native Evalchemy nests positional generation arguments before request kwargs:
+        # ``[[[prompt], kwargs]]``.
+        if isinstance(candidate, list) and candidate:
+            candidate = candidate[0]
         if isinstance(candidate, str):
             prompt = candidate
     output = ""
@@ -266,6 +314,9 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     filtered = raw.get("filtered_resps")
     if isinstance(filtered, list) and filtered:
         filtered = filtered[0]
+    if failure_marker is not None:
+        output = failure_marker
+        filtered = output
     messages = _parse_chat_messages(prompt)
     return EvalSample(
         kind=SampleKind.GENERATION,
@@ -274,6 +325,297 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
         output=output,
         extracted=filtered if isinstance(filtered, str) else json.dumps(filtered, ensure_ascii=False),
         **common,
+    )
+
+
+def samples_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = None) -> list[EvalSample]:
+    """Normalize a historical Evalchemy record into its extraction-filter rows."""
+    variants = raw.get("filter_variants")
+    if not isinstance(variants, list) or not variants:
+        return [sample_from_lm_eval(task, raw, primary_metric_name)]
+
+    samples = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            raise ValueError("lm-eval filter_variants entries must be mappings")
+        metrics = variant.get("metrics", {})
+        if not isinstance(metrics, dict):
+            raise ValueError("lm-eval filter_variants metrics must be a mapping")
+        samples.append(
+            sample_from_lm_eval(
+                task,
+                {
+                    **raw,
+                    **metrics,
+                    "filter": variant.get("filter"),
+                    "filtered_resps": variant.get("filtered_resps", []),
+                },
+                primary_metric_name,
+            )
+        )
+    return samples
+
+
+# --------------------------------------------------------------------------------------------------
+# Coverage: what a task's own sample rows say about how much of it ran.
+# --------------------------------------------------------------------------------------------------
+
+
+def _document_extent(doc_ids: Iterable[str]) -> int | None:
+    """How many documents a task enumerated, from the indices its rows carry, or None if unknowable.
+
+    lm-eval indexes a task's documents ``0..N-1`` and writes a row for each one it reached, so the
+    highest index present establishes ``N``. Non-numeric document identifiers leave coverage
+    unknown.
+    """
+    highest = -1
+    for doc_id in doc_ids:
+        if not doc_id.isdigit():
+            return None
+        highest = max(highest, int(doc_id))
+    return highest + 1 if highest >= 0 else None
+
+
+def _is_infrastructure_error(sample: EvalSample) -> bool:
+    return any(
+        value is not None and _INFRASTRUCTURE_ERROR_PREFIX in value for value in (sample.output, sample.extracted)
+    )
+
+
+@dataclass(frozen=True)
+class _GradedSampleSummary:
+    filter: str | None
+    score: float | None
+    correct: bool | None
+    generation: bool
+    unanswered: bool
+    infrastructure_error: bool
+
+
+@dataclass
+class _TaskCoverageAccumulator:
+    """Fold samples into coverage one at a time, never retaining the samples themselves.
+
+    An export streams a results tree whose sample payloads dwarf everything else in memory, so the
+    only per-sample state kept here is one small summary row.
+    """
+
+    n_benchmark: int | None = None
+    n_attempted: int | None = None
+    score_from_aggregate: bool = False
+    graded: dict[str, list[_GradedSampleSummary]] = field(default_factory=dict)
+    first: dict[str, _GradedSampleSummary] = field(default_factory=dict)
+    recovered_values: dict[str, tuple[float, int]] = field(default_factory=dict)
+    recovered_doc_ids: set[str] = field(default_factory=set)
+    seen: set[str] = field(default_factory=set)
+    any_metrics: bool = False
+
+    def _summary(self, sample: EvalSample) -> _GradedSampleSummary:
+        return _GradedSampleSummary(
+            filter=sample.grading.filter if sample.grading is not None else None,
+            score=sample.grading.score if sample.grading is not None else None,
+            correct=sample.correct,
+            generation=sample.kind is SampleKind.GENERATION,
+            unanswered=sample.kind is SampleKind.GENERATION and not sample.extracted,
+            infrastructure_error=_is_infrastructure_error(sample),
+        )
+
+    def add(self, sample: EvalSample) -> None:
+        summary = self._summary(sample)
+        self.seen.add(sample.doc_id)
+        self.any_metrics = self.any_metrics or bool(sample.metrics)
+        self.first.setdefault(sample.doc_id, summary)
+        if sample.grading is None:
+            return
+        self.graded.setdefault(sample.doc_id, []).append(summary)
+        if summary.infrastructure_error:
+            return
+        self.recovered_doc_ids.add(sample.doc_id)
+        for name, value in sample.metrics.items():
+            metric = name if "," in name or sample.grading.filter is None else f"{name},{sample.grading.filter}"
+            total, count = self.recovered_values.get(metric, (0.0, 0))
+            self.recovered_values[metric] = (total + value, count + 1)
+
+    def result(self) -> tuple[TaskCoverage, dict[str, float]]:
+        headline = primary_filter(
+            {summary.filter for rows in self.graded.values() for summary in rows if summary.filter}
+        )
+        aggregate_scored = self.score_from_aggregate and bool(self.seen) and not self.any_metrics
+        if aggregate_scored:
+            graded_samples = list(self.first.values())
+        else:
+            graded_samples = [
+                next((summary for summary in rows if summary.filter == headline), rows[0])
+                for rows in self.graded.values()
+            ]
+        infrastructure_errors = [summary for summary in graded_samples if summary.infrastructure_error]
+        scored = [summary for summary in graded_samples if not summary.infrastructure_error]
+        ungraded = 0 if aggregate_scored else len(self.seen) - len(graded_samples)
+        # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
+        # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
+        # task.
+        binary = not aggregate_scored and all(summary.score in (0.0, 1.0) for summary in scored)
+        errors = {UNGRADED_ERROR: ungraded} if ungraded else {}
+        if infrastructure_errors:
+            errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
+        extent = _document_extent(self.seen)
+        if self.n_attempted is not None and extent is not None and extent > self.n_attempted:
+            raise ValueError(f"sample document extent {extent} exceeds intended count {self.n_attempted}")
+        coverage = TaskCoverage(
+            n_benchmark=self.n_benchmark,
+            n_attempted=self.n_attempted if self.n_attempted is not None else extent,
+            n_scored=len(scored),
+            n_correct=sum(1 for summary in scored if summary.correct) if binary and scored else None,
+            n_unanswered=sum(1 for summary in scored if summary.generation and summary.unanswered),
+            errors=errors,
+        )
+        recovered_metrics: dict[str, float] = {}
+        if infrastructure_errors:
+            recovered_metrics = {name: total / count for name, (total, count) in self.recovered_values.items()}
+            if recovered_metrics:
+                recovered_metrics[SAMPLE_COUNT_METRIC] = float(len(self.recovered_doc_ids))
+        return coverage, recovered_metrics
+
+
+def task_coverage_and_metrics(
+    samples: Sequence[EvalSample],
+    *,
+    n_benchmark: int | None = None,
+    n_attempted: int | None = None,
+    score_from_aggregate: bool = False,
+) -> tuple[TaskCoverage, dict[str, float]]:
+    """Compute one task's coverage and metrics recovered after request failures.
+
+    Ungraded documents and failed requests are unscored. Empty model completions remain scored and
+    count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
+    by :func:`~marin.evaluation.metric_selection.primary_filter`. Recovered metrics retain every filter.
+
+    When the evaluator declares an aggregate-only primary metric, every enumerated document counts
+    as scored even though the sample rows carry no per-item score. No per-item pass tally exists.
+    """
+    accumulator = _TaskCoverageAccumulator(
+        n_benchmark=n_benchmark, n_attempted=n_attempted, score_from_aggregate=score_from_aggregate
+    )
+    for sample in samples:
+        accumulator.add(sample)
+    return accumulator.result()
+
+
+def _task_keys(
+    sources: Sequence[str], benchmark_metadata: Mapping[str, Mapping[str, BenchmarkMetadataRef]] | None = None
+) -> dict[str, str]:
+    """The ``metrics`` key each sample file's coverage belongs to.
+
+    A run's records key metrics by the task-config directory (``<task_dir>/<model>/<file>``), and
+    namespace them ``<task_dir>/<task>`` when one config evaluated several tasks -- see
+    :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`. Coverage uses the same
+    keys. Multiple sample files or multiple benchmark metadata entries trigger subtask names.
+    """
+    by_directory: dict[PurePosixPath, list[str]] = {}
+    for relative in sources:
+        by_directory.setdefault(PurePosixPath(relative).parent.parent, []).append(relative)
+    keys: dict[str, str] = {}
+    for directory, files in by_directory.items():
+        for relative in files:
+            task = _task_from_filename(PurePosixPath(relative).name, ".jsonl")
+            grouped = len(files) > 1 or len((benchmark_metadata or {}).get(directory.name, {})) > 1
+            keys[relative] = f"{directory.name}/{task}" if grouped else directory.name
+    return keys
+
+
+def _result_contracts(
+    result_payloads: Mapping[str, bytes],
+) -> tuple[dict[str, dict[str, BenchmarkMetadataRef]], dict[str, dict[str, dict[str, float]]]]:
+    """Read evaluator-owned benchmark metadata and canonical results by task directory."""
+    benchmarks: dict[str, dict[str, BenchmarkMetadataRef]] = {}
+    canonical: dict[str, dict[str, dict[str, float]]] = {}
+    for relative, payload in result_payloads.items():
+        directory = PurePosixPath(relative).parent.parent.name
+        result = json.loads(payload)
+        raw_benchmarks = result.get("benchmark_metadata") or {}
+        if isinstance(raw_benchmarks, Mapping):
+            for leaf, raw in raw_benchmarks.items():
+                if isinstance(leaf, str):
+                    benchmarks.setdefault(directory, {})[leaf] = BenchmarkMetadataRef.model_validate(raw)
+        raw_canonical = result.get("canonical_results") or {}
+        if isinstance(raw_canonical, Mapping):
+            for leaf, values in raw_canonical.items():
+                if isinstance(leaf, str) and isinstance(values, Mapping):
+                    canonical.setdefault(directory, {})[leaf] = {
+                        str(name): float(value)
+                        for name, value in values.items()
+                        if isinstance(value, int | float) and not isinstance(value, bool)
+                    }
+    return benchmarks, canonical
+
+
+def _task_key(directory: str, leaf: str, leaf_count: int) -> str:
+    return f"{directory}/{leaf}" if leaf_count > 1 else directory
+
+
+def _recorded_tasks(
+    tasks: Sequence[TaskDeclaration], benchmarks: Mapping[str, Mapping[str, BenchmarkMetadataRef]]
+) -> tuple[EvalTaskRef, ...]:
+    recorded: list[EvalTaskRef] = []
+    for task in tasks:
+        directory = eval_task_directory(task.name, task.num_fewshot, task.task_alias)
+        task_benchmarks = benchmarks.get(directory, {})
+        if not task_benchmarks:
+            recorded.append(
+                EvalTaskRef(
+                    name=task.name,
+                    num_fewshot=task.num_fewshot,
+                    task_alias=task.task_alias,
+                    generation=task.generation,
+                    unsafe_code=task.unsafe_code,
+                    completion_only=task.completion_only,
+                )
+            )
+            continue
+        for benchmark in task_benchmarks.values():
+            recorded.append(
+                EvalTaskRef(
+                    name=benchmark.task,
+                    num_fewshot=task.num_fewshot,
+                    task_alias=directory if len(task_benchmarks) > 1 else task.task_alias,
+                    generation=task.generation,
+                    unsafe_code=task.unsafe_code,
+                    completion_only=task.completion_only,
+                    benchmark=benchmark,
+                )
+            )
+    return tuple(recorded)
+
+
+@dataclass(frozen=True)
+class _EvalchemyContractSummary:
+    benchmarks: dict[str, dict[str, BenchmarkMetadataRef]]
+    canonical_metrics: dict[str, dict[str, float]]
+    tasks: tuple[EvalTaskRef, ...]
+    coverage: dict[str, TaskCoverage]
+
+
+def _evalchemy_contract_summary(
+    result_payloads: Mapping[str, bytes], tasks: Sequence[TaskDeclaration]
+) -> _EvalchemyContractSummary:
+    benchmarks, canonical_results = _result_contracts(result_payloads)
+    return _EvalchemyContractSummary(
+        benchmarks=benchmarks,
+        canonical_metrics={
+            _task_key(directory, leaf, len(benchmarks.get(directory, values))): metrics
+            for directory, values in canonical_results.items()
+            for leaf, metrics in values.items()
+        },
+        tasks=_recorded_tasks(tasks, benchmarks),
+        coverage={
+            _task_key(directory, leaf, len(values)): TaskCoverage(
+                n_benchmark=benchmark.n_benchmark,
+                n_attempted=benchmark.n_attempted,
+                n_scored=0,
+            )
+            for directory, values in benchmarks.items()
+            for leaf, benchmark in values.items()
+        },
     )
 
 
@@ -287,19 +629,22 @@ def _is_sample_source(relative: str) -> bool:
     return relative.rsplit("/", 1)[-1].startswith(SAMPLES_PREFIX) and relative.endswith(".jsonl")
 
 
-def run_artifacts(out_path: str) -> list[str]:
-    """Every object under a run's results root that is not part of its own archive, relative to it.
+def _is_result_source(relative: str) -> bool:
+    name = PurePosixPath(relative).name
+    return name.startswith("results_") and name.endswith(".json") and not is_scratch_artifact(relative)
 
-    A run's results tree and its archive share a root, so "preserve everything" has to exclude the
-    archive or a re-export would fold it into itself. Listing rather than globbing is what reaches
-    the harness's dot-directories: evalchemy's resume state lives under ``.resume/``, which a ``*``
-    glob does not match.
+
+def run_artifacts(out_path: str) -> list[str]:
+    """List harness artifacts under a run's results root, relative to the root.
+
+    The results tree and archive share a root, so archive objects are excluded. A filesystem listing
+    includes dot-directories such as evalchemy's ``.resume/`` state.
     """
     fs, key = factory.url_to_fs(out_path)
     artifacts = []
     for path in fs.find(key):
         relative = path[len(key) :].strip("/")
-        if relative in _ARCHIVE_MARKERS or relative.split("/", 1)[0] in _ARCHIVE_TABLES:
+        if relative in _ARCHIVE_MARKERS or relative.split("/", 1)[0] in _ARCHIVE_DIRS:
             continue
         artifacts.append(relative)
     return sorted(artifacts)
@@ -313,49 +658,233 @@ def _content_type(relative: str) -> str:
     return "application/octet-stream"
 
 
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
-    """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
+@dataclass(frozen=True)
+class EvaluationArchiveSummary:
+    """Rows, coverage, and evaluator metadata read or produced for an archive."""
 
-    Returns the number of samples written. Every artifact the harness left in the results tree is
-    preserved inside the archive, not only the files this reads, so the archive stands alone if the
-    tree is pruned. Re-running is idempotent: an unchanged source produces identical rows, which
-    collapse on the primary key without conflict. A run with no sample source is left untouched.
+    samples: int
+    coverage: dict[str, TaskCoverage] = field(default_factory=dict)
+    """Per-task coverage keyed like the run's ``metrics`` (see :func:`_task_keys`)."""
 
-    Raises if the archive holds samples written under an older contract. Those rows cannot collapse
-    against rows written under the current one, and finestore does not delete, so bringing them
-    forward is a migration rather than an export.
-    """
+    recovered_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    """Metrics rebuilt from successful samples for tasks with request failures."""
+
+    canonical_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    tasks: tuple[EvalTaskRef, ...] = ()
+
+
+def _write_sample_archive(
+    out_path: str,
+    writer_id: str,
+    artifacts: Sequence[str],
+    result_payloads: Mapping[str, bytes],
+    benchmarks: Mapping[str, Mapping[str, BenchmarkMetadataRef]],
+    initial_coverage: Mapping[str, TaskCoverage],
+) -> tuple[int, dict[str, TaskCoverage], dict[str, dict[str, float]]]:
+    """Preserve evaluator artifacts and normalize their per-sample rows."""
     root = StoragePath(out_path)
-    artifacts = run_artifacts(out_path)
-    if not any(_is_sample_source(relative) for relative in artifacts):
-        # With no source there is nothing to write, and nothing that could stand in for what is
-        # already stored, so a run evaluated by another mechanism keeps the archive it has.
-        return 0
-    require_current_samples(out_path)
+    keys = _task_keys(
+        [relative for relative in artifacts if _is_sample_source(relative) and not is_scratch_artifact(relative)],
+        benchmarks,
+    )
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
+    coverage = dict(initial_coverage)
+    recovered_metrics: dict[str, dict[str, float]] = {}
     try:
         for relative in artifacts:
-            payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
+            payload = result_payloads.get(relative)
+            if payload is None:
+                payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
             store.add_source_artifact(relative, payload, content_type=_content_type(relative))
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
-            if _is_sample_source(relative) and not is_scratch_artifact(relative):
-                count += _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
+            task_key = keys.get(relative)
+            if task_key is None:
+                continue
+            directory = PurePosixPath(relative).parent.parent.name
+            leaf = _task_from_filename(PurePosixPath(relative).name, ".jsonl")
+            benchmark = benchmarks.get(directory, {}).get(leaf)
+            primary_source = None
+            score_from_aggregate = False
+            if benchmark is not None:
+                primary_source = next(
+                    metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric
+                )
+                score_from_aggregate = primary_source.endswith("_avg")
+            accumulator = _TaskCoverageAccumulator(
+                n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
+                n_attempted=benchmark.n_attempted if benchmark is not None else None,
+                score_from_aggregate=score_from_aggregate,
+            )
+            written = _add_lm_eval_rows(
+                store,
+                relative.rsplit("/", 1)[-1],
+                payload,
+                primary_metric_name=primary_source,
+                coverage=accumulator,
+            )
+            count += written
+            if not written:
+                continue
+            task_coverage_result, task_metrics = accumulator.result()
+            coverage[task_key] = task_coverage_result
+            if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+                recovered_metrics[task_key] = task_metrics
         store.seal()
     finally:
         store.close()
-    return count
+    return count, coverage, recovered_metrics
+
+
+def export_lm_eval_samples(
+    out_path: str,
+    *,
+    tasks: Sequence[TaskDeclaration] = (),
+    writer_id: str = "evalchemy",
+) -> EvaluationArchiveSummary:
+    """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
+
+    Returns the rows written, coverage, and metrics recovered from successful requests. The archive
+    preserves every harness artifact and remains usable after the results tree is pruned. Re-running
+    an unchanged source produces rows that collapse on the primary key. Runs without sample sources
+    remain untouched.
+
+    Raises if the archive holds samples written under an older contract. Finestore cannot collapse
+    those rows against the current schema; an explicit migration must replace them.
+    """
+    artifacts = run_artifacts(out_path)
+    sources = [relative for relative in artifacts if _is_sample_source(relative) and not is_scratch_artifact(relative)]
+    root = StoragePath(out_path)
+    result_payloads = {
+        relative: StoragePath(prefix_join(str(root), relative)).read_bytes()
+        for relative in artifacts
+        if _is_result_source(relative)
+    }
+    contracts = _evalchemy_contract_summary(result_payloads, tasks)
+    if not sources:
+        return EvaluationArchiveSummary(
+            samples=0,
+            coverage=contracts.coverage,
+            canonical_metrics=contracts.canonical_metrics,
+            tasks=contracts.tasks,
+        )
+    require_current_samples(out_path)
+    count, coverage, recovered_metrics = _write_sample_archive(
+        out_path,
+        writer_id,
+        artifacts,
+        result_payloads,
+        contracts.benchmarks,
+        contracts.coverage,
+    )
+    return EvaluationArchiveSummary(
+        samples=count,
+        coverage=coverage,
+        recovered_metrics=recovered_metrics,
+        canonical_metrics=contracts.canonical_metrics,
+        tasks=contracts.tasks,
+    )
+
+
+def _is_native_evalchemy_source(name: str) -> bool:
+    path = PurePosixPath(name)
+    if not path.is_relative_to(EVALCHEMY_SOURCE_ROOT):
+        return False
+    relative = path.relative_to(EVALCHEMY_SOURCE_ROOT)
+    return len(relative.parts) == 3 and relative.parts[1] == EVALCHEMY_NATIVE_SOURCE_DIR
+
+
+@dataclass(frozen=True)
+class NativeEvalchemyArtifacts:
+    """Native Evalchemy source artifacts needed by Marin's archive readers."""
+
+    sample_sources: tuple[str, ...]
+    result_payloads: dict[str, bytes]
+
+
+def read_native_evalchemy_artifacts(out_path: str) -> NativeEvalchemyArtifacts:
+    """Discover native Evalchemy sources and read their results payloads."""
+    reader = ReadView(out_path)
+    source_names = tuple(
+        sorted(
+            key[0]
+            for key in reader.keys(BlobTables.DESCRIPTORS)
+            if isinstance(key[0], str) and _is_native_evalchemy_source(key[0])
+        )
+    )
+    payloads: dict[str, bytes] = {}
+    for name in source_names:
+        if not _is_result_source(name):
+            continue
+        payload = reader.read_blob(name)
+        if payload is None:
+            raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
+        payloads[name] = payload
+    return NativeEvalchemyArtifacts(
+        sample_sources=tuple(name for name in source_names if _is_sample_source(name)),
+        result_payloads=payloads,
+    )
+
+
+def summarize_native_eval_samples(
+    out_path: str,
+    *,
+    tasks: Sequence[TaskDeclaration] = (),
+) -> EvaluationArchiveSummary:
+    """Read coverage and evaluator metadata from native Evalchemy FineStore output."""
+    reader = ReadView(out_path)
+    artifacts = read_native_evalchemy_artifacts(out_path)
+    if not artifacts.result_payloads:
+        raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy results artifacts")
+
+    contracts = _evalchemy_contract_summary(artifacts.result_payloads, tasks)
+    coverage = dict(contracts.coverage)
+
+    table = reader.scan(ARCHIVE_SAMPLES_TABLE)
+    if table is None and artifacts.sample_sources:
+        raise FileNotFoundError(f"archive at {out_path!r} contains no normalized evaluation samples")
+    by_task: dict[str, list[EvalSample]] = {}
+    if table is not None:
+        for row in table.to_pylist(maps_as_pydicts="strict"):
+            sample = sample_from_archive_row(row)
+            by_task.setdefault(sample.task, []).append(sample)
+
+    task_keys = _task_keys(artifacts.sample_sources, contracts.benchmarks)
+    sample_count = 0
+    recovered_metrics: dict[str, dict[str, float]] = {}
+    for name in artifacts.sample_sources:
+        task_key = task_keys[name]
+        samples = by_task.get(task_key, [])
+        sample_count += len(samples)
+        directory = PurePosixPath(name).parent.parent.name
+        leaf = _task_from_filename(PurePosixPath(name).name, ".jsonl")
+        benchmark = contracts.benchmarks.get(directory, {}).get(leaf)
+        task_coverage_result, task_metrics = task_coverage_and_metrics(
+            samples,
+            n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
+            n_attempted=benchmark.n_attempted if benchmark is not None else None,
+        )
+        coverage[task_key] = task_coverage_result
+        if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+            recovered_metrics[task_key] = task_metrics
+
+    return EvaluationArchiveSummary(
+        samples=sample_count,
+        coverage=coverage,
+        recovered_metrics=recovered_metrics,
+        canonical_metrics=contracts.canonical_metrics,
+        tasks=contracts.tasks,
+    )
 
 
 def require_current_samples(out_path: str) -> None:
     """Raise if the archive's samples predate the current contract.
 
-    A widened primary key reads as null on the older shards, so those rows would survive beside the
-    ones a writer adds now rather than collapsing against them. Removing them is a migration's job,
-    not a writer's.
+    A widened primary key reads as null on older shards, leaving both old and current rows in the
+    table. A migration must remove the old rows before writing the current contract.
     """
-    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    stored_version = ReadView(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return
     raise ValueError(
@@ -369,20 +898,57 @@ def _task_from_filename(name: str, suffix: str) -> str:
     return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
 
 
-def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:
-    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the rows added.
+def _add_lm_eval_rows(
+    store: EvaluationStore,
+    filename: str,
+    payload: bytes,
+    *,
+    primary_metric_name: str | None = None,
+    task_name: str | None = None,
+    coverage: _TaskCoverageAccumulator | None = None,
+) -> int:
+    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the sample count added.
 
-    Splits only on the physical LF delimiter, so a literal U+2028/U+2029 inside a JSON string stays
-    part of its record rather than being taken for a record boundary.
+    Physical LF bytes delimit records, so the payload is parsed one line at a time and never fully
+    decoded into a row list. Literal U+2028/U+2029 characters remain inside JSON strings.
     """
-    rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
-    if not rows:
+    task = task_name or _task_from_filename(filename, ".jsonl")
+    count = 0
+    start = 0
+    while start < len(payload):
+        end = payload.find(b"\n", start)
+        if end < 0:
+            end = len(payload)
+        line = payload[start:end]
+        start = end + 1
+        if not line or line.isspace():
+            continue
+        raw = json.loads(line)
+        normalized = samples_from_lm_eval(task, raw, primary_metric_name)
+        variants = raw.get("filter_variants")
+        filters = (
+            [variant.get("filter") for variant in variants]
+            if isinstance(variants, list) and variants
+            else [raw.get("filter")]
+        )
+        repeat = raw.get("sample_repeat")
+        trial_id = str(repeat) if repeat is not None else ""
+        for sample, extraction_filter in zip(normalized, filters, strict=True):
+            # An explicit filter only carries information a grading does not already name; a
+            # filtered response without a per-sample grade would otherwise lose its filter.
+            store.add_sample(
+                sample,
+                trial_id=trial_id,
+                extraction_filter=(
+                    extraction_filter if isinstance(extraction_filter, str) and sample.grading is None else None
+                ),
+            )
+            if coverage is not None:
+                coverage.add(sample)
+            count += 1
+    if not count:
         logger.warning("samples file %s is empty; skipping archive export", filename)
-        return 0
-    task = _task_from_filename(filename, ".jsonl")
-    for raw in rows:
-        store.add_sample(sample_from_lm_eval(task, raw))
-    return len(rows)
+    return count
 
 
 def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
@@ -394,7 +960,7 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     return tuple(
         sorted(
             key[0]
-            for key in CompositeReader(out_path).keys(BLOBS_TABLE)
+            for key in ReadView(out_path).keys(BlobTables.DESCRIPTORS)
             if isinstance(key[0], str)
             and key[0].startswith(f"{SOURCES_PREFIX}/")
             and key[0].endswith(".jsonl")
@@ -403,7 +969,7 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     )
 
 
-def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
+def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[EvalTaskRef] = (), writer_id: str = "rebuild") -> int:
     """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
 
     The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this repairs
@@ -412,12 +978,15 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
     collapse against themselves, so nothing is deleted; an archive at an older contract raises, and
     one preserving no sources raises too.
     """
-    reader = CompositeReader(out_path)
+    reader = ReadView(out_path)
     names = preserved_sample_sources(out_path)
     if not names:
         raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")
     require_current_samples(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
+    task_configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
+    native_names = tuple(name for name in names if _is_native_evalchemy_source(name))
+    native_task_keys = _task_keys(native_names)
     count = 0
     try:
         for name in names:
@@ -426,7 +995,31 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
             payload = reader.read_blob(name)
             if payload is None:
                 raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-            count += _add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload)
+            directory = PurePosixPath(name).parent.parent.name
+            sample_task = _task_from_filename(PurePosixPath(name).name, ".jsonl")
+            task = task_configs.get(directory)
+            benchmark = task.benchmark if task is not None else None
+            if benchmark is None:
+                benchmark = next(
+                    (
+                        candidate.benchmark
+                        for candidate in tasks
+                        if candidate.benchmark is not None and candidate.benchmark.task == sample_task
+                    ),
+                    None,
+                )
+            primary_source = None
+            if benchmark is not None:
+                primary_source = next(
+                    metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric
+                )
+            count += _add_lm_eval_rows(
+                store,
+                name.rsplit("/", 1)[-1],
+                payload,
+                primary_metric_name=primary_source,
+                task_name=native_task_keys.get(name),
+            )
         store.seal()
     finally:
         store.close()

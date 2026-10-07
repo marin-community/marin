@@ -1,10 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared test helpers: the bridge config and a canned k8s API server."""
+"""Shared test helpers: the bridge config, a canned k8s API server, and finelog's SQL dialect."""
+
+import re
 
 import httpx
 from config import BridgeConfig, K8sClusterTarget
+from finelog.errors import StatsError
 from k8s_source import K8sSource
 
 KUEUE_DEPLOY = "/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controller-manager"
@@ -13,6 +16,15 @@ TRAEFIK_DEPLOY = "/apis/apps/v1/namespaces/traefik/deployments/traefik"
 CERT_DEPLOY = "/apis/apps/v1/namespaces/cert-manager/deployments/cert-manager"
 FINELOG_DEPLOYMENTS_PATH = "/apis/apps/v1/deployments"
 KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices"
+NODE_POOLS = "/apis/compute.coreweave.com/v1alpha1/nodepools"
+
+
+def install_finelog_dialect_macros(database) -> None:
+    """Teach a DuckDB connection the finelog spellings the dashboards write."""
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
+    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
 
 
 def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
@@ -81,6 +93,14 @@ def node(
     unschedulable: bool = False,
     kernel_deadlock_reason: str = "",
     arch: str = "arm64",
+    node_pool: str = "",
+    compute_class: str = "",
+    gpu_model: str = "",
+    rack_slot: str = "",
+    node_state: str = "",
+    ib_fabric: str = "",
+    ib_speed: str = "",
+    gpu_driver: str = "",
 ) -> dict:
     labels = {}
     if rack is not None:
@@ -88,6 +108,18 @@ def node(
         labels["ds.coreweave.com/physical-topology.rack-name"] = rack_name
     if instance_type:
         labels["node.kubernetes.io/instance-type"] = instance_type
+    for key, value in (
+        ("compute.coreweave.com/node-pool", node_pool),
+        ("compute.coreweave.com/compute-class", compute_class),
+        ("gpu.nvidia.com/model", gpu_model),
+        ("node.coreweave.cloud/slot", rack_slot),
+        ("node.coreweave.cloud/state", node_state),
+        ("ib.coreweave.cloud/fabric", ib_fabric),
+        ("ib.coreweave.cloud/speed.current", ib_speed),
+        ("gpu.coreweave.cloud/driver-version", gpu_driver),
+    ):
+        if value:
+            labels[key] = value
     conditions = [{"type": "Ready", "status": "True" if ready else "False"}]
     annotations = {}
     if kernel_deadlock_reason:
@@ -171,4 +203,16 @@ def healthy_k8s_routes() -> dict:
         "/api/v1/nodes": [
             node("g1", rack="169", rack_name="dh1-r169-us-east-08a", instance_type="gb200-4x", gpu_capacity=4)
         ],
+        NODE_POOLS: [],
     }
+
+
+def absent_namespace_error(sql: str) -> StatsError:
+    """What DataFusion raises when a statement names a namespace the deployment has never held."""
+    namespace = queried_namespace(sql)
+    return StatsError(f"Error during planning: table 'datafusion.public.{namespace}' not found")
+
+
+def queried_namespace(sql: str) -> str:
+    (namespace,) = re.findall(r'FROM "([^"]+)"', sql)
+    return namespace

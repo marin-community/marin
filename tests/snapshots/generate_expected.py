@@ -21,7 +21,7 @@ MY_DIR = os.path.dirname(os.path.realpath(__file__))
 
 def transform_web(html: str) -> str:
     """Transform web HTML to markdown using resiliparse."""
-    output = convert_page(html, extract_method="resiliparse", config=ResiliparseConfig())
+    output = convert_page(html, config=ResiliparseConfig())
     return output["content"]
 
 
@@ -30,7 +30,6 @@ def transform_wiki(html: str) -> str:
     filtered_html = clean_wiki_html(html, remove_reference_section=True)
     output = convert_page(
         filtered_html,
-        extract_method="resiliparse",
         config=ResiliparseConfig(
             links=False,
             skip_elements=WIKI_BLACKLISTED_SELECTORS,
@@ -51,7 +50,6 @@ def transform_ar5iv(html: str) -> str:
 
     output = convert_page(
         filtered_html,
-        extract_method="resiliparse",
         config=ResiliparseConfig(
             links=False,
             prepend_title=True,
@@ -87,7 +85,7 @@ def transform_stackexchange(json_str: str) -> str:
             include_links=False,
         ),
     )
-    content = prepare_md_template(title, question, answers, tags, "resiliparse", config, prepend_vote_count=False)
+    content = prepare_md_template(title, question, answers, tags, config, prepend_vote_count=False)
     return content.strip()
 
 
@@ -95,7 +93,6 @@ def transform_dclm_hq(html: str) -> str:
     """Transform DCLM HQ HTML to markdown."""
     output = convert_page(
         html,
-        extract_method="resiliparse",
         config=ResiliparseConfig(
             links=False,
             skip_elements=[],

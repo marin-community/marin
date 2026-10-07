@@ -6,6 +6,7 @@
     "dev": "rsbuild dev",
     "build": "rsbuild build",
     "build:check": "vue-tsc --noEmit && rsbuild build",
+    "test": "node --test 'tests/*.test.ts'",
     "preview": "rsbuild preview"
   },
   "dependencies": {
@@ -14,14 +15,14 @@
     "@tailwindcss/postcss": "^4.3.0",
     "apache-arrow": "^17.0.0",
     "marked": "^18.0.4",
-    "vue": "^3.5.35",
+    "vue": "^3.5.43",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@rsbuild/core": "^1.2.0",
     "@rsbuild/plugin-vue": "^1.2.9",
     "autoprefixer": "^10.5.0",
-    "postcss": "^8.5.15",
+    "postcss": "^8.5.28",
     "speedscope": "^1.25.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.3",

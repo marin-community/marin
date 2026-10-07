@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import gc
+import functools
 import logging
 import os
 from dataclasses import dataclass, field
@@ -23,6 +23,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
@@ -36,6 +37,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_act
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
+from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
@@ -128,12 +130,12 @@ def _load_lm_model_from_configured_source(
     elif (
         config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
     ):
-        # Both build a fresh base model and load only the checkpoint's `model` subtree into it (weights
-        # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
+        # Both load the checkpoint's `model` subtree into an abstract template. They differ
+        # only in how main() uses the loaded weights.
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
         checkpoint_path = latest_checkpoint_path(source)
-        model = config.model.build(Vocab, key=model_key)
-        model = load_checkpoint(model, checkpoint_path, subpath="model")
+        model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
+        model = load_checkpoint(model, checkpoint_path, subpath="model", axis_mapping=parameter_axis_mapping)
         model = hax.shard(model, parameter_axis_mapping)
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     else:
@@ -206,7 +208,10 @@ def main(config: TrainLmConfig):
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
-    with Trainer(config.trainer, optimizer, loss_function) as trainer:
+    with (
+        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
+    ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy
         seed = config.trainer.seed
@@ -259,7 +264,27 @@ def main(config: TrainLmConfig):
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
-        if isinstance(config.adapter, NoAdaptorConfig):
+        load_source_model = functools.partial(
+            _load_lm_model_from_configured_source,
+            config=config,
+            converter=converter,
+            Vocab=Vocab,
+            model_key=model_key,
+            adapter_key=adapter_key,
+            parameter_axis_mapping=parameter_axis_mapping,
+            trainer=trainer,
+        )
+        _, resuming = trainer.checkpoint_load_plan()
+        weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
+        if weight_source and not resuming:
+            logger.info("Initializing trainer state directly from pretrained weights")
+            initial_model = load_source_model()
+            state = trainer.initial_state(
+                training_key,
+                model=initial_model,
+                is_trainable=config.adapter.trainable_filter(initial_model),
+            )
+        elif isinstance(config.adapter, NoAdaptorConfig):
             state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
         else:
             initial_model = config.adapter.apply(
@@ -273,64 +298,18 @@ def main(config: TrainLmConfig):
                 is_trainable=config.adapter.trainable_filter(initial_model),
             )
 
-        if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
+        if not resuming and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
             state = load_checkpoint(state, checkpoint_path)
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
-        if int(state.step) == 0:
-            # TODO: I don't love that we init the model twice, but it's not a big deal i think?
-            if config.initialize_from_hf:
-                # initialize from an hf pretrained model
-                assert converter is not None
-                logger.info(
-                    "No training checkpoint found. Initializing model from HF checkpoint"
-                    f" '{converter.reference_checkpoint}'"
-                )
-                source = "HF checkpoint"
-            elif config.initialize_model_from_checkpoint_path is not None:
-                # Weights-only native init: the same "load weights, fresh optimizer, step 0" path as
-                # initialize_from_hf, so it goes through the same loader (which also applies any adapter to
-                # the loaded base). The load itself is strict — every model leaf must be present.
-                logger.info(
-                    "No training checkpoint found. Initializing model weights from native checkpoint"
-                    f" '{config.initialize_model_from_checkpoint_path}' (fresh optimizer, step 0)."
-                )
-                source = "native checkpoint"
-            else:
-                source = None
-
-            if source is not None:
-                # this is a bit gross, but we want to free up the memory from the model we just built
-                state = dataclasses.replace(state, model=None)
-                gc.collect()
-                model = _load_lm_model_from_configured_source(
-                    config=config,
-                    converter=converter,
-                    Vocab=Vocab,
-                    model_key=model_key,
-                    adapter_key=adapter_key,
-                    parameter_axis_mapping=parameter_axis_mapping,
-                    trainer=trainer,
-                )
-                state = dataclasses.replace(state, model=model)
-            else:
-                logger.info("No checkpoint found. Starting from scratch.")
-        elif not isinstance(config.adapter, NoAdaptorConfig):
+        if resuming and not isinstance(config.adapter, NoAdaptorConfig):
             logger.info(
                 "Adapter checkpoints only store trainable weights. Reconstructing the base LM model from the "
                 "configured source before overlaying resumed adapter parameters."
             )
-            source_model = _load_lm_model_from_configured_source(
-                config=config,
-                converter=converter,
-                Vocab=Vocab,
-                model_key=model_key,
-                adapter_key=adapter_key,
-                parameter_axis_mapping=parameter_axis_mapping,
-                trainer=trainer,
-            )
+            source_model = load_source_model()
             state = dataclasses.replace(
                 state,
                 model=_restore_lm_model_from_partial_checkpoint(
@@ -386,7 +365,7 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
         trainer.add_hook(
-            callbacks.iris_status_reporter(
+            iris_status_reporter(
                 Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
             ),
             every=10,

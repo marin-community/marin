@@ -9,12 +9,12 @@
 //! trigram prune only removes *more* row groups, never fewer.
 //!
 //! Safety: we prune only on a substring predicate that appears as a **top-level
-//! conjunct** — either `contains(col, <literal>)` or `col LIKE '%<literal>%'`. A
-//! predicate under an `OR` could drop rows that match the other branch, so those
-//! are ignored. The pushdown stays `Inexact`, so DataFusion keeps a `FilterExec`
-//! that re-checks the predicate exactly — a kept row group that doesn't actually
-//! match (Bloom false positive, or trigrams split across rows) is filtered there,
-//! not returned.
+//! conjunct** — `contains(col, <literal>)`, `col LIKE '%<literal>%'`, or
+//! `regexp_matches(col, <literal-pattern>)`. A predicate under an `OR` could drop
+//! rows that match the other branch, so those are ignored. The pushdown stays
+//! `Inexact`, so DataFusion keeps a `FilterExec` that re-checks the predicate
+//! exactly — a kept row group that doesn't actually match (Bloom false positive,
+//! or trigrams split across rows) is filtered there, not returned.
 //!
 //! A `LIKE` pattern contributes every literal run between its wildcards, since
 //! `%` and `_` only insert characters *between* those runs: `%a%b%` requires
@@ -31,9 +31,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::ParquetAccessPlan;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+use regex_syntax::hir::{Hir, HirKind};
+use regex_syntax::Parser;
 
-use crate::query::index_cache::IndexCache;
-use crate::store::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
+use crate::indices::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
+use crate::indices::{IndexRegistry, SegmentArtifacts};
 
 /// An inclusive key range constraining a single column, distilled from a query's
 /// top-level conjuncts. Used to scope which segments' index sections are read: a
@@ -50,27 +52,144 @@ pub struct StringRange {
     pub hi: Option<Vec<u8>>,
 }
 
-/// Inject access plans for already-extracted per-column `needles` (from
-/// [`substring_needles_by_column`]). Does the blocking bundle + footer reads
-/// (routed through the [`IndexCache`] cache), so the provider runs it under
-/// `spawn_blocking`. `key_ranges` (from [`string_column_ranges`]) scopes which
-/// segments are consulted by key band. Returns `plan` unchanged when `needles`
-/// is empty or nothing prunes.
-pub fn apply_with_needles(
-    plan: Arc<dyn ExecutionPlan>,
+/// Eliminate whole segments whose advertised trigram bundle proves that no row
+/// can satisfy the required string predicates. Missing or uncached artifacts
+/// keep the segment, so this remains a fail-open optimization.
+pub fn plan_segments(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
+) -> SegmentPruning {
+    let mut masks = HashMap::new();
+    let columns = ordered_trigram_needles(needles, key_ranges);
+    if columns.is_empty() {
+        return SegmentPruning {
+            paths: segment_paths.to_vec(),
+            masks,
+        };
+    }
+
+    let mut pruned = 0usize;
+    let retained = segment_paths
+        .iter()
+        .filter(|path| {
+            let Some(segment_artifacts) = artifacts.get(path.as_str()) else {
+                return true;
+            };
+            let Some(segment) = indices.open_summary(segment_artifacts) else {
+                return true;
+            };
+            let mut combined: Option<Vec<bool>> = None;
+            let mut span_rows = None;
+            for (column, needle_sets) in &columns {
+                let Some((coverage, index)) = indices.summary_trigram(&segment, column) else {
+                    continue;
+                };
+                if !coverage.key_column.is_empty()
+                    && key_ranges.get(&coverage.key_column).is_some_and(|range| {
+                        !coverage.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref())
+                    })
+                {
+                    pruned += 1;
+                    return false;
+                }
+                if span_rows.is_some_and(|rows| rows != coverage.span_rows)
+                    || combined
+                        .as_ref()
+                        .is_some_and(|mask| mask.len() != coverage.span_count as usize)
+                {
+                    return true;
+                }
+                span_rows = Some(coverage.span_rows);
+                let mask = combined.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
+                for trigrams in needle_sets {
+                    for (keep, matches) in mask.iter_mut().zip(index.keep_mask_for(trigrams)) {
+                        *keep &= matches;
+                    }
+                }
+                if mask.iter().all(|keep| !keep) {
+                    pruned += 1;
+                    return false;
+                }
+            }
+            if let (Some(keep), Some(span_rows)) = (combined, span_rows) {
+                if keep.iter().any(|&keep| !keep) {
+                    masks.insert(
+                        path.to_string(),
+                        SpanMask {
+                            keep,
+                            span_rows: span_rows as usize,
+                        },
+                    );
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    if pruned > 0 {
+        tracing::debug!(segments_pruned = pruned, "trigram segment prune");
+    }
+    SegmentPruning {
+        paths: retained,
+        masks,
+    }
+}
+
+/// Selected segments and their query-owned masks. Retaining masks avoids a
+/// second sweep through an index working set larger than the shared cache.
+pub struct SegmentPruning {
+    pub paths: Vec<String>,
+    masks: HashMap<String, SpanMask>,
+}
+
+struct SpanMask {
+    keep: Vec<bool>,
+    span_rows: usize,
+}
+
+/// Attach the masks already computed before source planning.
+pub fn apply_pruning(
+    plan: Arc<dyn ExecutionPlan>,
+    pruning: &SegmentPruning,
 ) -> Arc<dyn ExecutionPlan> {
-    if needles.is_empty() {
-        return plan;
-    }
-    let access_plans = build_access_plans(segment_paths, needles, key_ranges, index_cache);
-    if access_plans.is_empty() {
-        return plan;
-    }
-    rewrite_file_groups(plan, &access_plans)
+    rewrite_file_groups(plan, &access_plans(pruning))
+}
+
+fn access_plans(pruning: &SegmentPruning) -> HashMap<String, ParquetAccessPlan> {
+    pruning
+        .masks
+        .iter()
+        .filter_map(|(path, mask)| {
+            let rows = crate::store::segment::segment_row_group_rows(Path::new(path))?;
+            let access = span_access_plan(&mask.keep, mask.span_rows, &rows)?;
+            let basename = Path::new(path).file_name()?.to_str()?.to_string();
+            Some((basename, access))
+        })
+        .collect()
+}
+
+fn ordered_trigram_needles<'a>(
+    needles: &'a HashMap<String, Vec<String>>,
+    key_ranges: &HashMap<String, StringRange>,
+) -> Vec<(&'a str, Vec<Vec<[u8; 3]>>)> {
+    let mut columns: Vec<_> = needles
+        .iter()
+        .filter_map(|(column, values)| {
+            let trigrams: Vec<_> = values
+                .iter()
+                .filter_map(|value| needle_trigrams(value))
+                .collect();
+            (!trigrams.is_empty()).then_some((column.as_str(), trigrams))
+        })
+        .collect();
+    // A range-constrained column is usually the segment's sort key. Its small
+    // trigram section can rule out the whole segment before a wide data section
+    // is read, even when catalog min/max bounds overlap the requested range.
+    columns.sort_by_key(|(column, _)| (!key_ranges.contains_key(*column), *column));
+    columns
 }
 
 /// Inclusive per-column key ranges implied by a query's top-level conjuncts.
@@ -171,8 +290,9 @@ fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
 }
 
 /// Substring needles grouped by the column each constrains, from every top-level
-/// `contains(col, lit)` / `col LIKE '%lit%'` conjunct, keeping the literals long
-/// enough to decompose into at least one trigram (`>= MIN_TRIGRAM_LEN`).
+/// `contains(col, lit)` / `col LIKE '%lit%'` / `regexp_matches(col, pattern)`
+/// conjunct, keeping the literals long enough to decompose into at least one
+/// trigram (`>= MIN_TRIGRAM_LEN`).
 ///
 /// A column's needles are required together, so dropping a too-short one only
 /// loosens the constraint.
@@ -201,30 +321,72 @@ pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, Vec<Stri
 
 /// `Some((column, needles))` if `expr` constrains some column to contain literal
 /// substrings — all of them, since they are ANDed: `contains(<col>, <utf8
-/// literal>)`, or the literal runs of a `<col> LIKE` pattern (see
-/// [`like_column_needles`]).
+/// literal>)`, the literal runs of a `<col> LIKE` pattern (see
+/// [`like_column_needles`]), or the literals required by a regex match.
 fn substring_column_needles(expr: &Expr) -> Option<(String, Vec<String>)> {
     match expr {
-        Expr::ScalarFunction(sf) => {
-            contains_column_literal(sf).map(|(col, needle)| (col, vec![needle]))
-        }
+        Expr::ScalarFunction(sf) => scalar_function_needles(sf),
         Expr::Like(like) => like_column_needles(like),
         _ => None,
     }
 }
 
-/// `Some((column, needle))` if `sf` is exactly `contains(<column>, <utf8 literal>)`.
-fn contains_column_literal(
+fn scalar_function_needles(
     sf: &datafusion::logical_expr::expr::ScalarFunction,
-) -> Option<(String, String)> {
-    if sf.func.name() != "contains" || sf.args.len() != 2 {
+) -> Option<(String, Vec<String>)> {
+    if sf.args.len() != 2 {
         return None;
     }
     let Expr::Column(col) = &sf.args[0] else {
         return None;
     };
-    let needle = utf8_literal(&sf.args[1])?;
-    Some((col.name.clone(), needle))
+    let value = utf8_literal(&sf.args[1])?;
+    match sf.func.name() {
+        "contains" | "prefix" => Some((col.name.clone(), vec![value])),
+        "regexp_matches" => Some((col.name.clone(), regex_required_literals(&value))),
+        _ => None,
+    }
+}
+
+/// Literal byte strings that every match of `pattern` must contain.
+///
+/// The HIR has already resolved escapes and flags. Literals beneath optional
+/// repetition are discarded, while alternation keeps only literals required by
+/// every branch. Returning too few literals only loses an optimization;
+/// returning one that is not required could incorrectly prune matching rows.
+fn regex_required_literals(pattern: &str) -> Vec<String> {
+    let Ok(hir) = Parser::new().parse(pattern) else {
+        return Vec::new();
+    };
+    required_hir_literals(&hir)
+        .into_iter()
+        .filter_map(|literal| String::from_utf8(literal).ok())
+        .collect()
+}
+
+fn required_hir_literals(hir: &Hir) -> Vec<Vec<u8>> {
+    match hir.kind() {
+        HirKind::Literal(literal) => vec![literal.0.to_vec()],
+        HirKind::Capture(capture) => required_hir_literals(&capture.sub),
+        HirKind::Repetition(repetition) if repetition.min > 0 => {
+            required_hir_literals(&repetition.sub)
+        }
+        HirKind::Concat(parts) => parts.iter().flat_map(required_hir_literals).collect(),
+        HirKind::Alternation(branches) => {
+            let Some((first, rest)) = branches.split_first() else {
+                return Vec::new();
+            };
+            let mut required = required_hir_literals(first);
+            for branch in rest {
+                let branch_required = required_hir_literals(branch);
+                required.retain(|literal| branch_required.contains(literal));
+            }
+            required
+        }
+        HirKind::Empty | HirKind::Class(_) | HirKind::Look(_) | HirKind::Repetition(_) => {
+            Vec::new()
+        }
+    }
 }
 
 /// `Some((column, needles))` if `like` is `<column> LIKE '<pattern>'`, where
@@ -290,132 +452,24 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 /// out of scope, nothing pruned) is skipped — the file then scans unpruned,
 /// which is correct.
 ///
-/// Bundle reads go through the store's shared [`IndexCache`], so a repeated
+/// Bundle reads go through the registry's shared parsed-section cache, so a repeated
 /// query reuses parsed blooms and resident bytes stay within the configured
 /// budget.
+#[cfg(test)]
 fn build_access_plans(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
-    manager: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
-    // Decompose each constrained column's needles into trigram sets ONCE, not
-    // once per segment — a single query commonly spans dozens of segments.
-    // Needles arrive pre-filtered to `>= MIN_TRIGRAM_LEN`, so each yields a
-    // non-empty set; a column whose needles all degrade is dropped here.
-    let trigrams_by_column: HashMap<&str, Vec<Vec<[u8; 3]>>> = needles
-        .iter()
-        .filter_map(|(col, ns)| {
-            let tg: Vec<Vec<[u8; 3]>> = ns.iter().filter_map(|n| needle_trigrams(n)).collect();
-            (!tg.is_empty()).then_some((col.as_str(), tg))
-        })
-        .collect();
-    if trigrams_by_column.is_empty() {
-        return HashMap::new();
-    }
-
-    let mut out = HashMap::new();
-    let mut total_row_groups = 0usize;
-    let mut skipped_row_groups = 0usize;
-    let mut total_spans = 0usize;
-    let mut skipped_spans = 0usize;
-    let mut scoped_out = 0usize;
-    'segments: for path in segment_paths {
-        let p = Path::new(path);
-        let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let Some(segment) = manager.indexed_segment(p) else {
-            // No valid bundle: expected for L0 or an unindexed namespace.
-            // segments. The file just scans unpruned — correct, never a false
-            // negative.
-            tracing::debug!(
-                segment = basename,
-                "no usable trigram section; scanning unpruned"
-            );
-            continue;
-        };
-        // A span survives only if it survives EVERY constrained column's needles.
-        // A column this segment's bundle does not index can't prune, so it
-        // simply contributes no constraint here. The mask is sized from the
-        // section's own span count; the Parquet footer is consulted below for a
-        // segment whose blooms actually pruned something.
-        let mut keep: Option<Vec<bool>> = None;
-        let mut span_rows = None;
-        let mut applied_any = false;
-        for (&col, needle_trigrams) in &trigrams_by_column {
-            let Some((coverage, index)) = manager.get_trigram(p, &segment.header, col) else {
-                continue;
-            };
-            if !coverage.key_column.is_empty() {
-                if let Some(range) = key_ranges.get(&coverage.key_column) {
-                    if !coverage.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref()) {
-                        scoped_out += 1;
-                        continue 'segments;
-                    }
-                }
-            }
-            let keep = keep.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
-            if keep.len() != coverage.span_count as usize
-                || span_rows.is_some_and(|rows| rows != coverage.span_rows as usize)
-            {
-                tracing::warn!(
-                    segment = basename,
-                    column = col,
-                    "inconsistent trigram sections; ignoring section"
-                );
-                continue;
-            }
-            span_rows = Some(coverage.span_rows as usize);
-            applied_any = true;
-            for trigrams in needle_trigrams {
-                for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
-                    *k &= m;
-                }
-            }
-        }
-        let Some(keep) = keep else {
-            continue;
-        };
-        if !applied_any || keep.iter().all(|&k| k) {
-            continue;
-        }
-        // Map the span mask onto the segment's row groups. This parses the whole
-        // footer, so it runs last — after the cheap header and key-band checks,
-        // and only for a segment an access plan would be attached to.
-        let Some(access) = span_access_plan(
-            &keep,
-            span_rows.unwrap_or_default(),
-            &segment.row_group_rows,
-        ) else {
-            tracing::warn!(
-                segment = basename,
-                index_spans = keep.len(),
-                index_span_rows = span_rows,
-                parquet_rows = segment.row_group_rows.iter().sum::<usize>(),
-                "stale trigram section (spans do not cover the segment); scanning unpruned"
-            );
-            continue;
-        };
-        total_row_groups += segment.row_group_rows.len();
-        skipped_row_groups += segment.row_group_rows.len() - access.row_group_indexes().len();
-        total_spans += keep.len();
-        skipped_spans += keep.iter().filter(|&&k| !k).count();
-        out.insert(basename.to_string(), access);
-    }
-    if !out.is_empty() || scoped_out > 0 {
-        tracing::debug!(
-            indexed_columns = trigrams_by_column.len(),
-            segments_pruned = out.len(),
-            segments_scoped_out = scoped_out,
-            row_groups_skipped = skipped_row_groups,
-            row_groups_total = total_row_groups,
-            spans_skipped = skipped_spans,
-            spans_total = total_spans,
-            "trigram prune"
-        );
-    }
-    out
+    access_plans(&plan_segments(
+        segment_paths,
+        needles,
+        key_ranges,
+        indices,
+        artifacts,
+    ))
 }
 
 /// Turn a per-span keep mask into a row-group access plan.
@@ -499,20 +553,31 @@ fn rewrite_file_groups(
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
+
     use datafusion::logical_expr::{col, lit};
 
     use super::*;
+    use crate::indices::format;
 
-    /// `contains(data, 'x')` built as a logical expr, mirroring how the planner
-    /// represents the UDF call.
-    fn contains_expr(column: &str, needle: &str) -> Expr {
+    fn scalar_predicate_expr(name: &str, column: &str, value: &str) -> Expr {
         use datafusion::execution::FunctionRegistry;
         use datafusion::logical_expr::expr::ScalarFunction;
         use datafusion::prelude::SessionContext;
         let ctx = SessionContext::new();
         crate::query::udf::register_scalar_udfs(&ctx);
-        let udf = ctx.udf("contains").unwrap();
-        Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col(column), lit(needle)]))
+        let udf = ctx.udf(name).unwrap();
+        Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col(column), lit(value)]))
+    }
+
+    /// `contains(data, 'x')` built as a logical expr, mirroring how the planner
+    /// represents the UDF call.
+    fn contains_expr(column: &str, needle: &str) -> Expr {
+        scalar_predicate_expr("contains", column, needle)
+    }
+
+    fn regex_expr(column: &str, pattern: &str) -> Expr {
+        scalar_predicate_expr("regexp_matches", column, pattern)
     }
 
     /// `<column> LIKE '<pattern>'` (or `NOT LIKE` / `ILIKE` via the flags).
@@ -545,6 +610,32 @@ mod tests {
         // conjuncts (the elements of `filters`) are inspected.
         let buried = contains_expr("data", "x").or(col("seq").gt(lit(1_i64)));
         assert!(substring_needles(&[buried], "data").is_empty());
+    }
+
+    #[test]
+    fn regex_extracts_only_literals_required_by_every_match() {
+        assert_eq!(
+            substring_needles(&[regex_expr("data", r"rank0.*train/loss")], "data"),
+            vec!["rank0", "train/loss"]
+        );
+        assert_eq!(
+            substring_needles(&[regex_expr("data", r"start(?:middle)+end")], "data"),
+            vec!["start", "middle", "end"]
+        );
+
+        // Optional text and branch-specific text are not guaranteed. The common
+        // suffix remains usable, while a case-insensitive literal becomes an HIR
+        // class and therefore cannot be checked against case-sensitive trigrams.
+        assert_eq!(
+            substring_needles(
+                &[regex_expr("data", r"(?:foo|bar)(?:optional)?tail")],
+                "data"
+            ),
+            vec!["tail"]
+        );
+        assert!(substring_needles(&[regex_expr("data", r"(?i)needle")], "data").is_empty());
+        assert!(substring_needles(&[regex_expr("data", r"foo|bar")], "data").is_empty());
+        assert!(substring_needles(&[regex_expr("data", r"[")], "data").is_empty());
     }
 
     #[test]
@@ -665,11 +756,16 @@ mod tests {
         assert!(mirrored.get("key").unwrap().hi.is_none());
     }
 
-    /// Write a log segment spanning two index spans (all rows under `key`, the
-    /// needle in span 1 only) plus its trigram section; return the segment path.
-    fn write_scoping_segment(dir: &std::path::Path, key: &str, needle: &str) -> String {
+    /// Write two index spans, with the needle in the last row and one key per
+    /// span; return the segment path.
+    fn write_scoping_segment(
+        dir: &std::path::Path,
+        first_key: &str,
+        last_key: &str,
+        needle: &str,
+    ) -> String {
+        use crate::indices::trigram::SIDECAR_SPAN_ROWS;
         use crate::store::segment::write_segment_to_dir;
-        use crate::store::trigram::SIDECAR_SPAN_ROWS;
         use arrow::array::{Int64Array, StringArray};
         use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
         use arrow::record_batch::RecordBatch;
@@ -684,21 +780,23 @@ mod tests {
             .collect();
         data.push(needle.to_string()); // the only row in the second span
         let n = data.len() as i64;
+        let mut keys = vec![first_key; SIDECAR_SPAN_ROWS];
+        keys.push(last_key);
         let batch = RecordBatch::try_new(
             schema,
             vec![
                 Arc::new(Int64Array::from_iter_values(1..=n)),
-                Arc::new(StringArray::from(vec![key; data.len()])),
+                Arc::new(StringArray::from(keys)),
                 Arc::new(StringArray::from(data)),
             ],
         )
         .unwrap();
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
-        crate::store::segment_index::write_segment_index(
+        crate::indices::write_segment_index(
             &path,
             std::slice::from_ref(&batch),
-            &crate::store::segment_index::SegmentIndexConfig::from_policies(
-                ["data"],
+            &crate::indices::SegmentIndexConfig::from_policies(
+                ["key", "data"],
                 &[],
                 &[],
                 Some("key".to_string()),
@@ -721,6 +819,7 @@ mod tests {
         let path = write_scoping_segment(
             &dir,
             "/system/controller",
+            "/system/controller",
             "Bootstrap completed for TPU here",
         );
         let paths = vec![path];
@@ -728,10 +827,11 @@ mod tests {
             "data".to_string(),
             vec!["Bootstrap completed for TPU".to_string()],
         )]);
-        let index_cache = IndexCache::new(16);
+        let indices = crate::indices::test_index_registry();
+        let artifacts = crate::indices::sidecar_artifacts(&paths);
 
         // No key constraint: the needle prunes row group 0, so a plan is produced.
-        let unscoped = build_access_plans(&paths, &needles, &HashMap::new(), &index_cache);
+        let unscoped = build_access_plans(&paths, &needles, &HashMap::new(), &indices, &artifacts);
         assert_eq!(
             unscoped.len(),
             1,
@@ -747,7 +847,7 @@ mod tests {
             },
         )]);
         assert_eq!(
-            build_access_plans(&paths, &needles, &inband, &index_cache).len(),
+            build_access_plans(&paths, &needles, &inband, &indices, &artifacts).len(),
             1
         );
 
@@ -760,7 +860,106 @@ mod tests {
                 hi: Some(b"/zzz9".to_vec()),
             },
         )]);
-        assert!(build_access_plans(&paths, &needles, &out_of_band, &index_cache).is_empty());
+        assert!(
+            build_access_plans(&paths, &needles, &out_of_band, &indices, &artifacts).is_empty()
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn key_trigrams_skip_unneeded_data_section() {
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_prune_key_first_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_scoping_segment(&dir, "/a", "/z", "Model");
+
+        // A broken data section should remain untouched: neither key span can
+        // match /middle, even though the segment's /a..../z key band overlaps it.
+        let bundle_path = format::bundle_path(std::path::Path::new(&path));
+        let header = format::read_header(&bundle_path).unwrap();
+        let offset = header.section("trigram:data").unwrap().offset;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap();
+        file.write_all_at(&[0xff], offset).unwrap();
+
+        let needles = HashMap::from([
+            ("key".to_string(), vec!["/middle".to_string()]),
+            ("data".to_string(), vec!["Model".to_string()]),
+        ]);
+        let ranges = HashMap::from([(
+            "key".to_string(),
+            StringRange {
+                lo: Some(b"/middle".to_vec()),
+                hi: Some(b"/n".to_vec()),
+            },
+        )]);
+        let paths = vec![path];
+        let artifacts = crate::indices::sidecar_artifacts(&paths);
+        let indices = crate::indices::test_index_registry();
+        // Repetition makes a regression to unordered column iteration likely to
+        // expose a data-first plan that reads the corrupted section.
+        for _ in 0..16 {
+            assert!(
+                plan_segments(&paths, &needles, &ranges, &indices, &artifacts)
+                    .paths
+                    .is_empty()
+            );
+            assert_eq!(
+                build_access_plans(&paths, &needles, &ranges, &indices, &artifacts).len(),
+                0
+            );
+        }
+        assert_eq!(indices.cache().corruption_counts().sections, 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_the_segment_does_not_advertise_is_not_used() {
+        // Sitting beside the Parquet is not membership: pruning uses the bundle
+        // the snapshotted table state names, so a segment with no artifact
+        // reference scans unpruned even though a complete bundle is on disk.
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_prune_unadvertised_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_scoping_segment(
+            &dir,
+            "/system/controller",
+            "/system/controller",
+            "Bootstrap completed for TPU here",
+        );
+        let paths = vec![path];
+        let needles = HashMap::from([(
+            "data".to_string(),
+            vec!["Bootstrap completed for TPU".to_string()],
+        )]);
+        let indices = crate::indices::test_index_registry();
+
+        let advertised = crate::indices::sidecar_artifacts(&paths);
+        assert_eq!(
+            build_access_plans(&paths, &needles, &HashMap::new(), &indices, &advertised).len(),
+            1
+        );
+        assert!(build_access_plans(
+            &paths,
+            &needles,
+            &HashMap::new(),
+            &indices,
+            &crate::indices::SegmentArtifacts::new(),
+        )
+        .is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -862,6 +1061,73 @@ mod tests {
                     assert!(
                         value.contains(run.as_str()),
                         "pattern {pattern:?} matched {value:?}, which lacks the run {run:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn regex_literals_are_implied_by_the_engines_own_match() {
+        use datafusion::arrow::array::{Array, RecordBatch, StringArray};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+
+        let values = [
+            "rank0 step train/loss=1.2",
+            "error: task 123 failed",
+            "warning: task 7 failed",
+            "footail",
+            "foooptionaltail",
+            "abcabc",
+            "path/to.file",
+            "unrelated",
+        ];
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "v",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(values.to_vec()))])
+                .unwrap();
+        let ctx = crate::query::make_ctx();
+        ctx.register_batch("t", batch).unwrap();
+
+        for pattern in [
+            r"rank0.*train/loss",
+            r"^(?:error|warning): task [0-9]+ failed$",
+            r"foo(?:optional)?tail",
+            r"(?:abc){2,}",
+            r"path/to\.file",
+        ] {
+            let literals = regex_required_literals(pattern);
+            let batches = ctx
+                .sql(&format!(
+                    "SELECT v FROM t WHERE regexp_matches(v, '{pattern}')"
+                ))
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            let matched: Vec<String> = batches
+                .iter()
+                .flat_map(|batch| {
+                    let column = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap()
+                        .clone();
+                    (0..column.len()).map(move |i| column.value(i).to_string())
+                })
+                .collect();
+            assert!(!matched.is_empty(), "pattern {pattern:?} matched nothing");
+            for value in &matched {
+                for literal in &literals {
+                    assert!(
+                        value.contains(literal),
+                        "pattern {pattern:?} matched {value:?}, which lacks {literal:?}"
                     );
                 }
             }

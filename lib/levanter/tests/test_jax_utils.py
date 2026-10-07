@@ -1,6 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -9,14 +13,17 @@ import numpy as np
 import pytest
 from haliax.partitioning import ResourceAxis
 
+import levanter.utils.jax_utils as jax_utils
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
+    barrier_sync,
     best_effort_sharding,
     move_tree_to_memory_kind,
     sharded_tree_size,
     tree_broadcast_to,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _assert_can_put_with_sharding(array, sharding):
@@ -146,6 +153,33 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
     _assert_can_put_with_sharding(array, sharding)
 
 
+def test_best_effort_sharding_uses_context_and_expert_for_checkpoint_staging():
+    run_on_cpu_devices(
+        """
+        import jax
+        import numpy as np
+        from jax.sharding import AxisType
+        from levanter.utils.jax_utils import best_effort_sharding
+        from levanter.utils.mesh import create_mesh_from_axis_specs
+
+        mesh = create_mesh_from_axis_specs(
+            ici_axes={"data": 1, "context": 2, "expert": 4, "model": 1},
+            dcn_axes={},
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        shape = (8, 16, 32)
+        sharding = best_effort_sharding(shape, mesh=mesh)
+        staged = jax.device_put(np.arange(np.prod(shape)).reshape(shape), sharding)
+        assert len(staged.addressable_shards) == 8
+        assert all(shard.data.size == np.prod(shape) // 8 for shard in staged.addressable_shards)
+        assert {"context", "expert"} == set().union(
+            *(entry if isinstance(entry, tuple) else (entry,) for entry in sharding.spec if entry is not None)
+        )
+        """,
+        device_count=8,
+    )
+
+
 def test_tree_broadcast_to_simple():
 
     # Test with simple nested dicts
@@ -272,3 +306,67 @@ def test_move_tree_to_memory_kind_is_noop_inside_jit():
     y = move_inside_jit(x)
     np.testing.assert_array_equal(np.asarray(y), np.asarray(x))
     assert y.sharding.memory_kind == x.sharding.memory_kind
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    def wait_at_barrier(self, barrier_id, timeout_in_ms):
+        self.calls.append((barrier_id, timeout_in_ms))
+
+
+@pytest.fixture
+def multiprocess_client(monkeypatch):
+    client = _RecordingClient()
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(jax_utils.jax_distributed.global_state, "client", client, raising=False)
+    return client
+
+
+def test_barrier_sync_does_not_reuse_a_barrier_id(multiprocess_client):
+    """Barriers are one-shot, so repeated calls must not collide on an id."""
+    barrier_sync(timeout=1.0)
+    barrier_sync(timeout=1.0)
+
+    first, second = (barrier_id for barrier_id, _ in multiprocess_client.calls)
+    assert first != second
+
+
+def test_multihost_allgather_can_use_a_pipeline_stage_without_world_rank_zero(monkeypatch):
+    context = threading.local()
+    condition = threading.Condition()
+    values = {}
+    arrived = {}
+
+    class Coordinator:
+        def key_value_set(self, key, value):
+            with condition:
+                values[key] = value
+                condition.notify_all()
+
+        def wait_at_barrier(self, barrier_id, timeout_in_ms, process_ids):
+            assert process_ids == (1, 2)
+            with condition:
+                arrived.setdefault(barrier_id, set()).add(context.rank)
+                condition.notify_all()
+                assert condition.wait_for(lambda: arrived[barrier_id] == {1, 2}, timeout=timeout_in_ms / 1000)
+
+        def blocking_key_value_get(self, key, timeout_in_ms):
+            with condition:
+                assert condition.wait_for(lambda: key in values, timeout=timeout_in_ms / 1000)
+                return values[key]
+
+    monkeypatch.setattr(jax, "process_count", lambda: 3)
+    monkeypatch.setattr(jax, "process_index", lambda: context.rank)
+    monkeypatch.setattr(jax_utils.jax_distributed.global_state, "client", Coordinator(), raising=False)
+    monkeypatch.setattr(jax_utils, "_group_sync_counters", defaultdict(int))
+
+    def gather(rank):
+        context.rank = rank
+        return jax_utils.multihost_allgather_sync({"rank": rank}, process_ids=(1, 2))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(gather, (1, 2)))
+
+    assert results == [[{"rank": 1}, {"rank": 2}]] * 2

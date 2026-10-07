@@ -15,9 +15,9 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
+from iris.testing.worker import create_run_task_request
 from rigging.timing import Duration
 from starlette.testclient import TestClient
-from tests.cluster.worker.conftest import create_run_task_request
 
 pytestmark = pytest.mark.timeout(10)
 

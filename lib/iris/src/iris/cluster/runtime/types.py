@@ -67,6 +67,7 @@ class ExecutionStage(StrEnum):
 
 class MountKind(StrEnum):
     WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
+    OUTPUT = "output"  # attempt-local files captured after task termination
     TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
     CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
 
@@ -78,6 +79,12 @@ class MountSpec:
     kind: MountKind = MountKind.CACHE
     read_only: bool = False
     size_bytes: int = 0  # 0 = no limit; tmpfs size / emptyDir sizeLimit
+
+
+# Docker network modes. A host-network container shares the worker VM's network
+# stack; a "none" container has only loopback.
+NETWORK_MODE_HOST = "host"
+NETWORK_MODE_NONE = "none"
 
 
 @dataclass
@@ -92,8 +99,9 @@ class ContainerConfig:
     container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
-    network_mode: str = "host"  # e.g. "host" for --network=host
+    network_mode: str = NETWORK_MODE_HOST
     workdir_host_path: Path | None = None
+    output_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
     attempt_uid: str | None = None
@@ -299,14 +307,6 @@ class ContainerRuntime(Protocol):
 
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
-        """
-        ...
-
-    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
-        """Prepare the task workdir before bundle staging.
-
-        Docker: mounts a per-task tmpfs for quota enforcement.
-        Process/K8s: no-op.
         """
         ...
 

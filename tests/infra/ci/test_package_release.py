@@ -21,6 +21,7 @@ from scripts.ci.package_release import (
     PublishedArtifact,
     artifact_manifest,
     cargo_compatible_version,
+    latest_native_release_versions,
     latest_supported_version,
     next_development_version,
     packages_for_changes,
@@ -32,8 +33,11 @@ from scripts.ci.package_release import (
     validate_targeted_lock_change,
 )
 from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
+from scripts.python_libs_package import _rewrite_sibling_pins
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
+EXTERNAL_UPDATE_WORKFLOW = Path(".github/workflows/ops-external-dependencies.yaml")
+NATIVE_UPDATE_WORKFLOW = Path(".github/workflows/ops-native-package-dependencies.yaml")
 
 PLATFORM_WHEEL_TAGS = (
     "cp312-cp312-manylinux_2_28_x86_64.whl",
@@ -128,6 +132,9 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/finelog/src/finelog/client/log_client.py"]) == ["finelog"]
     assert packages_for_changes(["rust/Cargo.lock"]) == ["dupekit", "finelog", "iris"]
     assert packages_for_changes(["scripts/python_libs_package.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["python-libs"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
@@ -228,6 +235,22 @@ def test_shared_requirement_path_is_emitted_once() -> None:
     assert requirement_paths_for_packages(["finelog", "iris"]) == (Path("lib/iris/pyproject.toml"),)
 
 
+def test_latest_native_releases_follow_the_consumed_wheel_distributions() -> None:
+    published = {
+        "marin-dupekit-native": "0.1.4.dev1",
+        "marin-finelog-server": "0.2.13.dev2",
+        "marin-iris-native": "0.1.4.dev3",
+    }
+
+    versions = latest_native_release_versions(published.get)
+
+    assert dict(versions) == {
+        "dupekit": "0.1.4.dev1",
+        "finelog": "0.2.13.dev2",
+        "iris": "0.1.4.dev3",
+    }
+
+
 def test_update_native_requirement_advances_floor_without_touching_neighbors() -> None:
     before = """\
 dependencies = [
@@ -268,6 +291,13 @@ def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
     assert set(family.declared_version_paths) == {
         Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
     }
+
+
+def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
+    pyproject = Path("lib/shellbox/pyproject.toml").read_text()
+    released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
+
+    assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
@@ -400,6 +430,8 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
     assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+    assert "shellbox-v*" not in push["tags"]
+    assert "lib/shellbox/src/**" in push["paths"]
 
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}
@@ -408,11 +440,31 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert "needs.plan.outputs.build_matrix" in str(workflow["jobs"]["build"]["strategy"])
 
 
-def test_release_workflow_uses_app_token_for_version_pr() -> None:
-    workflow = _workflow(RELEASE_WORKFLOW)
+def test_native_version_updates_run_from_main_after_trusted_releases() -> None:
+    release_workflow = _workflow(RELEASE_WORKFLOW)
+    workflow = _workflow(NATIVE_UPDATE_WORKFLOW)
+
+    assert "bump" not in release_workflow["jobs"]
     assert workflow["permissions"] == {"contents": "read"}
-    steps = workflow["jobs"]["bump"]["steps"]
+    assert "workflow_run.event != 'pull_request'" in workflow["jobs"]["update"]["if"]
+
+
+@pytest.mark.parametrize("workflow_path", [EXTERNAL_UPDATE_WORKFLOW, NATIVE_UPDATE_WORKFLOW])
+def test_dependency_update_workflows_share_scoped_app_pr_lifecycle(workflow_path: Path) -> None:
+    workflow = _workflow(workflow_path)
+    job = workflow["jobs"]["update"]
+
+    assert job["environment"] == "external-runtime-updater"
+    steps = workflow["jobs"]["update"]["steps"]
     token_step = next(step for step in steps if step.get("id") == "app-token")
     assert token_step["uses"] == "actions/create-github-app-token@v3"
-    pr_step = next(step for step in steps if step.get("name") == "Commit and open or update pull request")
+    assert token_step["with"] == {
+        "client-id": "${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}",
+        "private-key": "${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}",
+        "repositories": "${{ github.event.repository.name }}",
+    }
+    pr_step = next(step for step in steps if step.get("name") == "Open or update pull request")
     assert pr_step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+    updater_commands = [step["run"] for step in steps if "scripts.ci.dependency_update" in step.get("run", "")]
+    assert updater_commands
+    assert all("python -m scripts.ci.dependency_update" in command for command in updater_commands)

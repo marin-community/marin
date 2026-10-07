@@ -19,13 +19,15 @@ import huggingface_hub
 from fray.types import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
-from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join, url_to_fs
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.execution.step_spec import StepSpec
-from marin.utilities.validation_utils import write_provenance_json
+from marin.utilities.provenance import write_provenance_json
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +322,18 @@ def stream_file_to_fsspec(task: FileDownloadTask) -> dict:
     )
 
 
-def download_hf(cfg: DownloadConfig) -> None:
+@dataclass(frozen=True)
+class DownloadPlan:
+    """Pinned file transfers and provenance to commit after completion."""
+
+    tasks: tuple[FileDownloadTask, ...]
+    output_path: str
+    metrics_path: str
+    provenance: dict
+
+
+def plan_download(cfg: DownloadConfig) -> DownloadPlan:
+    """List pinned source files and prepare their validated transfer tasks."""
 
     configure_logging(level=logging.INFO)
 
@@ -393,24 +406,11 @@ def download_hf(cfg: DownloadConfig) -> None:
     total_size_gb = sum(info["size"] for info in file_info.values() if info.get("size") is not None) / (1024**3)
     logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
-    pipeline = (
-        Dataset.from_list(download_tasks)
-        .map(stream_file_to_fsspec)
-        .write_jsonl(
-            prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
-            skip_existing=True,
-        )
-    )
-    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
-    if cfg.worker_resources is not None:
-        ctx_kwargs["resources"] = cfg.worker_resources
-    ctx = ZephyrContext(**ctx_kwargs)
-    ctx.execute(pipeline)
-
-    # Write Provenance JSON
-    write_provenance_json(
+    return DownloadPlan(
+        tuple(download_tasks),
         output_path,
-        metadata={
+        prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+        {
             "dataset": cfg.hf_dataset_id,
             "version": cfg.revision,
             "links": files,
@@ -418,7 +418,24 @@ def download_hf(cfg: DownloadConfig) -> None:
         },
     )
 
-    logger.info(f"Streamed all files and wrote provenance JSON; check {output_path}.")
+
+def finish_download(plan: DownloadPlan) -> None:
+    """Persist source provenance after all file transfers have completed."""
+    write_provenance_json(plan.output_path, metadata=plan.provenance)
+    logger.info("Streamed all files and wrote provenance JSON; check %s.", plan.output_path)
+
+
+def download_hf(cfg: DownloadConfig) -> None:
+    plan = plan_download(cfg)
+    pipeline = (
+        Dataset.from_list(list(plan.tasks)).map(stream_file_to_fsspec).write_jsonl(plan.metrics_path, skip_existing=True)
+    )
+    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
+    if cfg.worker_resources is not None:
+        ctx_kwargs["resources"] = cfg.worker_resources
+    with ZephyrContext(**ctx_kwargs) as context:
+        context.execute(pipeline)
+    finish_download(plan)
 
 
 def download_hf_step(

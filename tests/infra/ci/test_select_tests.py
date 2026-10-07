@@ -3,39 +3,29 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import subprocess
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from infra.ci.select_tests import (
-    MIN_FILES_PER_SHARD,
     SCOPES,
-    SHARD_COUNT,
     UV_PACKAGE,
+    MatrixLeg,
+    SelectionResult,
     classify,
-    compute_matrix,
-    dependencies_by_test_file,
-    extra_suites,
-    full_matrix,
-    is_test_module,
     matrix_leg,
-    scope_legs,
-    shard_files,
+    select_all_tests,
+    select_changed_tests,
+    select_local_tests,
 )
 
 
-def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
-    """Mirror the diff-driven branch of select_tests.main without git."""
-    classification = classify(changed_files, repo_root)
-    source_build_scopes = set(classification.native_changed)
-    if classification.broad:
-        return full_matrix(repo_root, source_build_scopes)
-    return compute_matrix(
-        classification.src_modules,
-        classification.direct_tests,
-        classification.forced,
-        source_build_scopes,
-        repo_root,
-    )
+def select_matrix(changed_files: list[str], repo_root: Path) -> list[MatrixLeg]:
+    """Return the selector's diff-driven matrix without invoking git."""
+    return select_changed_tests(changed_files, repo_root).matrix
 
 
 def write(repo_root: Path, relative: str, body: str = "") -> Path:
@@ -45,13 +35,13 @@ def write(repo_root: Path, relative: str, body: str = "") -> Path:
     return path
 
 
-def leg_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
-    leg = next(entry for entry in matrix if entry["package"] == UV_PACKAGE[scope])
-    return str(leg["test_paths"]).split()
+def leg_paths(matrix: list[MatrixLeg], scope: str) -> list[str]:
+    leg = next(entry for entry in matrix if entry.package == UV_PACKAGE[scope])
+    return leg.test_paths.split()
 
 
-def scopes_in(matrix: list[dict[str, str | int]]) -> set[str]:
-    packages = {entry["package"] for entry in matrix}
+def scopes_in(matrix: list[MatrixLeg]) -> set[str]:
+    packages = {entry.package for entry in matrix}
     return {scope for scope in SCOPES if UV_PACKAGE[scope] in packages}
 
 
@@ -134,12 +124,85 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 
 
+@pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
+@pytest.mark.parametrize(
+    "changed_file",
+    ["experiments/moe/test_optimizer.py", "experiments/moe/optimizer.py", "lib/levanter/src/levanter/optim.py"],
+)
+def test_experiment_tests_run_for_test_and_dependency_changes(
+    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str
+) -> None:
+    write(tmp_path, "lib/levanter/src/levanter/optim.py", "RATE = 1\n")
+    write(tmp_path, "experiments/moe/optimizer.py", "from levanter.optim import RATE\n")
+    write(
+        tmp_path,
+        "experiments/moe/test_optimizer.py",
+        "from experiments.moe.optimizer import RATE\n\ndef test_rate():\n    assert RATE == 1\n",
+    )
+    write(tmp_path, "experiments/moe/test_unrelated.py", "def test_other():\n    assert True\n")
+    write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
+
+    selection = select_tests([changed_file], tmp_path)
+
+    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py"]
+
+
+@pytest.mark.parametrize(
+    "changed_files, run_all_tests",
+    [
+        ([], True),
+        (["pyproject.toml"], False),
+        (["experiments/moe/conftest.py"], False),
+        (["experiments/moe/fixtures/weights.json"], False),
+    ],
+)
+def test_full_marin_suite_includes_experiment_tests(
+    tmp_path: Path, changed_files: list[str], run_all_tests: bool
+) -> None:
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
+    write(tmp_path, "experiments/moe/test_optimizer.py", "def test_optimizer():\n    assert True\n")
+
+    selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
+
+    assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
+
+
+def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
+    write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+
+    matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
+
+    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+
+
+def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
+    write(tmp_path, "experiments/moe/test_other.py", "def test_other():\n    assert True\n")
+
+    assert select_matrix(["experiments/moe/test_removed.py"], tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "changed_file",
+    ["lib/iris/src/iris/client.py", "lib/ducky/src/ducky/server.py"],
+)
+def test_iris_and_ducky_changes_select_dependent_ducky_test(tmp_path: Path, changed_file: str) -> None:
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/client.py", "class IrisClient: ...\n")
+    write(tmp_path, "lib/ducky/src/ducky/__init__.py")
+    write(tmp_path, "lib/ducky/src/ducky/server.py", "from iris.client import IrisClient\n")
+    write(tmp_path, "lib/ducky/tests/test_server.py", "from ducky.server import IrisClient\n")
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "ducky") == ["lib/ducky/tests/test_server.py"]
+
+
 def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     """A test reaching source only through a shared helper is still selected."""
     write(tmp_path, "lib/iris/src/iris/__init__.py")
     write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
     write(tmp_path, "lib/iris/tests/support.py", "from iris.scheduler import SCHED\n")
-    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from tests.support import SCHED\n")
+    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from lib.iris.tests.support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_relative_helper.py", "from .support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_direct.py", "def test_x():\n    pass\n")
 
@@ -168,32 +231,247 @@ def test_deleted_test_module_is_not_handed_to_pytest(tmp_path: Path) -> None:
 
 
 def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
-    """A changed non-collectable .py under tests/ runs the full scope, not the file itself."""
+    """A changed helper under tests/ runs the full scope, even when named test_*.py."""
+    write(tmp_path, "lib/iris/tests/test_utils.py", "def helper():\n    pass\n")
     result = classify(
-        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/cluster/test_types.py"],
+        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/test_utils.py"],
         tmp_path,
     )
 
     assert result.forced == {"iris"}
-    assert result.direct_tests == {}, "the changed test module does not exist on disk"
+    assert result.direct_tests == {}
 
 
-def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
-    assert "iris" in classify(["lib/iris/conftest.py"], tmp_path).forced
-    assert "iris" in classify(["lib/iris/tests/conftest.py"], tmp_path).forced
-    assert "iris" in classify(["lib/iris/pyproject.toml"], tmp_path).forced
-    assert "marin" in classify(["tests/snapshots/expected/simple.md"], tmp_path).forced
+def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
+    write(tmp_path, "infra/ci/__init__.py")
+    write(tmp_path, "infra/ci/select_tests.py", "def select():\n    pass\n")
+    write(tmp_path, "infra/ci/analyze_import_graph.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "tests/infra/ci/test_analyze_import_graph.py", "from infra.ci.analyze_import_graph import select\n")
+    write(tmp_path, "tests/infra/ci/test_select_tests.py", "from infra.ci.select_tests import select\n")
+
+    selection = select_local_tests(
+        ["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"],
+        tmp_path,
+    )
+
+    assert selection.reason == "diff-driven"
+    assert leg_paths(selection.matrix, "marin") == [
+        "tests/infra/ci/test_analyze_import_graph.py",
+        "tests/infra/ci/test_select_tests.py",
+    ]
 
 
-def test_classify_broad_triggers(tmp_path: Path) -> None:
-    for path in ("uv.lock", "pyproject.toml", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"):
-        assert classify([path], tmp_path).broad, path
+def test_taskcompendium_change_selects_dedicated_suite(tmp_path: Path) -> None:
+    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
 
-    ignored = classify(["docs/index.md", "lib/iris/docs/coreweave.md"], tmp_path)
-    assert not ignored.broad
-    assert not ignored.src_modules
-    assert not ignored.direct_tests
-    assert not ignored.forced
+    assert selection.matrix == []
+    assert selection.suites == ["taskcompendium-unit"]
+
+    full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
+    assert "taskcompendium-unit" in full_selection.suites
+
+
+@pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
+def test_shared_dependency_change_selects_taskcompendium_harbor_suite(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert "taskcompendium-unit" in selection.suites
+
+
+def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:
+    write(tmp_path, "lib/verifyit/src/verifyit/__init__.py")
+    write(tmp_path, "lib/verifyit/src/verifyit/grade.py", "def grade(): ...\n")
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "from verifyit.grade import grade\n")
+    write(tmp_path, "tests/test_verifier.py", "from verifyit.grade import grade\n")
+
+    matrix = select_matrix(["lib/verifyit/src/verifyit/grade.py"], tmp_path)
+
+    assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grade.py"]
+    assert leg_paths(matrix, "marin") == ["tests/test_verifier.py"]
+    verifier_leg = next(leg for leg in matrix if leg.package == "verifyit")
+    assert verifier_leg.extras == "--extra all"
+
+
+@pytest.mark.parametrize("run_all_tests", [False, True])
+def test_verifier_manifest_and_full_runs_select_entire_library(tmp_path: Path, run_all_tests: bool) -> None:
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "def test_grade(): ...\n")
+
+    selection = select_changed_tests(
+        [] if run_all_tests else ["lib/verifyit/pyproject.toml"], tmp_path, run_all_tests=run_all_tests
+    )
+
+    assert leg_paths(selection.matrix, "verifyit") == ["lib/verifyit/tests"]
+
+
+def _verifier_members(verifier_source: str) -> str:
+    if verifier_source == "workspace":
+        return '"lib/levanter", "lib/haliax", "lib/verifyit"'
+    return '"lib/levanter", "lib/haliax"'
+
+
+def _tpu_lock(
+    *,
+    jax_version: str = "0.11.1",
+    shared_version: str = "1",
+    leaf_version: str = "1",
+    verifier_source: str = "workspace",
+    tpu_marker: str = "",
+    jax_source: str = 'registry = "https://pypi.org/simple"',
+) -> str:
+    source = (
+        'editable = "lib/verifyit"'
+        if verifier_source == "workspace"
+        else ('git = "https://github.com/marin-community/verifyit?rev=abc123"')
+    )
+    marker = f', marker = "{tpu_marker}"' if tpu_marker else ""
+    return f"""\
+    version = 1
+    requires-python = ">=3.12"
+    [manifest]
+    members = [{_verifier_members(verifier_source)}]
+    [[package]]
+    name = "marin-root"
+    version = "0.1.0"
+    source = {{ editable = "." }}
+    dependencies = [{{ name = "verifyit" }}]
+    [[package]]
+    name = "verifyit"
+    version = "0.1.0"
+    source = {{ {source} }}
+    [[package]]
+    name = "marin-levanter"
+    version = "0.2.0"
+    source = {{ editable = "lib/levanter" }}
+    dependencies = [{{ name = "marin-haliax" }}, {{ name = "shared" }}]
+    [package.optional-dependencies]
+    tpu = [{{ name = "jax", version = "{jax_version}"{marker} }}]
+    [package.dev-dependencies]
+    test = [{{ name = "pytest" }}]
+    [[package]]
+    name = "marin-haliax"
+    source = {{ editable = "lib/haliax" }}
+    dependencies = [{{ name = "shared" }}]
+    [[package]]
+    name = "shared"
+    version = "{shared_version}"
+    source = {{ registry = "https://pypi.org/simple" }}
+    dependencies = [{{ name = "leaf" }}]
+    [[package]]
+    name = "leaf"
+    version = "{leaf_version}"
+    source = {{ registry = "https://pypi.org/simple" }}
+    [[package]]
+    name = "jax"
+    version = "{jax_version}"
+    source = {{ {jax_source} }}
+    [[package]]
+    name = "pytest"
+    version = "8.0.0"
+    source = {{ registry = "https://pypi.org/simple" }}
+    """
+
+
+def _tpu_manifest(verifier_source: str = "workspace") -> str:
+    source = (
+        "{ workspace = true }"
+        if verifier_source == "workspace"
+        else ('{ git = "https://github.com/marin-community/verifyit", rev = "abc123" }')
+    )
+    return f"""\
+    [project]
+    name = "marin-root"
+    requires-python = ">=3.12"
+    dependencies = ["verifyit"]
+    [tool.uv.workspace]
+    members = [{_verifier_members(verifier_source)}]
+    [tool.uv.sources]
+    verifyit = {source}
+    """
+
+
+def _commit_base_tpu_workspace(tmp_path: Path) -> str:
+    write(tmp_path, "uv.lock", _tpu_lock())
+    write(tmp_path, "pyproject.toml", _tpu_manifest())
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(tmp_path, "lib/levanter/tests/test_torch.py", "@pytest.mark.torch\ndef test_torch():\n    assert True\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base"],
+        cwd=tmp_path,
+        check=True,
+    )
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+
+def test_verifier_git_source_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    write(tmp_path, "uv.lock", _tpu_lock(verifier_source="git"))
+    write(tmp_path, "pyproject.toml", _tpu_manifest(verifier_source="git"))
+
+    selection = select_changed_tests(["uv.lock", "pyproject.toml"], tmp_path, base_ref=base)
+
+    assert selection.reason == "broad-trigger"
+    assert "marin-levanter" in {leg.package for leg in selection.matrix}
+    assert "levanter-tpu" not in selection.suites
+    assert selection.suite_test_paths["levanter-torch"] == ["lib/levanter/tests/test_torch.py"]
+
+
+@pytest.mark.parametrize(
+    "lock_change",
+    [
+        {"jax_version": "0.11.2"},
+        {"shared_version": "2"},
+        {"leaf_version": "2"},
+        {"tpu_marker": "python_version >= '3.12'"},
+        {"jax_source": 'git = "https://github.com/jax-ml/jax?rev=abc123"'},
+    ],
+)
+def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: dict[str, str]) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    write(tmp_path, "uv.lock", _tpu_lock(**lock_change))
+
+    selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
+
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_unavailable_or_invalid_dependency_graph_selects_tpu(tmp_path: Path, missing: bool) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    if missing:
+        (tmp_path / "uv.lock").unlink()
+    else:
+        write(tmp_path, "uv.lock", "[[package]\n")
+
+    selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
+
+    assert "levanter-tpu" in selection.suites
+
+
+def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+
+    selection = select_all_tests(tmp_path)
+
+    assert selection.reason == "run-all-tests"
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "lib/levanter/src/levanter/model.py",
+        "lib/haliax/src/haliax/core.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ],
+)
+def test_source_and_ci_changes_still_select_tpu(tmp_path: Path, path: str) -> None:
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    selection = select_changed_tests([path], tmp_path, run_all_tests=True)
+
+    assert "levanter-tpu" in selection.suites
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
@@ -204,175 +482,27 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     assert classify(["experiments/grug/moe/model.py"], tmp_path).src_modules == {"experiments.grug.moe.model"}
 
 
-def test_extra_suites_follow_the_owning_package_directory() -> None:
-    """Accelerator and browser suites drive whole subsystems, so directory membership gates them."""
-    assert extra_suites(["lib/iris/dashboard/src/App.vue"]) == ["iris-e2e-smoke"]
-    assert extra_suites(["lib/haliax/src/haliax/core.py"]) == ["levanter-torch", "levanter-tpu"]
-    assert extra_suites(["lib/levanter/tests/test_attention.py"]) == ["levanter-torch", "levanter-tpu"]
-    assert extra_suites(["lib/zephyr/src/zephyr/writers.py"]) == []
-    assert extra_suites(["docs/index.md"]) == []
-    assert extra_suites(["uv.lock"]) == ["iris-e2e-smoke", "levanter-torch", "levanter-tpu"]
+def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
+    write(tmp_path, "infra/marina/apps/evaldash/metrics.py")
+    assert classify(["infra/marina/apps/evaldash/metrics.py"], tmp_path).src_modules == {"evaldash.metrics"}
 
 
-def test_selector_changes_do_not_wake_the_accelerator_suites() -> None:
-    """A broad trigger reruns every unit test, but the TPU runner is serialized and scarce:
-    only a dependency or in-package change can move what those suites exercise."""
-    assert classify(["infra/ci/select_tests.py"], Path("/unused")).broad
-    assert extra_suites(["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"]) == []
+def test_deploy_change_selects_deploy_test(tmp_path: Path) -> None:
+    write(tmp_path, "infra/deploy/src/marin_deploy/__init__.py")
+    write(tmp_path, "infra/deploy/src/marin_deploy/cli.py", "def cli(): ...\n")
+    write(
+        tmp_path,
+        "infra/deploy/tests/test_cli.py",
+        "from marin_deploy.cli import cli\n\ndef test_cli(): ...\n",
+    )
 
+    matrix = select_matrix(["infra/deploy/src/marin_deploy/cli.py"], tmp_path)
 
-def test_only_pytest_collectable_modules_are_selectable(tmp_path: Path) -> None:
-    """Helper modules under tests/ must never be handed to pytest explicitly -- an explicit
-    path is imported even when it does not match the collection convention, crashing the
-    lane when the helper's deps are absent."""
-    write(tmp_path, "lib/iris/src/iris/__init__.py")
-    write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
-    for name in ("test_client.py", "actor_test.py", "gang_jax_smoke_workload.py", "conftest.py"):
-        write(tmp_path, f"lib/iris/tests/{name}", "from iris.scheduler import SCHED\n")
-
-    selected = dependencies_by_test_file("iris", tmp_path, {"iris", "iris.scheduler"})
-
-    assert sorted(selected) == ["lib/iris/tests/actor_test.py", "lib/iris/tests/test_client.py"]
-
-
-def test_is_test_module_matches_pytest_defaults() -> None:
-    assert is_test_module("test_client.py")
-    assert is_test_module("gpt2_test.py")
-    assert not is_test_module("conftest.py")
-    assert not is_test_module("openai_stub.py")
-    assert not is_test_module("test_data.json")
-
-
-def test_shard_files_splits_into_balanced_contiguous_chunks() -> None:
-    assert shard_files(list(range(10)), 4) == [[0, 1, 2], [3, 4, 5], [6, 7], [8, 9]]
-    assert shard_files(list(range(4)), 4) == [[0], [1], [2], [3]]
-    # No file is dropped or duplicated, and order is preserved.
-    files = [f"t{i}" for i in range(23)]
-    chunks = shard_files(files, 4)
-    assert [f for chunk in chunks for f in chunk] == files
-
-
-def _levanter_suite(repo_root: Path, count: int) -> list[str]:
-    write(repo_root, "lib/levanter/src/levanter/__init__.py", '"""levanter."""\n')
-    write(repo_root, "lib/levanter/src/levanter/core.py", "X = 1\n")
-    files = []
-    for i in range(count):
-        path = f"lib/levanter/tests/test_mod_{i:03d}.py"
-        write(repo_root, path, "from levanter.core import X\n")
-        files.append(path)
-    return sorted(files)
-
-
-def test_scope_legs_shards_a_large_levanter_selection(tmp_path: Path) -> None:
-    files = _levanter_suite(tmp_path, 60)
-
-    legs = scope_legs("levanter", files, tmp_path)
-
-    assert len(legs) == SHARD_COUNT["levanter"]
-    assert [leg["label"] for leg in legs] == ["levanter 1/4", "levanter 2/4", "levanter 3/4", "levanter 4/4"]
-    # Every selected file runs exactly once across the shards.
-    covered = [path for leg in legs for path in leg["test_paths"].split()]
-    assert sorted(covered) == files
-    assert len(covered) == len(set(covered))
-
-
-def test_scope_legs_keeps_a_small_selection_in_one_leg(tmp_path: Path) -> None:
-    files = _levanter_suite(tmp_path, MIN_FILES_PER_SHARD)
-
-    legs = scope_legs("levanter", files, tmp_path)
-
-    assert len(legs) == 1
-    assert legs[0]["label"] == "levanter"
-
-
-def test_scope_legs_never_shards_below_the_minimum(tmp_path: Path) -> None:
-    """A medium selection stays one leg rather than splitting into sub-minimum runners."""
-    # Just over the threshold and just under two full shards both stay a single leg...
-    for count in (MIN_FILES_PER_SHARD + 1, 2 * MIN_FILES_PER_SHARD - 1):
-        legs = scope_legs("levanter", _levanter_suite(tmp_path, count), tmp_path)
-        assert [leg["label"] for leg in legs] == ["levanter"], count
-
-    # ...and two full shards' worth is the first size that fans out, each at/above the minimum.
-    legs = scope_legs("levanter", _levanter_suite(tmp_path, 2 * MIN_FILES_PER_SHARD), tmp_path)
-    assert len(legs) == 2
-    assert all(len(leg["test_paths"].split()) >= MIN_FILES_PER_SHARD for leg in legs)
-
-
-def test_scope_legs_shards_the_full_levanter_suite(tmp_path: Path) -> None:
-    """A full-suite (tests=None) sharded scope expands its directory to the file list."""
-    files = _levanter_suite(tmp_path, 60)
-
-    legs = scope_legs("levanter", None, tmp_path)
-
-    assert len(legs) == SHARD_COUNT["levanter"]
-    covered = sorted(path for leg in legs for path in leg["test_paths"].split())
-    assert covered == files
-
-
-def test_scope_legs_does_not_shard_other_scopes(tmp_path: Path) -> None:
-    write(tmp_path, "lib/iris/src/iris/__init__.py", '"""iris."""\n')
-    write(tmp_path, "lib/iris/src/iris/core.py", "X = 1\n")
-    files = [f"lib/iris/tests/test_{i:03d}.py" for i in range(60)]
-    for path in files:
-        write(tmp_path, path, "from iris.core import X\n")
-
-    legs = scope_legs("iris", sorted(files), tmp_path)
-
-    assert len(legs) == 1
-    assert legs[0]["label"] == "iris"
-    assert legs[0]["test_paths"].split() == sorted(files)
-
-
-def test_broad_trigger_runs_every_scope() -> None:
-    assert matrix_leg("marin", []) == {
-        "label": "marin",
-        "package": "marin-core",
-        "extras": "--extra cpu --extra dedup",
-        "test_paths": "tests",
-        "setup": "",
-        "timeout": 15,
-    }
-    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"), set())
-
-
-def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]:
-    return next(entry for entry in matrix if entry["label"] == label)
-
-
-def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
-    """A rust/ change is invisible to the import graph, so it force-selects its owning scope
-    and marks it for a source build."""
-    result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
-    assert result.forced == {"dupekit"}
-    assert result.native_changed == {"dupekit"}
-    # A Cargo.lock under the crate counts as a native change too.
-    assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
-
-
-def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> None:
-    """A rust-only change runs the owning scope from source; its own tests cover the native,
-    and consumers are not pulled in."""
-    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
-    assert scopes_in(matrix) == {"dupekit"}
-    assert _leg(matrix, "dupekit")["setup"] == "rust"
-    assert _leg(matrix, "dupekit")["timeout"] == 30
-
-
-def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> None:
-    """A finelog rust change source-builds only the finelog leg; a co-changed consumer (iris)
-    is selected by its own Python change and runs against the prebuilt wheel."""
-    write(tmp_path, "lib/iris/src/iris/__init__.py")
-    write(tmp_path, "lib/iris/src/iris/log.py", "X = 1\n")
-    write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
-
-    matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
-
-    assert _leg(matrix, "finelog")["setup"] == "rust"
-    assert _leg(matrix, "iris")["setup"] == ""
+    assert leg_paths(matrix, "deploy") == ["infra/deploy/tests/test_cli.py"]
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
-    assert all(leg["setup"] == "" for leg in matrix)
+    assert all(leg.setup == "" for leg in matrix)

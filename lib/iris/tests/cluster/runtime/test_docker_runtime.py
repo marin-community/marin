@@ -8,8 +8,8 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, _security_flags
-from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerRuntime, _security_flags
+from iris.cluster.runtime.types import NETWORK_MODE_HOST, NETWORK_MODE_NONE, ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
 
 
@@ -58,6 +58,17 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     assert resolved[0].kind == MountKind.CACHE
 
 
+def test_resolve_mounts_output_uses_attempt_host_path(tmp_path, runtime):
+    output_dir = tmp_path / "attempt-output"
+    mounts = [MountSpec("task-outputs", container_path="/iris/outputs", kind=MountKind.OUTPUT)]
+
+    resolved = runtime.resolve_mounts(mounts, output_host_path=output_dir)
+
+    assert output_dir.is_dir()
+    assert resolved[0].host_path == str(output_dir)
+    assert resolved[0].container_path == "/iris/outputs"
+
+
 def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
     """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
     mounts = [MountSpec("tmp", container_path="/tmp", kind=MountKind.TMPFS)]
@@ -75,13 +86,6 @@ def test_resolve_mounts_workdir_requires_host_path(tmp_path):
     mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR)]
     with pytest.raises(RuntimeError, match="workdir_host_path"):
         runtime.resolve_mounts(mounts)
-
-
-def test_prepare_workdir_is_noop(tmp_path, runtime):
-    """prepare_workdir is a no-op since cache_dir is already on /dev/shm."""
-    workdir = tmp_path / "task-workdir"
-    workdir.mkdir()
-    runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
 
 
 @pytest.mark.parametrize(
@@ -128,6 +132,47 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
     else:
         assert "--memory" not in create_command
     assert create_command[create_command.index("--shm-size") + 1] == f"{expected_shm_mb}m"
+
+
+@pytest.mark.parametrize(
+    "network_mode, expect_sysctls, expect_egress_resolv_conf",
+    [
+        (NETWORK_MODE_NONE, False, False),
+        (NETWORK_MODE_HOST, False, False),
+        ("bridge", True, False),
+        (EGRESS_NETWORK, False, True),
+    ],
+)
+def test_create_container_network_flags(
+    monkeypatch, tmp_path, runtime, network_mode, expect_sysctls, expect_egress_resolv_conf
+):
+    """The container joins the configured network; a plain bridge gets sysctl tuning, the egress network public DNS."""
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        stdout = "container-id\n" if cmd[:2] == ["docker", "create"] else ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=job_pb2.RuntimeEntrypoint(run_command=job_pb2.CommandEntrypoint(argv=["true"])),
+        env={},
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+        network_mode=network_mode,
+        workdir_host_path=workdir,
+    )
+
+    runtime.create_container(config).run()
+
+    create_command = next(command for command in commands if command[:2] == ["docker", "create"])
+    assert create_command[create_command.index("--network") + 1] == network_mode
+    assert ("--sysctl" in create_command) == expect_sysctls
+    assert (f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro" in create_command) == expect_egress_resolv_conf
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
@@ -190,9 +235,9 @@ def test_security_flags_docker_access_mounts_socket():
     assert "--cap-drop" in flags
 
 
-def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps():
-    """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_GVISOR, is_tpu_run=False)
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX])
+def test_security_flags_gvisor_profiles_use_runsc_runtime_and_default_caps(profile):
+    flags = _security_flags(profile, is_tpu_run=False)
     assert flags == ["--runtime", "runsc"]
     # in-guest root needs the default cap set, so the container is NOT cap-dropped
     # or privileged — gVisor provides the host isolation instead.

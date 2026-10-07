@@ -448,12 +448,6 @@ def _convert_frac_or_steps(frac_or_steps: float | int, num_train_steps: int):
     return int(frac_or_steps)
 
 
-@dataclass(frozen=True)
-class HessianOptConfig(OptimizerConfig, abc.ABC):
-    update_interval: int = 10
-    """How often to update the hessian approximation."""
-
-
 @OptimizerConfig.register_subclass("adam")
 @dataclass(frozen=True)
 class AdamConfig(OptimizerConfig):

@@ -13,7 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from rigging.filesystem import StoragePath, is_cross_region_url, record_transfer, url_to_fs
+from rigging.filesystem.cross_region import is_cross_region_url, record_transfer
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tensorstore_serialization import build_kvstore_spec
 
@@ -26,9 +28,30 @@ DEFAULT_CHUNK_SIZE = 256 * 1024
 DEFAULT_WRITE_CHUNK_SIZE = DEFAULT_CHUNK_SIZE * 512
 
 
+@dataclass(frozen=True)
+class BloscCodec:
+    """Blosc settings used when creating a jagged-array store."""
+
+    compressor: str
+    compression_level: int
+
+
+DEFAULT_BLOSC_CODEC = BloscCodec("zstd", 1)
+
+
 _READ_CONTEXT: ts.Context | None = None
 _READ_CONTEXT_LOCK = threading.Lock()
 _READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
+
+
+def set_jagged_array_read_cache_bytes(total_bytes_limit: int) -> None:
+    """Set the shared TensorStore read cache size before opening any stores."""
+    if total_bytes_limit <= 0:
+        raise ValueError("total_bytes_limit must be positive")
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is not None:
+            raise RuntimeError("Jagged array read cache is already initialized")
+        _READ_CACHE_SETTINGS["total_bytes_limit"] = total_bytes_limit
 
 
 def _read_context() -> ts.Context:
@@ -201,35 +224,49 @@ class JaggedArrayStore:
 
     @staticmethod
     async def open_async(
-        path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
+        path: Optional[str],
+        *,
+        mode="a",
+        item_rank=1,
+        dtype,
+        cache_metadata: bool = False,
+        write_codec: BloscCodec = DEFAULT_BLOSC_CODEC,
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
+        offsets = await _ts_open_async(offset_path, jnp.int64, [1], mode=mode, write_codec=write_codec)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_async(data_path, dtype, [0], mode=mode)
+        data = await _ts_open_async(data_path, dtype, [0], mode=mode, write_codec=write_codec)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
+            shapes = await _ts_open_async(
+                shape_path, jnp.int64, [0, item_rank - 1], mode=mode, write_codec=write_codec
+            )
         else:
             shapes = None
 
-        return JaggedArrayStore(
-            await offsets, await data, await shapes if shapes is not None else None, item_rank, cache_metadata
-        )
+        return JaggedArrayStore(offsets, data, shapes, item_rank, cache_metadata)
 
     @staticmethod
-    def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
+    def open(
+        path: Optional[str],
+        *,
+        mode="a",
+        item_rank=1,
+        dtype,
+        cache_metadata: bool = False,
+        write_codec: BloscCodec = DEFAULT_BLOSC_CODEC,
+    ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode)
+        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode, write_codec=write_codec)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_sync(data_path, dtype, [0], mode=mode)
+        data = _ts_open_sync(data_path, dtype, [0], mode=mode, write_codec=write_codec)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
+            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode, write_codec=write_codec)
         else:
             shapes = None
 
@@ -597,35 +634,37 @@ def _ts_open_kwargs(mode: str) -> dict:
     return {"context": ts.Context({"cache_pool": {}})}
 
 
-def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
-    spec = _get_spec(path, shape)
+def _ts_open_sync(
+    path: Optional[str], dtype: jnp.dtype, shape, *, mode, write_codec: BloscCodec = DEFAULT_BLOSC_CODEC
+):
     mode_config = _mode_to_open_mode(mode)
+    open_spec = _get_spec(path, shape, write_codec=None)
+    create_spec = _get_spec(path, shape, write_codec=write_codec)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
     open_kwargs = _ts_open_kwargs(mode)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode_config.get("delete_existing", False):
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
-            return ts.open(spec, **open_kwargs, **mode_config).result()
+            return ts.open(open_spec, **open_kwargs, **mode_config).result()
         except FileNotFoundError:
             pass
         except ValueError:
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     try:
-        if spec.get("kvstore", {}).get("path", "").startswith("memory://"):
+        if create_spec.get("kvstore", {}).get("path", "").startswith("memory://"):
             raise ValueError("No kvstore specified in spec, cannot open TensorStore")
         return ts.open(
-            spec,
+            create_spec,
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
             **open_kwargs,
-            # chunk_layout=ts.ChunkLayout(
-            #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-            #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-            # ),
-            # compression={"codec": "zstd", "compression_level": 5},
             **mode_config,
         ).result()
     except ValueError as e:
@@ -635,59 +674,74 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             raise e
 
 
-async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
-    spec = _get_spec(path, shape)
+async def _ts_open_async(
+    path: Optional[str], dtype: jnp.dtype, shape, *, mode, write_codec: BloscCodec = DEFAULT_BLOSC_CODEC
+):
     mode_config = _mode_to_open_mode(mode)
+    open_spec = _get_spec(path, shape, write_codec=None)
+    create_spec = _get_spec(path, shape, write_codec=write_codec)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
     open_kwargs = _ts_open_kwargs(mode)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode_config.get("delete_existing", False):
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
-            return await ts.open(spec, **open_kwargs, **mode_config)
+            return await ts.open(open_spec, **open_kwargs, **mode_config)
         except FileNotFoundError:
             pass
         except ValueError:
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
-    return await ts.open(
-        spec,
-        dtype=jnp.dtype(dtype).name,
-        shape=[2**54, *shape[1:]],
-        **open_kwargs,
-        # chunk_layout=ts.ChunkLayout(
-        #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-        #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-        # ),
-        # compression={"codec": "zstd", "compression_level": 5},
-        **mode_config,
-    )
+    try:
+        return await ts.open(
+            create_spec,
+            dtype=jnp.dtype(dtype).name,
+            shape=[2**54, *shape[1:]],
+            **open_kwargs,
+            **mode_config,
+        )
+    except ValueError as e:
+        if "NOT_FOUND" in str(e):
+            raise FileNotFoundError(f"File not found: {path}") from e
+        raise
 
 
-def _get_spec(path, shape):
+def _get_spec(path, shape, *, write_codec: BloscCodec | None):
     if path is None:
         random_name = str(uuid.uuid4())
         spec = ts.Spec({"driver": "zarr", "kvstore": f"memory://{random_name}"})
     else:
         kvstore = build_kvstore_spec(path)
         spec = {"driver": "zarr3", "kvstore": kvstore}
-        StoragePath(os.path.dirname(path)).mkdirs()
-        spec["metadata"] = {
-            "chunk_grid": {
-                "name": "regular",
-                "configuration": {"chunk_shape": [DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]},
-            },
-            "codecs": [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
-                        "codecs": [{"name": "blosc", "configuration": {"clevel": 5}}],
+        if write_codec is not None:
+            spec["metadata"] = {
+                "chunk_grid": {
+                    "name": "regular",
+                    "configuration": {"chunk_shape": [DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]},
+                },
+                "codecs": [
+                    {
+                        "name": "sharding_indexed",
+                        "configuration": {
+                            "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
+                            "codecs": [
+                                {
+                                    "name": "blosc",
+                                    "configuration": {
+                                        "cname": write_codec.compressor,
+                                        "clevel": write_codec.compression_level,
+                                    },
+                                }
+                            ],
+                        },
                     },
-                }
-            ],
-        }
+                ],
+            }
     return spec
 
 

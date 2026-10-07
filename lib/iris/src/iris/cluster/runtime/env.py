@@ -17,6 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -24,12 +25,17 @@ logger = logging.getLogger(__name__)
 
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
+IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
+IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
+IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
+TASK_OUTPUT_FINALIZING_STATUS = "finalizing task outputs"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).
 WORKDIR_PATH = "/app"
+OUTPUT_PATH = "/iris/outputs"
 VENV_PATH = f"{WORKDIR_PATH}/.venv"
 
 # Download caches, bound to node-local storage that outlives the container
@@ -38,11 +44,12 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
+UV_CACHE_RECOVERY_SIGNAL_PREFIX = ".iris-recovery-"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
 # node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
-# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# it. `iris.jax.init` puts XLA's per-fusion autotune cache under
 # `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
 # which has no object-store filesystem.
 SCRATCH_CACHE_PATH = "/cache"
@@ -56,9 +63,11 @@ SCRATCH_CACHE_PATH = "/cache"
 # var and mount disagree still runs -- it just writes to the container's own
 # writable layer and re-downloads on every task, with nothing to see in a log.
 WORKDIR_MOUNT = MountSpec("workdir", WORKDIR_PATH, kind=MountKind.WORKDIR)
+OUTPUT_MOUNT = MountSpec("task-outputs", OUTPUT_PATH, kind=MountKind.OUTPUT)
 
 STANDARD_MOUNTS: tuple[MountSpec, ...] = (
     WORKDIR_MOUNT,
+    OUTPUT_MOUNT,
     MountSpec("tmpfs", "/tmp", kind=MountKind.TMPFS),
     MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
@@ -75,6 +84,39 @@ def cache_host_dirname(container_path: str) -> str:
 # Heredoc delimiter for materializing a setup script to disk. Distinctive enough
 # that a real setup script will not contain it as a standalone line.
 _SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+_UV_WRAPPER_DELIMITER = "__IRIS_UV_WRAPPER__"
+_UV_WRAPPER_DIR = "/tmp/iris-uv-wrapper"
+_UV_WRAPPER_PATH = f"{_UV_WRAPPER_DIR}/uv"
+
+_UV_WRAPPER_SCRIPT = r"""#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+shared_cache="${UV_CACHE_DIR:-}"
+
+case "${1:-} ${2:-}" in
+  "sync "*|"pip install") ;;
+  *) exec "$IRIS_UV_EXECUTABLE" "$@" ;;
+esac
+
+if [ -f "$recovery_marker" ]; then
+  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@"
+fi
+
+if "$IRIS_UV_EXECUTABLE" "$@"; then
+  exit 0
+fi
+
+printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
+echo 'uv install failed; retrying with task-local cache' >&2
+env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+retry_status=$?
+if [ "$retry_status" -eq 0 ] && [ -n "${IRIS_ATTEMPT_UID:-}" ]; then
+  touch "$shared_cache/__UV_CACHE_RECOVERY_SIGNAL_PREFIX__${IRIS_ATTEMPT_UID}" || \
+    echo 'uv cache recovery succeeded, but Iris could not record it' >&2
+fi
+exit "$retry_status"
+"""
 
 
 def render_setup_steps(scripts: Sequence[str]) -> list[str]:
@@ -84,7 +126,18 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
     banner, rather than concatenated, so a failure points at the exact step. The
     caller's ``set -e`` stops the sequence on the first non-zero step.
     """
-    lines: list[str] = []
+    if not scripts:
+        return []
+
+    lines = [
+        'export IRIS_UV_EXECUTABLE="$(command -v uv)"',
+        f'mkdir -p "{_UV_WRAPPER_DIR}"',
+        f"cat > {_UV_WRAPPER_PATH} <<'{_UV_WRAPPER_DELIMITER}'",
+        _UV_WRAPPER_SCRIPT.replace("__UV_CACHE_RECOVERY_SIGNAL_PREFIX__", UV_CACHE_RECOVERY_SIGNAL_PREFIX).rstrip("\n"),
+        _UV_WRAPPER_DELIMITER,
+        f'chmod +x "{_UV_WRAPPER_PATH}"',
+        f'export PATH="{_UV_WRAPPER_DIR}:$PATH"',
+    ]
     total = len(scripts)
     for index, script in enumerate(scripts, start=1):
         step_file = f"/tmp/iris-setup-step-{index}.sh"
@@ -164,6 +217,7 @@ def build_common_iris_env(
     *,
     task_id: str,
     attempt_id: int,
+    attempt_uid: str,
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
@@ -189,6 +243,8 @@ def build_common_iris_env(
     # backend.
     wire_task_id = f"{task_id}:{attempt_id}"
     env["IRIS_TASK_ID"] = wire_task_id
+    if attempt_uid:
+        env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
 
@@ -200,18 +256,21 @@ def build_common_iris_env(
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_WORKDIR"] = WORKDIR_PATH
+    env[IRIS_OUTPUT_DIR_ENV] = OUTPUT_PATH
     env["IRIS_PYTHON"] = "python"
     # Canonical venv the setup script populates and the run phase activates.
     # UV_PROJECT_ENVIRONMENT points uv (sync/pip install) at the same path so a
     # custom setup script does not have to depend on uv's cwd-relative default.
     env["IRIS_VENV"] = VENV_PATH
     env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
-    # Point each tool at its STANDARD_MOUNTS cache. Set here rather than in the
-    # task image so a task running its own image still hits the shared caches.
+    # Point long-lived downloads at their STANDARD_MOUNTS caches. Set these
+    # paths here so tasks that bring their own images use the same cache policy.
     # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
     env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    # Kubernetes may clean the shared cache while tasks run, so its venvs own copies.
+    env[UV_LINK_MODE_ENV] = DEFAULT_UV_LINK_MODE
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain

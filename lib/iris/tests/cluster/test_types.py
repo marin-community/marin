@@ -221,17 +221,6 @@ def test_task_name_job_id_and_task_index():
     assert tn.task_index == 0
 
 
-def test_task_name_with_and_without_attempt():
-    tn = TaskAttempt.from_wire("/alice/job/0")
-    with_attempt = tn.with_attempt(7)
-    assert with_attempt.attempt_id == 7
-    assert with_attempt.task_id == tn.task_id
-
-    without = with_attempt.without_attempt()
-    assert without.attempt_id is None
-    assert without.task_id == tn.task_id
-
-
 def test_task_name_from_components():
     task_id = JobName.from_string("/alice/job/0")
     tn = TaskAttempt(task_id=task_id, attempt_id=2)

@@ -1,27 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed eval-output artifacts and the aggregated report.
+"""Typed readers for evaluation output artifacts and aggregate reports.
 
-An eval step writes its backend's native output; the typed artifact reads the metrics back
-*through* the artifact, so a consumer calls ``result.task_metrics()`` instead of guessing the
-directory layout. :class:`EvalchemyResult` reads the evalchemy fork's output — lm-eval's native
-nested tree (``<task_dir>/<model>/results_<ts>.json``, one file per task-config) — by globbing and
-keying each file's metrics by its ``<task_dir>`` (which the producer makes unique per task-config).
-
-:func:`compile_eval_report` reads every dependency uniformly
-(``dep.artifact_type.raw_load(path).task_metrics()``) and materializes one :class:`EvalReport` — a
-value artifact carrying the merged per-task metrics and averages.
+Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
+:class:`FineStoreEvalchemyResult` reads current Evalchemy results artifacts;
+:class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
+merges several typed results.
 """
 
 import functools
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from pydantic import Field
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
+from marin.evaluation.lm_eval_samples import (
+    is_scratch_artifact,
+    read_native_evalchemy_artifacts,
+)
 from marin.execution.artifact import Artifact, result_type_name
 
 logger = logging.getLogger(__name__)
@@ -35,23 +36,21 @@ def _numeric(values: dict) -> dict[str, float]:
 
 
 def _result_task_dir(result_file: StoragePath) -> str:
-    """The task-config directory a results file sits under: ``<task_dir>/<model>/results_<ts>.json``.
-
-    The evalchemy client uploads each task-config's lm-eval output under a dir unique to that config
-    (alias or ``name_Nshot``), so this dir — not the bare task name inside the JSON — is the stable key.
-    """
     task_dir = result_file.parent.parent.name
     if not task_dir:
         raise ValueError(f"unexpected evalchemy results layout (want <task_dir>/<model>/file): {result_file}")
     return task_dir
 
 
-class EvalResult(Artifact):
-    """One eval's output: per-task metrics and (where the backend provides them) cross-task averages.
+def _metrics_for_task_dir(results: dict, task_dir: str) -> dict[str, dict[str, float]]:
+    return {
+        task_dir if len(results) == 1 else f"{task_dir}/{task}": _numeric(task_metrics)
+        for task, task_metrics in results.items()
+    }
 
-    A path-ref artifact — ``raw_load`` returns a handle into the output directory and the metrics are
-    parsed on demand. Subclasses implement the two accessors for their backend's on-disk shape.
-    """
+
+class EvalResult(Artifact):
+    """Path-backed per-task metrics and cross-task averages for one evaluation."""
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
         """Numeric metrics for every evaluated task, as ``{task: {metric: value}}``."""
@@ -63,34 +62,57 @@ class EvalResult(Artifact):
 
 
 class EvalchemyResult(EvalResult):
-    """An evalchemy run's output: lm-eval's native ``<task_dir>/<model>/results_<ts>.json`` tree.
+    """Per-task metrics from a pre-native Evalchemy result tree.
 
-    The evalchemy fork runs each task-config through lm-eval's ``EvaluationTracker`` and writes one
-    ``results_<ts>.json``, uploaded whole under a ``<task_dir>`` the producer makes unique per config
-    (see :func:`~marin.evaluation.evalchemy.runner._task_dir`). The accessor keys each file's
-    metrics by that dir, not by the task name lm-eval writes inside the JSON: two shot variants of one
-    task (``hellaswag`` at 0- and 10-shot) share that inner name but land in different dirs, so keying
-    by the dir keeps them distinct instead of silently overwriting. A group task (e.g. ``mmlu``) writes
-    several entries in one file, so those are namespaced ``<task_dir>/<subtask>``. evalchemy records no
-    cross-task average, so :meth:`averages` is empty — :func:`compile_eval_report` computes suite-level
-    rollups instead.
+    Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
+    shot variants distinct. Evalchemy does not record cross-task averages. Historical reports persist
+    the ``EvalchemyResult`` type name, so this reader remains part of their durable decoding contract.
     """
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
-        result_files = sorted(StoragePath(prefix_join(self.path, "**/results_*.json")).glob(), key=str)
-        if not result_files:
+        root = StoragePath(self.path)
+        found = sorted((root / f"**/{EVALCHEMY_RESULTS_PREFIX}*{EVALCHEMY_RESULTS_SUFFIX}").glob(), key=str)
+        if root.scheme == "file":
+            # fsspec's local glob returns bare paths, while ``relative_to`` compares protocols.
+            found = [StoragePath(scheme="file", segments=path.segments, rooted=path.rooted) for path in found]
+        if not found:
             raise FileNotFoundError(f"no evalchemy results_*.json under {self.path}")
+        # A retried evaluation leaves a second complete tree under the harness's scratch directory,
+        # scoring the same items again. Reading both would key one benchmark's panel twice and double
+        # its item count, so the canonical tree wins wherever there is one to prefer.
+        canonical = [path for path in found if not is_scratch_artifact(path.relative_to(root))]
+        result_files = canonical or found
         metrics: dict[str, dict[str, float]] = {}
         for result_file in result_files:
             task_dir = _result_task_dir(result_file)
             results = json.loads(result_file.read_text()).get("results", {})
-            for task, task_metrics in results.items():
-                # One entry -> the dir is the whole identity; several (a group task) -> namespace them.
-                key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
-                metrics[key] = _numeric(task_metrics)
+            metrics.update(_metrics_for_task_dir(results, task_dir))
+        return metrics
+
+    def task_metrics(self) -> dict[str, dict[str, float]]:
+        return dict(self._task_metrics)
+
+    def averages(self) -> dict[str, float]:
+        return {}
+
+
+class FineStoreEvalchemyResult(EvalResult):
+    """Per-task metrics from Evalchemy results artifacts stored in FineStore."""
+
+    @functools.cached_property
+    def _task_metrics(self) -> dict[str, dict[str, float]]:
+        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
+        if not result_payloads:
+            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
+
+        metrics: dict[str, dict[str, float]] = {}
+        for name, payload in sorted(result_payloads.items()):
+            task_dir = PurePosixPath(name).parent.parent.name
+            results = json.loads(payload).get("results", {})
+            metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
@@ -116,9 +138,9 @@ class EvalReport(Artifact):
     contributions from different results distinct."""
 
 
-# result_type name -> reader class, so :func:`compile_eval_report` reconstructs the right accessor
-# from the identity string a step records (the class itself cannot ride through the JSON config).
-_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {result_type_name(cls): cls for cls in (EvalchemyResult,)}
+_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {
+    result_type_name(cls): cls for cls in (EvalchemyResult, FineStoreEvalchemyResult)
+}
 
 
 @dataclass(frozen=True)

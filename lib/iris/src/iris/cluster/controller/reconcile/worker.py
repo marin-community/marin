@@ -11,7 +11,9 @@ so they do not flow through ``ControllerEffects``.
 import logging
 from dataclasses import dataclass
 
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
+from rigging.timing import Timestamp
+
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
@@ -87,6 +89,7 @@ class WorkerReconcilePlan:
 
     worker_id: WorkerId
     request: worker_pb2.Worker.ReconcileRequest
+    attempts: tuple[ReconcileRow, ...]
 
 
 @dataclass(frozen=True)
@@ -245,6 +248,7 @@ def _reconcile_worker(
             worker_id=worker_id,
             desired=desired,
         ),
+        attempts=tuple(rows),
     )
 
 
@@ -269,25 +273,28 @@ def filter_observations_to_plan(
         else:
             dropped += 1
     if dropped:
-        logger.warning("apply_reconcile: worker %s sent %d observations outside the plan; dropping", worker_id, dropped)
+        logger.warning("worker reconcile: worker %s sent %d observations outside the plan; dropping", worker_id, dropped)
     return kept
 
 
 def observations_to_updates(
-    snapshot: TransitionSnapshot,
+    plan: WorkerReconcilePlan,
     observations: list[worker_pb2.Worker.AttemptObservation],
+    *,
+    observed_at: Timestamp,
 ) -> list[TaskUpdate]:
-    """Translate ``AttemptObservation`` protos to ``TaskUpdate``s."""
+    """Translate worker protocol observations into exact task observations."""
+    attempts_by_uid = {row.attempt_uid: row for row in plan.attempts}
     updates: list[TaskUpdate] = []
     for obs in observations:
         if not obs.attempt_uid:
             logger.warning("AttemptObservation missing attempt_uid; skipping: %s", obs)
             continue
-        resolved = snapshot.attempt_uid_index.get(AttemptUid(obs.attempt_uid))
-        if resolved is None:
-            logger.warning("AttemptObservation uid=%s did not resolve to an attempt row; skipping", obs.attempt_uid)
+        attempt_uid = AttemptUid(obs.attempt_uid)
+        row = attempts_by_uid.get(attempt_uid)
+        if row is None:
+            logger.warning("AttemptObservation uid=%s was not in the reconcile plan; skipping", obs.attempt_uid)
             continue
-        task_id, attempt_id = resolved
         # proto3 has no presence for scalar ``exit_code``: an unset field and a
         # genuine 0 both arrive as 0. Treat 0 as "no exit code reported" so a
         # default-valued observation doesn't overwrite a previously recorded
@@ -295,58 +302,57 @@ def observations_to_updates(
         exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
         error: str | None = obs.error or None
         container_id: str | None = obs.container_id or None
-        if obs.state == job_pb2.TASK_STATE_MISSING:
-            # A worker reports MISSING when it can't resolve a desired attempt to
-            # a live local one. While the task is still ACTIVE this is worker loss
-            # (the worker restarted and failed to re-adopt a still-running
-            # container) -> WORKER_FAILED so it consumes the preemption budget
-            # rather than going terminal at max_retries_failure=0. Once the task
-            # is already TERMINAL in the snapshot, MISSING is the stranded
-            # terminal-attempt finalize case -> FAILED stamps the dead attempt.
-            snapshot_task = snapshot.tasks.get(task_id)
-            task_active = snapshot_task is not None and snapshot_task.state in ACTIVE_TASK_STATES
-            missing_state = job_pb2.TASK_STATE_WORKER_FAILED if task_active else job_pb2.TASK_STATE_FAILED
-            updates.append(
-                TaskUpdate(
-                    task_id=task_id,
-                    attempt_id=attempt_id,
-                    new_state=missing_state,
-                    error="worker_lost_spec",
-                )
+        output_archive = obs.output_archive if obs.HasField("output_archive") else None
+        updates.append(
+            TaskUpdate(
+                task_id=row.task_id,
+                attempt_id=row.attempt_id,
+                attempt_uid=attempt_uid,
+                worker_id=plan.worker_id,
+                execution_started_at=observed_at if obs.state == job_pb2.TASK_STATE_BUILDING else None,
+                new_state=obs.state,
+                error=error,
+                exit_code=exit_code,
+                container_id=container_id,
+                status_message=obs.status_message,
+                output_archive=output_archive,
             )
-        else:
-            updates.append(
-                TaskUpdate(
-                    task_id=task_id,
-                    attempt_id=attempt_id,
-                    new_state=obs.state,
-                    error=error,
-                    exit_code=exit_code,
-                    container_id=container_id,
-                )
-            )
+        )
     return updates
 
 
-def assigned_updates_from_plan(
-    snapshot: TransitionSnapshot,
-    candidates: list[tuple[JobName, int]],
-    error: str,
-) -> list[TaskUpdate]:
-    """Return synthetic WORKER_FAILED updates for ASSIGNED attempts in the plan."""
+def failed_launch_updates(plan: WorkerReconcilePlan, error: str) -> list[TaskUpdate]:
+    """Report launches rejected because their worker RPC failed."""
+    attempts_by_uid = {row.attempt_uid: row for row in plan.attempts}
     updates: list[TaskUpdate] = []
-    for task_id, attempt_id in candidates:
-        task = snapshot.tasks.get(task_id)
-        if task is None:
+    for desired in plan.request.desired:
+        if not desired.HasField("run") or not desired.run.HasField("request"):
             continue
-        if task.state != job_pb2.TASK_STATE_ASSIGNED:
+        row = attempts_by_uid.get(AttemptUid(desired.attempt_uid))
+        if row is None:
             continue
         updates.append(
             TaskUpdate(
-                task_id=task_id,
-                attempt_id=attempt_id,
+                task_id=row.task_id,
+                attempt_id=row.attempt_id,
+                attempt_uid=row.attempt_uid,
+                worker_id=plan.worker_id,
                 new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                observed_task_state=job_pb2.TASK_STATE_ASSIGNED,
                 error=f"Reconcile RPC failed: {error}",
             )
         )
     return updates
+
+
+def task_updates_from_result(
+    plan: WorkerReconcilePlan,
+    result: WorkerReconcileResult,
+    *,
+    observed_at: Timestamp,
+) -> list[TaskUpdate]:
+    """Normalize one worker RPC result into the shared task observation shape."""
+    if result.error is not None:
+        return failed_launch_updates(plan, result.error)
+    observations = filter_observations_to_plan(plan, result.observations, plan.worker_id)
+    return observations_to_updates(plan, observations, observed_at=observed_at)

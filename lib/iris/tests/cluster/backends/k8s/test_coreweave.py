@@ -24,11 +24,14 @@ from iris.cluster.config import (
     IrisClusterConfig,
     KubernetesProviderConfig,
     KueueConfig,
+    NodeHealthConfig,
+    NodeStorageHealthConfig,
     PlatformConfig,
     ScaleGroupConfig,
     SliceConfig,
     StorageConfig,
 )
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
@@ -63,6 +66,7 @@ from iris.cluster.platforms.types import (
     Labels,
 )
 from iris.cluster.types import AcceleratorType
+from rigging.timing import Duration
 
 
 class _ControllerDeploymentK8sService(InMemoryK8sService):
@@ -297,6 +301,40 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+    batch_priority_class = k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-batch")
+    assert batch_priority_class is not None
+    assert batch_priority_class["value"] == 0
+    assert batch_priority_class["preemptionPolicy"] == "PreemptLowerPriority"
+    assert {
+        name: k8s.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, name)["value"]
+        for name in (
+            "iris-cpu-batch",
+            "iris-accelerator-batch",
+            "iris-coscheduled-batch",
+            "iris-cpu-interactive",
+            "iris-accelerator-interactive",
+            "iris-coscheduled-interactive",
+            "iris-cpu-production",
+            "iris-accelerator-production",
+            "iris-coscheduled-production",
+            "iris-cpu-system",
+            "iris-accelerator-system",
+            "iris-coscheduled-system",
+        )
+    } == {
+        "iris-cpu-batch": 0,
+        "iris-accelerator-batch": 1,
+        "iris-coscheduled-batch": 2,
+        "iris-cpu-interactive": 10,
+        "iris-accelerator-interactive": 11,
+        "iris-coscheduled-interactive": 12,
+        "iris-cpu-production": 1000,
+        "iris-accelerator-production": 1000,
+        "iris-coscheduled-production": 1000,
+        "iris-cpu-system": 10000,
+        "iris-accelerator-system": 10000,
+        "iris-coscheduled-system": 10000,
+    }
 
     agent_spec = node_agent["spec"]["template"]["spec"]
     assert agent_spec["hostNetwork"] is True
@@ -334,13 +372,40 @@ def test_start_controller_creates_controller_resources():
     provider.shutdown()
 
 
-def test_start_controller_leaves_node_agent_absent_without_external_finelog():
+def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.kubernetes_provider.cache_dir = "/mnt/local/iris-cache"
+    cluster_config.kubernetes_provider.cache_max_age = Duration.from_hours(24)
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert node_agent["spec"]["template"]["metadata"]["annotations"] == {
+        "iris.marin.community/cache-max-age-ms": "86400000"
+    }
+    assert {"name": "task-cache", "mountPath": "/mnt/local/iris-cache"} in agent_spec["containers"][0]["volumeMounts"]
+    assert {
+        "name": "task-cache",
+        "hostPath": {"path": "/mnt/local/iris-cache", "type": "DirectoryOrCreate"},
+    } in agent_spec["volumes"]
+    provider.shutdown()
+
+
+def test_start_controller_runs_cache_recovery_agent_without_external_finelog():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     _seed_prerequisites(k8s, cluster_config)
     provider.start_controller(cluster_config)
 
-    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert node_agent["spec"]["template"]["metadata"]["annotations"] == {
+        "iris.marin.community/cache-max-age-ms": "disabled"
+    }
+    assert {"name": "task-cache", "mountPath": DEFAULT_TASK_CACHE_DIR} in agent_spec["containers"][0]["volumeMounts"]
     provider.shutdown()
 
 
@@ -1024,3 +1089,84 @@ def test_iris_priority_class_manifest_rejects_unknown_band():
 def _apply_stub(k8s: InMemoryK8sService, kind: str, name: str, namespace: str = "iris") -> None:
     """Apply a minimal stub resource into the in-memory K8s store."""
     k8s.apply_json({"kind": kind, "metadata": {"name": name, "namespace": namespace}, "spec": {}})
+
+
+# ============================================================================
+# Tests: egress NetworkPolicy
+# ============================================================================
+
+
+def _egress_policy_rules(k8s: InMemoryK8sService, mode: str) -> list[dict]:
+    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, f"iris-egress-{mode}")
+    assert policy is not None
+    spec = policy["spec"]
+    assert spec["podSelector"] == {"matchLabels": {"iris.egress": mode}}
+    assert set(spec["policyTypes"]) == {"Ingress", "Egress"}
+    assert spec["ingress"] == []
+    return spec["egress"]
+
+
+_DNS_RULE = {
+    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
+}
+_PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+
+
+@pytest.mark.parametrize(
+    ("service_cidr", "blocked"),
+    [
+        pytest.param("10.16.0.0/16", _PRIVATE_RANGES, id="service-range-already-private"),
+        pytest.param("198.18.0.0/15", [*_PRIVATE_RANGES, "198.18.0.0/15"], id="service-range-public"),
+    ],
+)
+def test_start_controller_creates_one_network_policy_per_egress_policy(service_cidr, blocked):
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.service_cidr = service_cidr
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    assert _egress_policy_rules(k8s, "none") == [_DNS_RULE]
+    assert _egress_policy_rules(k8s, "internet") == [
+        _DNS_RULE,
+        {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
+    ]
+
+
+@pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])
+def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(monkeypatch, change):
+    provider, k8s = _make_provider()
+    config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    config.kubernetes_provider.node_health = NodeHealthConfig(
+        storage=NodeStorageHealthConfig(scratch="s3://test-bucket/health")
+    )
+    config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://regional.example"
+    config.defaults.inject_env = ["AWS_SESSION_TOKEN"]
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "first-test-token")
+    _seed_prerequisites(k8s, config)
+    provider.start_controller(config)
+    agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
+    container = agent["spec"]["containers"][0]
+    assert {"operator": "Exists"} in agent["spec"]["tolerations"]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env"}}]
+    assert {"name": "AWS_ENDPOINT_URL", "value": "https://regional.example"} in container["env"]
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert "AWS_ACCESS_KEY_ID" in secret["data"]
+    assert not any(item["name"] == "AWS_ACCESS_KEY_ID" for item in container["env"])
+    original_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
+    if change == "health_config":
+        config.kubernetes_provider.node_health.storage.failure_threshold = 4
+    elif change == "literal_endpoint":
+        config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://other-regional.example"
+    else:
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "rotated-test-token")
+    provider.start_controller(config)
+    changed = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
+    assert changed["metadata"]["annotations"] != agent["metadata"]["annotations"]
+    updated_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
+    assert original_config != updated_config
+    assert "first-test-token" not in original_config
+    assert "rotated-test-token" not in updated_config
+    provider.shutdown()

@@ -18,10 +18,20 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import click
+from rigging.provenance import Provenance
 
 DEFAULT_IMAGE = "ghcr.io/marin-community/finelog:latest"
 DEFAULT_PLATFORM = "linux/amd64"
 REGISTRY_COMPRESSION = "compression=zstd,compression-level=3"
+
+
+def finelog_source_build_args(provenance: Provenance) -> dict[str, str]:
+    """Return the revision build arguments consumed by the Finelog Dockerfile."""
+    return {
+        "SOURCE_COMMIT": provenance.base_commit,
+        "SOURCE_TREE": provenance.tree_hash,
+        "SOURCE_DIRTY": "true" if provenance.dirty else "false",
+    }
 
 
 def find_marin_root() -> Path:
@@ -45,26 +55,6 @@ def find_marin_root() -> Path:
     raise click.ClickException(
         "Cannot find marin repo root (lib/finelog/deploy/Dockerfile). " "Run from a marin checkout."
     )
-
-
-def _source_revision(marin_root: Path) -> dict[str, str]:
-    """The checkout's commit, tree hash, and dirty flag, for the image's build stamp.
-
-    The Dockerfile's Rust stage receives only ``lib/finelog/rust``, so the
-    revision cannot be read there. Values are empty when ``marin_root`` is not a
-    git checkout, which leaves the deployed server reporting an unknown revision
-    rather than failing the build.
-    """
-
-    def git(*args: str) -> str:
-        result = subprocess.run(["git", *args], cwd=marin_root, capture_output=True, text=True, check=False)
-        return result.stdout.strip() if result.returncode == 0 else ""
-
-    return {
-        "SOURCE_COMMIT": git("rev-parse", "HEAD"),
-        "SOURCE_TREE": git("rev-parse", "HEAD^{tree}"),
-        "SOURCE_DIRTY": "true" if git("status", "--porcelain") else "false",
-    }
 
 
 def build_image(
@@ -109,7 +99,8 @@ def build_image(
         image,
         "--provenance=false",
     ]
-    for name, value in _source_revision(marin_root).items():
+    provenance = Provenance.from_git(marin_root)
+    for name, value in finelog_source_build_args(provenance).items():
         cmd.extend(["--build-arg", f"{name}={value}"])
     for tag in additional_tags:
         cmd.extend(["--tag", tag])

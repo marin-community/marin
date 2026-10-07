@@ -9,6 +9,7 @@ import socket
 import subprocess as sp
 import threading
 import zipfile
+from dataclasses import replace
 from typing import cast
 from unittest.mock import Mock
 
@@ -16,9 +17,12 @@ import pytest
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import EGRESS_NETWORK, DockerRuntime
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -30,22 +34,22 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, JobName, WellKnownAttribute
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
-from rigging.timing import Duration
-from tests.cluster.worker.conftest import (
+from iris.testing.worker import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,
     create_run_task_request,
 )
+from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -110,6 +114,92 @@ def test_task_lifecycle_phases(mock_worker):
     final_task = mock_worker.get_task(task_id)
     assert final_task.status == job_pb2.TASK_STATE_SUCCEEDED
     assert final_task.exit_code == 0
+
+
+def test_task_outputs_are_archived_after_success(mock_worker, mock_runtime, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._config = replace(
+        mock_worker._config,
+        task_outputs=TaskOutputPolicy(destination="file://", ttl_days=0),
+    )
+
+    def create_with_output(config):
+        assert config.output_host_path is not None
+        (config.output_host_path / "profile.heap").write_bytes(b"profile")
+        return create_mock_container_handle()
+
+    mock_runtime.create_container = Mock(side_effect=create_with_output)
+    task_id = mock_worker.submit_task(create_run_task_request())
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+    assert task.output_archive.retention == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER
+    assert StoragePath(task.output_archive.uri).exists()
+
+
+def test_task_output_storage_failure_preserves_task_success(mock_worker, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._config = replace(
+        mock_worker._config,
+        task_outputs=TaskOutputPolicy(destination="file://", ttl_days=0),
+    )
+
+    def fail_destination(*args, **kwargs):
+        raise RuntimeError("archive store unavailable")
+
+    monkeypatch.setattr("iris.cluster.runtime.output_capture.resolve_task_output_destination", fail_destination)
+    task_id = mock_worker.submit_task(create_run_task_request())
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.exit_code == 0
+    assert task.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED
+    assert "archive store unavailable" in task.output_archive.error
+
+
+def test_stop_during_output_finalization_preserves_task_success(mock_worker, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._config = replace(
+        mock_worker._config,
+        task_outputs=TaskOutputPolicy(destination="file://", ttl_days=0),
+    )
+    capture_started = threading.Event()
+
+    def capture_until_stopped(*args, stop, **kwargs):
+        capture_started.set()
+        assert stop.wait(timeout=1.0)
+        return job_pb2.TaskOutputArchive(
+            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE,
+            error="cancelled",
+        )
+
+    monkeypatch.setattr(
+        "iris.cluster.worker.task_attempt.capture_task_outputs_for_attempt",
+        capture_until_stopped,
+    )
+    task_id = mock_worker.submit_task(create_run_task_request())
+    assert capture_started.wait(timeout=1.0)
+    task = mock_worker.get_task(task_id)
+    response = mock_worker.handle_reconcile(
+        worker_pb2.Worker.ReconcileRequest(
+            desired=[
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=task.attempt_uid,
+                    run=worker_pb2.Worker.AttemptSpec(),
+                )
+            ]
+        )
+    )
+    assert response.observed[0].status_message == "finalizing task outputs"
+
+    assert mock_worker.kill_task(task_id, term_timeout_ms=10)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE
 
 
 def test_runtime_stage_bundle_receives_workdir_files(mock_worker, mock_runtime):
@@ -616,15 +706,62 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
     assert len(ports) == 3
 
 
+def test_worker_region_env_uses_physical_metadata(mock_worker, mock_runtime, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._worker_metadata.attributes[WellKnownAttribute.REGION].string_value = "us-east5"
+
+    request = create_run_task_request()
+    request.environment.env_vars["IRIS_WORKER_REGION"] = "spoofed"
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env["IRIS_WORKER_REGION"] == "us-east5"
+
+
+@pytest.mark.parametrize("tpu_host, expected_link_mode", [(True, "symlink"), (False, "copy")])
+def test_cpu_task_uses_worker_host_uv_link_mode(mock_bundle_store, mock_runtime, tmp_path, tpu_host, expected_link_mode):
+    metadata = job_pb2.WorkerMetadata()
+    if tpu_host:
+        metadata.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+    else:
+        metadata.device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+    )
+    worker = Worker(
+        config,
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+        worker_metadata=metadata,
+    )
+
+    task_id = worker.submit_task(create_run_task_request())
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env["UV_LINK_MODE"] == expected_link_mode
+
+
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
-    """Job-level env vars win over task_env, which wins over iris system vars.
+    """Job env wins over task defaults without replacing attempt identity.
 
     The merge order in _create_container is:
       1. iris system vars (IRIS_TASK_ID, etc.)
       2. task_env (worker-level defaults, overrides iris vars)
-      3. job-level env_vars (from the request, wins over everything user-visible)
+      3. job-level env_vars (from the request, wins over user-visible values)
+      4. controller-owned attempt identity
 
-    This test verifies the observable precedence: job > default > absent.
+    This test verifies the observable precedence and reserved identity.
     """
     config = WorkerConfig(
         port=0,
@@ -632,7 +769,11 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
+        task_env={
+            "SHARED_KEY": "default_value",
+            "DEFAULT_ONLY": "from_default",
+            "IRIS_ATTEMPT_UID": "stale-cluster-value",
+        },
     )
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
@@ -647,7 +788,11 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
         attempt_uid="uid-env-test",
         entrypoint=Entrypoint.from_callable(_fn).to_proto(),
         environment=job_pb2.EnvironmentConfig(
-            env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
+            env_vars={
+                "SHARED_KEY": "job_value",
+                "JOB_ONLY": "from_job",
+                "IRIS_ATTEMPT_UID": "shared-job-value",
+            },
         ),
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
@@ -668,6 +813,75 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
+    assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
+
+
+def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_store, mock_runtime, tmp_path):
+    """A SANDBOX task sees neither worker task_env nor the controller, and mounts no node cache."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        controller_address="http://controller:10000",
+        task_env={"MARIN_PREFIX": "gs://bucket/prefix"},
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.environment.env_vars["TASK_VAR"] = "1"
+
+    task = w.get_task(w.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.env["TASK_VAR"] == "1"
+    assert "MARIN_PREFIX" not in container_config.env
+    assert "IRIS_CONTROLLER_ADDRESS" not in container_config.env
+    assert not [m for m in container_config.mounts if m.kind is MountKind.CACHE]
+
+
+@pytest.mark.parametrize(
+    "profile, egress, network_mode",
+    [
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, NETWORK_MODE_NONE),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, NETWORK_MODE_HOST),
+    ],
+)
+def test_egress_policy_selects_the_docker_network(
+    mock_worker, mock_runtime, monkeypatch, tmp_path, profile, egress, network_mode
+):
+    """Only CLUSTER uses the host network; INTERNET joins the filtered egress network once bootstrap installed it."""
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("nameserver 8.8.8.8\n")
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(resolv_conf))
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = egress
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
+
+
+def test_docker_worker_refuses_internet_egress_without_the_host_filter(mock_worker, mock_runtime, monkeypatch, tmp_path):
+    """Without the bootstrap filter a bridge container reaches the VPC, so the task fails before any container starts."""
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(tmp_path / "missing"))
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert task.status != job_pb2.TASK_STATE_SUCCEEDED
+    assert "internet" in (task.error or "")
+    mock_runtime.create_container.assert_not_called()
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
@@ -1255,33 +1469,6 @@ def test_adopted_attempt_publishes_logs_and_stats(mock_bundle_store, mock_runtim
         for row in task_rows
     )
     worker.stop()
-
-
-def test_adopt_reserves_host_ports_against_reallocation():
-    """A re-adopted task keeps its host ports and the allocator won't re-hand them out.
-
-    Regression for #6721: before the fix, adopt() rebuilt ports={} and never
-    re-marked the allocator, so a restarted worker could double-allocate the
-    in-use ports of an adopted container.
-    """
-    # Three candidate ports: 50500, 50501, 50502. Two belong to the adopted task.
-    port_allocator = PortAllocator(port_range=(50500, 50503))
-    container = _make_discovered_container(ports={"http": 50500, "grpc": 50501})
-
-    attempt = TaskAttempt.adopt(
-        discovered=container,
-        container_handle=create_mock_container_handle(),
-        log_client=None,
-        port_allocator=port_allocator,
-    )
-
-    # The adopted attempt retains its original port mapping.
-    assert attempt.ports == {"http": 50500, "grpc": 50501}
-
-    # The only port the allocator may hand to a new task is the one not in use.
-    assert port_allocator.allocate(1) == [50502]
-    with pytest.raises(RuntimeError, match="No free ports"):
-        port_allocator.allocate(1)
 
 
 # ============================================================================

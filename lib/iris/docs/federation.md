@@ -48,12 +48,19 @@ constraints the scheduler already uses for reservations, but the `available:<tok
 
 A peer reports the resources available per band: alongside `amounts` it reports `held_by_band`,
 what its *admitted* work holds at each priority band. A candidate's effective capacity on a
-backend is that backend's free amount plus everything held **below** its own band (a
-numerically higher band is lower priority) — the work the peer's scheduler would preempt to
-admit the job. Placement spends idle capacity first, reclaims from the lowest-priority band
-upward, and prefers a peer that needs no preemption at all. A peer that reports no band split
+backend is that backend's free amount plus everything held **below** its own band — the work
+the peer's scheduler would preempt to admit the job. Placement spends idle capacity first,
+reclaims from the lowest-priority band upward, and prefers a peer that needs no preemption at
+all. A peer that reports no band split
 (a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
 amount alone.
+
+A `--reserve H100` marker on a CPU job requires an H100 peer but carries no numeric capacity
+gate. When other placement scores tie, the job prefers the peer with the most effective `h100`
+capacity. The CPU job does not reserve that capacity and can still be placed when every eligible
+peer reports zero; later GPU child jobs have no capacity guarantee. A peer without a readable
+capacity metric ranks after measured peers, and a peer reporting no `h100` capacity scores zero.
+A hash of the job id and peer id breaks ties, so different jobs need not choose the same peer.
 
 Three properties keep placement honest without pretending to be exact:
 
@@ -79,17 +86,27 @@ bound on a burst against stale metrics.
 
 Routing constraints are the subset of constraints marked `routing=True` in
 `CONSTRAINT_REGISTRY` (`cluster/constraints.py`): `device-type`, `device-variant`,
-`preemptible`, `region`, `zone`.
+`preemptible`, `region`, `zone`. The router also matches `availability:<variant>`
+constraints from `--reserve`.
+
+Peers advertise configured accelerator variants, availability markers,
+preemptibility, and regions. A CPU job with `--reserve H100` can use an H100 peer
+without a cluster pin or free GPUs. A `preemptible=false` constraint requires
+on-demand or reserved capacity. CPU jobs with one task, at most one core, and at
+most 4 GiB default to `preemptible=false`.
+
+Peer attributes combine all scaling groups, so a match does not guarantee that
+one group can satisfy every constraint. Preferred routing constraints also act
+as filters.
 
 Two consequences catch people out:
 
 - **`gpu-count` is not a routing constraint.** It is a consumable, checked against a worker's
   free GPUs when the peer schedules the job. `H100x1` and `H100x8` route identically. GPUs
   pack: several tasks share one 8-GPU node, unlike a TPU VM, which is atomic.
-- **A peer that advertises no `region` satisfies no `region` constraint.** An advertised
-  attribute the peer omits makes every constraint on that key fail. The CoreWeave backends
-  advertise only `device-type` and `device-variant`, so any job carrying a region or zone
-  constraint stays local.
+- **Region constraints require a matching advertised region.** CoreWeave backends
+  advertise their configured region. Backends do not advertise zones, so a zone
+  constraint prevents automatic federation.
 
 That second point bites sub-jobs specifically. `IrisClient.submit` (`iris/client/client.py`)
 gives a child job its parent worker's region unless the child names a region itself, which
@@ -174,6 +191,13 @@ will not round-trip today, because the child rewrites `Location` against its own
 `/proxy/t/<token>/<name>` prefix without the cluster tag; direct-API endpoints (an
 OpenAI-style `/v1/*` server) are unaffected.
 
+For relay 502s, use the JSON error body to identify the failing path.
+`upstream transport error: client error (Connect)` is emitted by the native proxy
+when it cannot connect to its upstream. Compare `proxy_responses_total` with `scope=total` in Finelog's
+`telemetry_v1.iris.rpc` for the hub (`cluster` is empty) and the peer. A peer 502
+increase shows that requests reached the peer proxy, where its upstream is the
+registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
+
 ## Observing federation
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come
@@ -212,6 +236,6 @@ request against the peer's advertised `amounts` plus the `held_by_band` entries 
 own band — those together are what it can reach. A job cancelled while queued never reaches the
 peer and terminates as `Cancelled before handoff`.
 
-A federated job's tasks live on the peer and are mirrored back, so `iris job summary` reports
+A federated job's tasks live on the peer and are mirrored back, so `iris job describe` reports
 its state from `marin`. Its logs are relayed asynchronously into `marin`'s finelog and lag
-behind a log-heavy job; `job summary` is the reliable liveness answer.
+behind a log-heavy job; `job describe` is the reliable liveness answer.

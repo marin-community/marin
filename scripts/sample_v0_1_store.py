@@ -19,7 +19,7 @@ import textwrap
 
 import numpy as np
 from levanter.store.tree_store import TreeStore
-from rigging.filesystem import url_to_fs
+from rigging.filesystem.factory import url_to_fs
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)

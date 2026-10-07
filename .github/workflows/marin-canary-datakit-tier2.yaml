@@ -7,8 +7,7 @@ on:
 
 permissions:
   contents: read
-  issues: write    # claude triage files issues
-  id-token: write  # claude-code-action OIDC
+  id-token: write  # Loom federation OIDC
 
 jobs:
   datakit-tier2-ferry:
@@ -71,9 +70,6 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      # If you change the iris flags below, also update the matching tier
-      # entry in scripts/ci/submit_perf_run.py (TIERS["2"]) so the
-      # evaluate-zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit tier2 ferry
         id: submit
         shell: bash -l {0}
@@ -81,8 +77,11 @@ jobs:
           set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=2G \
+            --timeout 21600 \
+            --region=us-west4 \
+            --memory=8G --enable-extra-resources \
             --extra=cpu \
+            --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
             -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
@@ -161,30 +160,20 @@ jobs:
 
       # lane id must be unique per canary: it flows into the [canary-{lane}] issue
       # title, so a shared id would collide with another tier's triage dedup.
-      - name: Claude triage
-        id: claude_triage
+      - name: Launch Loom triage
+        id: loom_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: ./.github/actions/claude-triage
-        timeout-minutes: 30
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
         with:
-          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           lane: datakit-tier2
           job-id: ${{ steps.submit.outputs.job_id }}
           run-id: ${{ env.SMOKE_RUN_ID }}
           iris-config: ${{ env.IRIS_CONFIG }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
-          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      - name: Upload Slack message
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: slack-message
-          path: slack_message.md
-          retention-days: 1
-          if-no-files-found: ignore
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
@@ -196,7 +185,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Tier 2 Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

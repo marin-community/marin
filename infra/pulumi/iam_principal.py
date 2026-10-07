@@ -33,7 +33,10 @@ from iac.gcp.iam_config import (
 )
 from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
 
-_PRINCIPAL_REF_RE = re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$")
+_PRINCIPAL_REFERENCE_PATTERNS = (
+    re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$"),
+    re.compile(rf'principals\["({PRINCIPAL_ID_PATTERN})"\]'),
+)
 _PRINCIPAL_RECORD_RE = re.compile(rf"^[+-]\s*({PRINCIPAL_ID_PATTERN}):\s+(\S+)\s*$")
 
 
@@ -82,7 +85,7 @@ def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
 
 
 def decrypt_diff() -> None:
-    """Annotate changed YAML principal references without printing unchanged people."""
+    """Annotate changed YAML or Python principal references without printing unchanged people."""
     lines = sys.stdin.readlines()
     config = load_iam_config()
     current_ciphertexts = {principal.principal_id: principal.ciphertext for principal in config.principals}
@@ -94,8 +97,11 @@ def decrypt_diff() -> None:
         if match := _PRINCIPAL_RECORD_RE.match(line):
             changed_records[(line[0], match.group(1))] = match.group(2)
             continue
-        if match := _PRINCIPAL_REF_RE.match(line):
-            changed_references.append((line[0], match.group(1)))
+        for reference_pattern in _PRINCIPAL_REFERENCE_PATTERNS:
+            matches = tuple(reference_pattern.finditer(line))
+            if matches:
+                changed_references.extend((line[0], match.group(1)) for match in matches)
+                break
 
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id(config)

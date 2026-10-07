@@ -18,34 +18,54 @@ import time
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, NamedTuple
+from typing import NamedTuple
 
 from finelog.client.log_client import Table
+from google.protobuf import json_format
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.backends.k8s.output_contract import (
+    OUTPUT_CONTAINER_NAME,
+    OUTPUT_CONTROL_PATH,
+    OUTPUT_CONTROL_VOLUME_NAME,
+    OUTPUT_RELEASE_PATH,
+    output_uploader_environment,
+)
+from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
-    BackendRuntime,
+    BackendDescriptor,
+    BackendObservation,
+    BackendObservationRequest,
+    BackendRecoveryRequest,
+    BackendRecoveryResult,
     DeviceCapacity,
+    DirectReconcileRequest,
+    JobFeasibilityRequest,
     ProviderError,
+    ReconcileObservation,
     ReconcileRequest,
-    ReconcileResult,
+    RemoveCapacityRequest,
+    RemoveCapacityResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
 )
-from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.node_agent.storage_health import reconcile_storage_health
+from iris.cluster.platforms.k8s.constants import (
+    COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
+    NVIDIA_GPU_RESOURCE,
+    NVIDIA_GPU_TOLERATION,
+    RDMA_RESOURCE,
+)
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
     COSCHEDULE_NVLINK_DOMAIN,
@@ -59,20 +79,30 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
+    IRIS_ATTEMPT_ID_LABEL,
+    IRIS_KUBERNETES_RUNTIME,
+    IRIS_MANAGED_LABEL,
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
     IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
+    IRIS_RUNTIME_LABEL,
+    IRIS_TASK_CONTAINER_NAME,
+    IRIS_TASK_ID_ANNOTATION,
     K8sResource,
     KubectlError,
     parse_k8s_cpu,
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
-    STANDARD_MOUNTS,
+    OUTPUT_MOUNT,
+    TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
     WORKDIR_MOUNT,
     build_common_iris_env,
@@ -80,7 +110,9 @@ from iris.cluster.runtime.env import (
     normalize_workdir_relative_path,
     render_setup_steps,
 )
+from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
+    DEFAULT_PROFILE_DURATION_SECONDS,
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
     build_profile_row,
@@ -90,23 +122,25 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
+from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
-    IrisTaskStat,
     ProfileTrigger,
+    TaskEventDiagnostics,
     TaskEventRow,
     TaskEventSeverity,
-    build_task_stat,
     stats_timestamp,
 )
-from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import resolve_container_profile
+from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+_ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
 
 
 class PodManifestError(ValueError):
@@ -122,23 +156,16 @@ class PodManifestError(ValueError):
 
 
 # Label key prefix for iris-managed pod identification.
-_LABEL_MANAGED = "iris.managed"
-_LABEL_RUNTIME = "iris.runtime"
+_LABEL_MANAGED = IRIS_MANAGED_LABEL
+_LABEL_RUNTIME = IRIS_RUNTIME_LABEL
 _LABEL_TASK_ID = "iris.task_id"
-_LABEL_ATTEMPT_ID = "iris.attempt_id"
+_LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
 
 # Runtime identifier for pods created by K8sTaskProvider.
-_RUNTIME_LABEL_VALUE = "iris-kubernetes"
-
-# Extended resource name for NVIDIA GPUs in pod requests/limits.
-_GPU_RESOURCE = "nvidia.com/gpu"
-
-# Name of the task container in the pod. Exit-code/error extraction matches the
-# task status by this name rather than by position in containerStatuses.
-_TASK_CONTAINER_NAME = "task"
+_RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
 
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
@@ -146,6 +173,8 @@ _TASK_CONTAINER_NAME = "task"
 _LOGSHIP_CONTAINER_NAME = "log-shipper"
 _LOGSHIP_VOLUME_NAME = "varlogpods"
 _NODE_POD_LOG_DIR = "/var/log/pods"
+LOGSHIP_CPU_REQUEST = "50m"
+OUTPUT_UPLOADER_CPU_REQUEST = "100m"
 
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
@@ -159,10 +188,10 @@ _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
 _K8S_LABEL_MAX_LEN = 63
 
-# Number of consecutive sync cycles where a pod is missing from the k8s API
-# before declaring the attempt preempted. Avoids false positives from transient
-# API misses.
-_POD_NOT_FOUND_GRACE_CYCLES = 3
+# Number of consecutive sync cycles where a pod is missing or has no actionable
+# phase before declaring the attempt lost. Avoids false positives from
+# transiently stale Kubernetes observations.
+_POD_UNRESOLVED_GRACE_CYCLES = 3
 
 # A terminal reason can carry a full log tail (an init container running under
 # terminationMessagePolicy: FallbackToLogsOnError) or a Kueue eviction message,
@@ -172,6 +201,9 @@ _TERMINAL_REASON_MAX_CHARS = 500
 # Terminal reason for a vanished pod whose disruption was never observed — the
 # pod was deleted between two polls, so no condition survived to name the cause.
 _POD_DELETED_TERMINAL_REASON = "PodDeleted: pod was deleted while the attempt was active"
+_POD_UNKNOWN_TERMINAL_REASON = "PodUnknown: pod remained in an unknown phase while the attempt was active"
+
+_RESOLVED_POD_PHASES = frozenset({"Pending", "Running", "Succeeded", "Failed"})
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
 # Evicted: kubelet evicted the pod due to resource pressure.
@@ -252,9 +284,7 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
 #                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
-# kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
-# never invents WorkloadPriorityClass names (a missing one is rejected by
-# Kueue), so a band is stamped only when the config maps it explicitly.
+# kubernetes_provider.kueue.topologies.
 _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
     COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
     COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
@@ -272,6 +302,7 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
 _KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_SYSTEM: IRIS_PRIORITY_CLASS_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
     job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
@@ -426,14 +457,17 @@ def _lookup_pod(
 
 
 def _build_volumes_and_mounts(
+    mount_specs: Sequence[MountSpec],
     cache_dir: str,
     shm_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
-    """Build standard pod volumes and container volume mounts.
+    """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
-    they persist across pods on the same node. /dev/shm is memory-backed and
-    shares the task container's memory limit when one is set.
+    ``mount_specs`` comes from the task's ``TaskIsolation.mounts``; for a
+    sandbox task it has no CACHE entries, so no hostPath volume is created.
+    Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
+    cache_dir so they persist across pods on the same node. /dev/shm is
+    memory-backed and shares the task container's memory limit when one is set.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -442,7 +476,7 @@ def _build_volumes_and_mounts(
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
-    for spec in STANDARD_MOUNTS:
+    for spec in mount_specs:
         if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
@@ -481,12 +515,13 @@ class PodConfig:
     # sidecar instead runs the iris controller image (iris + finelog installed),
     # which can launch `python -m iris.cluster.backends.k8s.logship` directly.
     logship_image: str = ""
-    cache_dir: str = "/cache"
+    cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    task_outputs: TaskOutputPolicy | None = None
     # Name of a Secret whose keys are projected into every task container via
     # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
     env_secret_name: str = ""
@@ -494,9 +529,6 @@ class PodConfig:
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
-    # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
-    # stamped (Kueue uses its default priority); Iris never invents class names.
-    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -636,8 +668,34 @@ def _build_logship_sidecar(
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.logship"],
         "env": env,
         "volumeMounts": [{"name": _LOGSHIP_VOLUME_NAME, "mountPath": _NODE_POD_LOG_DIR, "readOnly": True}],
-        "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
+        "resources": {"requests": {"cpu": LOGSHIP_CPU_REQUEST, "memory": "64Mi"}},
     }
+
+
+def _build_output_uploader(
+    task_id_wire: str,
+    attempt_uid: str,
+    image: str,
+    policy: TaskOutputPolicy,
+    source_prefix: str | None,
+    env_secret_name: str,
+) -> dict:
+    container: dict[str, object] = {
+        "name": OUTPUT_CONTAINER_NAME,
+        "image": image,
+        "imagePullPolicy": "IfNotPresent",
+        "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
+        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        "volumeMounts": [
+            {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
+            {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
+        ],
+        "resources": {"requests": {"cpu": OUTPUT_UPLOADER_CPU_REQUEST, "memory": "128Mi"}},
+        "terminationMessagePolicy": "File",
+    }
+    if env_secret_name:
+        container["envFrom"] = [{"secretRef": {"name": env_secret_name}}]
+    return container
 
 
 def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
@@ -671,7 +729,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
+    availability = {"minAvailable": 1} if priority_band in ADMIN_PRIORITY_BAND_VALUES else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",
@@ -776,23 +834,31 @@ def _build_pod_manifest(
     # job needs no special image and iris does not inspect the resource request.
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
-    service_account = config.service_account
-    host_network = config.host_network
     managed_label = config.managed_label
+    isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
+    service_account = config.service_account if isolation.include_service_account else ""
+    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
+    host_network = (
+        config.host_network
+        and isolation.network is TaskNetwork.CLUSTER
+        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
+    )
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
         task_id=run_req.task_id,
         attempt_id=run_req.attempt_id,
+        attempt_uid=run_req.attempt_uid,
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
-        controller_address=config.controller_address,
+        controller_address=config.controller_address if isolation.include_controller_address else None,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
-    combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
+    cluster_env = config.task_env if isolation.include_cluster_env else {}
+    combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -835,10 +901,10 @@ def _build_pod_manifest(
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
                 # K8s treats accelerator limits as implicit requests.
-                limits[_GPU_RESOURCE] = str(gpu_count)
+                limits[NVIDIA_GPU_RESOURCE] = str(gpu_count)
                 if host_network:
                     # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
-                    limits["rdma/ib"] = str(gpu_count)
+                    limits[RDMA_RESOURCE] = str(gpu_count)
         if limits:
             resources["limits"] = limits
         if requests:
@@ -854,7 +920,7 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, shm_limit_bytes=shm_limit_bytes)
+    volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     container: dict = {
         "name": "task",
@@ -873,7 +939,7 @@ def _build_pod_manifest(
     }
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
-    if config.env_secret_name:
+    if config.env_secret_name and isolation.include_cluster_env:
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
@@ -894,10 +960,13 @@ def _build_pod_manifest(
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
+    if isolation.network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = isolation.network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
         "labels": labels,
+        "annotations": {IRIS_TASK_ID_ANNOTATION: run_req.task_id},
     }
 
     # Every pod is admitted through one Kueue TAS flavor: its accounting and
@@ -906,14 +975,12 @@ def _build_pod_manifest(
     # The composer enforces a configured LocalQueue for the K8s backend.
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
-    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
-    # An unmapped band is not left unranked: Kueue derives the Workload's priority
-    # from the pod's own PriorityClass (spec.priorityClassName), so the
-    # iris-{production,interactive,batch} bands already order the queue. Iris never
-    # invents a WorkloadPriorityClass name (a missing one is rejected).
-    wpc = config.kueue_priority_classes.get(run_req.priority)
-    if wpc:
-        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    if is_gang:
+        priority_kind = WorkloadPriorityKind.COSCHEDULED
+    else:
+        priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
+    labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
@@ -932,50 +999,78 @@ def _build_pod_manifest(
         # Per-pod ordinal within the gang (0..total-1). Kueue's TAS assigns each pod a domain
         # rank from it; for the sliced level it makes slice membership rank-contiguous.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
-        metadata["annotations"] = {
-            _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
-            **_topology_request_annotations(
-                topo, group_by=group_by, num_tasks=run_req.num_tasks, gpu_count=gpu_count, task_ref=run_req.task_id
-            ),
-        }
+        metadata["annotations"].update(
+            {
+                _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
+                **_topology_request_annotations(
+                    topo,
+                    group_by=group_by,
+                    num_tasks=run_req.num_tasks,
+                    gpu_count=gpu_count,
+                    task_ref=run_req.task_id,
+                ),
+            }
+        )
     elif gpu_count > 0:
         # A non-coscheduled GPU pod has no gang to colocate, so ask only for the
         # finest, always-satisfiable level as a soft preference.
-        metadata["annotations"] = {_KUEUE_PREFERRED_TOPOLOGY: _KUEUE_SINGLE_POD_TOPOLOGY}
+        metadata["annotations"][_KUEUE_PREFERRED_TOPOLOGY] = _KUEUE_SINGLE_POD_TOPOLOGY
     else:
         # Accelerator-free Pods remain in TAS without requesting colocation. This
         # records their per-node CPU usage in the same flavor as GPU gangs, so a
         # higher-priority gang can simulate reclaiming it before topology fit.
-        metadata["annotations"] = {_KUEUE_UNCONSTRAINED_TOPOLOGY: "true"}
+        metadata["annotations"][_KUEUE_UNCONSTRAINED_TOPOLOGY] = "true"
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is
     # excluded from pod-phase computation, so completion detection (which keys on
     # pod.status.phase) is unaffected. The hostPath volume gives it read-only
     # access to the node's pod log directory.
-    logship = _build_logship_sidecar(
-        iris_env["IRIS_TASK_ID"],
-        config.controller_address,
-        config.logship_image,
-    )
-    volumes.append(
-        {
-            "name": _LOGSHIP_VOLUME_NAME,
-            "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
-        }
-    )
+    #
+    # A sandbox pod gets neither this nor the output uploader. Containers in a
+    # pod share its network, so the task can use any route a sidecar has: a
+    # finelog route exposes every job's logs, and the uploader needs the env
+    # Secret's object-store keys and a route to the object store.
+    sidecars = isolation.network is TaskNetwork.CLUSTER
+    init_containers: list[dict] = []
+    if sidecars:
+        init_containers.append(
+            _build_logship_sidecar(iris_env["IRIS_TASK_ID"], config.controller_address, config.logship_image)
+        )
+        volumes.append(
+            {
+                "name": _LOGSHIP_VOLUME_NAME,
+                "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
+            }
+        )
+
+    containers = [container]
+    if config.task_outputs is not None and sidecars:
+        volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
+        containers.append(
+            _build_output_uploader(
+                iris_env["IRIS_TASK_ID"],
+                iris_env.get("IRIS_ATTEMPT_UID", ""),
+                config.logship_image,
+                config.task_outputs,
+                config.task_env.get("MARIN_PREFIX"),
+                config.env_secret_name,
+            )
+        )
 
     spec: dict = {
         "restartPolicy": "Never",
-        "containers": [container],
-        "initContainers": [logship],
+        "containers": containers,
+        "initContainers": init_containers,
         "volumes": volumes,
     }
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
-    if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
+    if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
         spec["runtimeClassName"] = "gvisor"
+    if not isolation.include_service_account:
+        spec["automountServiceAccountToken"] = False
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -999,9 +1094,14 @@ def _build_pod_manifest(
 
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs
-    # from execution start; single pods keep the earlier native deadline.
+    # from execution start. Single pods keep the native execution deadline and
+    # reserve the configured output-finalization window before K8s kills the pod.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
-        spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
+        execution_deadline = max(1, run_req.timeout.milliseconds // 1000)
+        finalization_grace = (
+            (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
+        )
+        spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -1009,7 +1109,6 @@ def _build_pod_manifest(
     # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
     # as INHERIT) from silently dropping to the cluster default. A band with no configured
     # class name leaves priorityClassName unset.
-    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
         spec["priorityClassName"] = priority_class_name
@@ -1033,9 +1132,45 @@ def _task_container_status(pod: dict) -> dict | None:
     if not statuses:
         return None
     for status in statuses:
-        if status.get("name") == _TASK_CONTAINER_NAME:
+        if status.get("name") == IRIS_TASK_CONTAINER_NAME:
             return status
     return statuses[0]
+
+
+def _output_container_status(pod: dict) -> dict | None:
+    for status in pod.get("status", {}).get("containerStatuses", []):
+        if status.get("name") == OUTPUT_CONTAINER_NAME:
+            return status
+    return None
+
+
+def _task_container_terminated(pod: dict) -> bool:
+    status = _task_container_status(pod)
+    return status is not None and bool(status.get("state", {}).get("terminated"))
+
+
+def _output_archive_from_pod(pod: dict) -> job_pb2.TaskOutputArchive | None:
+    status = _output_container_status(pod)
+    if status is None:
+        return None
+    terminated = status.get("state", {}).get("terminated")
+    if terminated is None:
+        return None
+    message = terminated.get("message", "")
+    if not message:
+        reason = terminated.get("reason") or "unknown reason"
+        exit_code = terminated.get("exitCode")
+        return task_output_storage_failure(RuntimeError(f"output uploader terminated: {reason} (exit code {exit_code})"))
+    archive = job_pb2.TaskOutputArchive()
+    try:
+        json_format.Parse(message, archive)
+    except json_format.ParseError:
+        logger.warning("Invalid output-uploader termination message", exc_info=True)
+        return job_pb2.TaskOutputArchive(
+            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+            error="invalid_uploader_result",
+        )
+    return archive
 
 
 def _disruption_condition(pod: dict) -> dict | None:
@@ -1121,6 +1256,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
 
     if phase == "Pending":
         return TaskUpdate(
+            attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_BUILDING,
@@ -1130,33 +1266,49 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
 
     if phase == "Running":
         return TaskUpdate(
+            attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_RUNNING,
-            status_message="",
+            status_message=TASK_OUTPUT_FINALIZING_STATUS if _task_container_terminated(pod) else "",
             **identity,
         )
 
     if phase == "Succeeded":
         return TaskUpdate(
+            attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_SUCCEEDED,
             status_message="",
+            output_archive=_output_archive_from_pod(pod),
             **identity,
         )
 
-    # Failed or Unknown -- distinguish infrastructure vs application failure. The
-    # error field carries the failure story, so clear the waiting one-liner.
+    # _poll_pods holds unresolved phases through their grace period, so only a
+    # definitive Failed phase can reach the failure classifier.
     exit_code = _extract_exit_code(pod)
+    task_terminated = _task_container_terminated(pod)
+    new_state = (
+        job_pb2.TASK_STATE_SUCCEEDED
+        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
+        else _pod_failure_state(pod)
+    )
+    terminal_reason = _extract_terminal_reason(pod)
     return TaskUpdate(
+        attempt_uid=AttemptUid(entry.attempt_uid),
         task_id=task_id,
         attempt_id=attempt_id,
-        new_state=_pod_failure_state(pod),
+        new_state=new_state,
         exit_code=exit_code,
-        error=_extract_error(pod),
+        error=(
+            None
+            if new_state == job_pb2.TASK_STATE_SUCCEEDED
+            else terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod)
+        ),
         status_message="",
-        terminal_reason=_extract_terminal_reason(pod),
+        terminal_reason=terminal_reason,
+        output_archive=_output_archive_from_pod(pod),
         **identity,
     )
 
@@ -1172,6 +1324,21 @@ def _extract_exit_code(pod: dict) -> int | None:
     return None
 
 
+def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
+    exit_code = _extract_exit_code(pod)
+    terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
+    terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
+    update = _task_update_from_pod(entry, terminal_pod)
+    return replace(
+        update,
+        status_message="",
+        output_archive=job_pb2.TaskOutputArchive(
+            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+            error="deadline_exceeded",
+        ),
+    )
+
+
 def _extract_error(pod: dict) -> str | None:
     """Extract error reason/message from the task container's status."""
     status = _task_container_status(pod)
@@ -1182,6 +1349,8 @@ def _extract_error(pod: dict) -> str | None:
     message = terminated.get("message", "")
     if reason == "Completed":
         return message or None
+    if message and reason and reason != "Error":
+        return f"{reason}: {message}"
     return message or reason or None
 
 
@@ -1252,66 +1421,18 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # cannot race exit-status collection.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
-# Blocker eviction: minimum interval between reconcile-driven eviction sweeps
-# of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
-# while Kueue retries admission; without this floor every reconcile would
-# re-list the foreign namespaces and re-issue deletes for pods already
-# terminating.
-_PREEMPT_INTERVAL_SECONDS = 30
-
-
-def _has_gated_gpu_pods(pods: list[dict]) -> bool:
-    """True when any GPU-requesting pod is still held by a Kueue scheduling gate.
-
-    Kueue's webhook gates every pod carrying the queue-name label and removes the
-    gate only on Workload admission, so a surviving gate on a GPU pod — a gang member
-    or a single-pod GPU job, both of which now route through Kueue — means it is still
-    waiting for GPU capacity, the signal to evict foreign preemptible blockers holding
-    that capacity.
-    """
-    for pod in pods:
-        if not pod.get("spec", {}).get("schedulingGates"):
-            continue
-        if _pod_gpu_request(pod) > 0:
-            return True
-    return False
-
-
-def _run_req_gpu_count(run_req: job_pb2.RunTaskRequest) -> int:
-    """GPU count a task requests (0 for CPU-only), used to gate blocker eviction."""
-    if not run_req.HasField("resources") or not run_req.resources.HasField("device"):
-        return 0
-    return get_gpu_count(run_req.resources.device)
-
 
 def _pod_gpu_request(pod: dict) -> int:
     """Total GPUs the pod requests, counting limits as implicit requests."""
     total = 0
     for container in pod.get("spec", {}).get("containers", []):
         resources = container.get("resources", {})
-        value = resources.get("requests", {}).get(_GPU_RESOURCE) or resources.get("limits", {}).get(_GPU_RESOURCE)
+        value = resources.get("requests", {}).get(NVIDIA_GPU_RESOURCE) or resources.get("limits", {}).get(
+            NVIDIA_GPU_RESOURCE
+        )
         if value:
             total += parse_k8s_quantity(str(value))
     return total
-
-
-def _is_preemptible_blocker(pod: dict) -> bool:
-    """Whether a foreign-namespace pod is safe for Iris to evict.
-
-    Hard guards, independent of configuration: the pod must declare a negative
-    priority (its priority class marks it scheduler-preemptible by design) AND
-    request GPUs (it actually holds capacity Kueue TAS counts against gangs).
-    Terminal and already-terminating pods are skipped.
-    """
-    meta = pod.get("metadata", {})
-    if meta.get("deletionTimestamp"):
-        return False
-    if pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
-        return False
-    priority = pod.get("spec", {}).get("priority")
-    if not isinstance(priority, int) or priority >= 0:
-        return False
-    return _pod_gpu_request(pod) > 0
 
 
 @dataclass(frozen=True)
@@ -1467,8 +1588,24 @@ def _workload_for_pod(pod: dict, workloads: _KueueWorkloadIndex) -> dict | None:
 
 # The layer that produced a task-event verdict, recorded as the event ``source``.
 _EVENT_SOURCE_CONTAINER = "k8s/container"
+_EVENT_SOURCE_DISRUPTION = "k8s/disruption"
 _EVENT_SOURCE_KUEUE = "k8s/kueue"
 _EVENT_SOURCE_SCHEDULER = "k8s/scheduler"
+
+_NODE_DIAGNOSTIC_LABEL_PREFIXES = (
+    "compute.coreweave.com/",
+    "gpu.coreweave.cloud/",
+    "gpu.nvidia.com/",
+    "ib.coreweave.cloud/",
+    "node.coreweave.cloud/",
+    "node.kubernetes.io/",
+    "topology.kubernetes.io/",
+)
+_NODE_DIAGNOSTIC_ANNOTATION_PREFIXES = (
+    "cwnc.coreweave.com/",
+    "gpu.coreweave.cloud/",
+    "node.coreweave.cloud/",
+)
 
 # Pod/container reasons that are always operator-actionable failures (rather than
 # a transient wait), surfaced as Warning-severity events.
@@ -1488,13 +1625,64 @@ _WARNING_EVENT_REASONS = frozenset(
 
 @dataclass(frozen=True)
 class _PodEvent:
-    """A scheduling/admission verdict for a not-yet-running pod, ready to record
-    as an ``iris.task_event`` row. ``severity`` is the k8s-style Normal/Warning."""
+    """A Kubernetes backend verdict ready to record in ``iris.task_event``."""
 
     source: str
     reason: str
     message: str
     severity: TaskEventSeverity
+    diagnostics: TaskEventDiagnostics = field(default_factory=TaskEventDiagnostics)
+
+
+def _diagnostic_metadata(values: dict, prefixes: tuple[str, ...]) -> dict:
+    return {key: value for key, value in values.items() if key.startswith(prefixes)}
+
+
+def _diagnostic_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _disruption_event(pod: dict, node: dict | None, disruption: dict) -> _PodEvent:
+    pod_metadata = pod.get("metadata", {})
+    pod_spec = pod.get("spec", {})
+    node_metadata = node.get("metadata", {}) if node is not None else {}
+    node_spec = node.get("spec", {}) if node is not None else {}
+    node_status = node.get("status", {}) if node is not None else {}
+    node_info = node_status.get("nodeInfo", {})
+
+    return _PodEvent(
+        source=_EVENT_SOURCE_DISRUPTION,
+        reason=disruption.get("reason", "") or _DISRUPTION_TARGET_CONDITION,
+        message=disruption.get("message", ""),
+        severity=TaskEventSeverity.WARNING,
+        diagnostics=TaskEventDiagnostics(
+            pod_name=pod_metadata.get("name") or None,
+            pod_uid=pod_metadata.get("uid") or None,
+            pod_deletion_timestamp=pod_metadata.get("deletionTimestamp") or None,
+            node_name=pod_spec.get("nodeName") or None,
+            node_uid=node_metadata.get("uid") or None,
+            node_provider_id=node_spec.get("providerID") or None,
+            node_boot_id=node_info.get("bootID") or None,
+            node_system_uuid=node_info.get("systemUUID") or None,
+            node_unschedulable=bool(node_spec.get("unschedulable")) if node is not None else None,
+            pod_tolerations_json=_diagnostic_json(pod_spec.get("tolerations", [])),
+            pod_conditions_json=_diagnostic_json(pod.get("status", {}).get("conditions", [])),
+            node_taints_json=_diagnostic_json(node_spec.get("taints", [])) if node is not None else None,
+            node_conditions_json=_diagnostic_json(node_status.get("conditions", [])) if node is not None else None,
+            node_labels_json=(
+                _diagnostic_json(_diagnostic_metadata(node_metadata.get("labels", {}), _NODE_DIAGNOSTIC_LABEL_PREFIXES))
+                if node is not None
+                else None
+            ),
+            node_annotations_json=(
+                _diagnostic_json(
+                    _diagnostic_metadata(node_metadata.get("annotations", {}), _NODE_DIAGNOSTIC_ANNOTATION_PREFIXES)
+                )
+                if node is not None
+                else None
+            ),
+        ),
+    )
 
 
 def _workload_admission_blocked(workload: dict | None) -> bool:
@@ -1513,16 +1701,11 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
     return False
 
 
-def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
-    """The current actionable backend event for a pod.
-
-    ``source`` attributes the verdict to the layer that produced it (the task
-    container, the Kueue gate, or the scheduler); ``severity`` is Warning for an
-    actionable failure (image pull, config error, Kueue eviction) or a
-    Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
-    running or otherwise quiet pod.
-    """
+def _pod_event(pod: dict, workload: dict | None, node: dict | None = None) -> _PodEvent | None:
+    """Return the pod's current actionable verdict, including disruptions."""
     disruption = _disruption_condition(pod)
+    if disruption is not None and disruption.get("type") == _DISRUPTION_TARGET_CONDITION:
+        return _disruption_event(pod, node, disruption)
     if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
         return _PodEvent(
             source=_EVENT_SOURCE_KUEUE,
@@ -1661,7 +1844,7 @@ def _node_disk_bytes(node: dict) -> int:
 
 
 def _node_gpu_count(node: dict) -> int:
-    gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+    gpu = node.get("status", {}).get("allocatable", {}).get(NVIDIA_GPU_RESOURCE)
     return int(parse_k8s_quantity(str(gpu))) if gpu else 0
 
 
@@ -1757,15 +1940,15 @@ class ClusterState:
         is dropped from the split (still counted as held) — it cannot be preempted on
         a band the parent can reason about.
 
-        Deliberately imperfect — it lags the sync and ignores per-node packing, which
-        the meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        Deliberately imperfect — it lags the sync and ignores per-node packing,
+        which federation routing tolerates (the peer's own Kueue is the backstop)."""
         band_by_class = {name: band for band, name in priority_class_names.items()}
         with self._lock:
             nodes = self._nodes[:]
             pods = self._pods[:]
         allocatable = 0
         for node in nodes:
-            gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+            gpu = node.get("status", {}).get("allocatable", {}).get(NVIDIA_GPU_RESOURCE)
             if gpu:
                 allocatable += int(parse_k8s_quantity(str(gpu)))
         held = 0
@@ -1828,79 +2011,6 @@ class ClusterState:
             node_pools=node_pools,
             nodes=node_statuses,
         )
-
-
-class ResourceCollector:
-    """Periodic emitter that samples running pods' CPU/memory usage.
-
-    The reconcile loop declares the authoritative set of running pods via
-    ``set_pods()`` once per cycle. Each ``poll_interval`` the collector samples
-    those pods via one bulk metrics query and appends an ``IrisTaskStat`` row
-    per pod to the ``iris.task`` table — the same table the worker daemon writes
-    to on the GCE/TPU path, so the dashboard's ``iris.task`` queries cover both
-    runtimes uniformly.
-
-    ``poll_interval`` defaults to the metrics-server scrape resolution (15s);
-    polling faster only re-reads the same sample.
-    """
-
-    def __init__(
-        self,
-        kubectl: K8sService,
-        task_stats_table: Table,
-        *,
-        labels: dict[str, str] | None = None,
-        poll_interval: float = 15.0,
-    ):
-        self._kubectl = kubectl
-        self._table = task_stats_table
-        self._labels = labels
-        # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
-        # identity needed to build IrisTaskStat without parsing strings.
-        self._pods: dict[tuple[str, int], str] = {}
-        self._lock = threading.Lock()
-        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="resource-collector")
-
-    def set_pods(self, pods: dict[tuple[str, int], str]) -> None:
-        """Declare the authoritative set of pods to collect resources for."""
-        with self._lock:
-            self._pods = dict(pods)
-
-    def collect_once(self) -> None:
-        """Sample every tracked pod once and append a stat row per pod with usage.
-
-        Runs each ``poll_interval`` on the emitter thread; also the unit of
-        collection tests drive directly.
-        """
-        with self._lock:
-            snapshot = list(self._pods.items())
-        if not snapshot:
-            return
-        usage_by_pod = self._kubectl.top_pods(labels=self._labels)
-
-        stats: list[IrisTaskStat] = []
-        for (task_id_wire, attempt_id), pod_name in snapshot:
-            top = usage_by_pod.get(pod_name)
-            if top is None:
-                continue
-            stats.append(
-                build_task_stat(
-                    task_id=task_id_wire,
-                    attempt_id=attempt_id,
-                    # Pod name is the per-attempt platform identity on k8s,
-                    # mirroring worker_id on the GCE/TPU path.
-                    worker_id=pod_name,
-                    usage=job_pb2.ResourceUsage(
-                        cpu_millicores=top.cpu_millicores,
-                        memory_mb=top.memory_bytes // (1024 * 1024),
-                    ),
-                )
-            )
-        if stats:
-            self._table.write(stats)
-
-    def close(self) -> None:
-        self._emitter.close()
 
 
 # Periodic thread-dump cadence, 10 minutes to match the GCE/TPU worker cadence.
@@ -1999,32 +2109,25 @@ class PeriodicProfiler:
 
 
 class TaskEventLog:
-    """Appends Kubernetes backend events to the ``iris.task_event`` namespace.
+    """Append changed Kubernetes verdicts to ``iris.task_event``.
 
-    Driven synchronously from the pod poll — no background thread, since the
-    verdicts come from the pod/workload lists ``sync`` already fetches.
-    ``observe`` is called once per tracked attempt per cycle with the attempt's
-    current verdict (or ``None`` when the pod is running/quiet); a row is written
-    only when the ``(source, reason, severity)`` verdict *changes*, so a pod
-    wedged in one state produces a single row, not one per poll — but a severity
-    upgrade (e.g. a gated pod Kueue later declines flips Normal→Warning under the
-    same source/reason) is a change and does record the actionable row. ``retain``
-    drops dedup state for attempts no longer polled so a retried attempt (new
-    ``attempt_id``) starts clean and the map stays bounded.
+    Verdicts are deduplicated per attempt by source, reason, severity, and node
+    evidence availability. A disruption first observed without its node snapshot
+    emits one enriched row when the snapshot becomes available.
     """
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity]] = {}
+        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity, bool]] = {}
 
     def observe(self, attempt: RunningTaskEntry, event: _PodEvent | None) -> None:
         """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
-        verdict = (event.source, event.reason, event.severity)
+        has_node_evidence = event.diagnostics.node_uid is not None or event.diagnostics.node_conditions_json is not None
+        verdict = (event.source, event.reason, event.severity, has_node_evidence)
         if self._last_verdict.get(attempt) == verdict:
             return
-        self._last_verdict[attempt] = verdict
         row = TaskEventRow(
             task_id=attempt.task_id.to_wire(),
             attempt_id=attempt.attempt_id,
@@ -2035,11 +2138,14 @@ class TaskEventLog:
             message=event.message,
             source=event.source,
             count=1,
+            **asdict(event.diagnostics),
         )
         try:
             self._table.write([row])
         except Exception:
             logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
+            return
+        self._last_verdict[attempt] = verdict
 
     def retain(self, active: set[RunningTaskEntry]) -> None:
         """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
@@ -2137,17 +2243,6 @@ def _proc_int(text: str, default: int = 0) -> int:
         return default
 
 
-def _stat_fields_after_comm(raw: str) -> list[str]:
-    """Fields of ``/proc/PID/stat`` starting at ``state`` (field 3).
-
-    The ``comm`` field (2) is parenthesized and may itself contain spaces or
-    parens, so index from the last ``)`` rather than splitting the whole line.
-    Returned index ``i`` is stat field ``i + 3``.
-    """
-    rclose = raw.rfind(")")
-    return raw[rclose + 2 :].split() if rclose != -1 else []
-
-
 def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
     """Parse ``_POD_PROC_STATUS_SCRIPT`` output into a ``ProcessInfo`` for PID 1.
 
@@ -2183,8 +2278,8 @@ def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
         # utime (field 14) + stime (field 15) => indices 11, 12 after comm.
         return _proc_int(fields[11]) + _proc_int(fields[12]) if len(fields) >= 13 else 0
 
-    stat1 = _stat_fields_after_comm(sections.get("stat1", ""))
-    stat2 = _stat_fields_after_comm(sections.get("stat2", ""))
+    stat1 = stat_fields_after_comm(sections.get("stat1", ""))
+    stat2 = stat_fields_after_comm(sections.get("stat2", ""))
     uptime1, uptime2 = _uptime("uptime1"), _uptime("uptime2")
 
     interval = uptime2 - uptime1
@@ -2238,32 +2333,18 @@ class K8sTaskProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
-
+    descriptor: BackendDescriptor
     kubectl: K8sService
     # Cluster-level pod settings; also the source of the namespace and managed
     # label this backend uses for its own ConfigMap/PDB writes and kubectl scans.
     pods: PodConfig
-    # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
-    # when it has gang work for Kueue. Empty disables the feature; see
-    # _evict_preemptible_blockers for the safety guards.
-    preempt_namespaces: list[str] = field(default_factory=list)
-    # Pre-resolved iris.task Table handle, built from the controller's log client
-    # and passed in by the composer; when None — e.g. tests without finelog — the
-    # resource collector is disabled. K8s pods ship their own logs via the
-    # log-shipper sidecar, so the backend needs only the tables, not the client.
-    task_stats_table: Table | None = None
-    # Pre-resolved iris.task_event Table handle, passed alongside task_stats_table.
+    # Pre-resolved iris.task_event Table handle.
     # When None (tests without finelog) the scheduling/admission event log is
     # disabled; task state still flows, only the diagnostic timeline is skipped.
     task_event_table: Table | None = None
-    # Pre-resolved iris.profile Table handle, passed alongside task_stats_table.
+    # Pre-resolved iris.profile Table handle.
     # None in test mode.
     profile_table: Table | None = None
-    # Resource-usage poll cadence. Defaults to the metrics-server scrape
-    # resolution (15s) — sampling faster only re-reads the same value. One bulk
-    # metrics list per tick covers every managed pod (see ResourceCollector).
-    resource_poll_interval: float = 15.0
     # Cadence at which PeriodicProfiler dumps each running pod's threads to
     # iris.profile (trigger=periodic), so a silently hung collective is caught in
     # the profile timeline even though nothing polls a k8s pod otherwise.
@@ -2273,20 +2354,9 @@ class K8sTaskProvider:
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
+    node_health: NodeHealthConfig | None = None
     cluster_scan_interval: float = 5.0
-    name: str = "kubernetes"
-    # Routing metadata the meta-scheduler reads, set by the composer via configure_routing.
-    advertised: dict[str, set[str]] = field(default_factory=dict)
-    # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
-    autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
-    # A cluster backend tracks no Iris worker liveness; the controller's union read
-    # skips a None tracker, and no worker registers into a k8s scale group.
-    health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
-    # The controller-DB read surface this backend authors its dispatch effects
-    # from, passed by the composer at construction (a cluster backend has no
-    # worker store, so it reads its dispatch drain through this).
-    transition_reader: TransitionReader | None = field(default=None, repr=False)
-    _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
     # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
     # dropped once the attempt leaves the poll set.
@@ -2295,29 +2365,17 @@ class K8sTaskProvider:
     # were created under the current name, so their lookups must never consider the
     # pre-uid name — see _pod_name_candidates.
     _dispatched_attempts: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
-    _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
-    _last_preempt_time: float = field(default=0.0, init=False, repr=False)
     # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
-    # hash set, the one piece of state it shares with the control loop.
+    # pod-name set, the one piece of state it shares with the control loop.
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
     _gc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-    _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
-
-    def _ensure_resource_collector(self) -> ResourceCollector | None:
-        if self.task_stats_table is None:
-            return None
-        if self._resource_collector is None:
-            self._resource_collector = ResourceCollector(
-                self.kubectl,
-                self.task_stats_table,
-                labels=_MANAGED_POD_LABELS,
-                poll_interval=self.resource_poll_interval,
-            )
-        return self._resource_collector
+    _pending_gc_pods: set[str] = field(default_factory=set, init=False, repr=False)
+    _output_finalization_started: dict[RunningTaskEntry, float] = field(default_factory=dict, init=False, repr=False)
+    _released_output_attempts: set[RunningTaskEntry] = field(default_factory=set, init=False, repr=False)
 
     def _ensure_periodic_profiler(self) -> PeriodicProfiler | None:
         if self.profile_table is None:
@@ -2337,13 +2395,10 @@ class K8sTaskProvider:
             self._task_event_log = TaskEventLog(self.task_event_table)
         return self._task_event_log
 
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image or self.pods.default_image
 
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
-    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+    def _resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total GPUs inferred from the periodic kubectl cluster sync.
 
         Kueue owns placement, so there is no per-worker Iris capacity view here; instead
@@ -2353,7 +2408,7 @@ class K8sTaskProvider:
         lines up. Only when the backend advertises exactly one GPU variant can the
         GPUs be attributed unambiguously; otherwise it returns ``None`` (unset —
         shape-only federation)."""
-        variants = self.advertised.get(WellKnownAttribute.DEVICE_VARIANT)
+        variants = self.descriptor.advertised_attributes.get(WellKnownAttribute.DEVICE_VARIANT)
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()
@@ -2368,40 +2423,32 @@ class K8sTaskProvider:
         Iris-managed slices to tear down."""
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """No-op: a cluster backend tracks no Iris workers, so it builds no worker source."""
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        return BackendRecoveryResult()
 
-    def seed_liveness(self) -> None:
-        """No-op: a cluster backend tracks no Iris worker liveness to seed."""
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        return BackendObservation(
+            status=controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status()),
+            resource_capacity=self._resource_capacity(),
+        )
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        """Author the pod projection: sync task state, then resolve it into effects.
-
-        ``sync`` converges the cluster (apply new pods, delete strays, poll running
-        pods) and returns the neutral task updates it observed; this resolves those
-        into committable task ``effects`` against the backend's own read snapshot.
-        A cluster backend tracks no Iris workers, so it folds no liveness.
-        """
-        assert self.transition_reader is not None, "K8sTaskProvider.reconcile called before transition reader attached"
-        updates = self.sync(request)
-        effects = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects)
-
-    def run_teardown(self) -> None:
-        """No-op: a cluster backend tracks no Iris workers to reap."""
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
+        """Converge Pods and return exact task-attempt observations."""
+        if not isinstance(request, DirectReconcileRequest):
+            raise ValueError("Kubernetes backend requires DirectReconcileRequest")
+        return ReconcileObservation(task_updates=self.sync(request))
 
     def collect_garbage(self) -> None:
         """Run one garbage-collection pass for eligible Kubernetes resources."""
         self._gc_terminal_resources(self._list_active_pods())
 
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """No-op: a cluster backend tracks no Iris workers to reap."""
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        return RemoveCapacityResult()
 
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        """No-op: a cluster backend tracks no Iris workers to garbage-collect."""
-        return 0
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
+        return None
 
-    def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
+    def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -2414,17 +2461,8 @@ class K8sTaskProvider:
         cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
         refresh) run at most once per ``cluster_scan_interval``, and continue to
         run on an idle cluster (the controller never gates a cluster backend's
-        reconcile on having work) so orphaned pods are reaped. Terminal-resource
-        GC only takes the active-pod snapshot here; its pass runs on its own
-        thread.
+        reconcile on having work) so orphaned pods are reaped.
         """
-        # Free GPU capacity for any incoming GPU pod before it is created (gang
-        # member or single-pod GPU job — both route through Kueue): Kueue TAS
-        # computes node capacity at admission, so blockers must be gone (or
-        # terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
-            self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
-
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
             try:
@@ -2438,6 +2476,7 @@ class K8sTaskProvider:
                 # instead of the retryable WORKER_FAILED used for transient apply loss.
                 apply_failures.append(
                     TaskUpdate(
+                        attempt_uid=AttemptUid(run_req.attempt_uid),
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
                         new_state=job_pb2.TASK_STATE_FAILED,
@@ -2453,6 +2492,7 @@ class K8sTaskProvider:
                 # re-applies. The raw k8s error is logged above.
                 apply_failures.append(
                     TaskUpdate(
+                        attempt_uid=AttemptUid(run_req.attempt_uid),
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
                         new_state=job_pb2.TASK_STATE_WORKER_FAILED,
@@ -2464,6 +2504,8 @@ class K8sTaskProvider:
         if now - self._last_cluster_scan < self.cluster_scan_interval:
             return apply_failures
         self._last_cluster_scan = now
+        if self.node_health is not None and self.node_health.storage is not None:
+            reconcile_storage_health(self.kubectl, self.node_health.storage, self.node_health.max_cordoned_nodes)
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(
@@ -2471,12 +2513,6 @@ class K8sTaskProvider:
             labels=_MANAGED_POD_LABELS,
             field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
         )
-
-        # Blockers can also appear AFTER submission (health checks target any
-        # idle GPU node), so keep evicting while any GPU pod waits gated for
-        # Kueue admission.
-        if self.preempt_namespaces and _has_gated_gpu_pods(managed_pods):
-            self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
         for run_req in request.tasks_to_run:
@@ -2494,13 +2530,13 @@ class K8sTaskProvider:
             logger.warning("Failed to query Kueue workloads: %s", e)
             workloads = []
 
-        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads)
-
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
         except Exception as e:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
+
+        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads, nodes)
 
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
@@ -2553,13 +2589,26 @@ class K8sTaskProvider:
         """
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
-        duration = request.duration_seconds or 10
-        profile_type = request.profile_type
+        duration = request.duration_seconds or DEFAULT_PROFILE_DURATION_SECONDS
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
+        profile_type = job_pb2.ProfileType()
+        profile_type.CopyFrom(request.profile_type)
+        # py-spy 0.4.2's native unwinder can segfault on Linux ARM64 before it
+        # writes an output file. Keep native frames on other architectures and
+        # when explicitly requested, but default to Python frames on ARM64.
+        if profile_type.HasField("cpu") and not profile_type.cpu.HasField("native"):
+            architecture = dispatch.exec(["uname", "-m"], timeout=10)
+            if architecture.returncode == 0 and architecture.stdout.strip().lower() in _ARM64_ARCHITECTURES:
+                profile_type.cpu.native = False
 
         try:
             if profile_type.HasField("threads"):
-                data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+                data = capture_threads(
+                    dispatch,
+                    pid="1",
+                    include_locals=profile_type.threads.locals,
+                    include_native=profile_type.threads.native,
+                )
             elif profile_type.HasField("cpu"):
                 data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
             elif profile_type.HasField("memory"):
@@ -2628,22 +2677,12 @@ class K8sTaskProvider:
     def close(self) -> None:
         if self._gc_emitter is not None:
             self._gc_emitter.close()
-        if self._resource_collector is not None:
-            self._resource_collector.close()
         if self._periodic_profiler is not None:
             self._periodic_profiler.close()
 
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
         return self._cluster_state.to_status_response(self.pods.namespace)
-
-    def status(self) -> controller_pb2.Controller.BackendStatus:
-        """Author the ``kubernetes`` status variant from the cluster-state snapshot."""
-        return controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status())
-
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """Empty: K8s provisions its own capacity and runs no Iris autoscaler."""
-        return vm_pb2.AutoscalerStatus()
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -2694,76 +2733,26 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
-        self.kubectl.apply_json(manifest)
         task_id = run_req.task_id
-        logger.info(
-            "Applied pod %s for task %s attempt %d",
-            manifest["metadata"]["name"],
-            task_id,
-            run_req.attempt_id,
-        )
-
         if _is_coordinator_task(run_req):
+            # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
             pdb = _build_pdb_manifest(
                 pod_name,
                 self.pods.namespace,
-                _task_hash(run_req.task_id),
+                _task_hash(task_id),
                 run_req.priority,
                 managed_label=self.pods.managed_label,
             )
             self.kubectl.apply_json(pdb)
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
-    def _evict_preemptible_blockers(self, *, reason: str, force: bool = False) -> None:
-        """Delete preemptible GPU pods from preempt_namespaces to unblock gang admission.
-
-        Kueue TAS counts every non-Kueue pod's GPU requests as fixed node usage
-        and its preemption only targets Kueue Workloads, while gang pods never
-        reach the kube-scheduler until admitted — so pods the kube-scheduler
-        would displace (negative priority, PreemptLowerPriority) instead starve
-        gangs indefinitely. Iris performs that eviction itself, in the layer it
-        owns.
-
-        Safety guards regardless of configuration: only pods that pass
-        _is_preemptible_blocker (negative priority AND GPU request, not already
-        terminating) are deleted, and Iris's own namespace is never touched.
-        ``force`` bypasses the debounce for discrete events (gang submission);
-        the reconcile-driven path is rate-limited to _PREEMPT_INTERVAL_SECONDS.
-
-        Eviction is best-effort: per-namespace list/delete failures are logged
-        and skipped so they can never block task dispatch in reconcile().
-        """
-        now = time.monotonic()
-        if not force and now - self._last_preempt_time < _PREEMPT_INTERVAL_SECONDS:
-            return
-        self._last_preempt_time = now
-        for ns in self.preempt_namespaces:
-            if ns == self.pods.namespace:
-                logger.warning("preempt_namespaces includes iris's own namespace %r; refusing to evict there", ns)
-                continue
-            try:
-                pods = self.kubectl.list_pods_in_namespace(ns)
-            except KubectlError as e:
-                logger.warning("Failed to list pods in preempt namespace %s: %s", ns, e)
-                continue
-            for pod in pods:
-                if not _is_preemptible_blocker(pod):
-                    continue
-                name = pod.get("metadata", {}).get("name", "")
-                if not name:
-                    continue
-                logger.info(
-                    "Evicting preemptible blocker pod %s/%s (priority=%s, gpus=%d): %s",
-                    ns,
-                    name,
-                    pod.get("spec", {}).get("priority"),
-                    _pod_gpu_request(pod),
-                    reason,
-                )
-                try:
-                    self.kubectl.delete_pod_in_namespace(ns, name)
-                except KubectlError as e:
-                    logger.warning("Failed to evict blocker pod %s/%s: %s", ns, name, e)
+        self.kubectl.apply_json(manifest)
+        logger.info(
+            "Applied pod %s for task %s attempt %d",
+            manifest["metadata"]["name"],
+            task_id,
+            run_req.attempt_id,
+        )
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
         """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
@@ -2779,7 +2768,6 @@ class K8sTaskProvider:
         path.
         """
         stray_pod_names: list[str] = []
-        stray_hashes: set[str] = set()
         stray_pod_groups: set[str] = set()
         stray_gang_pod_names: list[str] = []
         for pod in cached_pods:
@@ -2797,7 +2785,6 @@ class K8sTaskProvider:
             pod_name = pod.get("metadata", {}).get("name")
             if pod_name:
                 stray_pod_names.append(pod_name)
-                stray_hashes.add(task_hash)
                 pod_group = labels.get(_KUEUE_POD_GROUP_NAME)
                 if pod_group:
                     stray_pod_groups.add(pod_group)
@@ -2806,17 +2793,16 @@ class K8sTaskProvider:
         if not stray_pod_names:
             return
 
+        # Retain exact attempt names even if deletion or reservation release fails.
+        with self._gc_lock:
+            self._pending_gc_pods.update(stray_pod_names)
         self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
         # The GC pass re-drives any gang pods that survive this teardown.
         self._release_gang_reservations(stray_gang_pod_names, stray_pod_groups)
-        # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
-        with self._gc_lock:
-            self._pending_gc_hashes.update(stray_hashes)
 
         logger.info(
-            "Deleted %d stray pods for %d task hashes (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
+            "Deleted %d stray pods (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
             len(stray_pod_names),
-            len(stray_hashes),
             len(stray_pod_groups),
         )
 
@@ -2893,12 +2879,6 @@ class K8sTaskProvider:
         cutoff = now - _GC_MAX_AGE_SECONDS
         gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 
-        # Task hashes that still have active (Pending/Running) pods must NOT have their
-        # configmaps/PDBs deleted, even if an older attempt of the same task is
-        # terminal — task_hash is shared across attempts.
-        active_hashes = {
-            h for pod in active_pods if (h := pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH))
-        }
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running
         # siblings, so the gang sweep must skip those groups entirely.
@@ -2906,45 +2886,34 @@ class K8sTaskProvider:
             g for pod in active_pods if (g := pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME))
         }
 
-        # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
-        #    since last GC, by task_hash label selector.
-        #    Only discard hashes actually cleaned up: skipped hashes (still active)
-        #    and any the sweep did not reach stay in the set for the next GC cycle,
-        #    so a failed delete retries instead of leaking the resources forever.
+        # Resource names include the pod's attempt UID. Never delete by task hash:
+        # dispatch can create a retry's ConfigMap after the active-pod snapshot.
         with self._gc_lock:
-            safe_pending = self._pending_gc_hashes - active_hashes
+            pending = self._pending_gc_pods.copy()
         cleaned: set[str] = set()
         try:
-            for task_hash in safe_pending:
-                labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
-                self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
-                self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
-                cleaned.add(task_hash)
-        except Exception:
-            # Isolated from the pod sweep below: a persistently failing CM/PDB delete
-            # must not be what stops terminal pods from ever being collected.
-            logger.exception("GC: CM/PDB cleanup failed after %d of %d hashes", len(cleaned), len(safe_pending))
+            for pod_name in pending:
+                self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
+                self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
+                cleaned.add(pod_name)
+        except KubectlError:
+            # Keep failed cleanup queued without preventing the terminal-pod sweep.
+            logger.exception("GC: CM/PDB cleanup failed after %d of %d pods", len(cleaned), len(pending))
         finally:
             with self._gc_lock:
-                self._pending_gc_hashes -= cleaned
+                self._pending_gc_pods -= cleaned
         if cleaned:
-            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(cleaned))
+            logger.info("GC: cleaned up CMs/PDBs for %d pods", len(cleaned))
 
-        # 2. Age-based sweep: delete terminal pods older than the cutoff and enqueue
-        #    their task hashes, so step 1 of a later pass cleans up the configmaps and
-        #    PDBs once it has confirmed no attempt of that task is active.
         old_pod_names: list[str] = []
-        old_task_hashes: set[str] = set()
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
-        gang_task_hashes: set[str] = set()
         for pod in self._iter_terminal_pods():
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
             if not created:
                 continue
             ts = parse_k8s_timestamp(created).timestamp()
-            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
             # Gang sweep: a deletionTimestamp means a prior delete is
             # wedged on the Kueue finalizer; otherwise the shorter gang
@@ -2958,13 +2927,14 @@ class K8sTaskProvider:
             if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
                 gang_pod_names.append(meta["name"])
                 gang_pod_groups.add(pod_group)
-                if task_hash:
-                    gang_task_hashes.add(task_hash)
                 continue
             if ts < cutoff:
                 old_pod_names.append(meta["name"])
-                if task_hash:
-                    old_task_hashes.add(task_hash)
+
+        # Queue before deleting the pods so a partial failure cannot orphan their resources.
+        with self._gc_lock:
+            self._pending_gc_pods.update(gang_pod_names)
+            self._pending_gc_pods.update(old_pod_names)
 
         if gang_pod_names:
             # force (gracePeriodSeconds=0): these pods are already terminal, so
@@ -2972,10 +2942,6 @@ class K8sTaskProvider:
             # deletion when the node's kubelet is gone (node failure).
             self.kubectl.delete_many(K8sResource.PODS, gang_pod_names, force=True, wait=False)
             self._release_gang_reservations(gang_pod_names, gang_pod_groups)
-            # CM/PDB cleanup follows the deferred path so active retry
-            # attempts sharing the task hash keep their resources.
-            with self._gc_lock:
-                self._pending_gc_hashes.update(gang_task_hashes)
             logger.info(
                 "GC: swept %d terminal gang pods, released %d Kueue workloads",
                 len(gang_pod_names),
@@ -2984,18 +2950,9 @@ class K8sTaskProvider:
 
         if old_pod_names:
             self.kubectl.delete_many(K8sResource.PODS, old_pod_names, wait=False)
-            # CM/PDB cleanup follows the deferred path, as the gang sweep does. Doing
-            # it inline here would hang the only record of these hashes on a local:
-            # the pods that named them are deleted above, so no later pass could
-            # rediscover them, and anything that raised in between would orphan their
-            # configmaps and PDBs for good. Step 1 of the next pass deletes them
-            # against its own fresh active-pod read, and retries whatever fails.
-            with self._gc_lock:
-                self._pending_gc_hashes.update(old_task_hashes)
             logger.info(
-                "GC: deleted %d terminal pods, deferred CM/PDB cleanup for %d task hashes (age > %ds)",
+                "GC: deleted %d terminal pods, deferred CM/PDB cleanup (age > %ds)",
                 len(old_pod_names),
-                len(old_task_hashes),
                 _GC_MAX_AGE_SECONDS,
             )
 
@@ -3015,8 +2972,51 @@ class K8sTaskProvider:
                 field_selector=f"status.phase={phase}",
             )
 
+    def _finalize_task_outputs(
+        self,
+        entry: RunningTaskEntry,
+        pod_name: str,
+        pod: dict,
+    ) -> TaskUpdate | None:
+        policy = self.pods.task_outputs
+        if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
+            return None
+        # A running pod reports every container, so no status means no uploader (a sandbox pod).
+        uploader = _output_container_status(pod)
+        if uploader is None:
+            return None
+
+        started = self._output_finalization_started.setdefault(entry, time.monotonic())
+        uploader_running = "running" in uploader.get("state", {})
+        if uploader_running and entry not in self._released_output_attempts:
+            try:
+                release = self.kubectl.exec(
+                    pod_name,
+                    ["touch", OUTPUT_RELEASE_PATH],
+                    container=OUTPUT_CONTAINER_NAME,
+                    timeout=10,
+                )
+                if release.returncode == 0:
+                    self._released_output_attempts.add(entry)
+                else:
+                    logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
+            except KubectlError:
+                logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
+
+        if time.monotonic() - started < policy.finalization_timeout.to_seconds():
+            return None
+
+        self.kubectl.delete(K8sResource.PODS, pod_name, force=True, wait=False)
+        self._output_finalization_started.pop(entry, None)
+        self._released_output_attempts.discard(entry)
+        return _task_update_after_output_timeout(entry, pod)
+
     def _poll_pods(
-        self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None
+        self,
+        running: list[RunningTaskEntry],
+        cached_pods: list[dict],
+        workloads: list[dict] | None = None,
+        nodes: list[dict] | None = None,
     ) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
@@ -3030,20 +3030,27 @@ class K8sTaskProvider:
 
         Task logs are shipped by the per-pod log-shipper sidecar, not pulled
         here. This method drives task state and registers running pods with the
-        ResourceCollector, calling set_pods() once with the authoritative set of
-        running pods so the collector can never drift.
+        periodic profiler.
         """
         if not running:
-            if self._resource_collector is not None:
-                self._resource_collector.set_pods({})
             if self._periodic_profiler is not None:
                 self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
                 self._task_event_log.retain(set())
+            self._pod_unresolved_counts.clear()
             self._disruption_reasons.clear()
+            self._output_finalization_started.clear()
+            self._released_output_attempts.clear()
             return []
 
+        running_set = set(running)
+        self._output_finalization_started = {
+            entry: started for entry, started in self._output_finalization_started.items() if entry in running_set
+        }
+        self._released_output_attempts.intersection_update(running_set)
+
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
+        nodes_by_name = {node.get("metadata", {}).get("name", ""): node for node in nodes or []}
         workload_index = _kueue_workload_index(workloads or [])
         updates: list[TaskUpdate] = []
 
@@ -3077,67 +3084,99 @@ class K8sTaskProvider:
                     if not unresolved:
                         break
 
-        # (task_id_wire, attempt_id) -> pod_name. Resource samples are
-        # appended directly to iris.task by the collector; the controller no
-        # longer multiplexes them through TaskUpdate.
-        resource_pods: dict[tuple[str, int], str] = {}
-        # Same running set, carrying the node name so the periodic profiler can
+        # The running set carries the node name so the periodic profiler can
         # stamp the k8s/<node> vm_id without a per-pod GET.
         profile_targets: dict[tuple[str, int], _ProfileTarget] = {}
         event_log = self._ensure_task_event_log()
 
         for entry in running:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
-            cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
-            if pod is None:
-                count = self._pod_not_found_counts.get(cursor_key, 0) + 1
-                self._pod_not_found_counts[cursor_key] = count
-                if count < _POD_NOT_FOUND_GRACE_CYCLES:
+            phase = pod.get("status", {}).get("phase", "") if pod is not None else ""
+            workload = _workload_for_pod(pod, workload_index) if pod is not None else None
+            output_update = self._finalize_task_outputs(entry, pod_name, pod) if pod is not None else None
+            if output_update is not None:
+                updates.append(output_update)
+                continue
+            if pod is not None:
+                disruption = _disruption_condition(pod)
+                if disruption is not None:
+                    self._disruption_reasons[entry] = _format_disruption_reason(disruption)
+            pod_unresolved = pod is None or phase not in _RESOLVED_POD_PHASES
+            if pod_unresolved:
+                count = self._pod_unresolved_counts.get(entry, 0) + 1
+                self._pod_unresolved_counts[entry] = count
+                if count < _POD_UNRESOLVED_GRACE_CYCLES:
+                    metadata = pod.get("metadata", {}) if pod is not None else {}
                     updates.append(
                         TaskUpdate(
+                            attempt_uid=AttemptUid(entry.attempt_uid),
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
-                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            new_state=entry.state,
+                            status_message=_pod_status_message(pod, workload) if pod is not None else "",
+                            pod_name=metadata.get("name") or None,
+                            pod_uid=metadata.get("uid") or None,
+                            node_name=(pod.get("spec", {}).get("nodeName") or None) if pod is not None else None,
                         )
                     )
                     continue
-                # Grace exhausted — the pod is truly gone. Absence is not an
-                # application failure, so charge the preemption budget either
-                # way: PREEMPTED when the pod was seen terminating under a
-                # disruption (Kueue deletes every pod of a preempted Workload,
-                # leaving no terminal status), WORKER_FAILED when the cause was
-                # never observed.
-                self._pod_not_found_counts.pop(cursor_key, None)
-                disruption_reason = self._disruption_reasons.get(entry)
-                updates.append(
-                    TaskUpdate(
-                        task_id=entry.task_id,
-                        attempt_id=entry.attempt_id,
-                        new_state=(
-                            job_pb2.TASK_STATE_PREEMPTED
-                            if disruption_reason is not None
-                            else job_pb2.TASK_STATE_WORKER_FAILED
-                        ),
-                        error="Pod not found",
-                        terminal_reason=disruption_reason or _POD_DELETED_TERMINAL_REASON,
-                        status_message="",
+                self._pod_unresolved_counts.pop(entry, None)
+                if pod is None:
+                    # Grace exhausted — the pod is truly gone. Absence is not an
+                    # application failure, so charge the preemption budget either
+                    # way: PREEMPTED when the pod was seen terminating under a
+                    # disruption (Kueue deletes every pod of a preempted Workload,
+                    # leaving no terminal status), WORKER_FAILED when the cause was
+                    # never observed.
+                    disruption_reason = self._disruption_reasons.get(entry)
+                    terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
+                    new_state = (
+                        job_pb2.TASK_STATE_PREEMPTED
+                        if disruption_reason is not None
+                        else job_pb2.TASK_STATE_WORKER_FAILED
                     )
-                )
+                    updates.append(
+                        TaskUpdate(
+                            attempt_uid=AttemptUid(entry.attempt_uid),
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=new_state,
+                            error=terminal_reason,
+                            terminal_reason=terminal_reason,
+                            status_message="",
+                        )
+                    )
+                else:
+                    disruption_reason = self._disruption_reasons.get(entry)
+                    terminal_reason = disruption_reason or _POD_UNKNOWN_TERMINAL_REASON
+                    metadata = pod.get("metadata", {})
+                    updates.append(
+                        TaskUpdate(
+                            attempt_uid=AttemptUid(entry.attempt_uid),
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=(
+                                job_pb2.TASK_STATE_PREEMPTED
+                                if disruption_reason is not None
+                                else job_pb2.TASK_STATE_WORKER_FAILED
+                            ),
+                            error=terminal_reason,
+                            terminal_reason=terminal_reason,
+                            status_message="",
+                            pod_name=metadata.get("name") or None,
+                            pod_uid=metadata.get("uid") or None,
+                            node_name=pod.get("spec", {}).get("nodeName") or None,
+                        )
+                    )
                 continue
 
-            self._pod_not_found_counts.pop(cursor_key, None)
-            workload = _workload_for_pod(pod, workload_index)
+            self._pod_unresolved_counts.pop(entry, None)
             update = _task_update_from_pod(entry, pod, workload)
-            # Readable only while the pod terminates; the vanished-pod path
-            # above has no pod left to read it from.
-            disruption = _disruption_condition(pod)
-            if disruption is not None:
-                self._disruption_reasons[entry] = _format_disruption_reason(disruption)
+            updates.append(update)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
-                resource_pods[task_key] = pod_name
                 profile_targets[task_key] = _ProfileTarget(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
@@ -3145,18 +3184,16 @@ class K8sTaskProvider:
                     node_name=pod.get("spec", {}).get("nodeName", "") or "",
                 )
             if event_log is not None:
-                event_log.observe(entry, _pod_event(pod, workload))
+                node = nodes_by_name.get(pod.get("spec", {}).get("nodeName", ""))
+                event_log.observe(entry, _pod_event(pod, workload, node))
 
-            updates.append(update)
-
-        resource_collector = self._ensure_resource_collector()
-        if resource_collector is not None:
-            resource_collector.set_pods(resource_pods)
         periodic_profiler = self._ensure_periodic_profiler()
         if periodic_profiler is not None:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain(set(running))
+        for stale_entry in self._pod_unresolved_counts.keys() - set(running):
+            del self._pod_unresolved_counts[stale_entry]
         for stale_entry in self._disruption_reasons.keys() - set(running):
             del self._disruption_reasons[stale_entry]
 

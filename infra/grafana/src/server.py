@@ -12,12 +12,29 @@ dashboard never sends admin RPC SQL, and every route feeds Infinity's backend pa
 Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /finelog/{cluster}/v1/node/overview       bounded shared Node Details dataset
+    GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
+    GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
+    GET /finelog/{cluster}/v1/rl/overview         bounded shared RL dataset
+    GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
+    GET /finelog/{cluster}/v1/async-rl/overview   bounded shared async RL dataset
+    GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
+    GET /finelog/{cluster}/v1/jobs/overview       five namespace-bounded Jobs sources
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
+    GET /finelog/{cluster}/v1/zephyr/overview     bounded ranked shuffle snapshot
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
+    GET /finelog/{cluster}/alerts/query          alert SQL; no data when Finelog is unavailable
+    GET /finelog/marin/relay_status              direct regional relay heartbeats
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
+    GET /finelog/marin/alerts/relay_status       stale relay/table rows + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
+    GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
+    GET /finelog/marin/alerts/training_telemetry watched hero runs + silent-telemetry value(0|1)
+    GET /finelog/marin/alerts/training_optimizer watched hero runs + optimizer-fault value(0|1)
+    GET /finelog/marin/alerts/training_health    watched hero runs + degraded-signal value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
-    GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/job_counts               root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/jobs?cluster=             recent jobs visible through one federation peer
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
     GET /iris/{cluster}/peers                    federation reachability from the controller heartbeat
@@ -25,17 +42,20 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
-    GET /wandb/{chart}                           sampled public hero-report series by chart key
-    GET /overview/provisioning                   latest fleet and resource-pool provisioning cycle
+    GET /wandb/report/{chart}                    sampled public hero-report series by chart key
+    GET /wandb/history?run=&metric=&project=     one run's full logged history for one metric
+    GET /wandb/activity?run=&project=            one run's active/wall/downtime seconds and progress efficiency
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
+    GET /k8s/workloads                           live Iris jobs, placement, and requested resources
     GET /k8s/termination_candidates             pods overdue past their deletion deadline
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
     GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
     GET /k8s/finelog_events                      recent Warning events involving finelog
     GET /k8s/health | nodes                      API reachability and CoreWeave node health
+    GET /k8s/node_pools                          CoreWeave NodePool capacity and conditions
     GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
@@ -53,77 +73,150 @@ Routes, grouped by source (cluster is a path segment where it applies):
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
 cached. The k8s routes aggregate every CW cluster into one response, so a dead
-cluster becomes labeled error rows while the rest render; the alert routes always
-return at least one row per cluster (explicit zeros when healthy) so Grafana
-rules never hit NoData. Handlers are sync defs; Starlette runs them in a
+cluster becomes labeled error rows while the rest render. Fixed-shape alert routes
+return at least one row per cluster (explicit zeros when healthy), while generic
+alert SQL uses each rule's explicit no-data behavior. Handlers are sync defs;
+Starlette runs them in a
 threadpool. The two alert webhooks are async because they post to Slack, and the
 Loom one also exchanges tokens and creates a run over HTTP.
 """
 
 import json
 import logging
-from collections.abc import Mapping
-from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+import threading
+import time
+from collections.abc import Callable, Hashable, Mapping, Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from http import HTTPStatus
 
 import pyarrow as pa
 import uvicorn
+from accelerator_observability import accelerator_overview_dataset
+from async_rl_observability import async_rl_overview_dataset
 from cache import TtlCache
 from config import (
     BRIDGE_PORT,
     CLUSTERS,
+    DEFAULT_OPERATOR_BEHAVIOR,
     FINELOG_SLOW_THRESHOLD_MS,
     GITHUB_REPO,
+    HERO_OPERATOR_BEHAVIOR,
     K8S_CLUSTERS,
     BridgeConfig,
     ClusterTarget,
 )
-from errors import UpstreamError
-from finelog.errors import QueryResultTooLargeError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from dashboard_dataset import DashboardDataset, SourceQuery, project_dataset, validate_table_budget
+from errors import FinelogUnavailableError, UpstreamError
+from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
+from hero_health import (
+    EVAL_HISTORY_LENGTH,
+    EvalHistory,
+    Signals,
+    WatchedRun,
+    eval_history,
+    health_alert_rows,
+    optimizer_alert_rows,
+    retry_event_query,
+    selected_executions,
+    signal_query,
+    signals_by_run,
+    telemetry_alert_rows,
+    training_runs,
+    watched_runs,
+)
+from hero_runs import (
+    HeroRun,
+    RunIdentity,
+    active_hero_runs,
+    phase_execution_query,
+    phase_root_key,
+    recent_phase_query,
+    task_state_query,
+)
 from iris_source import IrisSource
+from jobs_observability import jobs_overview_dataset
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
+    OperatorBehavior,
     SlackAlertClient,
     SlackAnnouncementError,
 )
+from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
-from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
+from node_observability import node_overview_dataset
+from relay_health import relay_alert_rows
+from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_producers import check_window, collect_producers
+from runs_observability import runs_overview_dataset
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from training_stalls import task_state_query, telemetry_query, training_stall_alert_rows
+from training_observability import training_overview_dataset
+from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
+    VLLM_DETAIL_MAX_WINDOW_MS,
     VLLM_MAX_RESULT_ROWS,
+    VLLM_MAX_SERIES,
     VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
     vllm_overview_query,
+    vllm_overview_table,
+    vllm_run_summary_samples_query,
+    vllm_run_summary_table,
 )
-from wandb_source import WandbSource
+from wandb_source import EVAL_LOSS_METRIC, WandbSource
+from zephyr_observability import zephyr_overview_dataset
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 logger = logging.getLogger(__name__)
+
+HERO_OPERATOR_INSTRUCTIONS = (
+    "Start from this alert's logical run identity and gather current evidence before deciding whether it joins an "
+    "existing incident. Later alerts on this channel may refer to the same run across execution or coordinator "
+    "retries, so correlate them instead of assuming either a clean run or inherited evidence. Treat the alert's "
+    "cluster, run, and job labels as discovery leads, not a complete task inventory. Read "
+    "docs/ops/hero-run-health-alerts.md, the linked runbook, lib/iris/OPS.md, and the current launcher, configuration, "
+    "and applicable skills before probing; checkpoint paths, task layouts, and retry behavior can change during a "
+    "run. Use bounded Finelog queries to: (1) inspect telemetry_v1 for the labeled cluster and run_id with "
+    "service='levanter' and process_index='0', enumerate recent execution_uid values and their time bounds, and read "
+    "the latest relevant metrics per execution; (2) recover coordinator roots from execution UIDs of the form "
+    "iris:<task-id>:attempt:<n> using the current Iris root-job logic, including prior roots for this logical run; "
+    "(3) inspect recent iris.task_state rows for the exact root_job_id values; (4) inspect iris.task_event for each "
+    "literal root task subtree with prefix(task_id, '<root>/'), summing its count field when aggregating deduplicated "
+    "events; and (5) inspect log rows for literal key prefixes around execution boundaries and task events. If the "
+    "cluster label is unknown, resolve the real cluster before interpreting empty results. Examine stderr, "
+    "warning/error levels, and other abnormal output without relying on a fixed error-signature list or assuming the "
+    "first query is exhaustive. Compare ranks and tasks to distinguish the first causal failure from expected "
+    "gang-scheduling fallout, and gather additional live evidence as needed before concluding."
+)
 
 # Window macros a panel writes into its SQL, substituted with tz-naive UTC
 # TIMESTAMP literals before the query runs.
 FROM_MACRO = "{{from}}"
 TO_MACRO = "{{to}}"
 
-# infra/probes writes its label set as a JSON object string. The bridge expands
-# it into columns under this prefix so a panel can select one as a series.
+# EAV metrics store labels as a JSON object string. The bridge expands it into
+# columns under this prefix so a panel can select one as a series.
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
 _K8S_ARCH_MISMATCH_CACHE_KEY = "arch_mismatch"
 _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
+_DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
+_DATASET_CONCURRENCY = 2
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
 
@@ -182,22 +275,24 @@ def substitute_time_macros(sql: str, start: datetime | None, end: datetime | Non
 def _json_safe(value: object) -> object:
     """Coerce one Arrow cell into a JSON-serializable value.
 
-    Timestamps become epoch milliseconds (naive cells read as UTC); bytes become
-    text; everything else passes through.
+    Timestamps become epoch milliseconds (naive cells read as UTC), bytes become
+    text, and decimals become floats. Everything else passes through.
     """
     if isinstance(value, datetime):
         at = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return round(at.timestamp() * 1000)
     if isinstance(value, (bytes, bytearray)):
         return bytes(value).decode("utf-8", "replace")
+    if isinstance(value, Decimal):
+        return float(value)
     return value
 
 
 def _labels_as_dict(raw: object) -> dict | None:
     """Coerce a labels cell to a ``{key: value}`` dict, or None if it isn't one.
 
-    Handles both label encodings finelog serves: a JSON-string column (the probes
-    EAV convention) and a native ``Map<Utf8,Utf8>`` column, which arrives from
+    Handles both label encodings finelog serves: a JSON-string EAV column and a
+    native ``Map<Utf8,Utf8>`` column, which arrives from
     ``Table.to_pylist()`` as a ``list[(key, value)]`` (or a dict).
     """
     if isinstance(raw, dict):
@@ -262,6 +357,103 @@ class _BadRequest(Exception):
     """A malformed request, surfaced as HTTP 400."""
 
 
+def _vllm_status_row(status: str, message: str) -> dict[str, object]:
+    return {
+        "t": None,
+        "section": "diagnostic_status",
+        "metric": "query",
+        "stat": "state",
+        "series": message,
+        "value": None,
+        "unit": None,
+        "status": status,
+        "samples": None,
+        "gap_seconds": None,
+    }
+
+
+def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) -> dict[str, object]:
+    """Compare already projected server counters without inferring request outcomes."""
+    if summary_only:
+        observed = [
+            row["value"] for row in rows if row["section"] == "run_summary" and row["metric"] == "ttft_observations"
+        ]
+        observations = float(observed[0]) if observed and isinstance(observed[0], (int, float)) else None
+        finishes = [
+            float(row["value"])
+            for row in rows
+            if row["section"] == "run_summary"
+            and row["metric"] == "request_success_total"
+            and isinstance(row["value"], (int, float))
+        ]
+        finished = sum(finishes) if finishes else None
+    else:
+        observed = next(
+            (
+                row["samples"]
+                for row in rows
+                if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean"
+            ),
+            None,
+        )
+        observations = float(observed) if isinstance(observed, (int, float)) else None
+        finish_samples = next((row["samples"] for row in rows if row["section"] == "length_finish_fraction"), None)
+        finished = float(finish_samples) if isinstance(finish_samples, (int, float)) else None
+
+    if observations is None or finished is None:
+        state = "no_conclusion"
+        message = (
+            "Comparable first-token and engine-finish counts unavailable. Check server detail and evaluator in Iris."
+        )
+        gap = None
+    elif observations > finished:
+        state = "check_count_gap"
+        message = (
+            f"{observations:g} first-token observations vs {finished:g} request_success_total finishes. "
+            "Partial ranges can differ; check the evaluator in Iris."
+        )
+        gap = observations - finished
+    else:
+        state = "no_conclusion"
+        message = "No excess first-token observations in this range. Check evaluator in Iris for client outcomes."
+        gap = observations - finished
+
+    return {
+        **_vllm_status_row(state, message),
+        "metric": "run attention",
+        "stat": "selected-range count comparison",
+        "value": gap,
+        "unit": "observations minus finishes",
+        "ttft_observations": observations,
+        "request_success_finishes": finished,
+    }
+
+
+def _vllm_unavailable_attention_row(status: str) -> dict[str, object]:
+    state = "no_conclusion" if status == "empty" else "unavailable"
+    message = (
+        "No server telemetry in this range. Check the serve ID and evaluator in Iris."
+        if status == "empty"
+        else "Server comparison unavailable. Retry or narrow the range, then check the evaluator in Iris."
+    )
+    return {
+        **_vllm_status_row(state, message),
+        "metric": "run attention",
+        "ttft_observations": None,
+        "request_success_finishes": None,
+    }
+
+
+def _vllm_query_timed_out(error: BaseException) -> bool:
+    while error is not None:
+        if isinstance(error, (QueryTimeoutError, TimeoutError)):
+            return True
+        if isinstance(error, ConnectError) and error.code == Code.DEADLINE_EXCEEDED:
+            return True
+        error = error.__cause__
+    return False
+
+
 def _require(params, name: str) -> str:
     value = params.get(name)
     if not value:
@@ -287,6 +479,13 @@ def _require_time(params, name: str) -> datetime:
         raise _BadRequest(str(err)) from err
 
 
+def _csv_values(params, name: str) -> tuple[str, ...]:
+    values = tuple(value for value in _require(params, name).split(",") if value)
+    if not values:
+        raise _BadRequest(f"{name} must name at least one value")
+    return values
+
+
 def _bucket(at: datetime | None, ttl: float) -> int | None:
     """Snap at to a TTL-wide bucket so a drifting window keeps one cache key."""
     return None if at is None else int(at.timestamp() // max(ttl, 1))
@@ -299,35 +498,89 @@ def _target_for(name: str, sources: Mapping[str, MetricSource]) -> ClusterTarget
     return sources[name].target
 
 
-def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricSource], cache: TtlCache):
-    target = _target_for(request.path_params["cluster"], sources)
-    params = request.query_params
+@dataclass(frozen=True)
+class _FinelogQueries:
+    config: BridgeConfig
+    sources: Mapping[str, MetricSource]
+    cache: TtlCache
 
-    sql = _require(params, "sql")
-    start = _optional_time(params, "from")
-    end = _optional_time(params, "to")
+    def _rows(self, request: Request):
+        target = _target_for(request.path_params["cluster"], self.sources)
+        params = request.query_params
 
-    # Key on the SQL as written, before substitution, with each window edge snapped
-    # to a TTL bucket, so a relative range stays one key as its edges drift.
-    key = (target.name, sql, _bucket(start, config.cache_ttl), _bucket(end, config.cache_ttl))
+        sql = _require(params, "sql")
+        start = _optional_time(params, "from")
+        end = _optional_time(params, "to")
 
-    try:
-        effective_sql = substitute_time_macros(sql, start, end)
-    except ValueError as err:
-        raise _BadRequest(str(err)) from err
+        # Key on the SQL as written, before substitution, with each window edge snapped
+        # to a TTL bucket, so a relative range stays one key as its edges drift.
+        key = (target.name, sql, _bucket(start, self.config.cache_ttl), _bucket(end, self.config.cache_ttl))
 
-    def run():
-        logger.info("query %s: %s", target.name, effective_sql)
-        table = sources[target.name].query(effective_sql, max_rows=config.max_rows)
-        return rows_to_json(table)
+        try:
+            effective_sql = substitute_time_macros(sql, start, end)
+        except ValueError as err:
+            raise _BadRequest(str(err)) from err
 
-    return cache.get_or_compute(key, run)
+        def run():
+            logger.info("query %s: %s", target.name, effective_sql)
+            table = self.sources[target.name].query(effective_sql, max_rows=self.config.max_rows)
+            return rows_to_json(table)
+
+        return self.cache.get_or_compute(key, run)
+
+    def query(self, request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(self._rows(request))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+    def alert_query(self, request: Request) -> JSONResponse:
+        """Run alert SQL while treating only transient Finelog failures as no data."""
+        try:
+            return self.query(request)
+        except FinelogUnavailableError as err:
+            logger.warning("Finelog alert query unavailable: %s", err)
+            return JSONResponse([])
 
 
 def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     if name not in sources:
         raise _BadRequest(f"unknown cluster {name!r}; configured: {sorted(sources)}")
     return sources[name]
+
+
+def _dataset_source(
+    source: MetricSource,
+    cluster: str,
+    query: SourceQuery,
+    max_rows: int,
+    cache: TtlCache[pa.Table],
+) -> pa.Table:
+    max_rows = min(query.max_rows, max_rows)
+
+    def run() -> pa.Table:
+        started = time.monotonic()
+        table = source.query(query.sql, max_rows=max_rows)
+        validate_table_budget(
+            query.name,
+            table,
+            max_rows=query.max_rows,
+            max_samples=query.max_samples,
+        )
+        logger.info(
+            "dashboard source query source=%s cluster=%s rows=%d elapsed_ms=%d",
+            query.name,
+            cluster,
+            table.num_rows,
+            round((time.monotonic() - started) * 1000),
+        )
+        return table
+
+    # A source such as current task state does not depend on panel resolution.
+    # Share its Arrow result across datasets without retaining duplicate copies.
+    return cache.get_or_compute((cluster, query), run)
 
 
 def create_app(
@@ -342,19 +595,191 @@ def create_app(
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    dataset_source_cache: TtlCache[pa.Table] = TtlCache(
+        config.cache_ttl,
+        max_size=_DATASET_SOURCE_CACHE_BYTES,
+        get_size=lambda table: table.get_total_buffer_size(),
+    )
     finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
+    # Limit source loading as well as projection: queued requests must not hold
+    # Arrow inputs outside the source cache budget.
+    dataset_execution_slots = threading.BoundedSemaphore(_DATASET_CONCURRENCY)
+    # DuckDB projections share one CPU.
+    dashboard_projection_lock = threading.Lock()
+    finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
-    def query(request: Request) -> JSONResponse:
+    def dataset_rows(target: ClusterTarget, dataset: DashboardDataset) -> list[dict[str, object]]:
+        key = (target.name, dataset.name, *dataset.cache_key)
+
+        def run() -> list[dict[str, object]]:
+            with dataset_execution_slots:
+                source_tables: dict[str, pa.Table] = {}
+                started = time.monotonic()
+                for source_query in dataset.sources:
+                    query_started = time.monotonic()
+                    table = _dataset_source(
+                        finelog_sources[target.name], target.name, source_query, config.max_rows, dataset_source_cache
+                    )
+                    source_tables[source_query.name] = table
+                    logger.info(
+                        "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",
+                        dataset.name,
+                        source_query.name,
+                        target.name,
+                        table.num_rows,
+                        round((time.monotonic() - query_started) * 1000),
+                    )
+                rows = project_dataset(
+                    dataset,
+                    source_tables,
+                    dashboard_projection_lock,
+                    rows_to_json,
+                    min(dataset.max_result_rows, config.max_rows),
+                )
+                logger.info(
+                    "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d cache_key=%s",
+                    dataset.name,
+                    target.name,
+                    len(dataset.sources),
+                    len(rows),
+                    round((time.monotonic() - started) * 1000),
+                    dataset.cache_key,
+                )
+                return rows
+
+        return finelog_cache.get_or_compute(key, run)
+
+    def dashboard_dataset_response(
+        request: Request,
+        name: str,
+        build: Callable[[Mapping[str, str], int, int], DashboardDataset],
+    ) -> JSONResponse:
         try:
-            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            view = params.get("view")
+            start_ms = round(_require_time(params, "from").timestamp() * 1000)
+            end_ms = round(_require_time(params, "to").timestamp() * 1000)
+            try:
+                dataset = build(params, start_ms, end_ms)
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+            if view and view not in dataset.views:
+                raise _BadRequest(f"unknown {name} view {view!r}; configured: {sorted(dataset.views)}")
+            rows = dataset_rows(target, dataset)
+            return JSONResponse(rows if not view else [row for row in rows if row["section"] == view])
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+            return JSONResponse({"error": f"{err}; narrow the {name} filters or time range"}, status_code=400)
+
+    def node_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "node overview",
+            lambda params, start_ms, end_ms: node_overview_dataset(
+                _csv_values(params, "clusters"),
+                _csv_values(params, "nodes"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def zephyr_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Zephyr overview",
+            lambda params, start_ms, end_ms: zephyr_overview_dataset(
+                _require(params, "execution_id"), _require(params, "stage_name"), start_ms, end_ms
+            ),
+        )
+
+    def training_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Training overview",
+            lambda params, start_ms, end_ms: training_overview_dataset(
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+                params.get("view"),
+            ),
+        )
+
+    def runs_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Runs overview",
+            lambda params, start_ms, end_ms: runs_overview_dataset(
+                _csv_values(params, "clusters"),
+                _csv_values(params, "runs"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def accelerator_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Accelerator overview",
+            lambda params, start_ms, end_ms: accelerator_overview_dataset(
+                _csv_values(params, "clusters"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+            ),
+        )
+
+    def jobs_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Jobs overview",
+            lambda params, start_ms, end_ms: jobs_overview_dataset(
+                _csv_values(params, "clusters"),
+                tuple(value for value in params.get("jobs", "").split(",") if value),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def rl_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "RL overview",
+            lambda params, start_ms, end_ms: rl_overview_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def recent_rl_runs(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "recent RL runs",
+            lambda _params, start_ms, end_ms: recent_rl_runs_dataset(start_ms, end_ms),
+        )
+
+    def async_rl_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "async RL overview",
+            lambda params, start_ms, end_ms: async_rl_overview_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                _require(params, "job"),
+                _csv_values(params, "executions"),
+                start_ms,
+                end_ms,
+            ),
+        )
 
     def vllm_overview(request: Request) -> JSONResponse:
         try:
@@ -365,7 +790,7 @@ def create_app(
             except ValueError as err:
                 allowed = ", ".join(field.value for field in VllmIdentityField)
                 raise _BadRequest(f"identity_kind must be one of: {allowed}") from err
-            identity = _require(params, "identity")
+            identity = params.get("identity_override") or _require(params, "identity")
             view = params.get("view")
             if view and view not in VLLM_OVERVIEW_SECTIONS:
                 raise _BadRequest(f"unknown vLLM overview view {view!r}; configured: {sorted(VLLM_OVERVIEW_SECTIONS)}")
@@ -405,18 +830,128 @@ def create_app(
                     overview.start_ms,
                     overview.end_ms,
                 )
-                table = finelog_sources[target.name].query(
-                    overview.sql,
+                if overview.end_ms - overview.start_ms > VLLM_DETAIL_MAX_WINDOW_MS:
+                    series = finelog_sources[target.name].query(
+                        vllm_run_summary_samples_query(overview), max_rows=VLLM_MAX_SERIES
+                    )
+                    table = vllm_run_summary_table(overview, series, dashboard_projection_lock, max_rows=config.max_rows)
+                    rows = rows_to_json(table)
+                    if not rows:
+                        return [
+                            _vllm_status_row("empty", "No vLLM telemetry for this serve and time range"),
+                            _vllm_unavailable_attention_row("empty"),
+                        ]
+                    hours = (overview.end_ms - overview.start_ms) / 3_600_000
+                    rows.append(
+                        _vllm_status_row(
+                            "summary_only",
+                            f"{hours:g}h selected: hourly tokens and observed summary signals only. "
+                            "Zoom to 7h or less for engine, latency, and outcome detail.",
+                        )
+                    )
+                    rows.append(_vllm_attention_row(rows, summary_only=True))
+                    return rows
+
+                series = finelog_sources[target.name].query(overview.samples_sql, max_rows=VLLM_MAX_SERIES)
+                table = vllm_overview_table(
+                    overview,
+                    series,
+                    dashboard_projection_lock,
                     max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
                 )
-                return rows_to_json(table)
+                rows = rows_to_json(table)
+                empty = any(row["section"] == "freshness" and row["status"] == "no_data" for row in rows)
+                rows.extend(
+                    {**row, "section": "run_summary"}
+                    for row in tuple(rows)
+                    if row["section"] in ("counter_total", "request_outcome", "length_finish_fraction")
+                )
+                rows.append(
+                    _vllm_status_row(
+                        "empty" if empty else "detail",
+                        (
+                            "No vLLM telemetry for this serve and time range"
+                            if empty
+                            else "Detailed engine telemetry for the selected range"
+                        ),
+                    )
+                )
+                rows.append(
+                    _vllm_unavailable_attention_row("empty") if empty else _vllm_attention_row(rows, summary_only=False)
+                )
+                return rows
 
-            rows = finelog_cache.get_or_compute(key, run)
+            def run_with_status():
+                # Cache the classified status itself. Cached exceptions lose their
+                # cause, which otherwise turns a timeout into a generic error.
+                try:
+                    with dataset_execution_slots:
+                        return run()
+                except QueryResultTooLargeError as err:
+                    return [
+                        _vllm_status_row("sample_limit", f"{err}; zoom to a shorter range"),
+                        _vllm_unavailable_attention_row("sample_limit"),
+                    ]
+                except StatsError as err:
+                    logger.warning("vLLM diagnostic query failed: %s", err)
+                    status = "query_timeout" if _vllm_query_timed_out(err) else "query_error"
+                    return [
+                        _vllm_status_row(status, f"Finelog {status.replace('_', ' ')}; retry or narrow the range"),
+                        _vllm_unavailable_attention_row(status),
+                    ]
+
+            rows = finelog_cache.get_or_compute(key, run_with_status)
             return JSONResponse(rows if not view else [row for row in rows if row.get("section") == view])
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
+
+    def rl_producers(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            run = _require(params, "run")
+            clusters = tuple(value for value in params.get("clusters", "").split(",") if value)
+            if not clusters:
+                raise _BadRequest("clusters must name at least one cluster")
+            start = _require_time(params, "from")
+            end = _require_time(params, "to")
+            start_ms = round(start.timestamp() * 1000)
+            end_ms = round(end.timestamp() * 1000)
+
+            source = finelog_sources[target.name]
+
+            # Snap the window edges as /query does; the window is inside the SQL this route builds,
+            # so keying on the SQL alone would never hit on a rolling range.
+            key = (
+                target.name,
+                "rl_producers",
+                run,
+                clusters,
+                _bucket(start, config.cache_ttl),
+                _bucket(end, config.cache_ttl),
+            )
+
+            try:
+                check_window(start_ms, end_ms)
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+
+            def run_query() -> list[dict[str, object]]:
+                logger.info("rl producers %s: run=%s [%d, %d)", target.name, run, start_ms, end_ms)
+                return collect_producers(
+                    lambda sql: rows_to_json(source.query(sql, max_rows=config.max_rows)),
+                    source.namespaces(),
+                    run,
+                    clusters,
+                    start_ms,
+                    end_ms,
+                )
+
+            return JSONResponse(finelog_cache.get_or_compute(key, run_query))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
+            return JSONResponse({"error": f"{err}; narrow the time range"}, status_code=400)
 
     def fleet_health_rows() -> list[FinelogHealth]:
         _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
@@ -437,40 +972,199 @@ def create_app(
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
 
-    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+    def relay_status_rows():
+        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        return finelog_health_cache.get_or_compute(
+            "relay_status",
+            lambda: finelog_sources[_FINELOG_HUB_CLUSTER].relay_status(),
+        )
+
+    def finelog_relay_status(_: Request) -> JSONResponse:
+        return JSONResponse([asdict(sender) for sender in relay_status_rows()])
+
+    def finelog_alerts_relay_status(_: Request) -> JSONResponse:
+        expected_clusters = (cluster.name for cluster in K8S_CLUSTERS)
+        return JSONResponse(
+            relay_alert_rows(
+                relay_status_rows(),
+                expected_clusters,
+                round(datetime.now(UTC).timestamp() * 1000),
+            )
+        )
+
+    def hero_query(name: str, now: datetime, target: ClusterTarget, sql) -> pa.Table:
+        """Run one hero alert query per cache interval, however many rules read it."""
+        source = finelog_sources[target.name]
+        return finelog_cache.get_or_compute(
+            (name, _bucket(now, config.cache_ttl)),
+            lambda: source.query(sql(), max_rows=config.max_rows),
+        )
+
+    def hero_task_states(target: ClusterTarget, now: datetime) -> pa.Table:
+        """The newest `iris.task_state` row for every hero root, fresh or stale."""
+        return hero_query("hero_task_states", now, target, lambda: task_state_query(now))
+
+    def hero_runs(target: ClusterTarget, now: datetime) -> tuple[HeroRun, ...]:
+        """Hero roots Iris reports running, for the progress and loss-spike rules."""
+        return active_hero_runs(hero_task_states(target, now), now)
+
+    def hero_watched_runs(target: ClusterTarget, now: datetime) -> tuple[WatchedRun, ...]:
+        """Hero roots either Iris or Levanter still reports, for the run-health rules."""
+        task_states = hero_task_states(target, now)
+        active_runs = active_hero_runs(task_states, now)
+        recent_phase = hero_query("hero_recent_phase", now, target, lambda: recent_phase_query(now))
+        recent_roots = {key for row in recent_phase.to_pylist() if (key := phase_root_key(row)) is not None}
+        missing_phase = tuple(run for run in active_runs if (run.cluster, run.root_job) not in recent_roots)
+        if not missing_phase:
+            return watched_runs(task_states, recent_phase, now)
+
+        phase_history = hero_query(
+            "hero_phase_execution",
+            now,
+            target,
+            lambda: phase_execution_query(now, missing_phase),
+        )
+        return watched_runs(task_states, pa.concat_tables((recent_phase, phase_history)), now)
+
+    def hero_signals(target: ClusterTarget, now: datetime, runs: tuple[WatchedRun, ...]) -> Signals:
+        """One telemetry scan behind every run-health rule."""
+        if not runs:
+            return {}
+        rows = hero_query("hero_signals", now, target, lambda: signal_query(now, runs))
+        return signals_by_run(rows)
+
+    def hero_loss_windows(
+        target: ClusterTarget, now: datetime, runs: Sequence[RunIdentity], executions: tuple[str, ...] = ()
+    ) -> pa.Table:
+        """Loss windows for one run set, optionally narrowed to the given attempts."""
+        run_ids = tuple(sorted({run.run_id for run in runs}))
+        if not run_ids:
+            return pa.table({})
+        source = finelog_sources[target.name]
+        return finelog_cache.get_or_compute(
+            ("hero_loss_windows", run_ids, executions, _bucket(now, config.cache_ttl)),
+            lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
+        )
+
+    def hero_evaluations(runs: tuple[WatchedRun, ...]) -> dict[str, EvalHistory]:
+        """Each watched run's recent evaluation history from W&B, keyed by run ID.
+
+        Run-specific failures skip that run. Transport failures stop further
+        lookups so a W&B outage does not cost one timeout per run.
+        """
+        evaluations = {}
+        for run_id in sorted({run.run_id for run in runs}):
+            try:
+                points = wandb_cache.get_or_compute(
+                    ("hero_evaluations", run_id),
+                    lambda run_id=run_id: wandb_source.recent_points(
+                        run_id, metric=EVAL_LOSS_METRIC, count=EVAL_HISTORY_LENGTH
+                    ),
+                )
+            except UpstreamError as err:
+                logger.warning("W&B evaluation history for %s unavailable: %s", run_id, err)
+                if err.status_code == HTTPStatus.GATEWAY_TIMEOUT:
+                    break
+                continue
+            history = eval_history(points)
+            if history is not None:
+                evaluations[run_id] = history
+        return evaluations
+
+    def finelog_alert_endpoint(name: str, project, unavailable_rows) -> JSONResponse:
+        """Serve one finelog-backed alert projection under the hub's cache and error contract."""
+        now = datetime.now(UTC)
         try:
             target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
-            now = datetime.now(UTC)
-
-            def run() -> list[dict]:
-                source = finelog_sources[target.name]
-                task_states = source.query(task_state_query(now), max_rows=config.max_rows)
-                telemetry_metrics = source.query(telemetry_query(now), max_rows=config.max_rows)
-                return training_stall_alert_rows(task_states, telemetry_metrics, now)
-
-            key = ("training_stalls", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
+            key = (name, _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
+        except FinelogUnavailableError as err:
+            logger.warning("Finelog alert endpoint %s unavailable: %s", name, err)
+            return JSONResponse(unavailable_rows(now))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+
+    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_runs(target, now)
+            telemetry_metrics = (
+                finelog_sources[target.name].query(telemetry_query(now, runs), max_rows=config.max_rows)
+                if runs
+                else pa.table({})
+            )
+            return training_stall_alert_rows(runs, telemetry_metrics, now)
+
+        return finelog_alert_endpoint(
+            "training_stalls",
+            project,
+            lambda now: training_stall_alert_rows((), pa.table({}), now),
+        )
+
+    def finelog_alerts_loss_spikes(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_runs(target, now)
+            return loss_spike_alert_rows(runs, hero_loss_windows(target, now, runs))
+
+        return finelog_alert_endpoint(
+            "loss_spikes",
+            project,
+            lambda _: loss_spike_alert_rows((), pa.table({})),
+        )
+
+    def finelog_alerts_training_telemetry(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_watched_runs(target, now)
+            return telemetry_alert_rows(runs, hero_signals(target, now, runs), now)
+
+        return finelog_alert_endpoint(
+            "training_telemetry",
+            project,
+            lambda now: telemetry_alert_rows((), {}, now),
+        )
+
+    def finelog_alerts_training_optimizer(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_watched_runs(target, now)
+            signals = hero_signals(target, now, runs)
+            # The loss-jump check reads the two windows against each other, so
+            # both have to describe the attempt the signal scan selected.
+            loss_windows = hero_loss_windows(target, now, runs, selected_executions(signals))
+            return optimizer_alert_rows(runs, signals, loss_windows, now)
+
+        return finelog_alert_endpoint(
+            "training_optimizer",
+            project,
+            lambda now: optimizer_alert_rows((), {}, pa.table({}), now),
+        )
+
+    def finelog_alerts_training_health(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_watched_runs(target, now)
+            retry_events = (
+                hero_query("hero_retry_events", now, target, lambda: retry_event_query(now)) if runs else pa.table({})
+            )
+            signals = hero_signals(target, now, runs)
+            evaluations = hero_evaluations(training_runs(runs, signals, now))
+            return health_alert_rows(runs, signals, retry_events, evaluations, now)
+
+        return finelog_alert_endpoint(
+            "training_health",
+            project,
+            lambda now: health_alert_rows((), {}, pa.table({}), {}, now),
+        )
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
-        try:
-            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
-            now = datetime.now(UTC)
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            progress_metrics = finelog_sources[target.name].query(zephyr_progress_query(now), max_rows=config.max_rows)
+            return zephyr_stall_alert_rows(progress_metrics, now)
 
-            def run() -> list[dict]:
-                source = finelog_sources[target.name]
-                progress_metrics = source.query(zephyr_progress_query(now), max_rows=config.max_rows)
-                return zephyr_stall_alert_rows(progress_metrics, now)
-
-            key = ("zephyr_stalls", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+        return finelog_alert_endpoint(
+            "zephyr_stalls",
+            project,
+            lambda now: zephyr_stall_alert_rows(pa.table({}), now),
+        )
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -481,8 +1175,15 @@ def create_app(
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
+    def iris_job_counts(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "job_counts", lambda s: s.job_counts())
+
     def iris_jobs(request: Request) -> JSONResponse:
-        return iris_endpoint(request, "jobs", lambda s: s.jobs())
+        try:
+            cluster = _require(request.query_params, "cluster")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        return iris_endpoint(request, f"jobs:{cluster}", lambda s: s.jobs(cluster))
 
     def iris_workers(request: Request) -> JSONResponse:
         return iris_endpoint(request, "workers", lambda s: s.workers())
@@ -519,36 +1220,53 @@ def create_app(
     def github_nightlies(_: Request) -> JSONResponse:
         return github_endpoint("nightlies", github_source.nightlies)
 
-    def wandb_chart(request: Request) -> JSONResponse:
-        chart = request.path_params["chart"]
+    def wandb_endpoint(key: Hashable, run) -> JSONResponse:
         try:
-            return JSONResponse(wandb_cache.get_or_compute(chart, lambda: wandb_source.points(chart)))
+            return JSONResponse(wandb_cache.get_or_compute(key, run))
         except ValueError as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
-    def overview_provisioning(_: Request) -> JSONResponse:
+    def wandb_report_chart(request: Request) -> JSONResponse:
+        chart = request.path_params["chart"]
+        return wandb_endpoint(("report", chart), lambda: wandb_source.points(chart))
+
+    def wandb_run_history(request: Request) -> JSONResponse:
         try:
-            now = datetime.now(UTC)
-
-            def run() -> list[dict]:
-                source = finelog_sources[_target_for(_FINELOG_HUB_CLUSTER, finelog_sources).name]
-                cutoff = now - timedelta(hours=PROVISIONING_LOOKBACK_HOURS)
-                table = source.query(provisioning_query(cutoff), max_rows=config.max_rows)
-                return [asdict(row) for row in provisioning_rows(rows_to_json(table))]
-
-            key = ("overview_provisioning", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
+            run = _require(request.query_params, "run")
+            metric = _require(request.query_params, "metric")
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; reduce the provisioning lookback"}, status_code=400)
+        project = request.query_params.get("project") or None
+        return wandb_endpoint(
+            ("history", run, metric, project),
+            lambda: wandb_source.run_history(run, metric=metric, project=project),
+        )
+
+    def wandb_run_activity(request: Request) -> JSONResponse:
+        try:
+            run = _require(request.query_params, "run")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        project = request.query_params.get("project") or None
+        return wandb_endpoint(
+            ("activity", run, project),
+            lambda: wandb_source.run_activity(run, project=project),
+        )
 
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
         return JSONResponse(k8s_cache.get_or_compute(key, run))
+
+    def filtered_k8s_endpoint(key: str, run, request: Request, fields: tuple[str, ...]) -> JSONResponse:
+        rows = k8s_cache.get_or_compute(key, run)
+        for field in fields:
+            selected = {value for value in request.query_params.get(field, "").split(",") if value}
+            if selected:
+                rows = [row for row in rows if field not in row or row[field] in selected]
+        return JSONResponse(rows)
 
     def k8s_control_plane(_: Request) -> JSONResponse:
         return k8s_endpoint("control_plane", k8s_fleet.control_plane)
@@ -558,6 +1276,9 @@ def create_app(
 
     def k8s_pending(_: Request) -> JSONResponse:
         return k8s_endpoint("pending", k8s_fleet.pending)
+
+    def k8s_workloads(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("workloads", k8s_fleet.workload_allocations, request, ("cluster", "job"))
 
     def k8s_termination_candidates(_: Request) -> JSONResponse:
         rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
@@ -587,8 +1308,11 @@ def create_app(
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
 
-    def k8s_nodes(_: Request) -> JSONResponse:
-        return k8s_endpoint("nodes", k8s_fleet.nodes)
+    def k8s_nodes(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("nodes", k8s_fleet.nodes, request, ("cluster", "node"))
+
+    def k8s_node_pools(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("node_pools", k8s_fleet.node_pools, request, ("cluster", "node_pool"))
 
     def k8s_overview(_: Request) -> JSONResponse:
         def compute() -> list[dict]:
@@ -605,10 +1329,10 @@ def create_app(
         return k8s_endpoint("alerts_unreachable", k8s_fleet.alert_unreachable)
 
     def k8s_alerts_crashloops(request: Request) -> JSONResponse:
-        # The paging rule asks for scope=control-plane; workload backoffs stay
-        # observe-only. Filtering after the cache keeps one scan per TTL.
-        response = k8s_cache.get_or_compute("alerts_crashloops", k8s_fleet.alert_crashloops)
         scope = request.query_params.get("scope")
+        if scope == "control-plane":
+            return k8s_endpoint("alerts_control_plane_crashloops", k8s_fleet.alert_control_plane_crashloops)
+        response = k8s_cache.get_or_compute("alerts_crashloops", k8s_fleet.alert_crashloops)
         if scope:
             response = [row for row in response if row["scope"] == scope]
         return JSONResponse(response)
@@ -681,14 +1405,33 @@ def create_app(
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
-            Route("/wandb/{chart}", wandb_chart),
-            Route("/overview/provisioning", overview_provisioning),
-            Route("/finelog/{cluster}/query", query),
+            Route("/wandb/history", wandb_run_history),
+            Route("/wandb/activity", wandb_run_activity),
+            Route("/wandb/report/{chart}", wandb_report_chart),
+            Route("/finelog/{cluster}/query", finelog_queries.query),
+            Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
+            Route("/finelog/{cluster}/v1/node/overview", node_overview),
+            Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
+            Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
+            Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
+            Route("/finelog/{cluster}/v1/async-rl/overview", async_rl_overview),
+            Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
+            Route("/finelog/{cluster}/v1/runs/overview", runs_overview),
+            Route("/finelog/{cluster}/v1/training/overview", training_overview),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
+            Route("/finelog/{cluster}/v1/zephyr/overview", zephyr_overview),
+            Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
+            Route("/iris/{cluster}/job_counts", iris_job_counts),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
@@ -697,6 +1440,7 @@ def create_app(
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),
             Route("/k8s/pending", k8s_pending),
+            Route("/k8s/workloads", k8s_workloads),
             Route("/k8s/termination_candidates", k8s_termination_candidates),
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),
@@ -704,6 +1448,7 @@ def create_app(
             Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
             Route("/k8s/nodes", k8s_nodes),
+            Route("/k8s/node_pools", k8s_node_pools),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/arch_mismatch", k8s_arch_mismatch),
@@ -733,7 +1478,26 @@ def main() -> None:
     github_source = GithubSource(auth=github_auth, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
-    loom_alerts = LoomAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
+    loom_alerts = None
+    if config.loom_alerts is not None:
+        loom_alerts = LoomAlertClient(
+            config.loom_alerts,
+            behaviors=(
+                OperatorBehavior(
+                    name=DEFAULT_OPERATOR_BEHAVIOR,
+                    channel="operator",
+                    session_title="Grafana operator",
+                    operator_name="Marin Grafana operator",
+                ),
+                OperatorBehavior(
+                    name=HERO_OPERATOR_BEHAVIOR,
+                    channel="operator:hero",
+                    session_title="Hero run operator",
+                    operator_name="Marin hero-run operator",
+                    instructions=HERO_OPERATOR_INSTRUCTIONS,
+                ),
+            ),
+        )
     slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.

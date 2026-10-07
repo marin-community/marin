@@ -34,6 +34,11 @@ DCGM_FI_DEV_FB_USED{{{_DCGM_IDENTITY},DCGM_FI_DRIVER_VERSION="570.86.15"}} 200
 DCGM_FI_DEV_FB_TOTAL{{{_DCGM_IDENTITY}}} 81281
 DCGM_FI_DEV_GPU_UTIL{{{_DCGM_IDENTITY}}} 40
 DCGM_FI_DEV_PCIE_REPLAY_COUNTER{{{_DCGM_IDENTITY}}} 3
+DCGM_FI_PROF_SM_ACTIVE{{{_DCGM_IDENTITY}}} 0.75
+DCGM_FI_PROF_NVLINK_RX_BYTES{{{_DCGM_IDENTITY}}} 1250000000
+DCGM_FI_PROF_NVLINK_TX_BYTES{{{_DCGM_IDENTITY}}} 1500000000
+DCGM_FI_PROF_PCIE_RX_BYTES{{{_DCGM_IDENTITY}}} 500000000
+DCGM_FI_PROF_PCIE_TX_BYTES{{{_DCGM_IDENTITY}}} 750000000
 """
 
 
@@ -97,6 +102,11 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
     host_network = transport.record("node_network_receive_bytes", {"node_uid": "node-uid-1"})
     gpu_memory = transport.record("gpu_memory_used_bytes", {"gpu_uuid": "GPU-aaa"})
     pcie_errors = transport.record("gpu_pcie_replay_errors", {"gpu_uuid": "GPU-aaa"})
+    sm_activity = transport.record("gpu_sm_active_ratio", {"gpu_uuid": "GPU-aaa"})
+    nvlink_receive = transport.record("gpu_nvlink_receive_bytes_per_second", {"gpu_uuid": "GPU-aaa"})
+    nvlink_transmit = transport.record("gpu_nvlink_transmit_bytes_per_second", {"gpu_uuid": "GPU-aaa"})
+    pcie_receive = transport.record("gpu_pcie_receive_bytes_per_second", {"gpu_uuid": "GPU-aaa"})
+    pcie_transmit = transport.record("gpu_pcie_transmit_bytes_per_second", {"gpu_uuid": "GPU-aaa"})
     inventory = transport.record("hardware_inventory", {"gpu_uuid": "GPU-aaa"})
 
     assert host_memory["attributes"] == {
@@ -127,6 +137,16 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
     assert pcie_errors["value"] == 3
     assert pcie_errors["attributes"]["source_temporality"] == telemetry.CUMULATIVE_SNAPSHOT
     assert pcie_errors["attributes"]["source_replica_uid"] == "dcgm-pod-uid-1"
+    assert sm_activity["value"] == 0.75
+    assert sm_activity["unit"] == "1"
+    assert nvlink_receive["value"] == 1_250_000_000
+    assert nvlink_receive["unit"] == "By/s"
+    assert nvlink_transmit["value"] == 1_500_000_000
+    assert nvlink_transmit["unit"] == "By/s"
+    assert pcie_receive["value"] == 500_000_000
+    assert pcie_receive["unit"] == "By/s"
+    assert pcie_transmit["value"] == 750_000_000
+    assert pcie_transmit["unit"] == "By/s"
     assert inventory["attributes"]["gpu_model"] == "NVIDIA H100 80GB HBM3"
     assert inventory["attributes"]["driver_version"] == "570.86.15"
     assert transport.resources[-1] == {
