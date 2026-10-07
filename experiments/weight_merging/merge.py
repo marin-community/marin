@@ -31,6 +31,7 @@ def main() -> None:
         MergeParameters(**parameters),
         code_revision=args.code_revision,
         preserve_rows={name: tuple(rows) for name, rows in recipe["preserve_rows"].items()},
+        tensor_coefficients={name: tuple(values) for name, values in recipe["tensor_coefficients"].items()},
     )
 
 

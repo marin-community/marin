@@ -6,7 +6,7 @@
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import safetensors.torch
@@ -64,6 +64,7 @@ def merge_checkpoint(
     *,
     code_revision: str,
     preserve_rows: dict[str, tuple[int, ...]],
+    tensor_coefficients: dict[str, tuple[float, ...]],
 ) -> dict[str, Any]:
     """Write an immutable merged checkpoint, publishing its manifest last.
 
@@ -80,6 +81,13 @@ def merge_checkpoint(
         raise ValueError("Preserved rows refer to missing tensors")
     if len(donors) != len(parameters.coefficients):
         raise ValueError("Each donor needs one coefficient")
+    if not set(tensor_coefficients) <= names:
+        raise ValueError("Tensor coefficients refer to missing tensors")
+    selected_parameters = {}
+    for name, coefficients in tensor_coefficients.items():
+        if len(coefficients) != len(donors):
+            raise ValueError(f"Each donor needs one coefficient for {name}")
+        selected_parameters[name] = replace(parameters, coefficients=coefficients)
     fs, output_path = filesystem_for(output)
     if fs.exists(output_path) and fs.ls(output_path):
         raise FileExistsError(f"Output must be empty: {output}")
@@ -90,6 +98,7 @@ def merge_checkpoint(
         "parameters": asdict(parameters),
         "code_revision": code_revision,
         "preserve_rows": preserve_rows,
+        "tensor_coefficients": tensor_coefficients,
         "objects": [],
     }
 
@@ -106,7 +115,7 @@ def merge_checkpoint(
         merged = merge_tensor(
             readers[0].tensor(name),
             [reader.tensor(name) for reader in readers[1:]],
-            parameters,
+            selected_parameters.get(name, parameters),
             tensor_name=name,
         )
         if name in preserve_rows:

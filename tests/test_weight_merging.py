@@ -54,7 +54,10 @@ def test_dare_full_density_retains_nonconflicting_donor(method):
     torch.testing.assert_close(result, donor, rtol=0, atol=0)
 
 
-def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_manifest(tmp_path):
+@pytest.mark.parametrize("tensor_coefficients,expected_a", [({}, [3.0, 2.0]), ({"a": (1.0,)}, [5.0, 2.0])])
+def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_manifest(
+    tmp_path, tensor_coefficients, expected_a
+):
     anchor_dir, donor_dir, output = (tmp_path / name for name in ("anchor", "donor", "output"))
     for folder in (anchor_dir, donor_dir):
         folder.mkdir()
@@ -79,9 +82,10 @@ def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_mani
         parameters,
         code_revision="code-revision",
         preserve_rows={"a": (1,)},
+        tensor_coefficients=tensor_coefficients,
     )
     reader = CheckpointReader(CheckpointSource(str(output), "merged"))
-    torch.testing.assert_close(reader.tensor("a"), torch.tensor([3.0, 2.0]), rtol=0, atol=0)
+    torch.testing.assert_close(reader.tensor("a"), torch.tensor(expected_a), rtol=0, atol=0)
     torch.testing.assert_close(reader.tensor("b"), torch.tensor([[5.0]]), rtol=0, atol=0)
     manifest = json.loads((output / "merge-manifest.json").read_text())
     for entry in manifest["objects"]:
@@ -97,4 +101,5 @@ def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_mani
             parameters,
             code_revision="code-revision",
             preserve_rows={"a": (1,)},
+            tensor_coefficients=tensor_coefficients,
         )

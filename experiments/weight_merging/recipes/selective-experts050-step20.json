@@ -13,12 +13,12 @@
       "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
     }
   ],
-  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/serial-dare-step20-025",
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/selective-experts050-step20",
   "parameters": {
     "method": "average",
     "coefficients": [
-      0.75,
-      0.25
+      0.0,
+      1.0
     ],
     "density": 1,
     "scale": 1,
@@ -542,5 +542,318 @@
       128255
     ]
   },
-  "tensor_coefficients": {}
+  "tensor_coefficients": {
+    "model.layers.0.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.mlp.experts.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.mlp.experts.gate_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.mlp.experts.up_proj.weight": [
+      0.5,
+      0.5
+    ]
+  }
 }
