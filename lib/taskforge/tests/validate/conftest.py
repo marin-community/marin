@@ -28,6 +28,7 @@ from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskforge.spec.controls import (
     Control,
     ControlCategory,
+    ControlConcern,
     ControlKind,
     Expectation,
     Transcript,
@@ -89,8 +90,12 @@ def file_task() -> TaskSpec:
     )
 
 
-def control(name: str, kind: ControlKind, category: ControlCategory, payload, expect: Expectation) -> Control:
-    return Control(id=name, kind=kind, category=category, author="tests", payload=payload, expect=expect)
+def control(
+    name: str, kind: ControlKind, category: ControlCategory, concern: ControlConcern, payload, expect: Expectation
+) -> Control:
+    return Control(
+        id=name, kind=kind, category=category, concern=concern, author="tests", payload=payload, expect=expect
+    )
 
 
 CORRECT = Expectation(status=Outcome.GRADED, reward_min=1.0)
@@ -101,17 +106,37 @@ NO_SUBMISSION = Expectation(status=Outcome.SUBMISSION_FAILURE)
 @pytest.fixture
 def math_controls() -> tuple[Control, ...]:
     return (
-        control("correct", ControlKind.POSITIVE, ControlCategory.KNOWN_CORRECT, Transcript((reply("395"),)), CORRECT),
-        control("wrong", ControlKind.NEGATIVE, ControlCategory.PLAUSIBLE_WRONG, Transcript((reply("391"),)), WRONG),
+        control(
+            "correct",
+            ControlKind.POSITIVE,
+            ControlCategory.KNOWN_CORRECT,
+            ControlConcern.REFERENCE,
+            Transcript((reply("395"),)),
+            CORRECT,
+        ),
+        control(
+            "wrong",
+            ControlKind.NEGATIVE,
+            ControlCategory.PLAUSIBLE_WRONG,
+            ControlConcern.ACCEPTANCE,
+            Transcript((reply("391"),)),
+            WRONG,
+        ),
         control(
             "two-answers",
             ControlKind.NEGATIVE,
             ControlCategory.TASK_SPECIFIC_SHORTCUT,
+            ControlConcern.SHORTCUT,
             Transcript((reply("395 or 391"),)),
             WRONG,
         ),
         control(
-            "empty", ControlKind.MALFORMED, ControlCategory.EMPTY_OR_MALFORMED, Transcript((reply(""),)), NO_SUBMISSION
+            "empty",
+            ControlKind.MALFORMED,
+            ControlCategory.EMPTY_OR_MALFORMED,
+            ControlConcern.EXTRACTION,
+            Transcript((reply(""),)),
+            NO_SUBMISSION,
         ),
     )
 
@@ -123,6 +148,7 @@ def file_controls() -> tuple[Control, ...]:
             "correct",
             ControlKind.POSITIVE,
             ControlCategory.KNOWN_CORRECT,
+            ControlConcern.REFERENCE,
             Transcript((shell_turn(("c1", f"echo {NUMBERS_SUM} > /workspace/sum.txt")), reply("Done."))),
             CORRECT,
         ),
@@ -130,6 +156,7 @@ def file_controls() -> tuple[Control, ...]:
             "wrong",
             ControlKind.NEGATIVE,
             ControlCategory.PLAUSIBLE_WRONG,
+            ControlConcern.ACCEPTANCE,
             Transcript((shell_turn(("c1", "head -n 1 /workspace/numbers.txt > /workspace/sum.txt")), reply("Done."))),
             WRONG,
         ),
@@ -137,6 +164,7 @@ def file_controls() -> tuple[Control, ...]:
             "workspace-correct",
             ControlKind.POSITIVE,
             ControlCategory.KNOWN_CORRECT,
+            ControlConcern.ACCEPTANCE,
             Workspace((file("/workspace/sum.txt", f"{NUMBERS_SUM}\n"),)),
             CORRECT,
         ),
@@ -144,11 +172,17 @@ def file_controls() -> tuple[Control, ...]:
             "plant-grader",
             ControlKind.NEGATIVE,
             ControlCategory.REWARD_HACK,
+            ControlConcern.SHORTCUT,
             Transcript((shell_turn(("c1", "mkdir -p /grader && echo 'echo 1' > /grader/check.sh")), reply("Done."))),
             WRONG,
         ),
         control(
-            "no-work", ControlKind.MALFORMED, ControlCategory.EMPTY_OR_MALFORMED, Transcript((reply("Done."),)), WRONG
+            "no-work",
+            ControlKind.MALFORMED,
+            ControlCategory.EMPTY_OR_MALFORMED,
+            ControlConcern.EXTRACTION,
+            Transcript((reply("Done."),)),
+            WRONG,
         ),
     )
 
