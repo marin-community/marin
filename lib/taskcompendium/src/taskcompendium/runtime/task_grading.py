@@ -179,7 +179,7 @@ def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence
         except ValueError as error:
             return GradeResult(Outcome.INVALID_TASK, None, str(error))
         try:
-            return grade_result(verifyit_grade(verifier, tests, workspace))
+            return grade_result(verifier, verifyit_grade(verifier, tests, workspace))
         except InvalidTask as error:
             return GradeResult(Outcome.INVALID_TASK, None, str(error))
         except Exception as error:

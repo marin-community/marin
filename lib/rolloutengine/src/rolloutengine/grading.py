@@ -172,7 +172,7 @@ async def _verifyit_grade(
     with TemporaryDirectory(prefix="rollout-verdict-") as directory:
         path = Path(directory) / "verdict.json"
         await machine.download(VERDICT_PATH, path)
-        return parse_grade_result(path.read_bytes())
+        return parse_grade_result(spec, path.read_bytes())
 
 
 async def _remove_archive(machine: Machine, path: str, timeout: float | None) -> None:

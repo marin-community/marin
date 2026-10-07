@@ -59,7 +59,7 @@ def validate_verifier(specification: VerifierSpec) -> None:
     resolve_verifier(specification)
 
 
-def grade_result(verdict: Reward) -> GradeResult:
+def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
     """Normalize VerifyIT outcomes independently of the verifier runtime."""
     if (
         not isinstance(verdict.status, Status)
@@ -72,21 +72,22 @@ def grade_result(verdict: Reward) -> GradeResult:
     ):
         raise ValueError("Invalid verifier verdict")
     if verdict.status == Status.SCORED:
-        status = (
-            Outcome.SUBMISSION_FAILURE if verdict.detail.get("reason") == "invalid_numeric_candidate" else Outcome.GRADED
-        )
-        return GradeResult(status, float(verdict.reward), verdict.detail.get("error"), verdict.detail)
+        if isinstance(verifier, NumericSpec) and verdict.detail.get("reason") == "invalid_numeric_candidate":
+            if verdict.reward != 0:
+                raise ValueError("Invalid numeric submissions cannot receive a positive reward")
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, verdict.detail.get("error"), verdict.detail)
+        return GradeResult(Outcome.GRADED, float(verdict.reward), verdict.detail.get("error"), verdict.detail)
     status = Outcome.INVALID_TASK if verdict.status == Status.INVALID_TASK else Outcome.INFRA_ERROR
     return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
 
 
-def parse_grade_result(data: bytes) -> GradeResult:
+def parse_grade_result(verifier: Spec, data: bytes) -> GradeResult:
     """Decode an isolated verifier verdict through the shared grading contract."""
     try:
         verdict = json.loads(data)
         if not isinstance(verdict, dict):
             raise ValueError("Verifier verdict must be an object")
-        return grade_result(Reward(verdict["reward"], Status(verdict["status"]), verdict["detail"]))
+        return grade_result(verifier, Reward(verdict["reward"], Status(verdict["status"]), verdict["detail"]))
     except (KeyError, TypeError, ValueError):
         return GradeResult(Outcome.INFRA_ERROR, None, "Invalid verifier verdict", failure=GradingFailure.INVALID_REWARD)
 
@@ -94,20 +95,20 @@ def parse_grade_result(data: bytes) -> GradeResult:
 def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
     match verifier, submission:
         case StructuredExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
-            return grade_result(grade_structured_exact_candidate(verifier, value))
+            return grade_result(verifier, grade_structured_exact_candidate(verifier, value))
         case PredictedActionSpec(), ActionSubmission(message=final):
             calls = (
                 tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
                 if isinstance(final, AssistantToolCalls)
                 else ()
             )
-            return grade_result(grade_predicted_action_candidate(verifier, calls))
+            return grade_result(verifier, grade_predicted_action_candidate(verifier, calls))
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "Text verifier requires a string JSON value")
-            return grade_result(grade_text_candidate(verifier, value))
+            return grade_result(verifier, grade_text_candidate(verifier, value))
         case ExactSpec() | NumericSpec() | McqSpec(), TextSubmission(value=value):
-            return grade_result(grade_text_candidate(verifier, value))
+            return grade_result(verifier, grade_text_candidate(verifier, value))
         case StructuredExactSpec(), _:
             raise TypeError("Structured exact verifier requires a JSON or state submission")
         case PredictedActionSpec(), _:
@@ -134,7 +135,7 @@ def grade_answer(specification: TaskSpec, convention: SubmissionConvention, atte
     try:
         return _grade_submission(verifier, submission)
     except NumericCandidateError as error:
-        return grade_result(scored(0.0, reason="invalid_numeric_candidate", error=str(error)))
+        return grade_result(verifier, scored(0.0, reason="invalid_numeric_candidate", error=str(error)))
 
 
 def structured_exact(expected: JsonValue, *, numeric_types: NumericTypePolicy = NumericTypePolicy.VALUE) -> VerifierSpec:

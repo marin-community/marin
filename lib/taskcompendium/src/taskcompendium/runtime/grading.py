@@ -132,6 +132,6 @@ async def _sandbox_grade(
                 return GradeResult(Outcome.INFRA_ERROR, None, result.stderr.decode(errors="replace"))
             verdict_file = root / "verdict.json"
             await machine.download(VERDICT_PATH, verdict_file)
-            return parse_grade_result(verdict_file.read_bytes())
+            return parse_grade_result(spec, verdict_file.read_bytes())
     finally:
         await machine.close()
