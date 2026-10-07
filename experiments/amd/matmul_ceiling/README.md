@@ -7,6 +7,15 @@ Measures the dense matmul throughput one AMD Instinct GPU reaches, as a ceiling 
 
 Both venvs install AMD's `rocm-sdk-libraries==10.0.0` wheel, which provides hipBLASLt to PyTorch and JAX. On MI300X this setup reproduces Stas Bekman's bf16 row within 3.3% (MAMF 698 against 676 TFLOP/s). Results for MI350X and MI300X are in [#9812](https://github.com/marin-community/marin/issues/9812).
 
+## Wall-clock and kernel-time rates
+
+[`jax_matmul.sbatch`](./jax_matmul.sbatch) runs `jax_matmul.py` under `rocprofv3 --kernel-trace`, and [`kernel_trace.py`](./kernel_trace.py) then adds a second rate to each shape from the trace. Each result row has both:
+
+- Wall clock (`median_tflops`): FLOPs divided by host time over back-to-back `jax.jit` calls. It includes host dispatch and the idle GPU time between calls. On MI350X, dispatching a trivial jitted op takes about 43 µs on the host, and the GPU idles about 12-15 µs between executions even when the host keeps ahead (job 454529). Shapes that take less than about 100 µs per call therefore read low, and the tracer's own host overhead lowers them further.
+- Kernel time (`kernel_median_tflops`): FLOPs divided by the time the GPU spends in the kernels that start and end inside each timed window, which leaves out warmup, compilation and autotuning. `kernels` lists their names. `Cijk_*` kernels are Tensile-generated GEMMs from hipBLASLt; `gemm_fusion_dot*` kernels are GEMMs XLA generates itself with Triton.
+
+Compare MAMF and MSMF with the kernel-time rate. MAMF-finder records GPU events immediately before and after each `torch.mm`, so its rates also leave out the gaps between calls. It also clears a cache-sized buffer before every call, which `jax_matmul.py` does not.
+
 ## Running on the AMD HPC Fund cluster
 
 Sync the checkout to the cluster and build the venvs once from the login node. They go in `$WORK/agents/<checkout folder>/`, as do results and logs:

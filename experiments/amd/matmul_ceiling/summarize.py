@@ -7,17 +7,12 @@ Run from the checkout root: python -m experiments.amd.matmul_ceiling.summarize <
 """
 
 import argparse
-import json
 from pathlib import Path
 
-from experiments.amd.matmul_ceiling.jax_matmul import RunHeader, ShapeResult
+from experiments.amd.matmul_ceiling.jax_matmul import ShapeResult, read_results
 
 SNOWBALL_SHAPES = Path(__file__).with_name("snowball_shapes.txt")
-
-
-def read_results(path: Path) -> tuple[RunHeader, list[ShapeResult]]:
-    lines = [json.loads(line) for line in path.read_text().splitlines()]
-    return RunHeader(**lines[0]["header"]), [ShapeResult(**row) for row in lines[1:]]
+KERNEL_NAME_CHARS = 48
 
 
 def snowball_shape_labels() -> dict[str, str]:
@@ -34,6 +29,18 @@ def snowball_shape_labels() -> dict[str, str]:
     return {shape: ", ".join(parts) for shape, parts in labels.items()}
 
 
+def rate_columns(result: ShapeResult) -> str:
+    kernel = "      -" if result.kernel_median_tflops is None else f"{result.kernel_median_tflops:7.1f}"
+    return f"wall {result.median_tflops:7.1f}  kernel {kernel}"
+
+
+def kernel_label(result: ShapeResult) -> str:
+    if not result.kernels:
+        return ""
+    more = f" (+{len(result.kernels) - 1} more)" if len(result.kernels) > 1 else ""
+    return f"{result.kernels[0][:KERNEL_NAME_CHARS]}{more}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("results", type=Path, nargs="+")
@@ -45,14 +52,18 @@ def main() -> None:
         header, results = read_results(path)
         xla_flags = header.xla_flags.strip()
         print(f"== {path.name}: {header.hostname} {header.device_kind} {results[0].dtype} XLA_FLAGS={xla_flags!r}")
-        ranked = sorted(results, key=lambda r: r.median_tflops, reverse=True)
-        print(f"  {len(results)} shapes; top {args.top} by median TFLOP/s:")
+        traced = all(r.kernel_median_tflops is not None for r in results)
+        if traced:
+            ranked = sorted(results, key=lambda r: r.kernel_median_tflops or 0.0, reverse=True)
+        else:
+            ranked = sorted(results, key=lambda r: r.median_tflops, reverse=True)
+        print(f"  {len(results)} shapes; top {args.top} by median {'kernel' if traced else 'wall-clock'} TFLOP/s:")
         for r in ranked[: args.top]:
-            print(f"    {r.shape:>18}  median {r.median_tflops:7.1f}  max {r.max_tflops:7.1f}")
+            print(f"    {r.shape:>18}  {rate_columns(r)}  {kernel_label(r)}")
         print("  Snowball shapes:")
         for r in results:
             if r.shape in snowball:
-                print(f"    {r.shape:>18}  median {r.median_tflops:7.1f}  {snowball[r.shape]}")
+                print(f"    {r.shape:>18}  {rate_columns(r)}  {snowball[r.shape]}  [{kernel_label(r)}]")
 
 
 if __name__ == "__main__":

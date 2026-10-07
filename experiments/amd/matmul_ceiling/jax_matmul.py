@@ -8,6 +8,11 @@ for each requested shape and report the TFLOP/s it sustains. Shapes come from a
 grid of ranges, a shapes file, or both. Each shape is compiled once (XLA
 autotunes the GEMM during compilation), run for ``--warmup-seconds`` so clocks
 settle, then timed over ``--repeats`` windows of about ``--window-seconds``.
+
+The rate reported here is wall clock: it includes host dispatch and the idle GPU
+time between calls. Each window's bounds are recorded on the clock rocprofv3
+stamps kernels with, so ``kernel_trace.py`` can add the kernel-time rate from a
+``rocprofv3 --kernel-trace`` of the same run; ``jax_matmul.sbatch`` does both.
 """
 
 import argparse
@@ -28,6 +33,8 @@ import jax.numpy as jnp
 logger = logging.getLogger(__name__)
 
 DTYPES = {"bfloat16": jnp.bfloat16, "float16": jnp.float16}
+# rocprofv3 timestamps kernels with CLOCK_BOOTTIME, so window bounds use it too.
+TRACE_CLOCK = time.CLOCK_BOOTTIME
 
 
 @dataclasses.dataclass(frozen=True)
@@ -62,6 +69,13 @@ class ShapeResult:
     window_tflops: list[float]
     median_tflops: float
     max_tflops: float
+    window_bounds_ns: list[list[int]]
+    """Start and end of each timed window on ``TRACE_CLOCK``."""
+    kernel_window_tflops: list[float] | None = None
+    """Rate of each window from GPU kernel time alone; None until kernel_trace.py attaches a trace."""
+    kernel_median_tflops: float | None = None
+    kernels: list[str] | None = None
+    """Names of the kernels that ran in the timed windows, most frequent first."""
 
 
 def parse_shape(text: str) -> Shape:
@@ -75,6 +89,19 @@ def dim_values(values: list[int] | None, value_range: list[int] | None) -> list[
         return values
     start, stop, step = value_range
     return list(range(start, stop + 1, step))
+
+
+def header_line(header: RunHeader) -> str:
+    return json.dumps({"header": dataclasses.asdict(header)}) + "\n"
+
+
+def shape_line(result: ShapeResult) -> str:
+    return json.dumps(dataclasses.asdict(result)) + "\n"
+
+
+def read_results(path: Path) -> tuple[RunHeader, list[ShapeResult]]:
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    return RunHeader(**lines[0]["header"]), [ShapeResult(**row) for row in lines[1:]]
 
 
 def read_shapes_file(path: Path) -> list[Shape]:
@@ -100,13 +127,15 @@ def time_shape(shape: Shape, dtype: str, *, warmup_seconds: float, window_second
     iterations = max(10, math.ceil(window_seconds / seconds_per_call))
 
     window_tflops = []
+    window_bounds_ns = []
     for _ in range(repeats):
-        start = time.perf_counter()
+        start_ns = time.clock_gettime_ns(TRACE_CLOCK)
         for _ in range(iterations):
             out = matmul(a, b)
         out.block_until_ready()
-        elapsed = time.perf_counter() - start
-        window_tflops.append(shape.flops * iterations / elapsed / 1e12)
+        end_ns = time.clock_gettime_ns(TRACE_CLOCK)
+        window_bounds_ns.append([start_ns, end_ns])
+        window_tflops.append(shape.flops * iterations / ((end_ns - start_ns) / 1e9) / 1e12)
 
     return ShapeResult(
         shape=str(shape),
@@ -115,6 +144,7 @@ def time_shape(shape: Shape, dtype: str, *, warmup_seconds: float, window_second
         window_tflops=window_tflops,
         median_tflops=statistics.median(window_tflops),
         max_tflops=max(window_tflops),
+        window_bounds_ns=window_bounds_ns,
     )
 
 
@@ -165,7 +195,7 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     best: ShapeResult | None = None
     with args.output.open("w") as out:
-        out.write(json.dumps({"header": dataclasses.asdict(header)}) + "\n")
+        out.write(header_line(header))
         for i, shape in enumerate(shapes):
             result = time_shape(
                 shape,
@@ -174,7 +204,7 @@ def main() -> None:
                 window_seconds=args.window_seconds,
                 repeats=args.repeats,
             )
-            out.write(json.dumps(dataclasses.asdict(result)) + "\n")
+            out.write(shape_line(result))
             out.flush()
             if best is None or result.median_tflops > best.median_tflops:
                 best = result
