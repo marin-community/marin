@@ -576,7 +576,7 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
         ),
         pytest.param(
             lambda jwt: jwt.create_task_token(JobName.from_wire("/alice/train")),
-            {"user_id": "alice", "role": "task", "audience": None, "job": "/alice/train"},
+            {"user_id": "alice", "role": "task", "audience": None, "job_id": "/alice/train"},
             id="task",
         ),
     ],

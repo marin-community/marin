@@ -321,13 +321,13 @@ def _task_caller_parent(dependencies: JobDependencies, job_id: JobName) -> Row |
 
     A task may give its child the admin-gated band or profile its parent already
     holds: inheriting it grants nothing the parent's submitter did not. The
-    token's ``job`` claim must name the parent, so a task cannot borrow the
+    token's ``job_id`` claim must name the parent, so a task cannot borrow the
     privileges of another job with the same owner.
     """
     identity = get_verified_identity()
     if identity is None or identity.role != TASK_ROLE or job_id.parent is None:
         return None
-    if identity.job != job_id.parent.to_wire():
+    if identity.job_id != job_id.parent.to_wire():
         return None
     with dependencies.db.read_snapshot() as snapshot:
         return reads.get_job_detail(snapshot, job_id.parent)

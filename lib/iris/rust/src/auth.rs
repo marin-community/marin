@@ -60,9 +60,9 @@ pub struct VerifiedIdentity {
     pub user_id: String,
     pub role: String,
     pub audience: Option<String>,
-    // Set only for a task token: the job whose task holds it.
+    /// The job_id which owns this token, or None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub job: Option<String>,
+    pub job_id: Option<String>,
     #[serde(skip)]
     pub endpoint: Option<String>,
     #[serde(skip)]
@@ -107,7 +107,7 @@ struct Claims {
     #[serde(default)]
     endpoint: Option<String>,
     #[serde(default)]
-    job: Option<String>,
+    job_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -373,7 +373,7 @@ impl NativeVerifier {
                         user_id: peer_id.clone(),
                         role: "federation-peer".to_string(),
                         audience: None,
-                        job: None,
+                        job_id: None,
                         endpoint: None,
                         federation_peer: Some(peer_id.clone()),
                         expires_at: token_data.claims.exp,
@@ -404,7 +404,7 @@ impl NativeVerifier {
             user_id: claims.sub,
             role: claims.role,
             audience: claims.endpoint.clone().filter(|_| proxy_scope),
-            job: claims.job.filter(|_| !proxy_scope),
+            job_id: claims.job_id.filter(|_| !proxy_scope),
             endpoint: claims.endpoint.filter(|_| proxy_scope),
             federation_peer: None,
             expires_at: claims.exp,
@@ -520,7 +520,7 @@ impl IapVerifier {
                 self.default_user_role.clone()
             },
             audience: None,
-            job: None,
+            job_id: None,
             endpoint: None,
             federation_peer: None,
             expires_at: claims.exp,

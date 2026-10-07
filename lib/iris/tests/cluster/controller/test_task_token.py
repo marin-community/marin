@@ -20,7 +20,7 @@ from rigging.token_authority import generate_ed25519_keypair
 
 _JOB = JobName.from_wire("/alice/train")
 _ADMIN = VerifiedIdentity(user_id="operator", role="admin")
-_ALICE_TASK = VerifiedIdentity(user_id="alice", role="task", job="/alice/parent")
+_ALICE_TASK = VerifiedIdentity(user_id="alice", role="task", job_id="/alice/parent")
 
 
 def _enforcing_auth() -> ControllerAuth:
@@ -42,7 +42,7 @@ def test_task_token_authenticates_as_the_job_owner_without_admin():
     stamped = with_task_token(_run_request(), _JOB, auth)
 
     identity = auth.jwt_manager.verify(stamped.task_token)
-    assert (identity.user_id, identity.role, identity.job) == ("alice", "task", _JOB.to_wire())
+    assert (identity.user_id, identity.role, identity.job_id) == ("alice", "task", _JOB.to_wire())
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ def test_task_of_another_job_cannot_borrow_a_privileged_parent(auth_service):
     with identity_scope(_ADMIN):
         _launch(auth_service, "/alice/parent", **_PRIVILEGED)
 
-    other_task = VerifiedIdentity(user_id="alice", role="task", job="/alice/other")
+    other_task = VerifiedIdentity(user_id="alice", role="task", job_id="/alice/other")
     with identity_scope(other_task), pytest.raises(ConnectError) as exc:
         _launch(auth_service, "/alice/parent/child", **_PRIVILEGED)
     assert exc.value.code == Code.PERMISSION_DENIED
