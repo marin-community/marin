@@ -26,6 +26,7 @@ from taskforge.proposal.model import (
     ProposalFormatError,
     TaskProposal,
     Verification,
+    body_sections,
     parse,
     render,
 )
@@ -115,19 +116,6 @@ class RuleCheck:
     def run(self, p: TaskProposal, ctx: CheckContext) -> CheckResult:
         status, reason = self.rule(p, ctx)
         return CheckResult(name=self.name, severity=self.severity, status=status, reason=reason)
-
-
-def body_sections(body: str) -> dict[str, str]:
-    """Map each level-two heading in ``body`` to the text under it, up to the next level-two heading."""
-    sections: dict[str, list[str]] = {}
-    current: list[str] | None = None
-    for line in body.split("\n"):
-        if line.startswith("## "):
-            current = sections.setdefault(line[3:].strip(), [])
-            continue
-        if current is not None:
-            current.append(line)
-    return {heading: "\n".join(lines).strip() for heading, lines in sections.items()}
 
 
 def is_null(p: TaskProposal) -> bool:
