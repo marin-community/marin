@@ -25,6 +25,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
@@ -120,7 +121,7 @@ def outcome_summary(outcome: Outcome) -> dict[str, object]:
 
 def ledger_summary(directory: Path) -> list[dict[str, object]]:
     return [
-        {"step": e.step, "cause": e.cause, "wall": e.wall, "attrs": e.attrs, "tokens_out": e.tokens_out}
+        {"kind": e.kind, "step": e.step, "cause": e.cause, "wall": e.wall, "attrs": e.attrs, "tokens_out": e.tokens_out}
         for path in ledger_files(directory / "ledger")
         for e in read_entries(path)
     ]
@@ -261,9 +262,9 @@ async def test_forced_machine_failure_is_classified_and_retried(client, file_tas
         {EnvironmentKind.SHELLSIM: factory},
     )
     assert all(isinstance(o, Graded) for o in outcomes), directory
-    causes = [e["cause"] for e in ledger_summary(directory)]
-    assert causes.count(Cause.MACHINE_START) == 2
-    assert len(causes) == K + 2
+    attempt_causes = [e["cause"] for e in ledger_summary(directory) if e["kind"] is EntryKind.TRIAL]
+    assert attempt_causes.count(Cause.MACHINE_START) == 2
+    assert len(attempt_causes) == K + 2
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
