@@ -19,10 +19,10 @@ from taskforge.llm.client import GlmUnavailable
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.draft import file, shell_verifier
 from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, run_adversaries
-from taskforge.validate.calibration import FindingKind, RoleStats, summarize
+from taskforge.validate.calibration import DefectTier, FindingKind, RoleStats, summarize
 from taskforge.validate.controls import ControlVerdict
 from taskforge.validate.outcome import Cause, Ungraded
-from taskforge.validate.run import ValidationEvidence, controls_passed, load_validation, replay_controls
+from taskforge.validate.run import controls_passed, load_validation, replay_controls
 from taskforge.validate.solver import run_solver
 from taskforge.validate.trials import EngineSettings, task_digest
 
@@ -30,6 +30,7 @@ PLAIN = PlainText(id="plain")
 ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
 LENIENT_CHECK = "if grep -q 60 /workspace/sum.txt; then echo 1; else echo 0; fi\n"
 SHORTCUT = "seq 0 100 > /workspace/sum.txt"
+SOLVE = "awk '{s+=$1} END{print s}' /workspace/numbers.txt > /workspace/sum.txt"
 
 
 def render(messages) -> tuple[int, ...]:
@@ -80,7 +81,9 @@ def lenient(task):
     return task.model_copy(update={"verifier": verifier})
 
 
-async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(tmp_path, file_task, file_controls, rounds, fakes):
+async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(
+    tmp_path, file_task, file_controls, file_facts, rounds, fakes
+):
     draft = rounds.draft(file_task, file_controls, PLAIN)
     policy = rounds.policy(k=3, adversary_k=2)
     site = rounds.site(tmp_path)
@@ -93,15 +96,18 @@ async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(tmp_path, fil
         run_solver(draft, policy, site, settings(fakes), lambda _: solver_model),
         run_adversaries(draft, policy, site, settings(fakes), lambda _: adversary_model),
     )
-    ran = ValidationEvidence(task_digest(draft.task, draft.execution, draft.convention), controls, solver, adversaries)
+    digest = task_digest(draft.task, draft.execution, draft.convention)
+    ran = rounds.evidence(digest, controls, solver, adversaries, file_facts)
 
     loaded = load_validation(draft, site.evidence_dir)
+
+    assert loaded.facts == file_facts
 
     assert summarize(loaded, policy) == summarize(ran, policy)
     summary = summarize(loaded, policy)
     assert [f.kind for f in summary.findings] == [FindingKind.TOO_EASY]
     assert summary.controls_met == tuple(c.id for c in file_controls)
-    assert summary.roles[AdversaryRole.SHORTCUT].sentinel_replies == 2
+    assert summary.roles[AdversaryRole.SHORTCUT].gave_up == 2 and summary.notes == ()
 
 
 @pytest.mark.parametrize("removed", ["solver/1", "adversary/shortcut/0"])
@@ -141,7 +147,7 @@ async def test_re_entered_controls_replay_only_the_unsettled_ones(tmp_path, math
 
 
 async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and_a_strict_one_meets(
-    tmp_path, file_task, file_controls, rounds, fakes
+    tmp_path, file_task, file_controls, file_facts, rounds, fakes
 ):
     leaky = rounds.draft(lenient(file_task), file_controls, PLAIN)
     policy = rounds.policy(adversary_k=1)
@@ -150,7 +156,7 @@ async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and
     shortcut_only = replace(policy, roles=(AdversaryRole.SHORTCUT,))
     adversaries = await run_adversaries(leaky, shortcut_only, site, settings(fakes), lambda _: shortcut)
 
-    summary = summarize(ValidationEvidence("ab" * 32, (), (), adversaries), policy)
+    summary = summarize(rounds.evidence("ab" * 32, (), (), adversaries, file_facts), policy)
 
     (finding,) = summary.findings
     assert finding.kind is FindingKind.SHORTCUT_PASSED and SHORTCUT in finding.detail
@@ -176,28 +182,42 @@ async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and
 
 @dataclass
 class HonestAdversary:
-    """Does the task's work, then gives up with the sentinel reply of the role whose preamble it sees."""
+    """Does the task's work, then gives up with the sentinel line of the role whose preamble it sees."""
 
     work: dict[str, Any]
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         role = next(r for r in AdversaryRole if SENTINEL_REPLIES[r] in request.messages[0]["content"])
         done = any(message["role"] == "assistant" for message in request.messages)
-        message = {"role": "assistant", "content": SENTINEL_REPLIES[role]} if done else self.work
+        message = {"role": "assistant", "content": f"Solved it.\n{SENTINEL_REPLIES[role]}"} if done else self.work
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
         return ModelTurn(message, prompt, (21,), (-0.5,), "stop" if done else "tool_calls")
 
 
-async def test_only_an_ambiguity_pass_that_ends_on_its_sentinel_reply_is_no_finding(tmp_path, file_task, rounds, fakes):
+async def test_a_give_up_after_solving_is_no_finding_and_a_shortcut_solve_is_a_note(
+    tmp_path, file_task, file_facts, rounds, fakes
+):
     draft = rounds.draft(file_task, (), PLAIN)
     policy = rounds.policy(adversary_k=2)
-    honest = HonestAdversary(fakes.shell("echo 60 > /workspace/sum.txt"))
+    honest = HonestAdversary(fakes.shell(SOLVE))
 
     adversaries = await run_adversaries(draft, policy, rounds.site(tmp_path), settings(fakes), lambda _: honest)
-    summary = summarize(ValidationEvidence("ab" * 32, (), (), adversaries), policy)
+    summary = summarize(rounds.evidence("ab" * 32, (), (), adversaries, file_facts), policy)
 
-    assert [f.kind for f in summary.findings] == [FindingKind.SHORTCUT_PASSED] * 2 + [FindingKind.LEAK_PASSED] * 2
-    assert all(len(f.new_controls) == 1 for f in summary.findings)
+    assert summary.findings == ()
+    assert [n.kind for n in summary.notes] == [FindingKind.SHORTCUT_PASSED] * 2 + [FindingKind.LEAK_PASSED] * 2
+    assert all(n.new_controls == () for n in summary.notes)
+    assert [(a.role, a.tier, a.rule) for a in summary.assessments] == [
+        *((AdversaryRole.SHORTCUT, DefectTier.NOTED, "7"),) * 2,
+        *((AdversaryRole.LEAK, DefectTier.NOTED, "7"),) * 2,
+        *((AdversaryRole.AMBIGUITY, DefectTier.NONE, "3"),) * 2,
+    ]
+    tiers = {
+        AdversaryRole.SHORTCUT: {DefectTier.REPAIR: 0, DefectTier.NOTED: 2, DefectTier.NONE: 0},
+        AdversaryRole.LEAK: {DefectTier.REPAIR: 0, DefectTier.NOTED: 2, DefectTier.NONE: 0},
+        AdversaryRole.AMBIGUITY: {DefectTier.REPAIR: 0, DefectTier.NOTED: 0, DefectTier.NONE: 2},
+    }
     assert summary.roles == {
-        role: RoleStats(required=2, graded=2, passes=2, sentinel_replies=2) for role in AdversaryRole
+        role: RoleStats(required=2, graded=2, passes=2, gave_up=2, exhausted=0, output_tokens=4, tiers=tiers[role])
+        for role in AdversaryRole
     }

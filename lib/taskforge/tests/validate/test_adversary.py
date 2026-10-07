@@ -19,6 +19,7 @@ from taskforge.llm.recording import CallLedger
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, role_preamble, run_adversaries
 from taskforge.validate.attempts import trial_files
+from taskforge.validate.calibration import adversary_signals
 from taskforge.validate.outcome import Graded, TrialKind
 from taskforge.validate.solver import run_solver
 from taskforge.validate.trials import EngineSettings
@@ -135,7 +136,9 @@ async def test_a_task_system_prompt_follows_the_preamble_in_the_same_turn(tmp_pa
     assert first["content"] == f"{role_preamble(AdversaryRole.LEAK, policy.adversary_output_tokens)}\n\nYou are careful."
 
 
-async def test_a_rollout_past_its_output_budget_ends_as_length_and_is_graded(tmp_path, file_task, rounds, fakes):
+async def test_a_rollout_past_its_output_budget_ends_as_length_and_is_graded(
+    tmp_path, file_task, file_facts, rounds, fakes
+):
     model = EndlessShell(fakes.shell("ls -la /workspace"))
     policy = replace(rounds.policy(k=1, adversary_k=1, adversary_output_tokens=500), roles=(AdversaryRole.SHORTCUT,))
     draft = rounds.draft(file_task, (), PLAIN)
@@ -150,7 +153,8 @@ async def test_a_rollout_past_its_output_budget_ends_as_length_and_is_graded(tmp
     assert isinstance(outcome, Graded) and outcome.reward == 0.0
     assert outcome.rollout.stop_reason == "length" and len(outcome.rollout.steps) == 2
     assert trial_files(site.evidence_dir, TrialKind.ADVERSARY)["shortcut/0"].settled
-    assert outcome.rollout.loss_mask.count(1) == 2 * TURN_TOKENS
+    signals = adversary_signals(AdversaryRole.SHORTCUT, outcome, file_facts, ())
+    assert signals.budget_exhausted and signals.output_tokens == 2 * TURN_TOKENS
     (solved,) = solver
     assert solved.rollout is not None
     assert solved.rollout.stop_reason == "max_turns" and len(solved.rollout.steps) == 6

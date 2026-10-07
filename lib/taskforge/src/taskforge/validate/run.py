@@ -28,7 +28,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import Control, validate_controls
 from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, role_preamble
 from taskforge.validate.attempts import trial_files
-from taskforge.validate.calibration import CalibrationBand
+from taskforge.validate.calibration import CalibrationBand, TaskFacts, task_facts
 from taskforge.validate.controls import ControlOutcome, ControlVerdict, ScriptedModel, Tokenize, control_turns
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
@@ -100,12 +100,16 @@ class ValidationPolicy:
 
 @dataclass(frozen=True)
 class ValidationEvidence:
-    """A round's outcomes. ``solver`` and ``adversaries`` are empty when the controls short-circuited."""
+    """A round's outcomes and the task facts the adversary signals read.
+
+    ``solver`` and ``adversaries`` are empty when the controls short-circuited.
+    """
 
     task_digest: str
     controls: tuple[ControlOutcome, ...]
     solver: tuple[Outcome, ...]
     adversaries: Mapping[AdversaryRole, tuple[Outcome, ...]]
+    facts: TaskFacts
 
     def trial_evidence(self) -> Evidence:
         """The outcomes by trial kind, for status and ``RewardStats``."""
@@ -178,7 +182,7 @@ async def replay_controls(
 
 
 def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
-    """A round's evidence from its attempt files: each trial's last attempt.
+    """A round's evidence from its attempt files, each trial's last attempt, with ``task_facts(draft.task)``.
 
     Controls pair by id with ``draft.controls``; solver trials order by index; adversary trials group
     by role directory, in ``AdversaryRole`` order. Indices must run from 0 without a gap, so every
@@ -207,6 +211,7 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
             for role in AdversaryRole
             if role in adversaries
         },
+        facts=task_facts(draft.task),
     )
 
 
