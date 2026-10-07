@@ -1093,7 +1093,7 @@ class InferenceEngine:
         )
 
     def generate(
-        self, requests: Sequence[Request], step_callback=None, *, should_abort: Callable[[], bool] | None = None
+        self, requests: Sequence[Request], step_callback=None, *, should_abort: Callable[[int], bool] | None = None
     ) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
@@ -1103,7 +1103,7 @@ class InferenceEngine:
         Args:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
-            should_abort: Host predicate checked before prefill and between decode rounds.
+            should_abort: Predicate on request IDs, checked before prefill and between decode rounds.
                 Unfinished choices return their exact partial output with an ABORT reason.
         """
         if not requests:
@@ -1175,12 +1175,40 @@ class InferenceEngine:
                     "Increase max_stop_seqs/max_stop_tokens when constructing the service."
                 )
 
+        def abort_requested() -> None:
+            if should_abort is None:
+                return
+            cancelled_ids = {rid for rid in call_rids if should_abort(rid)}
+            if not cancelled_ids:
+                return
+            for rid in cancelled_ids:
+                for result in self.results[rid].values():
+                    if not result.done:
+                        result.finish_reason = FinishReason.ABORT
+            slots = [slot for slot, (rid, _) in self.local_map.items() if rid in cancelled_ids]
+            if slots:
+                mask = np.zeros(self.gen_state.decode_state.max_seqs, dtype=bool)
+                mask[slots] = True
+                self.gen_state = dataclasses.replace(
+                    self.gen_state, decode_state=self.gen_state.decode_state.abort_slots(jnp.asarray(mask))
+                )
+                for slot in slots:
+                    del self.local_map[slot]
+                    self.free_slots.append(slot)
+                self.free_slots.sort()
+
+        def pending_requests() -> list[Request]:
+            return [
+                request
+                for request in requests
+                if request.request_id not in self.sequences
+                and any(not result.done for result in self.results[int(request.request_id)].values())
+            ]
+
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
-        aborted = should_abort is not None and should_abort()
-        if not aborted:
-            decode_outputs = self._prefill_batch(requests)
-            self._extract_outputs(decode_outputs)
+        abort_requested()
+        decode_outputs = self._prefill_batch(pending_requests())
+        self._extract_outputs(decode_outputs)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1193,24 +1221,28 @@ class InferenceEngine:
                         return False
             return True
 
-        pending = [request for request in requests if request.request_id not in self.sequences]
+        pending = pending_requests()
         decode_iteration = 0
-        while not aborted and not _all_done():
-            if should_abort is not None and should_abort():
-                aborted = True
+        while not _all_done():
+            abort_requested()
+            pending = pending_requests()
+            if _all_done():
                 break
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending)
                 self._extract_outputs(prefill_outputs)
-                pending = [request for request in pending if request.request_id not in self.sequences]
+                pending = pending_requests()
                 if prefill_outputs is not None:
                     continue
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
-            if should_abort is not None and should_abort():
-                aborted = True
+            abort_requested()
+            if _all_done():
                 break
+            pending = pending_requests()
+            if pending and pending[0].n_generations <= len(self.free_slots):
+                continue
 
             iter_start = time.time()
 
@@ -1255,8 +1287,6 @@ class InferenceEngine:
             kid_map = self.results[rid]
             for k in range(int(r.n_generations)):
                 dr = kid_map[k]
-                if aborted and not dr.done:
-                    dr.finish_reason = FinishReason.ABORT
                 finish_reasons.append(dr.finish_reason)
                 outputs_list.append(dr.token_list)
                 logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
@@ -1269,7 +1299,7 @@ class InferenceEngine:
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
-        if aborted:
+        if FinishReason.ABORT in finish_reasons:
             self.reset()
         return GenerationResult(
             tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated, finish_reasons=finish_reasons
