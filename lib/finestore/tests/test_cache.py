@@ -17,7 +17,7 @@ from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
 from finestore.commit import read_snapshot
 from finestore.layout import BlobTables, FineStoreLayout
-from finestore.reader import BlobReadDiagnostics, ReadView
+from finestore.reader import ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractBufferedFile
@@ -132,13 +132,20 @@ def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
     filesystem, _ = factory.url_to_fs(root)
     filesystem.read_cache_types.clear()
     view = ReadView(root, snapshot=snapshot)
-    diagnostics = BlobReadDiagnostics()
-    assert view.read_blobs(["inline", "chunked", "missing"], diagnostics=diagnostics) == {
+    assert view.read_blobs(["inline", "chunked", "missing"]) == {
         "inline": b"latest",
         "chunked": chunked,
     }
+    diagnostics = view.read_diagnostics()
     assert diagnostics.descriptor_lookups == 1
     assert diagnostics.bytes_returned == len(b"latest") + len(chunked)
+    assert (diagnostics.requested_names, diagnostics.found_names) == (3, 2)
+    assert view.read_blobs(["inline", "missing", "inline"]) == {"inline": b"latest"}
+    cumulative = view.read_diagnostics()
+    assert (cumulative.read_calls, cumulative.requested_names, cumulative.found_names) == (2, 5, 3)
+    assert cumulative.bytes_returned == len(chunked) + 2 * len(b"latest")
+    diagnostics.bytes_returned = 0
+    assert view.read_diagnostics().bytes_returned == cumulative.bytes_returned
     assert filesystem.read_cache_types
     assert set(filesystem.read_cache_types) == {"none"}
 
@@ -146,7 +153,7 @@ def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
 def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, monkeypatch):
     root = str(tmp_path / "archive")
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
-    # Exercise older inline values that exceed the current 10 KiB cutoff.
+    # Exercise older inline values that exceed the current 128 KiB cutoff.
     monkeypatch.setattr(store_module, "INLINE_BLOB_BYTES", 2 * 1024 * 1024)
     random_bytes = random.Random(0)
     with DataStore.open(root, max_buffer_bytes=64 * 1024 * 1024, flush_interval=600) as store:
@@ -160,8 +167,8 @@ def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, m
     filesystem = _RangeFileSystem(skip_instance_cache=True)
     monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
     view = ReadView(root)
-    diagnostics = BlobReadDiagnostics()
-    assert view.read_blobs(["matched", "absent", "matched"], diagnostics=diagnostics) == {"matched": b"latest"}
+    assert view.read_blobs(["matched", "absent", "matched"]) == {"matched": b"latest"}
+    diagnostics = view.read_diagnostics()
     bounded_bytes = filesystem.fetched_bytes
     assert diagnostics.bytes_returned == len(b"latest")
     assert diagnostics.descriptor_lookups == 1
@@ -219,8 +226,26 @@ def test_batch_cache_reads_latest_persisted_values_and_preserves_memory_hits(tmp
 
     reader = PersistentKvCache.at(root)
     assert reader.load_many(["first", "second", "missing", "first"]) == {"first": b"new", "second": b"other"}
+    first_read = reader.read_diagnostics()
+    assert (first_read.requested_keys, first_read.memory_hits, first_read.storage_hits, first_read.misses) == (
+        3,
+        0,
+        2,
+        1,
+    )
+    assert (first_read.blob_reads.read_calls, first_read.blob_reads.requested_names) == (1, 3)
     drop_table(root, BlobTables.DESCRIPTORS)
     assert reader.load_many(["first", "second", "missing"]) == {"first": b"new", "second": b"other"}
+    diagnostics = reader.read_diagnostics()
+    assert (diagnostics.load_calls, diagnostics.memory_hits, diagnostics.storage_hits, diagnostics.misses) == (
+        2,
+        2,
+        2,
+        2,
+    )
+    assert diagnostics.blob_reads.read_calls == 2
+    first_read.blob_reads.bytes_returned = 0
+    assert diagnostics.blob_reads.bytes_returned == len(b"new") + len(b"other")
     reader.close()
 
 

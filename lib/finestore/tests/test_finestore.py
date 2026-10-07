@@ -416,7 +416,7 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
 
 def test_blob_inline_boundary_and_batch_parts_survive_rewrites(tmp_path, monkeypatch):
     root = str(tmp_path / "run")
-    monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 4096)
+    monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 64 * 1024)
     inline = b"a" * INLINE_BLOB_BYTES
     first = b"b" * (INLINE_BLOB_BYTES + 1)
     second = b"c" * (INLINE_BLOB_BYTES + 2)

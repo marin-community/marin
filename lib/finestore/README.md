@@ -68,7 +68,7 @@ older value outrank a concurrent write.
 table and returns `finestore://blobs/<name>`. Named objects participate in the same
 transaction and commit token as ordinary table rows.
 
-Objects up to 10 KiB remain inline in the `blobs` row. Larger objects use a
+Objects up to 128 KiB remain inline in the `blobs` row. Larger objects use a
 descriptor and up to 8 MiB rows in the internal `_finestore_blob_parts` table. The
 descriptor and parts become visible in one manifest commit, and `ReadView.open_blob`
 streams either encoding through one file interface. The first chunked-object commit adds the
@@ -97,12 +97,15 @@ still occupy memory, and dispersed keys can require reading most row groups;
 bounded decoding does not remove row-group read amplification. `read_blobs` reads
 all requested descriptors together and gathers chunked parts in one parts scan.
 
-Pass a `finestore.reader.BlobReadDiagnostics` instance as `diagnostics=` to
-`ReadView.read_blobs` or `PersistentKvCache.load_many` to accumulate
-descriptor-scan and payload-assembly seconds, descriptor lookup counts,
-selected descriptor-shard counts and returned value bytes. Returned bytes measure
-decoded output, not physical storage traffic. Memory hits do not add storage-read
-diagnostics.
+`ReadView.read_diagnostics()` returns a snapshot of cumulative `read_blobs`
+work, including single-value `read_blob` calls. It reports requested and found
+names, descriptor-scan and payload-assembly seconds, descriptor lookups,
+selected descriptor shards, and returned value bytes. Returned bytes measure
+decoded output, not physical storage traffic. `PersistentKvCache.read_diagnostics()`
+also reports unique requested keys, memory hits, storage hits, and misses across
+`load` and `load_many` calls. These totals are recorded automatically. Finelog
+telemetry exports counters for reads, names, bytes, and cache outcomes, plus
+histograms for descriptor time, payload time, and descriptor-shard fanout.
 
 Two adapters build cache behavior on this primitive:
 

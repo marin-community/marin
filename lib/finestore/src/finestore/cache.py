@@ -9,7 +9,9 @@ import atexit
 import logging
 import threading
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 
+from rigging import telemetry
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 
@@ -22,6 +24,24 @@ _MAX_BATCH_DATA_BYTES = 100 * 1024 * 1024
 _MAX_BATCH_OBJECTS = 65_536
 
 logger = logging.getLogger(__name__)
+
+_CACHE_LOAD_CALLS = telemetry.counter("finestore_cache_load_calls", unit="{call}")
+_CACHE_REQUESTED_KEYS = telemetry.counter("finestore_cache_requested_keys", unit="{key}")
+_CACHE_MEMORY_HITS = telemetry.counter("finestore_cache_memory_hits", unit="{key}")
+_CACHE_STORAGE_HITS = telemetry.counter("finestore_cache_storage_hits", unit="{key}")
+_CACHE_MISSES = telemetry.counter("finestore_cache_misses", unit="{key}")
+
+
+@dataclass
+class CacheReadDiagnostics:
+    """Cumulative cache probes and underlying FineStore batch reads."""
+
+    load_calls: int = 0
+    requested_keys: int = 0
+    memory_hits: int = 0
+    storage_hits: int = 0
+    misses: int = 0
+    blob_reads: BlobReadDiagnostics = field(default_factory=BlobReadDiagnostics)
 
 
 class PersistentKvCache:
@@ -45,6 +65,7 @@ class PersistentKvCache:
         self._root_lock = threading.Lock()
         self._lock = threading.Lock()
         self._memory: dict[str, bytes] = {}
+        self._read_diagnostics = CacheReadDiagnostics()
         self._remote_pending: dict[str, bytes] = {}
         self._background_thread: threading.Thread | None = None
         self._exit_registered = False
@@ -69,23 +90,45 @@ class PersistentKvCache:
         """Return ``key`` from memory or the latest committed FineStore view."""
         return self.load_many((key,)).get(key)
 
-    def load_many(self, keys: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None) -> dict[str, bytes]:
-        """Read a batch from memory and one committed view, omitting cache misses."""
+    def read_diagnostics(self) -> CacheReadDiagnostics:
+        """Return a snapshot of cumulative cache probes and FineStore reads."""
         with self._lock:
-            values = {key: self._memory[key] for key in keys if key in self._memory}
-        missing = list(dict.fromkeys(key for key in keys if key not in values))
-        if not missing or self._resolve_root is None:
-            return values
-        # The cache is best-effort: an unreadable, inconsistent, or corrupt archive is a miss.
-        try:
-            loaded = ReadView(self._storage_root()).read_blobs(missing, diagnostics=diagnostics)
-        except Exception as exc:
-            logger.warning("FineStore cache is unreadable, treating %d keys as misses: %s", len(missing), exc)
-            return values
+            return replace(self._read_diagnostics, blob_reads=replace(self._read_diagnostics.blob_reads))
+
+    def load_many(self, keys: Sequence[str]) -> dict[str, bytes]:
+        """Read a batch from memory and one committed view, omitting cache misses."""
+        unique_keys = list(dict.fromkeys(keys))
+        with self._lock:
+            values = {key: self._memory[key] for key in unique_keys if key in self._memory}
+        memory_hits = len(values)
+        missing = [key for key in unique_keys if key not in values]
+        loaded: dict[str, bytes] = {}
+        view: ReadView | None = None
+        if missing and self._resolve_root is not None:
+            # The cache is best-effort: an unreadable, inconsistent, or corrupt archive is a miss.
+            try:
+                view = ReadView(self._storage_root())
+                loaded = view.read_blobs(missing)
+            except Exception as exc:
+                logger.warning("FineStore cache is unreadable, treating %d keys as misses: %s", len(missing), exc)
         with self._lock:
             for key, value in loaded.items():
                 self._memory.setdefault(key, value)
-            return {key: self._memory[key] for key in keys if key in self._memory}
+            result = {key: self._memory[key] for key in unique_keys if key in self._memory}
+            diagnostics = self._read_diagnostics
+            diagnostics.load_calls += 1
+            diagnostics.requested_keys += len(unique_keys)
+            diagnostics.memory_hits += memory_hits
+            diagnostics.storage_hits += len(loaded)
+            diagnostics.misses += len(unique_keys) - len(result)
+            if view is not None:
+                diagnostics.blob_reads.add(view.read_diagnostics())
+        _CACHE_LOAD_CALLS.add()
+        _CACHE_REQUESTED_KEYS.add(len(unique_keys))
+        _CACHE_MEMORY_HITS.add(memory_hits)
+        _CACHE_STORAGE_HITS.add(len(loaded))
+        _CACHE_MISSES.add(len(unique_keys) - len(result))
+        return result
 
     def store(self, key: str, value: bytes) -> None:
         """Remember ``value`` and persist it synchronously or through the remote write queue."""

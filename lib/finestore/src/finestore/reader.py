@@ -8,11 +8,12 @@ from __future__ import annotations
 import heapq
 import io
 import itertools
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import BinaryIO, ClassVar, Protocol
 
 import pyarrow as pa
@@ -21,6 +22,7 @@ import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
@@ -41,13 +43,36 @@ _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 
 @dataclass
 class BlobReadDiagnostics:
-    """Work performed by blob reads; returned bytes exclude storage read amplification."""
+    """Cumulative batch-read work; returned bytes exclude storage read amplification."""
 
+    read_calls: int = 0
+    requested_names: int = 0
+    found_names: int = 0
     descriptor_seconds: float = 0.0
     payload_seconds: float = 0.0
     descriptor_lookups: int = 0
     selected_shards: int = 0
     bytes_returned: int = 0
+
+    def add(self, other: BlobReadDiagnostics) -> None:
+        self.read_calls += other.read_calls
+        self.requested_names += other.requested_names
+        self.found_names += other.found_names
+        self.descriptor_seconds += other.descriptor_seconds
+        self.payload_seconds += other.payload_seconds
+        self.descriptor_lookups += other.descriptor_lookups
+        self.selected_shards += other.selected_shards
+        self.bytes_returned += other.bytes_returned
+
+
+_BLOB_READ_CALLS = telemetry.counter("finestore_blob_read_calls", unit="{call}")
+_BLOB_REQUESTED_NAMES = telemetry.counter("finestore_blob_requested_names", unit="{name}")
+_BLOB_FOUND_NAMES = telemetry.counter("finestore_blob_found_names", unit="{name}")
+_BLOB_RETURNED_BYTES = telemetry.counter("finestore_blob_returned_bytes", unit="By")
+_BLOB_DESCRIPTOR_LOOKUPS = telemetry.counter("finestore_blob_descriptor_lookups", unit="{lookup}")
+_BLOB_DESCRIPTOR_SECONDS = telemetry.histogram("finestore_blob_descriptor_seconds", unit="s")
+_BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", unit="s")
+_BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
 
 
 class _BlobReadHandler(FSSpecHandler):
@@ -414,6 +439,27 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
 class _ReadOperations:
     """Read operations shared by manifest and legacy listing snapshots."""
 
+    def __init__(self) -> None:
+        self._read_diagnostics = BlobReadDiagnostics()
+        self._read_diagnostics_lock = threading.Lock()
+
+    def read_diagnostics(self) -> BlobReadDiagnostics:
+        """Return a snapshot of cumulative ``read_blobs`` work on this view."""
+        with self._read_diagnostics_lock:
+            return replace(self._read_diagnostics)
+
+    def _record_blob_read(self, diagnostics: BlobReadDiagnostics) -> None:
+        with self._read_diagnostics_lock:
+            self._read_diagnostics.add(diagnostics)
+        _BLOB_READ_CALLS.add(diagnostics.read_calls)
+        _BLOB_REQUESTED_NAMES.add(diagnostics.requested_names)
+        _BLOB_FOUND_NAMES.add(diagnostics.found_names)
+        _BLOB_RETURNED_BYTES.add(diagnostics.bytes_returned)
+        _BLOB_DESCRIPTOR_LOOKUPS.add(diagnostics.descriptor_lookups)
+        _BLOB_DESCRIPTOR_SECONDS.record(diagnostics.descriptor_seconds)
+        _BLOB_PAYLOAD_SECONDS.record(diagnostics.payload_seconds)
+        _BLOB_SELECTED_SHARDS.record(diagnostics.selected_shards)
+
     root: str
 
     def primary_key(self, table: str) -> tuple[str, ...]:
@@ -517,49 +563,48 @@ class _ReadOperations:
 
     def read_blob(self, name: str) -> bytes | None:
         """Return a named blob, or ``None`` when it is absent."""
-        stream = self.open_blob(name)
-        if stream is None:
-            return None
-        with stream:
-            return stream.read()
+        return self.read_blobs((name,)).get(name)
 
-    def read_blobs(self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None) -> dict[str, bytes]:
+    def read_blobs(self, names: Sequence[str]) -> dict[str, bytes]:
         """Read named blobs, omitting absent names."""
-        if not names:
-            return {}
-        rows = self._blob_descriptors(names, diagnostics=diagnostics)
-        if rows is None:
-            return {}
-        started = time.monotonic()
+        diagnostics = BlobReadDiagnostics(read_calls=1, requested_names=len(set(names)))
         values: dict[str, bytes] = {}
-        chunked: dict[str, BlobDescriptor] = {}
         try:
-            for row in rows.to_pylist():
-                descriptor = BlobDescriptor.from_row(row)
-                if descriptor.part_count is None:
-                    values[descriptor.name] = b"".join(_validated_blob_parts(descriptor, ()))
-                else:
-                    chunked[descriptor.name] = descriptor
-            if chunked:
-                with closing(
-                    self._iter_rows(
-                        BlobTables.PARTS,
-                        columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
-                        where=[(BlobColumns.NAME, "in", list(chunked))],
-                        scan_profile=_BLOB_PART_SCAN_PROFILE,
-                    )
-                ) as part_rows:
-                    for name, group in itertools.groupby(part_rows, key=lambda row: row[BlobColumns.NAME]):
-                        values[name] = b"".join(_validated_blob_parts(chunked[name], group))
-                for name, descriptor in chunked.items():
-                    if name not in values:
-                        values[name] = b"".join(_validated_blob_parts(descriptor, ()))
-        finally:
-            if diagnostics is not None:
+            if not names:
+                return {}
+            rows = self._blob_descriptors(names, diagnostics=diagnostics)
+            if rows is None:
+                return {}
+            started = time.monotonic()
+            chunked: dict[str, BlobDescriptor] = {}
+            try:
+                for row in rows.to_pylist():
+                    descriptor = BlobDescriptor.from_row(row)
+                    if descriptor.part_count is None:
+                        values[descriptor.name] = b"".join(_validated_blob_parts(descriptor, ()))
+                    else:
+                        chunked[descriptor.name] = descriptor
+                if chunked:
+                    with closing(
+                        self._iter_rows(
+                            BlobTables.PARTS,
+                            columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
+                            where=[(BlobColumns.NAME, "in", list(chunked))],
+                            scan_profile=_BLOB_PART_SCAN_PROFILE,
+                        )
+                    ) as part_rows:
+                        for name, group in itertools.groupby(part_rows, key=lambda row: row[BlobColumns.NAME]):
+                            values[name] = b"".join(_validated_blob_parts(chunked[name], group))
+                    for name, descriptor in chunked.items():
+                        if name not in values:
+                            values[name] = b"".join(_validated_blob_parts(descriptor, ()))
+            finally:
                 diagnostics.payload_seconds += time.monotonic() - started
-        if diagnostics is not None:
-            diagnostics.bytes_returned += sum(len(value) for value in values.values())
-        return values
+            diagnostics.found_names = len(values)
+            diagnostics.bytes_returned = sum(len(value) for value in values.values())
+            return values
+        finally:
+            self._record_blob_read(diagnostics)
 
     def _blob_descriptors(
         self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
@@ -618,6 +663,7 @@ class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
     def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
+        super().__init__()
         self.root = root
         self._layout = FineStoreLayout(self.root)
         # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
