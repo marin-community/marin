@@ -13,8 +13,9 @@ with the repair brief as ``Revision.failure`` and the build recomputes the steps
 A ``Retry`` re-enters validation after a backoff, re-running only unsettled trials. A build the machine
 host failed (``BuildInfrastructureFailure``) spends no revision and reaches no author: it records
 ``BUILD_INFRASTRUCTURE`` and rebuilds the same program after the same backoff. Either kind of retry,
-spent, ends the item ``ABANDONED``. An unhandled exception, ``GlmUnavailable`` included, records
-``FAILED`` and propagates.
+spent, ends the item ``ABANDONED``. A host failure no retry changes (``HOST_REJECTIONS``: the host
+has no factory for the machine kind) rejects the item as ``HOST`` at once. An unhandled exception,
+``GlmUnavailable`` included, records ``FAILED`` and propagates.
 
 Each loop iteration derives the item's state from its event log, runs the sub-phase the state names
 and appends that sub-phase's completion event, so a new process resumes an item by re-running only
@@ -44,7 +45,7 @@ from pathlib import Path
 from types import ModuleType
 
 from taskforge.build.author import PROGRAM_FILE, Revision, author, load_program
-from taskforge.build.infrastructure import BuildInfrastructureFailure
+from taskforge.build.infrastructure import HOST_REJECTIONS, BuildInfrastructureFailure
 from taskforge.build.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
 from taskforge.build.sdk import BuildFailure, BuildServices
 from taskforge.build.step import CacheStatus
@@ -502,7 +503,10 @@ async def _build(item: _Item, state: ItemState) -> None:
         except GlmUnavailable:
             raise
         except BuildInfrastructureFailure as failure:
-            _host_failed(item, state, program.digest, failure)
+            if failure.cause in HOST_REJECTIONS:
+                _reject(item, state, RejectKind.HOST, f"the build cannot run on this host: {failure}")
+            else:
+                _host_failed(item, state, program.digest, failure)
             return
         except Exception as error:
             # A BuildFailure or any other exception the program raised goes back to the author as a revision.
@@ -532,9 +536,17 @@ def _host_failed(item: _Item, state: ItemState, program_digest: str, failure: Bu
     retries = len(state.build_host_failures) + 1
     abandon = retries > policy.max_build_retries
     not_before = time.time() + (0.0 if abandon else retry_wait(policy.retry_backoff, retries))
-    logger.warning(
-        "%s: the build host failed (%s), retry %d of %d", item.item_id, failure, retries, policy.max_build_retries
-    )
+    if abandon:
+        logger.warning(
+            "%s: the build host failed (%s) after %d rebuilds; abandoning the item",
+            item.item_id,
+            failure,
+            policy.max_build_retries,
+        )
+    else:
+        logger.warning(
+            "%s: the build host failed (%s), rebuild %d of %d", item.item_id, failure, retries, policy.max_build_retries
+        )
     item.log.append(
         state.round,
         EventKind.BUILD_INFRASTRUCTURE,

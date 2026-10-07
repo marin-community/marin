@@ -369,10 +369,13 @@ call, a review repair is a whole validation round. A build failure, or any excep
 program raises, goes back to the author as a revision. A
 `build.infrastructure.BuildInfrastructureFailure` (no factory for the machine kind, a scheduling
 timeout, an unreachable host) is the machine host's failure, not the program's: it spends no
-revision and the author never sees it. The loop records `BUILD_INFRASTRUCTURE` with the cause, waits
-out the retry backoff without holding a slot and rebuilds the same program; `max_build_retries`
-consecutive host failures end the item `ABANDONED` with its cause counts, and the next launch
-rebuilds the same program with a fresh count. `GlmUnavailable` (the endpoint's failure) propagates
+revision and the author never sees it. A missing factory is deterministic on the host (a laptop
+without Docker stays without Docker), so it rejects the item as `HOST` at once, as review rejects a
+trial the host cannot run; retrying it would spend the backoff ladder on every launch and never
+reach a terminal. For a transient cause the loop records `BUILD_INFRASTRUCTURE` with the cause,
+waits out the retry backoff without holding a slot and rebuilds the same program; a host failure
+after `max_build_retries` rebuilds ends the item `ABANDONED` with its cause counts, and the next
+launch rebuilds the same program with a fresh count. `GlmUnavailable` (the endpoint's failure) propagates
 and records `FAILED`. A
 repair whose rebuild produces the same task digest counts as a failed revision whose failure text is
 the brief again, so the author cannot spend the repair budget returning the same program. The
