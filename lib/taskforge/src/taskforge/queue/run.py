@@ -27,6 +27,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from taskforge.build.infrastructure import BuildInfrastructureFailure, InfrastructureCause
 from taskforge.build.run import item_id_for
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind
@@ -59,12 +60,15 @@ class RunSummary:
         ungraded_causes: Ungraded trial attempts by cause over every TRIAL entry in the run's ledger, so a
             ``MODEL_UNAVAILABLE`` wave is observed rather than guessed.
         model_unavailable: ``GlmUnavailable`` raised outside trials (proposing, triage, authoring, building).
+        build_infrastructure: ``BuildInfrastructureFailure`` raised by builds, by cause; the item ends
+            ``FAILED`` without spending a revision and re-enters its build when a launch retries it.
     """
 
     items: Mapping[str, Terminal]
     failed: Mapping[str, str]
     ungraded_causes: Counter[Cause]
     model_unavailable: int
+    build_infrastructure: Counter[InfrastructureCause]
 
     def summary_json(self) -> dict[str, object]:
         """The summary as ``summary.json`` holds it, with terminal counts first."""
@@ -74,6 +78,7 @@ class RunSummary:
             "failed": dict(sorted(self.failed.items())),
             "ungraded_causes": {str(c): n for c, n in sorted(self.ungraded_causes.items())},
             "model_unavailable": self.model_unavailable,
+            "build_infrastructure": {str(c): n for c, n in sorted(self.build_infrastructure.items())},
         }
 
 
@@ -110,12 +115,15 @@ class _Tally:
     items: dict[str, Terminal] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
     model_unavailable: int = 0
+    build_infrastructure: Counter[InfrastructureCause] = field(default_factory=Counter)
 
     def failure(self, key: str, error: Exception) -> None:
         logger.error("%s failed", key, exc_info=error)
         self.failed[key] = type(error).__name__
         if isinstance(error, GlmUnavailable):
             self.model_unavailable += 1
+        if isinstance(error, BuildInfrastructureFailure):
+            self.build_infrastructure[error.cause] += 1
 
 
 async def _gather(coroutines: Sequence[Coroutine[Any, Any, None]]) -> None:
@@ -168,4 +176,5 @@ async def run_queue[IdeaT](
         failed=tally.failed,
         ungraded_causes=ungraded_causes(services.root / LEDGER_DIR),
         model_unavailable=tally.model_unavailable,
+        build_infrastructure=tally.build_infrastructure,
     )

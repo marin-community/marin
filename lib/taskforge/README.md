@@ -190,7 +190,8 @@ or on a package the order does not name.
   run's width) bounds concurrent phases, not requests. An item whose log ends `ACCEPTED` or
   `REJECTED` is skipped, `FAILED` is skipped unless `failed` is `FailedItems.RETRY`, and `ABANDONED`
   re-enters. One item's exception is recorded in `RunSummary.failed` and never cancels a sibling.
-  `RunSummary` also counts ungraded trial attempts by cause and `GlmUnavailable` outside trials.
+  `RunSummary` also counts ungraded trial attempts by cause, `GlmUnavailable` outside trials, and
+  `BuildInfrastructureFailure` by `InfrastructureCause` (`build_infrastructure`).
 - `queue.job.run_job(config, inputs, failed)`: the laptop and Iris boundary. `queue.config.RunConfig`
   (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
   laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or
