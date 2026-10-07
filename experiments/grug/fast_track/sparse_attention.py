@@ -73,7 +73,7 @@ def _document_starts(segment_ids: Int[Array, "B S"]) -> jax.Array:
     return jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
 
 
-def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, window: int, topk: int):
+def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, window: int, topk: int, select_match: bool):
     batch, seq, heads, head_dim = q.shape
     chunk = min(_QUERY_CHUNK, seq)
     if seq % chunk:
@@ -101,7 +101,8 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, windo
         start_q = jax.lax.dynamic_slice_in_dim(starts, c0, chunk, axis=1)
         same = seg_q[:, :, None] == segment_ids[:, None, :]  # [B, C, S]
         dist = qi[None, :, None] - keys[None, None, :]
-        allowed = same & (dist >= 0) & ((dist < window) | (keys[None, None, :] == start_q[:, :, None]))
+        local = same & (dist >= 0) & ((dist < window) | (keys[None, None, :] == start_q[:, :, None]))
+        allowed = local[:, None]  # [B, G, C, S], G = 1 or one per head
         bias = jnp.zeros(allowed.shape, jnp.float32)
         index_logits = None
         if lightning is not None:
@@ -111,23 +112,25 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, windo
             visible = same & (dist >= 0)
             index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1e9)
             kth = jax.lax.top_k(index_logits, topk)[0][..., -1:]
-            allowed = allowed | (visible & (index_logits >= kth))
+            allowed = allowed | (visible & (index_logits >= kth))[:, None]
         elif topk:
             idx_q = jax.lax.dynamic_slice_in_dim(index, c0, chunk, axis=1)
-            score = jnp.einsum("bqr,bkr->bqk", idx_q, index)  # [B, C, S] against candidate m
+            score = jnp.einsum("bqgr,bkgr->bgqk", idx_q, index)  # [B, G, C, S] against candidate m
             # Candidate m's follower m + 1 must be visible (m + 1 <= i) and outside the local window.
-            cand = same & (dist >= 1) & (dist - 1 >= window)
+            cand = (same & (dist >= 1) & (dist - 1 >= window))[:, None]
             masked = jnp.where(cand, score, -jnp.inf)
             kth = jax.lax.top_k(masked, topk)[0][..., -1:]
-            chosen = cand & (masked >= kth)  # kth = -inf (fewer than topk candidates): every candidate
+            matched = cand & (masked >= kth)  # kth = -inf (fewer than topk candidates): every candidate
             # Move candidate m's selection and score onto its follower key m + 1.
-            chosen = jnp.pad(chosen[..., :-1], ((0, 0), (0, 0), (1, 0)))
-            score = jnp.pad(score[..., :-1], ((0, 0), (0, 0), (1, 0)))
-            allowed = allowed | chosen
-            bias = jnp.where(chosen, score, 0.0)
-        logits = logits + bias[:, None] * lam.astype(jnp.float32)[None, :, None, None]
+            follow = jnp.pad(matched[..., :-1], ((0, 0), (0, 0), (0, 0), (1, 0)))
+            bias = jnp.where(follow, jnp.pad(score[..., :-1], ((0, 0), (0, 0), (0, 0), (1, 0))), 0.0)
+            allowed = allowed | follow
+            if select_match:  # also the matched token m itself
+                bias = bias + jnp.where(matched & ~follow, score, 0.0)
+                allowed = allowed | matched
+        logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
         dense = logits
-        logits = jnp.where(allowed[:, None], logits, -1e9)
+        logits = jnp.where(allowed, logits, -1e9)
         weights = jax.nn.softmax(logits, axis=-1)
         out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
         if index_logits is None:
@@ -148,17 +151,18 @@ def sparse_index_attention(
     v: Float[Array, "B S H E"],
     rel_bias: Float[Array, "B H S W"] | None,
     segment_ids: Int[Array, "B S"] | None,
-    index: Float[Array, "B S R"],
+    index: Float[Array, "B S G R"],
     lam: Float[Array, " H"],
     lightning: Lightning | None = None,
     *,
     window: int,
     topk: int,
+    select_match: bool = False,
 ) -> Float[Array, "B S H E"]:
     """Attention over each query's local ``window``, its document start and its ``topk`` index-matched followers."""
     if segment_ids is None:
         segment_ids = jnp.zeros(q.shape[:2], jnp.int32)
-    math_fn = lambda *a: _sparse_math(*a, window=window, topk=topk)  # noqa: E731
+    math_fn = lambda *a: _sparse_math(*a, window=window, topk=topk, select_match=select_match)  # noqa: E731
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning)

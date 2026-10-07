@@ -990,6 +990,9 @@ class GrugModelConfig:
     mla_sparse_index: SparseIndex = SparseIndex.FOLLOW
     mla_sparse_index_heads: int = 4
     mla_sparse_kl_weight: float = 1.0
+    mla_sparse_index_per_head: bool = False
+    mla_sparse_select_match: bool = False
+    """Also attend to the matched tokens themselves, not only their followers."""
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -1378,11 +1381,7 @@ class GrugModelConfig:
     """MoE++ constant experts (zero-computation): output = ``a1 * x + a2 * v`` with a learned vector ``v`` and
     ``[a1, a2] = softmax(x @ W_c)`` per constant expert (``v``, ``W_c`` zero-init, Adam)."""
     moe_null_target_frac: float | None = None
-    """QB treatment of the zero-computation experts. None: they are free (router bias 0) and QB only balances
-    the real experts against each other at their measured load, with the mean real bias pinned at 0, so the
-    real-vs-null split is left to the learned router logits. A float: one QB over all columns sends this
-    fraction of the top-K slots to the zero-computation experts (split evenly), like MoE++'s tau-weighted
-    balance loss."""
+    """QB treatment of the null experts. None: free (bias 0); a float: QB sends this fraction of slots to them."""
     moe_bank2_topk: int = 0
     moe_bank2_intermediate_dim: int = 0
     moe_bank2_scale: bool = False
@@ -1525,10 +1524,7 @@ class GrugModelConfig:
     attn_latent_o: int = 0
     latent_mix_sites: tuple[str, ...] = ()
     """Mixture of latents at these sites (of ``LATENT_MIX_SITES``): the site's latent splits into
-    ``latent_mix_experts`` blocks, each RMS-normed on its own and weighted by SwitchHead's sigmoid top-k gate
-    (``latent_mix_topk`` blocks active per token). The attention sites need their ``attn_latent_*``; ``moe_in``
-    gates the MoE input latent (``latent_dim``), ``moe_out`` the experts' output before ``w_latent_up``, and ``kv``
-    the MLA KV latent (``mla_kv_latent_dim``, the total over blocks)."""
+    ``latent_mix_experts`` blocks, each RMS-normed and weighted by SwitchHead's sigmoid top-k gate."""
     latent_up_count: int = 1
     """MoE output projections: ``w_latent_up`` plus ``latent_up_count - 1`` more (``w_latent_up_extra``), each
     weighted per token by its own ``sigmoid(x W_g)`` (``x`` the router's input, ``W_g`` [D, count] zero-init so
@@ -2461,7 +2457,14 @@ class CausalSelfAttention(eqx.Module):
                     else None
                 ),
                 w_sidx=(
-                    reshard(_init_weight(random.fold_in(k_q, 10), (d, cfg.mla_sparse_index_dim), std), P(None, None))
+                    reshard(
+                        _init_weight(
+                            random.fold_in(k_q, 10),
+                            (d, (n if cfg.mla_sparse_index_per_head else 1) * cfg.mla_sparse_index_dim),
+                            std,
+                        ),
+                        P(None, None),
+                    )
                     if cfg.mla_sparse_topk and not lightning
                     else None
                 ),
@@ -2985,7 +2988,10 @@ class CausalSelfAttention(eqx.Module):
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
         if self.cfg.mla and self.cfg.mla_sparse_window:
             topk = self.cfg.mla_sparse_topk
-            idx = jnp.zeros((*x.shape[:2], 1)) if self.w_sidx is None else rms_norm(_proj(self.cfg, x, self.w_sidx))
+            r = self.cfg.mla_sparse_index_dim
+            idx = jnp.zeros((*x.shape[:2], 1, 1))
+            if self.w_sidx is not None:
+                idx = rms_norm(rearrange(_proj(self.cfg, x, self.w_sidx), "... (g r) -> ... g r", r=r))
             lam = jnp.zeros((q.shape[2],)) if self.sparse_lam is None else self.sparse_lam
             light = None
             if self.w_lq is not None and self.w_lk is not None and self.w_lw is not None:
@@ -3006,6 +3012,7 @@ class CausalSelfAttention(eqx.Module):
                 light,
                 window=self.cfg.mla_sparse_window,
                 topk=topk,
+                select_match=self.cfg.mla_sparse_select_match,
             )
         else:
             attn_out = _attend(q, k)[..., :head_dim]
