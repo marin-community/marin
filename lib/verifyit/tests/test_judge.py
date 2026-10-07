@@ -33,6 +33,7 @@ class FakeJudgeServer(ThreadingHTTPServer):
     requests: list[dict]
     finish_reasons: list[str]
     http_status: int
+    http_statuses: list[int]
     message_fields: dict
     response_fields: dict
     raw_body: str | None
@@ -92,7 +93,12 @@ class _Handler(BaseHTTPRequestHandler):
             ).encode()
         if server.raw_body is not None:
             body = server.raw_body.encode()
-        self.send_response(server.http_status)
+        status = (
+            server.http_statuses[min(len(server.prompts) - 1, len(server.http_statuses) - 1)]
+            if server.http_statuses
+            else server.http_status
+        )
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -110,6 +116,7 @@ def fake_judge(monkeypatch):
     server.requests = []
     server.finish_reasons = []
     server.http_status = 200
+    server.http_statuses = []
     server.message_fields = {}
     server.response_fields = {}
     server.raw_body = None
@@ -378,6 +385,23 @@ def test_a_failed_sample_leaves_the_whole_checklist_unscored_with_its_completed_
     [partial] = reward.detail["criteria"]
     assert (partial["criterion"], len(partial["samples"]), partial["attempt_count"]) == (CRITERIA[0], 2, 3)
     assert [attempt["finish_reason"] for attempt in partial["attempts"]] == ["stop", "stop", "length"]
+
+
+def test_a_transport_failure_on_a_later_sample_keeps_the_completed_samples(tmp_path, fake_judge):
+    # Criterion one resolves on three samples; the server rejects criterion two's third request.
+    fake_judge.replies = ["Yes.\nSCORE: 1", "SCORE: 1", "SCORE: 0", "Met.\nSCORE: 1", "SCORE: 0"]
+    fake_judge.http_statuses = [200, 200, 200, 200, 200, 400]
+    spec = JudgeSpec(rubric="checklist", criteria=CRITERIA[:2], samples=3)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    reward = run(spec_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
+    assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
+    assert len(fake_judge.requests) == 6
+    done, partial = reward.detail["criteria"]
+    assert (done["passed"], [sample["passed"] for sample in done["samples"]]) == (True, [True, True, False])
+    assert partial["criterion"] == CRITERIA[1]
+    assert [(sample["passed"], sample["reasoning"]) for sample in partial["samples"]] == [(True, "Met."), (False, "")]
+    assert partial["attempt_count"] == 2
 
 
 @pytest.mark.parametrize(

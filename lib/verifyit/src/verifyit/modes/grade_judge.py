@@ -555,13 +555,19 @@ def _needs_sample(spec: JudgeSpec, verdicts: list[bool]) -> bool:
 def _ask(
     spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
 ) -> _ScoreResult:
-    """Parse a final SCORE, retrying truncated replies with the larger budget."""
+    """Parse a final SCORE, retrying truncated replies with the larger budget.
+
+    Every failure, transport errors included, raises ``GradingInfraError`` with the attempts so far.
+    """
     attempts: list[_CompletionAttempt] = []
     budgets = _completion_budgets(spec)
     for attempt in range(1, ATTEMPTS + 1):
         for index, budget in enumerate(budgets):
-            response = _complete(spec, client, model, prompt, budget)
-            choice = _completion_choice(response)
+            try:
+                response = _complete(spec, client, model, prompt, budget)
+                choice = _completion_choice(response)
+            except (openai.APIError, RuntimeError, ValueError) as error:
+                raise GradingInfraError(f"{type(error).__name__}: {error}", **_attempt_detail(attempts)) from error
             attempts.append(
                 _CompletionAttempt(
                     finish_reason=choice.finish_reason,
