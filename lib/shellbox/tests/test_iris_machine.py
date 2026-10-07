@@ -4,13 +4,16 @@
 """Exercise the Iris backend with a local subprocess exec provider and a scripted controller."""
 
 import asyncio
+import json
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
@@ -74,7 +77,7 @@ class LocalJob:
     def __init__(self):
         self.terminated = False
 
-    def terminate(self):
+    def cancel(self):
         self.terminated = True
 
 
@@ -147,6 +150,50 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
         assert job.terminated
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("private_credentials", [False, True])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
+    task_id = JobName.from_wire("/fixture/sandbox/0")
+    status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
+    job = LocalJob()
+    job.tasks = lambda: [SimpleNamespace(task_id=task_id, status=lambda: status)]
+    client = LocalClient()
+    submitted_environments = []
+
+    def submit(**kwargs):
+        submitted_environments.append(kwargs["environment"].env_vars)
+        return job
+
+    client.submit = submit
+    endpoint = LocalEndpoint()
+    endpoint.url = "http://fixture"
+    endpoint.credentials = None
+    monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
+    monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
+    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
+    secret = "private-fixture-credential"
+    monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
+    factory = IrisMachineFactory(
+        controller_url="http://fixture",
+        secret_env={"JUDGE_KEY": ("env:SHELLBOX_TEST_PRIVATE_KEY",)} if private_credentials else None,
+    )
+    spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert secret not in json.dumps(asdict(machine.spec), default=str)
+            result = await machine.run(Command(("sh", "-c", "printf ready")))
+            assert result.stdout == b"ready"
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert job.terminated
+    assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
+    assert secret not in json.dumps(asdict(spec), default=str)
+    assert secret not in caplog.text
 
 
 def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
