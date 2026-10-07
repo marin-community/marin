@@ -30,7 +30,7 @@ p.add_argument("--experts", type=int, default=256)
 p.add_argument("--topk", type=int, default=4)
 p.add_argument("--ep", type=int, default=8)
 p.add_argument("--iters", type=int, default=20)
-p.add_argument("--section", default="all")
+p.add_argument("--section", choices=("all", "topk", "moe"), default="all")
 args = p.parse_args()
 print("devices", jax.devices(), "rocm", is_rocm_backend(), flush=True)
 
@@ -113,7 +113,7 @@ def main_moe():
 
     slots_fn = jax.jit(lambda li, v: ep_ring._assignment_slots(li, v, tokens=T, topk=K))
     slots = bench("assignment_slots (inverse map)", slots_fn, local_idx, valid)
-    bench("dispatch selection top_k (1M -> 131k)", routing, selected.astype(jnp.int32))
+    bench(f"dispatch selection top_k ({A} -> {PCAP})", routing, selected.astype(jnp.int32))
 
     # Forward combine.
     base = bench(
