@@ -94,9 +94,16 @@ def test_final_intermediate_dim_widens_only_the_final_layers_experts():
 
 def test_final_experts_per_token_changes_only_the_final_layers_top_k():
     mesh, model = t._model(
-        ngram_stat_rows=0, mla=True, num_layers=4, latent_out_full_layers=(3,), final_experts_per_token=3
+        ngram_stat_rows=0,
+        mla=True,
+        num_layers=4,
+        latent_out_full_layers=(3,),
+        final_experts_per_token=3,
+        final_routing_renorm_sum=3.0,
     )
     assert model.stacked_blocks_tail.stacked.mlp.cfg.num_experts_per_token == 3
+    assert model.stacked_blocks_tail.stacked.mlp.cfg.routing_renorm_sum == 3.0
+    assert model.stacked_blocks.stacked.mlp.cfg.routing_renorm_sum == model.config.routing_renorm_sum
     assert model.stacked_blocks.stacked.mlp.cfg.num_experts_per_token == model.config.num_experts_per_token
     tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
     with jax.set_mesh(mesh):

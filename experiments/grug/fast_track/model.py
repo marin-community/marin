@@ -960,6 +960,8 @@ class GrugModelConfig:
     final_intermediate_dim: int = 0
     final_experts_per_token: int = 0
     """> 0: the final layer's routed top-k (it must be the only layer of the softmax tail stack)."""
+    final_routing_renorm_sum: float = 0.0
+    """> 0: the final layer's ``routing_renorm_sum`` (e.g. scaled by sqrt(k / 8) with ``final_experts_per_token``)."""
     """> 0: the final layer's routed experts use this ``intermediate_dim`` (it must be the only layer of the softmax
     tail stack, ``latent_out_full_layers``)."""
     routed_off: bool = False
@@ -1880,7 +1882,7 @@ class GrugModelConfig:
             or self.lm_head_unigram_bias
         ):
             raise ValueError("lm_head_prototypes needs no MTP, aux LM layer, output bigram prior or lm_head bias")
-        if (self.final_intermediate_dim or self.final_experts_per_token) and (
+        if (self.final_intermediate_dim or self.final_experts_per_token or self.final_routing_renorm_sum) and (
             not self.attn_res or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
         ):
             raise ValueError(
@@ -8868,6 +8870,8 @@ def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> Grug
         out = dataclasses.replace(out, intermediate_dim=cfg.final_intermediate_dim)
     if cfg.final_experts_per_token:
         out = dataclasses.replace(out, num_experts_per_token=cfg.final_experts_per_token)
+    if cfg.final_routing_renorm_sum:
+        out = dataclasses.replace(out, routing_renorm_sum=cfg.final_routing_renorm_sum)
     if cfg.final_shared_only:
         out = dataclasses.replace(out, routed_off=True, shared_expert_intermediate_dim=cfg.final_shared_intermediate_dim)
     return out
@@ -8907,6 +8911,7 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         final_shared_only=False,  # model-level: the final layer's config carries routed_off
         final_intermediate_dim=0,
         final_experts_per_token=0,
+        final_routing_renorm_sum=0.0,
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
