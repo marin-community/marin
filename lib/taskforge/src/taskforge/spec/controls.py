@@ -7,8 +7,7 @@ A control is a candidate submission with a known label and the grade it must
 receive. Its payload is either a scripted transcript (the assistant turns to
 replay, shell calls included) or a workspace (files installed before grading).
 ``validate/`` replays controls through RolloutEngine; this module only checks
-that a control set is well formed and complete for a task. The rules port the
-controls gate of the capability_env_gen pipeline.
+that a control set is well formed and complete for a task.
 """
 
 import math

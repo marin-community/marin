@@ -14,11 +14,9 @@ healthcheck live in a ``TaskExecution`` that travels beside the task.
 ``assemble`` checks the ``TaskExecution`` against the task; the builder returns
 both (``BuildOutput.execution``), and validation passes both to RolloutEngine.
 
-#9623 proposes splitting the ``TaskSpec`` further: the environment and the
-presentation (system prompt, concrete tools) move to a ``TaskHarnessSpec`` and a
-``TaskSequence``, and ``TaskExecution`` becomes ``TaskExecutionSpec`` with
-``attempt_timeout`` on the sequence. Only ``_presentation`` builds the former and
-only ``task_execution`` builds the latter, so each move is a single-site change.
+Only ``_presentation`` builds the environment and the presentation (system
+prompt, concrete tools), and only ``task_execution`` builds a ``TaskExecution``,
+so moving either out of the ``TaskSpec`` or renaming it is a single-site change.
 """
 
 from collections.abc import Mapping, Sequence
@@ -90,7 +88,7 @@ class Resources:
 
 @dataclass(frozen=True)
 class _Presentation:
-    """The TaskSpec fields #9623 moves into ``TaskHarnessSpec`` and ``TaskSequence``."""
+    """The TaskSpec fields that describe the environment and how the task is presented."""
 
     context: ConversationInput
     final_tools: tuple[FunctionDefinition, ...]
@@ -147,8 +145,7 @@ def task_execution(
 ) -> TaskExecution:
     """The deadlines, agent user and stage preparation one execution of a task runs with.
 
-    Every Taskforge ``TaskExecution`` is built here; #9623 renames it to
-    ``TaskExecutionSpec`` and moves ``attempt_timeout`` to the task sequence.
+    Every Taskforge ``TaskExecution`` is built here.
     """
     return TaskExecution(
         attempt_timeout=attempt_timeout,
