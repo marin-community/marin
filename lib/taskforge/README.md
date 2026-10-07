@@ -41,6 +41,15 @@ content_hash -> atomic_file -> ledger -> spec -> sandbox -> llm
   `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
   with it. Use it to force an output format such as proposal front matter.
   `llm.client.prefill_request_fields(policy, request_fields)` returns the request fields it sends.
+- `spec.controls.Control`: one labeled candidate submission (`kind`, `category`, `concern`,
+  `author`, a `Transcript` or `Workspace` payload, an `Expectation`, `stage`). `concern` is a
+  required `ControlConcern`: `reference`, `acceptance`, `extraction` or `shortcut`.
+  `validate_controls(task, controls)` checks a set against its task; `controls_json` and
+  `parse_controls` round-trip it.
+- `sandbox.factories.machine_factories(where, controller_url, image_cache)`: the
+  `EnvironmentKind -> MachineFactory` mapping for `ShellboxRolloutEngine`. On Iris it takes the
+  controller URL and no image cache; on a laptop it takes the directory where the Docker factory
+  keeps Skopeo-prepared images and no controller URL. The caller names that directory.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -78,6 +87,13 @@ grading environment). Generic verifier types
 (math, mcq, judge, pytest, aggregation) belong to `lib/verifyit`, which `TaskSpec` reaches
 through its verifier registry. A gap in either is fixed upstream. Interim code for one gap goes
 in `taskforge/spec/extensions/<issue>.py`.
+
+Every control names the part of the grader it exercises. Answer extraction is expected to move to
+a cheap model, so controls that only pin today's parser carry `concern = extraction` and can be
+found and retired together. Each stage needs a `reference` control, an `acceptance` control and a
+`shortcut` control, so its required coverage never rests on extraction controls alone. The concern
+a control may carry follows its category (`spec.controls.CONCERNS`): `reference` only on
+known-correct controls, `shortcut` only on shortcut and reward-hack controls.
 
 Execution is RolloutEngine's. `ShellboxRolloutEngine` creates one shellbox `Machine` per attempt
 from the caller's `MachineFactory` for the task's `EnvironmentKind`, installs files, runs setup

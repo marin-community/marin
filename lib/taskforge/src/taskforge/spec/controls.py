@@ -59,6 +59,37 @@ REQUIRED_PER_STAGE = frozenset(
     {ControlCategory.KNOWN_CORRECT, ControlCategory.EMPTY_OR_MALFORMED, ControlCategory.PLAUSIBLE_WRONG}
 )
 ADVERSARIAL = frozenset({ControlCategory.TASK_SPECIFIC_SHORTCUT, ControlCategory.REWARD_HACK})
+
+
+class ControlConcern(StrEnum):
+    """The part of the grader a control exercises.
+
+    Extraction controls are kept apart because answer extraction is expected to move to a cheap
+    model: the controls that only pin today's parser must be identifiable so they can be dropped or
+    rewritten then, and no stage's required coverage may rest on them.
+    """
+
+    REFERENCE = "reference"
+    """A reference solution the grader must accept."""
+    ACCEPTANCE = "acceptance"
+    """The grader's acceptance rule: which answers count as right, wrong, or partly right."""
+    EXTRACTION = "extraction"
+    """Answer extraction and parsing: empty, malformed, or unusually formatted submissions."""
+    SHORTCUT = "shortcut"
+    """A shortcut or prompt injection that earns credit without doing the task."""
+
+
+CONCERNS: dict[ControlCategory, frozenset[ControlConcern]] = {
+    ControlCategory.KNOWN_CORRECT: frozenset(
+        {ControlConcern.REFERENCE, ControlConcern.ACCEPTANCE, ControlConcern.EXTRACTION}
+    ),
+    ControlCategory.PLAUSIBLE_WRONG: frozenset({ControlConcern.ACCEPTANCE, ControlConcern.EXTRACTION}),
+    ControlCategory.TASK_SPECIFIC_SHORTCUT: frozenset({ControlConcern.SHORTCUT, ControlConcern.EXTRACTION}),
+    ControlCategory.REWARD_HACK: frozenset({ControlConcern.SHORTCUT, ControlConcern.EXTRACTION}),
+    ControlCategory.EMPTY_OR_MALFORMED: frozenset({ControlConcern.EXTRACTION, ControlConcern.ACCEPTANCE}),
+    ControlCategory.CRITERION_MUTATION: frozenset({ControlConcern.ACCEPTANCE}),
+}
+REQUIRED_CONCERNS_PER_STAGE = frozenset({ControlConcern.REFERENCE, ControlConcern.ACCEPTANCE, ControlConcern.SHORTCUT})
 EXPECTED_STATUSES = frozenset({Outcome.GRADED, Outcome.SUBMISSION_FAILURE})
 
 
@@ -158,6 +189,7 @@ class Control:
     id: str
     kind: ControlKind
     category: ControlCategory
+    concern: ControlConcern
     author: str
     payload: Transcript | Workspace
     expect: Expectation
@@ -171,6 +203,8 @@ class Control:
             raise ValueError(f"Control {self.id} lacks an author")
         if self.category not in CATEGORIES[self.kind]:
             raise ValueError(f"Control {self.id}: {self.category} is not a {self.kind} category")
+        if self.concern not in CONCERNS[self.category]:
+            raise ValueError(f"Control {self.id}: a {self.category} control cannot exercise {self.concern}")
         if self.stage < 0:
             raise ValueError(f"Control {self.id} has a negative stage")
         _check_expectation(self)
@@ -197,7 +231,9 @@ def validate_controls(task: TaskSpec, controls: Sequence[Control]) -> None:
     """Check that ``controls`` is a complete, replayable control set for ``task``.
 
     Every stage needs a known-correct, an empty-or-malformed, a plausible-wrong,
-    and a task-specific-shortcut or reward-hack control. Partial controls need a
+    and a task-specific-shortcut or reward-hack control, and among its controls a
+    reference, an acceptance and a shortcut concern, so no stage's coverage rests on
+    extraction controls. Partial controls need a
     stage grader that writes JSON reward files, the only graders that report
     reward components.
 
@@ -228,6 +264,10 @@ def validate_controls(task: TaskSpec, controls: Sequence[Control]) -> None:
             raise ValueError(
                 f"Stage {stage} lacks controls: {', '.join(missing) or 'task_specific_shortcut or reward_hack'}"
             )
+        concerns = {control.concern for control in controls if control.stage == stage}
+        uncovered = sorted(REQUIRED_CONCERNS_PER_STAGE - concerns)
+        if uncovered:
+            raise ValueError(f"Stage {stage} lacks controls with concern: {', '.join(uncovered)}")
 
 
 CONTROLS = TypeAdapter(tuple[Control, ...])
