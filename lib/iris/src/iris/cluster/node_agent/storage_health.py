@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Probe regional S3 from nodes; let the controller quarantine isolated failures."""
+"""Probe task S3 storage from nodes; quarantine isolated failures."""
 
 import hashlib
+import json
 import logging
 import subprocess
 import sys
@@ -51,7 +52,8 @@ class StorageHealthReport(BaseModel):
 
 
 def target_id(config: NodeStorageHealthConfig) -> str:
-    return hashlib.sha256(config.model_dump_json().encode()).hexdigest()[:16]
+    target = [config.scratch, config.environment_revision]
+    return hashlib.sha256(json.dumps(target, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def probe_storage(path: str) -> ProbeResult:
@@ -61,17 +63,18 @@ def probe_storage(path: str) -> ProbeResult:
     The next successful probe deletes that key; bucket lifecycle expiry covers a
     node that never recovers. Caller must enforce a process-level deadline.
     """
+    object_path = StoragePath(path)
     fs, key = url_to_fs(path)
     result = ProbeResult.HEALTHY
     try:
-        fs.pipe_file(key, PROBE_PAYLOAD)
+        object_path.write_bytes(PROBE_PAYLOAD)
         if fs.cat_file(key, start=0, end=len(PROBE_PAYLOAD) + 1) != PROBE_PAYLOAD:
             result = ProbeResult.FAILED
     except (OSError, ValueError, BotoCoreError, ClientError) as error:
         result = storage_error_result(error)
     finally:
         try:
-            fs.rm(key)
+            object_path.rm()
         except (OSError, ValueError, BotoCoreError, ClientError) as error:
             cleanup_result = storage_error_result(error)
             if result == ProbeResult.HEALTHY or cleanup_result == ProbeResult.CONFIGURATION_ERROR:

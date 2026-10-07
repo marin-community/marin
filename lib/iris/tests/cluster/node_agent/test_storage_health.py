@@ -58,6 +58,18 @@ def seed_node(k8s, config, name, result=ProbeResult.HEALTHY, *, failures=0, age=
     )
 
 
+def recovery_report_and_time(k8s, name):
+    node = k8s.get_json(K8sResource.NODES, name)
+    report = StorageHealthReport.model_validate_json(node["metadata"]["annotations"][HEALTH_ANNOTATION])
+    recovery_time = Timestamp.from_ms(Timestamp.now().epoch_ms() + 1000)
+    report.result = ProbeResult.HEALTHY
+    report.failures = 0
+    report.failure_since = 0
+    report.started_at = recovery_time.epoch_seconds()
+    report.checked_at = report.started_at
+    return report, recovery_time
+
+
 def test_isolated_failure_cordons_only_after_threshold_and_preserves_node(config):
     k8s = InMemoryK8sService()
     seed_node(k8s, config, "bad", ProbeResult.FAILED, failures=2)
@@ -73,13 +85,7 @@ def test_isolated_failure_cordons_only_after_threshold_and_preserves_node(config
     assert CORDON_ANNOTATION in node["metadata"]["annotations"]
     # A fresh healthy probe releases only the Iris-owned cordon.
     seed_node(k8s, config, "manual", cordoned=True)
-    recovered = StorageHealthReport.model_validate_json(node["metadata"]["annotations"][HEALTH_ANNOTATION])
-    recovered.result = ProbeResult.HEALTHY
-    recovered.failures = 0
-    recovered.failure_since = 0
-    recovery_time = Timestamp.from_ms(Timestamp.now().epoch_ms() + 1000)
-    recovered.started_at = recovery_time.epoch_seconds()
-    recovered.checked_at = recovered.started_at
+    recovered, recovery_time = recovery_report_and_time(k8s, "bad")
     k8s.patch_node("bad", {"metadata": {"annotations": {HEALTH_ANNOTATION: recovered.model_dump_json()}}})
     with patch.object(Timestamp, "now", return_value=recovery_time):
         reconcile_storage_health(k8s, config, 1)
@@ -96,13 +102,7 @@ def test_recovery_requires_fresh_matching_node_probe(config, recovery_fault):
         seed_node(k8s, config, name)
     reconcile_storage_health(k8s, config, 1)
     node = k8s.get_json(K8sResource.NODES, "bad")
-    recovery = StorageHealthReport.model_validate_json(node["metadata"]["annotations"][HEALTH_ANNOTATION])
-    recovery.result = ProbeResult.HEALTHY
-    recovery.failures = 0
-    recovery.failure_since = 0
-    recovery_time = Timestamp.from_ms(Timestamp.now().epoch_ms() + 1000)
-    recovery.started_at = recovery_time.epoch_seconds()
-    recovery.checked_at = recovery.started_at
+    recovery, recovery_time = recovery_report_and_time(k8s, "bad")
     if recovery_fault == "old_probe":
         recovery.started_at = StorageHealthReport.model_validate_json(
             node["metadata"]["annotations"][CORDON_ANNOTATION]
@@ -170,14 +170,7 @@ def test_recovery_releases_budget_for_another_failed_node(config):
     for name in ("p1", "p2", "p3"):
         seed_node(k8s, config, name)
     reconcile_storage_health(k8s, config, 1)
-    node = k8s.get_json(K8sResource.NODES, "bad1")
-    recovery = StorageHealthReport.model_validate_json(node["metadata"]["annotations"][HEALTH_ANNOTATION])
-    recovery.result = ProbeResult.HEALTHY
-    recovery.failures = 0
-    recovery.failure_since = 0
-    recovery_time = Timestamp.from_ms(Timestamp.now().epoch_ms() + 1000)
-    recovery.started_at = recovery_time.epoch_seconds()
-    recovery.checked_at = recovery.started_at
+    recovery, recovery_time = recovery_report_and_time(k8s, "bad1")
     k8s.patch_node("bad1", {"metadata": {"annotations": {HEALTH_ANNOTATION: recovery.model_dump_json()}}})
     seed_node(k8s, config, "bad2", ProbeResult.FAILED, failures=3)
     with patch.object(Timestamp, "now", return_value=recovery_time):
@@ -189,12 +182,11 @@ def test_recovery_releases_budget_for_another_failed_node(config):
 def test_storage_probe_cleans_object_after_success_and_failed_read():
     fs = MemoryFileSystem()
     for fail in (False, True):
-        with patch("iris.cluster.node_agent.storage_health.url_to_fs", return_value=(fs, "/health-probe")):
-            if fail:
-                with patch.object(fs, "cat_file", side_effect=OSError("unreachable")):
-                    assert probe_storage("memory:///health-probe") == ProbeResult.FAILED
-            else:
-                assert probe_storage("memory:///health-probe") == ProbeResult.HEALTHY
+        if fail:
+            with patch.object(fs, "cat_file", side_effect=OSError("unreachable")):
+                assert probe_storage("memory:///health-probe") == ProbeResult.FAILED
+        else:
+            assert probe_storage("memory:///health-probe") == ProbeResult.HEALTHY
         assert not fs.exists("/health-probe")
 
 
@@ -249,9 +241,8 @@ def test_agent_resets_failure_streak_after_success_or_configuration_error(config
 )
 def test_storage_probe_network_failures_count_but_missing_credentials_do_not(error, expected):
     fs = MemoryFileSystem()
-    with patch("iris.cluster.node_agent.storage_health.url_to_fs", return_value=(fs, "/classification-probe")):
-        with patch.object(fs, "cat_file", side_effect=error):
-            assert probe_storage("memory:///classification-probe") == expected
+    with patch.object(fs, "cat_file", side_effect=error):
+        assert probe_storage("memory:///classification-probe") == expected
     assert not fs.exists("/classification-probe")
 
 
@@ -267,4 +258,14 @@ def test_environment_rotation_rejects_previous_successful_peer_reports(config):
     seed_node(k8s, current, "p1")
     seed_node(k8s, current, "p2")
     reconcile_storage_health(k8s, current, 1)
+    assert k8s.get_json(K8sResource.NODES, "bad")["spec"]["unschedulable"]
+
+
+def test_probe_policy_change_keeps_peer_evidence_for_same_storage_target(config):
+    k8s = InMemoryK8sService()
+    tuned = config.model_copy(update={"timeout": 2, "failure_threshold": 4})
+    seed_node(k8s, config, "bad", ProbeResult.FAILED, failures=3)
+    seed_node(k8s, tuned, "p1")
+    seed_node(k8s, tuned, "p2")
+    reconcile_storage_health(k8s, config, 1)
     assert k8s.get_json(K8sResource.NODES, "bad")["spec"]["unschedulable"]
