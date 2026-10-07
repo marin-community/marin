@@ -359,16 +359,19 @@ different `policy.json` is refused.
 
 The loop keeps a run's bounds separate because their costs differ: a build revision is one author
 call, a review repair is a whole validation round. A build failure, or any exception the builder
-program raises, goes back to the author as a revision; `GlmUnavailable` is the endpoint's failure,
-not the program's, and propagates. A repair whose rebuild produces the same task digest counts as a
-failed revision whose failure text is the brief again, so the author cannot spend the repair budget
-returning the same program. The output-token budget sums the item's `LLM_CALL` entries (triage,
-authoring, build steps) and is checked before each authoring. Validation trials record their model
-calls too, under steps `solver/<index>` and `adversary/<role>/<index>`, but the budget leaves them
-out (`loop.events.UNBUDGETED_TRIALS`): `k`, the roles and the deadlines bound them instead. A `Retry` waits out the backoff without holding a slot; spent
-retries end the item `ABANDONED`, never rejected, and the next launch re-enters it at the control
-replay with a fresh retry budget. An unhandled exception records `FAILED` and propagates to the queue.
-A triage verdict is final for its proposal digest within a run.
+program raises, goes back to the author as a revision. `GlmUnavailable` (the endpoint's failure) and
+`build.infrastructure.BuildInfrastructureFailure` (the machine host's) are not the program's: they
+propagate, record `FAILED` without spending a revision, and a relaunch rebuilds the same program. A
+repair whose rebuild produces the same task digest counts as a failed revision whose failure text is
+the brief again, so the author cannot spend the repair budget returning the same program. The
+output-token budget sums the item's `LLM_CALL` entries (triage, authoring, build steps) and is
+checked before each authoring. Validation trials record their model calls too, under steps
+`solver/<index>` and `adversary/<role>/<index>`, but the budget leaves them out
+(`loop.events.UNBUDGETED_TRIALS`): `k`, the roles and the deadlines bound them instead. A `Retry`
+waits out the backoff without holding a slot; spent retries end the item `ABANDONED`, never
+rejected, and the next launch re-enters it at the control replay with a fresh retry budget. An
+unhandled exception records `FAILED` and propagates to the queue. A triage verdict is final for its
+proposal digest within a run.
 
 ## Testing
 

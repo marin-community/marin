@@ -5,9 +5,11 @@
 validation through RolloutEngine, and fakes only at the source, the rubric and the rollout model."""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
+from taskforge.build.infrastructure import BuildInfrastructureFailure, InfrastructureCause
 from taskforge.build.run import item_id_for
 from taskforge.ledger.records import EntryKind
 from taskforge.loop.events import EventKind, Phase, RevisionKind, Terminal, derive_state
@@ -249,6 +251,27 @@ async def test_an_unhandled_exception_records_failed_and_a_relaunch_re_enters(lo
 
     async with loop.services() as services:
         assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
+
+
+async def test_a_host_failure_in_the_build_fails_the_item_without_spending_a_revision(loop, programs, fake_glm):
+    proposal = programs.proposal()
+    programs.submit(fake_glm, programs.source())
+    policy = programs.policy()
+
+    async with loop.services() as services:
+        hostless = replace(services, build=replace(services.build, factories={}))
+        with pytest.raises(BuildInfrastructureFailure) as failure:
+            await run_item(proposal, policy, hostless)
+    assert failure.value.cause is InfrastructureCause.NO_FACTORY
+    item_id = item_id_for(proposal)
+    assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
+    (failed,) = events_of(loop, item_id, EventKind.TERMINAL)
+    assert failed.attrs["terminal"] == Terminal.FAILED
+
+    # The relaunch builds the program already authored: no second authoring call is queued.
+    async with loop.services() as services:
+        assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
+    assert len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
 
 
 async def test_a_log_opened_under_another_policy_is_refused(loop, programs):
