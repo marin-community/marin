@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
+import ModelName from '@/components/shared/ModelName.vue'
 
 export interface Facet {
   key: string
@@ -38,7 +39,9 @@ function clearAll() {
         :model-value="modelValue[facet.key] ?? ''"
         :class="facet.key === 'model' ? 'flex-1 basis-80' : 'w-56'"
         @update:model-value="setFacet(facet.key, $event)"
-      />
+      >
+        <template v-if="facet.key === 'model'" #option="{ option }"><ModelName :model="option" /></template>
+      </SearchSelect>
       <label v-else class="flex flex-col text-xs text-text-secondary gap-1">
         {{ facet.label }}
         <select

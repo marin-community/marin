@@ -5,6 +5,7 @@ const props = defineProps<{
   label: string
   options: string[]
   modelValue: string
+  placeholder?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 const id = useId()
@@ -88,7 +89,7 @@ function toggle() {
         :aria-controls="`${id}-options`"
         :aria-activedescendant="open && active >= 0 ? `${id}-option-${active}` : undefined"
         :value="open ? query : modelValue"
-        :placeholder="`Search ${label.toLowerCase()}…`"
+        :placeholder="placeholder ?? `Search ${label.toLowerCase()}…`"
         :title="modelValue || undefined"
         class="w-full rounded border border-surface-border bg-surface pl-2 pr-16 py-1 text-sm"
         @focus="startSearch"
@@ -120,7 +121,7 @@ function toggle() {
       ref="list"
       role="listbox"
       :aria-label="label"
-      class="absolute z-30 mt-1 w-full min-w-[18rem] max-h-72 overflow-y-auto rounded border border-surface-border bg-surface shadow-lg"
+      class="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto rounded border border-surface-border bg-surface shadow-lg"
     >
       <li
         v-for="(option, index) in matches"
@@ -128,13 +129,14 @@ function toggle() {
         :key="option"
         role="option"
         :aria-selected="active === index"
+        :aria-label="option"
         class="cursor-pointer px-3 py-2 text-sm break-words hover:bg-surface-raised flex items-start gap-2"
         :class="active === index ? 'bg-accent-subtle text-accent' : 'text-text'"
         @mousedown.prevent
         @click="choose(option)"
       >
         <span class="w-4 shrink-0" aria-hidden="true">{{ option === modelValue ? '✓' : '' }}</span>
-        <span class="min-w-0">{{ option }}</span>
+        <span class="min-w-0"><slot name="option" :option="option">{{ option }}</slot></span>
       </li>
       <li v-if="!matches.length" role="presentation" class="px-3 py-3 text-sm text-text-muted">
         No matches. Try a shorter name.

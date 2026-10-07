@@ -155,7 +155,9 @@ The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-2
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
-in the selected cohort and benchmarks.
+in the selected cohort and benchmarks. Its searchable Add model dropdown supports up to four
+selections, with controls to remove one model or clear the set. Model names wrap in the picker,
+comparison results, and model cards; config digests remain visible on a separate line.
 
 Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
