@@ -109,6 +109,15 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 HERO_REFERENCE_SEQ_LEN = HERO_MODEL_CONFIG.max_seq_len
 HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_REFERENCE_SEQ_LEN
 
+
+def ladder_batch_size(seq_len: int, racks: int) -> int:
+    """Return the sequence batch that holds ``HERO_TOKENS_PER_RACK`` per rack at ``seq_len``."""
+    tokens_per_step = HERO_TOKENS_PER_RACK * racks
+    if seq_len <= 0 or tokens_per_step % seq_len:
+        raise ValueError(f"seq_len={seq_len} must divide {tokens_per_step} tokens per step")
+    return tokens_per_step // seq_len
+
+
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
 # rungs use `_small_model` with the same routing geometry.
@@ -205,9 +214,7 @@ def build_ladder_run(
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
     global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
-    if seq_len <= 0 or global_tokens_per_step % seq_len:
-        raise ValueError(f"seq_len={seq_len} must divide {global_tokens_per_step} tokens per step")
-    batch_size = global_tokens_per_step // seq_len
+    batch_size = ladder_batch_size(seq_len, dp_racks)
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
     if batch_size % eval_batch_size:
         raise ValueError(f"batch_size={batch_size} must divide evenly over {eval_batch_size} batch devices")
