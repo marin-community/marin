@@ -942,24 +942,7 @@ class LmDataConfig:
         weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None,
         mix_key: PRNGKeyArray,
     ) -> dict[str, int]:
-        shuffle = self.shuffle
-        assert isinstance(shuffle, BlockShuffleConfig)
-        block_tokens = shuffle.io_block_size * seq_len
-        for phase in self.prior_phases:
-            same_blocks = phase.shuffle.io_block_size * phase.seq_len == block_tokens
-            if not same_blocks or (phase.shuffle.window_blocks, phase.shuffle.perm_type) != (
-                shuffle.window_blocks,
-                shuffle.perm_type,
-            ):
-                raise ValueError(f"Prior phase {phase} must shuffle the same token-sized blocks and windows")
-        for name in datasets:
-            component = self.components[name]
-            if (
-                not isinstance(component, DatasetComponent)
-                or not isinstance(component.format, TextLmDatasetFormat)
-                or _effective_pack(component)
-            ):
-                raise ValueError(f"prior_phases need unpacked text-stream components; {name} is not one")
+        window_tokens = self._prior_phase_window_tokens(datasets, seq_len)
         token_counts = {
             name: blocking_wait(doc_caches[name].async_flat_field_length("input_ids")) for name in datasets
         }
@@ -990,9 +973,31 @@ class LmDataConfig:
             token_counts=token_counts,
             phases=phases,
             block_size=self.mixture_block_size,
-            window_tokens=block_tokens * shuffle.window_blocks,
+            window_tokens=window_tokens,
             key=mix_key,
         )
+
+    def _prior_phase_window_tokens(self, datasets: Mapping[str, AsyncDataset[GrugLmExample]], seq_len: int) -> int:
+        """Return the shuffle window size in tokens after checking that every phase can continue the reads."""
+        shuffle = self.shuffle
+        assert isinstance(shuffle, BlockShuffleConfig)
+        block_tokens = shuffle.io_block_size * seq_len
+        for phase in self.prior_phases:
+            same_blocks = phase.shuffle.io_block_size * phase.seq_len == block_tokens
+            if not same_blocks or (phase.shuffle.window_blocks, phase.shuffle.perm_type) != (
+                shuffle.window_blocks,
+                shuffle.perm_type,
+            ):
+                raise ValueError(f"Prior phase {phase} must shuffle the same token-sized blocks and windows")
+        for name in datasets:
+            component = self.components[name]
+            if (
+                not isinstance(component, DatasetComponent)
+                or not isinstance(component.format, TextLmDatasetFormat)
+                or _effective_pack(component)
+            ):
+                raise ValueError(f"prior_phases need unpacked text-stream components; {name} is not one")
+        return block_tokens * shuffle.window_blocks
 
     def train_sets(
         self,
