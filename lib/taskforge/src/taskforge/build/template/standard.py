@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The standard builder template: the session shape proven by the capability_env_gen builds.
+"""The standard builder template: research, fixtures, machine, grader, instructions, assembly, controls.
 
 Steps, in order:
 
@@ -16,9 +16,9 @@ Steps, in order:
 7. ``controls`` (CONTROLS): fixed controls written for the assembled task, a separate step from
    the grader. They are not replayed here; ``validate`` replays them.
 
-Every step takes a ``guidance`` string that a program uses to specialize the step's prompt
-without copying it. A step whose model output fails a check gets the failure back and retries,
-up to ``ATTEMPTS`` requests, then fails the build.
+Every model-driven step (all but ``assemble``) takes a ``guidance`` string that a program uses to
+specialize the step's prompt without copying it. A step whose model output fails a check gets the
+failure back and retries, up to ``ATTEMPTS`` requests, then fails the build.
 """
 
 import base64
