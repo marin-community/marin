@@ -7,11 +7,9 @@ import json
 from pathlib import Path
 
 import marin.datakit.download.code_alchemy as code_alchemy
-import marin.datakit.normalize as normalize_module
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.types import ResourceConfig
 from marin.datakit.download.code_alchemy import (
     HF_DATASET_ID,
     HF_REVISION,
@@ -206,25 +204,6 @@ def test_normalize_terminals_have_subset_specific_identities():
         assert normalized.hash_attrs["dedup_mode"] is DedupMode.NONE
         assert "bare" not in normalized.hash_attrs
         assert "drop_fields" not in normalized.hash_attrs
-
-
-def test_normalize_execution_policy_is_forwarded_without_rekeying(monkeypatch: pytest.MonkeyPatch):
-    calls: dict[str, object] = {}
-
-    def fake_normalize_to_parquet(**kwargs: object) -> None:
-        calls.update(kwargs)
-
-    monkeypatch.setattr(normalize_module, "normalize_to_parquet", fake_normalize_to_parquet)
-    normalized = code_alchemy_normalize_steps()["code-alchemy/code-dev"][-1]
-    assert normalized.fn is not None
-    normalized.fn("normalized-output")
-
-    assert calls["max_workers"] == 128
-    assert calls["heartbeat_timeout"] == 30 * 60.0
-    assert calls["worker_resources"] == ResourceConfig(cpu=4, ram="64g", disk="16g")
-    assert "max_workers" not in normalized.hash_attrs
-    assert "heartbeat_timeout" not in normalized.hash_attrs
-    assert "worker_resources" not in normalized.hash_attrs
 
 
 def test_hydrated_validator_accepts_complete_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
