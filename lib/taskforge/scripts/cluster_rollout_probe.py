@@ -22,7 +22,7 @@ Phases, each ``k`` trials through ``taskforge.validate.trials.run_trials``:
 
 - ``math``: a null-environment numeric task (no machine).
 - ``docker_shipped``: a docker task from a digest-pinned public image on
-  ``machine_factories(MachineHost.IRIS, controller_url)`` exactly as shipped, with the task's
+  ``machine_factories(MachineHost.IRIS, controller_url, image_cache=None)`` exactly as shipped, with the task's
   ``IRIS_CONTROLLER_URL``.
 - ``docker_readiness_fix``: the same task and factory with a readiness poll that
   compares against ``iris`` ``TaskState``, patched into this process (``apply_readiness_fix``),
@@ -73,6 +73,7 @@ from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import entry_to_json
 from taskforge.llm.client import GlmClient, Pool, endpoint_in_task
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.sandbox.factories import IRIS_DOCKER, SHELLSIM, MachineHost, machine_factories
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
@@ -277,12 +278,14 @@ async def run_phase(
     phase: Phase,
     task: TaskSpec,
     factories: dict[EnvironmentKind, MachineFactory],
-    model: GlmRolloutModel,
+    client: GlmClient,
     results: Path,
     k: int,
     max_retries: int,
 ) -> dict[str, Any]:
     directory = results / str(phase)
+    ledger = JsonlLedger(directory / "ledger")
+    model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
     timed = {kind: TimedFactory(factory) for kind, factory in factories.items()}
     settings = EngineSettings(
         factories=timed,
@@ -302,7 +305,7 @@ async def run_phase(
         token_contract_retries=TOKEN_CONTRACT_RETRIES,
         retry_backoff=ExponentialBackoff(initial=5, maximum=60),
         evidence_dir=directory,
-        ledger=JsonlLedger(directory / "ledger"),
+        ledger=ledger,
         first_attempt=0,
     )
     print(f"PHASE_START {phase} task={task.id} k={k} max_retries={max_retries}", flush=True)
@@ -398,16 +401,15 @@ async def probe(args: argparse.Namespace, token: str, controller_url: str, resul
         "phases": [],
     }
     async with GlmClient(endpoint) as client:
-        model = GlmRolloutModel(client, POLICY)
-        summary["phases"].append(await run_phase(Phase.MATH, math_task(), {}, model, results, args.k, 2))
-        factories = dict(machine_factories(MachineHost.IRIS, controller_url))
+        summary["phases"].append(await run_phase(Phase.MATH, math_task(), {}, client, results, args.k, 2))
+        factories = dict(machine_factories(MachineHost.IRIS, controller_url, image_cache=None))
         summary["phases"].append(
-            await run_phase(Phase.DOCKER_SHIPPED, docker_task(), factories, model, results, args.k, 1)
+            await run_phase(Phase.DOCKER_SHIPPED, docker_task(), factories, client, results, args.k, 1)
         )
         apply_readiness_fix()
-        factories = dict(machine_factories(MachineHost.IRIS, controller_url))
+        factories = dict(machine_factories(MachineHost.IRIS, controller_url, image_cache=None))
         summary["phases"].append(
-            await run_phase(Phase.DOCKER_READINESS_FIX, docker_task(), factories, model, results, args.k, 2)
+            await run_phase(Phase.DOCKER_READINESS_FIX, docker_task(), factories, client, results, args.k, 2)
         )
         summary["sandbox_environment"] = await sandbox_environment(factories[EnvironmentKind.DOCKER])
     return summary

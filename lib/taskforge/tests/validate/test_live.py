@@ -27,6 +27,7 @@ from taskcompendium.submission import PlainText
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.controls import Control
@@ -162,10 +163,10 @@ async def solver_trials(
     client: GlmClient, task: TaskSpec, check: str, purpose: str, factories: dict[EnvironmentKind, MachineFactory]
 ) -> tuple[list[Outcome], Path]:
     directory = check_dir(check)
+    trial_plan = plan(directory, TrialKind.SOLVER, task.id)
+    model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, task.id, 0, str(TrialKind.SOLVER)))
     started = time.monotonic()
-    outcomes = await run_trials(
-        task, EXECUTION, plan(directory, TrialKind.SOLVER, task.id), settings(factories), GlmRolloutModel(client, POLICY)
-    )
+    outcomes = await run_trials(task, EXECUTION, trial_plan, settings(factories), model)
     evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     write_summary(
         directory,
