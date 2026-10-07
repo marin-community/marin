@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,6 +20,7 @@ import zephyr.coordinator as coordinator_module
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.context import (
     _NON_RETRYABLE_ERRORS,
@@ -34,6 +36,7 @@ from zephyr.coordinator import (
     PullStatus,
     WorkerState,
     ZephyrCoordinator,
+    ZephyrExecutionResult,
 )
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
@@ -82,6 +85,44 @@ def test_ensure_picklable_exception_wraps_unrevivable_and_preserves_message():
     assert isinstance(revived, _NON_RETRYABLE_ERRORS)  # un-revivable -> fail fast, never retry
     assert "_UnpicklableError" in str(revived) and "boom 1/2/3" in str(revived)
     assert any("subprocess traceback" in n for n in revived.__notes__)
+
+
+def test_persisted_result_streams_before_serialization_finishes(coordinator, tmp_path, monkeypatch):
+    path = tmp_path / "results" / "panel.pkl"
+    written_bytes = 0
+    original_open = StoragePath.open
+
+    @contextmanager
+    def recording_open(storage_path, mode="rb", **kwargs):
+        with original_open(storage_path, mode, **kwargs) as stream:
+
+            class RecordingStream:
+                def write(self, data):
+                    nonlocal written_bytes
+                    written_bytes += len(data)
+                    return stream.write(data)
+
+            yield RecordingStream()
+
+    class CheckEarlierWrites:
+        def __reduce__(self):
+            # A whole-result dumps() cannot write the first item before reaching this one.
+            assert written_bytes > 0
+            return (str, ("serialized",))
+
+    monkeypatch.setattr(StoragePath, "open", recording_open)
+    binary = b"x" * 1024**2
+    result = ZephyrExecutionResult(
+        results=[binary, CheckEarlierWrites()],
+        counters={"rows": 2},
+        execution_id="archive-panel",
+    )
+
+    coordinator._persist_result(str(path), result)
+    recovered = cloudpickle.loads(path.read_bytes())
+
+    assert recovered.results == [binary, "serialized"]
+    assert recovered.counters == {"rows": 2}
 
 
 def test_simple_map(zephyr_ctx):
@@ -1649,6 +1690,70 @@ def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(lo
         reduce_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
     )
     assert sorted(result.results) == [2, 4, 6]
+
+
+def test_telemetry_includes_live_progress_without_recounting_completed_tasks(coordinator, monkeypatch):
+    run = start_test_stage(coordinator, [_make_task("review")], stage_name="review")
+    emitted = {}
+
+    class Gauge:
+        def __init__(self, name):
+            self.name = name
+
+        def set(self, value, *, attributes=None):
+            emitted[(attributes["run"], self.name)] = value
+
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
+    live = CounterSnapshot(counters={"review/completed": CounterEntry(7)}, generation=1)
+    coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})
+    coordinator._publish_telemetry()
+    assert emitted[(TEST_EXECUTION_ID, "review_completed")] == 7
+
+    coordinator.report_result(
+        "worker-0",
+        TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot(counters={"review/completed": CounterEntry(10)}, generation=2),
+        run.stage_generation,
+    )
+    coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})
+    coordinator._publish_telemetry()
+    assert emitted[(TEST_EXECUTION_ID, "review_completed")] == 10
+
+
+def test_dedicated_execution_exports_final_counters_without_periodic_snapshot(local_client, tmp_path, monkeypatch):
+    emitted = []
+
+    class Gauge:
+        def __init__(self, name):
+            self.name = name
+
+        def set(self, value, *, attributes=None):
+            emitted.append((self.name, value, attributes))
+
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
+    monkeypatch.setattr(ZephyrCoordinator, "_publish_telemetry", lambda _self: None)
+    context = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-final-counters-{uuid.uuid4().hex[:8]}",
+    )
+
+    def count_item(value):
+        counters.pipeline.update_counter("review/cache_hits", 1)
+        return value
+
+    result = context.execute(Dataset.from_list([1, 2]).map(count_item))
+    assert sorted(result.results) == [1, 2]
+    assert (
+        "review_cache_hits",
+        2,
+        {"run": result.execution_id, "source_kind": "gauge", "source_temporality": "current_snapshot"},
+    ) in emitted
 
 
 def test_report_from_a_previous_stage_is_rejected(coordinator):
