@@ -271,6 +271,32 @@ def test_taskcompendium_change_selects_dedicated_suite(tmp_path: Path) -> None:
     assert "taskcompendium-unit" in full_selection.suites
 
 
+@pytest.mark.parametrize(
+    "changed_file",
+    [
+        "lib/shellbox/src/shellbox/machine.py",
+        "lib/shellbox/tests/test_docker_machine.py",
+        "lib/shellbox/pyproject.toml",
+    ],
+)
+def test_shellbox_change_selects_own_and_consumer_suites(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert selection.matrix == []
+    assert selection.suites == ["shellbox-unit", "taskcompendium-unit"]
+
+
+@pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
+def test_shared_dependency_change_selects_shellbox_suite(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert "shellbox-unit" in selection.suites
+
+
+def test_scheduled_full_selection_includes_shellbox_suite(tmp_path: Path) -> None:
+    assert "shellbox-unit" in select_all_tests(tmp_path).suites
+
+
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
 def test_shared_dependency_change_selects_taskcompendium_harbor_suite(tmp_path: Path, changed_file: str) -> None:
     selection = select_changed_tests([changed_file], tmp_path)

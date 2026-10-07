@@ -6,6 +6,10 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("shellsim")
+
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, MachineSpec, ShellSimBuiltins, ShellStatus
 

@@ -293,6 +293,24 @@ jobs:
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
 
+  shellbox:
+    name: shellbox-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'shellbox-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      # TaskCompendium supplies the locked Shellbox base package. Backend extras
+      # remain optional; tests skip the SDK-dependent adapters when absent.
+      - name: Test Shellbox
+        run: uv run --package taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+
   taskcompendium:
     name: taskcompendium-unit
     needs: select
