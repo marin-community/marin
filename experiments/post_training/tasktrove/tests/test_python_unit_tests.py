@@ -1,8 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import subprocess
 import sys
+import uuid
+from pathlib import Path
 
+import pytest
 from verifyit.grade import Status, run
 from verifyit.spec import PytestSpec, parse_spec, render_spec
 
@@ -115,3 +120,94 @@ def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tm
     solution.write_text("def add(left, right):\n    return left + right\n")
     oracle = run(spec_path, workspace)
     assert (oracle.status, oracle.reward) == (Status.SCORED, 1.0)
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("module", ["inventory", "calculator", "factorial"])
+def test_e2egit_contracts_accept_valid_implementations_and_reject_reported_defects(tmp_path, module):
+    fixtures = Path(__file__).parents[1] / "fixtures"
+    info = SourceInfo("DCAgent__exp_rpt_e2egit-v2", SourceVerdict.KEEP, FAMILY, "")
+    record = convert_one(
+        info, module, (fixtures / f"e2egit_{module}.tar.gz").read_bytes(), converter_index(), "e9859a4e80"
+    )
+    assert record.status == ConvertStatus.CONVERTED
+    task = read_task_binary(record.task_binary)
+    task.write_to(tmp_path)
+    (tmp_path / "Dockerfile").write_text(task.text(DOCKERFILE) + "\nCOPY tests /tests\n")
+    program = (fixtures / f"{module}_control.py").read_text()
+    controls = [("correct", program, 1.0)]
+    if module == "inventory":
+        controls += [
+            ("no-op", program.replace('raise ValueError("underflow")', "return"), 1.0),
+            ("clamps", program.replace('raise ValueError("underflow")', "self.quantity = 0; return"), 0.0),
+        ]
+    elif module == "calculator":
+        controls += [
+            ("wrong-multiply", program.replace("return float(a * b)", "return 0.0"), 0.0),
+            ("wrong-divide", program.replace("return float(a / b)", "return 0.0"), 0.0),
+            ("no-docstrings", "\n".join(line for line in program.splitlines() if '"""' not in line), 0.0),
+        ]
+    else:
+        controls += [
+            (
+                "iterative",
+                program.replace(
+                    "return number * calculate_factorial(number - 1)",
+                    "result = 1\n    for value in range(1, number + 1):\n        result *= value\n    return result",
+                ),
+                0.0,
+            ),
+            ("no-zero-test", program, 0.0),
+            ("no-student-tests", program, 0.0),
+        ]
+    image = f"atlas-e2egit-regression:{uuid.uuid4().hex}"
+    subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
+    try:
+        # Benchmark tests execute only inside this owned container; controls are authored fixtures.
+        for name, candidate, expected in controls:
+            workspace = tmp_path / name
+            workspace.mkdir()
+            (workspace / f"{module}.py").write_text(candidate)
+            if module == "factorial" and name != "no-student-tests":
+                student_tests = (fixtures / "factorial_student_tests.py").read_text()
+                if name == "no-zero-test":
+                    student_tests = student_tests.replace("(0, 1),", "")
+                (workspace / "tests").mkdir()
+                (workspace / "tests/test_factorial.py").write_text(student_tests)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--cpus",
+                    "1",
+                    "--memory",
+                    "512m",
+                    "--pids-limit",
+                    "128",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "-v",
+                    f"{workspace}:/app:ro",
+                    "-e",
+                    "PYTHONPATH=/app",
+                    "-e",
+                    "PYTHONDONTWRITEBYTECODE=1",
+                    image,
+                    "bash",
+                    "-c",
+                    "verifyit /tests/verifier.toml && cat /logs/verifier/reward.json",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            assert json.loads(result.stdout)["reward"] == expected, name
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)

@@ -14,6 +14,8 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
+from experiments.post_training.tasktrove.converters.e2egit_test_contracts import repair_contract
+from experiments.post_training.tasktrove.converters.factorial_test_contract import repair_contract as repair_factorial
 from experiments.post_training.tasktrove.converters.todo_list import convert_todo_list, matches_todo_contract
 from experiments.post_training.tasktrove.task_format import TESTS_MOUNT
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TaskFiles
@@ -81,9 +83,11 @@ def convert(task: TaskFiles) -> ConvertedTask | Rejected:
     if isinstance(solution_files, Rejected):
         return solution_files
 
-    data_files = {test_file: task.files[test_file], **task.under("setup_files/")}
+    test, instruction = repair_contract(task.files[test_file], task.text(INSTRUCTION))
+    test, instruction, extra_files = repair_factorial(test, instruction)
+    data_files = {test_file: test, **extra_files, **task.under("setup_files/")}
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
+        instruction=instruction,
         spec=PytestSpec(paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",), python=PYTEST_PYTHON),
         dockerfile=task.text(DOCKERFILE).rstrip() + "\n" + PYTEST_INSTALL,
         tags=("code", "python", "unit-test", "kata"),
