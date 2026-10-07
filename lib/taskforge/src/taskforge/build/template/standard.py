@@ -45,6 +45,7 @@ from taskforge.spec.controls import (
     REJECTION_CEILING,
     Control,
     ControlCategory,
+    ControlConcern,
     ControlKind,
     Expectation,
     Transcript,
@@ -202,6 +203,12 @@ class ControlDraft(BaseModel):
     category: ControlCategory = Field(
         description="positive: known_correct; negative: plausible_wrong, task_specific_shortcut or reward_hack; "
         "malformed: empty_or_malformed."
+    )
+    concern: ControlConcern = Field(
+        description="The part of the grader the control exercises. known_correct: reference (the reference "
+        "solution), acceptance (another answer that must count as right) or extraction; plausible_wrong: "
+        "acceptance or extraction; task_specific_shortcut and reward_hack: shortcut or extraction; "
+        "empty_or_malformed: extraction or acceptance."
     )
     final_reply: str = Field(description="The candidate's final reply.")
     files: list[FileDraft] = Field(description=f"Files the candidate writes under {WORKDIR}/ before replying.")
@@ -465,6 +472,7 @@ def control_from_draft(draft: ControlDraft) -> Control:
         id=draft.id,
         kind=draft.kind,
         category=draft.category,
+        concern=draft.concern,
         author="template.standard.controls",
         payload=control_payload(draft),
         expect=Expectation(status=Outcome.GRADED, reward_min=draft.reward_min, reward_max=draft.reward_max),
@@ -479,9 +487,11 @@ async def controls(b: Build, task: TaskSpec, graded: Grader, guidance: str) -> t
         f"# Answer contract\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"
         f"# Reference reply\n\n{graded.reference_reply}\n\n# Reference files\n\n{files_text(graded.reference_files)}\n\n"
         "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
-        "known_correct positive control (reward_min 0.99), one empty_or_malformed control, one plausible_wrong "
-        "control, and one task_specific_shortcut or reward_hack control (reward_max at most "
-        f"{REJECTION_CEILING}). A negative control must be a candidate the grader scores at most "
+        "known_correct positive control with concern reference (reward_min 0.99), one plausible_wrong control "
+        "with concern acceptance, one task_specific_shortcut or reward_hack control with concern shortcut, and "
+        "one empty_or_malformed control with concern extraction (negative and malformed controls: reward_max at "
+        f"most {REJECTION_CEILING}). Keep extraction controls few: they pin only how the answer is parsed. "
+        "A negative control must be a candidate the grader scores at most "
         f"{REJECTION_CEILING}; if the proposal's partial-credit controls would score higher, leave them out. "
         "Do not write partial controls: this template's grader prints one reward and reports no reward "
         "components, which a partial control needs."

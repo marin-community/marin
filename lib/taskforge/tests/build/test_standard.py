@@ -44,11 +44,14 @@ def grader_call(script: str) -> dict:
     }
 
 
-def control(control_id: str, kind: str, category: str, text: str, low: float | None, high: float | None) -> dict:
+def control(
+    control_id: str, kind: str, category: str, concern: str, text: str, low: float | None, high: float | None
+) -> dict:
     return {
         "id": control_id,
         "kind": kind,
         "category": category,
+        "concern": concern,
         "final_reply": text,
         "files": [],
         "reward_min": low,
@@ -94,10 +97,10 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
         "submit_controls",
         {
             "controls": [
-                control("gold", "positive", "known_correct", "ANSWER = 42", 0.99, None),
-                control("empty", "malformed", "empty_or_malformed", "", None, 0.0),
-                control("sum", "negative", "plausible_wrong", "ANSWER = 13", None, 0.0),
-                control("echo", "negative", "task_specific_shortcut", "ANSWER = <n>", None, 0.0),
+                control("gold", "positive", "known_correct", "reference", "ANSWER = 42", 0.99, None),
+                control("empty", "malformed", "empty_or_malformed", "extraction", "", None, 0.0),
+                control("sum", "negative", "plausible_wrong", "acceptance", "ANSWER = 13", None, 0.0),
+                control("echo", "negative", "task_specific_shortcut", "shortcut", "ANSWER = <n>", None, 0.0),
             ]
         },
     )
@@ -149,7 +152,10 @@ async def test_grader_step_feeds_back_a_numeric_answer_that_is_not_a_literal(pro
 async def test_control_files_with_shell_metacharacters_in_their_paths_are_written_verbatim():
     path = "/workspace/it's $HOME/a b.txt"
     draft = standard.ControlDraft.model_validate(
-        {**control("quoted", "positive", "known_correct", "done", 1.0, None), "files": [file(path, "x'y\n")]}
+        {
+            **control("quoted", "positive", "known_correct", "reference", "done", 1.0, None),
+            "files": [file(path, "x'y\n")],
+        }
     )
     turn = standard.control_payload(draft).turns[0]
     machine = await ShellSimMachineFactory().create(MachineSpec(source=ShellSimBuiltins()))
