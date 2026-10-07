@@ -14,6 +14,6 @@ export HIP_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1
 export XLA_FLAGS="--xla_gpu_enable_command_buffer= ${XLA_FLAGS:-}"
 echo "XLA_FLAGS=$XLA_FLAGS"
 
-"$agent_work/venv-jax/bin/python" "$SLURM_SUBMIT_DIR/experiments/amd_matmul_ceiling/jax_matmul.py" \
+"$agent_work/venv-jax/bin/python" "$SLURM_SUBMIT_DIR/experiments/amd/matmul_ceiling/jax_matmul.py" \
   --output "$agent_work/results/jax-matmul-$SLURM_JOB_ID.jsonl" \
   "$@"

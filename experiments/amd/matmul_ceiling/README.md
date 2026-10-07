@@ -13,7 +13,7 @@ Sync the checkout to the cluster and build the venvs once from the login node. T
 
 ```bash
 cluster-sync
-cluster "cd agents/<name> && bash experiments/amd_matmul_ceiling/setup_envs.sh"
+cluster "cd agents/<name> && bash experiments/amd/matmul_ceiling/setup_envs.sh"
 ```
 
 Submit from the synced checkout root, and pin both jobs to one node with `-w <node>`: separate jobs otherwise land on different nodes. On MAMF-finder's 28 bf16 shapes, JAX ran a median of 3% faster on k007-002 than on k007-004, ranging from 8% slower to 5% faster per shape (jobs 453412 and 453338). Both scripts use `--no-requeue`, because this cluster requeues failed batch jobs by default and a job that wedges a GPU would otherwise move on to the next node:
@@ -21,10 +21,10 @@ Submit from the synced checkout root, and pin both jobs to one node with `-w <no
 ```bash
 sha=$(git rev-parse HEAD)
 cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -w <node> -t 60 -J <name> \
-  -o \$WORK/agents/<name>/logs/%x-%j.out experiments/amd_matmul_ceiling/mamf.sbatch --dtype bfloat16"
+  -o \$WORK/agents/<name>/logs/%x-%j.out experiments/amd/matmul_ceiling/mamf.sbatch --dtype bfloat16"
 cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -w <node> -t 60 -J <name> \
-  -o \$WORK/agents/<name>/logs/%x-%j.out experiments/amd_matmul_ceiling/jax_matmul.sbatch \
-  --dtype bfloat16 --shapes-file experiments/amd_matmul_ceiling/snowball_shapes.txt"
+  -o \$WORK/agents/<name>/logs/%x-%j.out experiments/amd/matmul_ceiling/jax_matmul.sbatch \
+  --dtype bfloat16 --shapes-file experiments/amd/matmul_ceiling/snowball_shapes.txt"
 ```
 
 Keep XLA's GEMM autotuning on. With `--xla_gpu_autotune_level=0`, bf16 matmuls on MI350X ran at 15-17 TFLOP/s, about 1% of the autotuned rate (job 453316), so level 0 does not isolate hipBLASLt's default kernel choice from XLA's tuning.

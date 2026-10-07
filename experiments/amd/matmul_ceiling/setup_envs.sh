@@ -13,7 +13,7 @@ TORCH_VERSION=2.13.0
 MAMF_SHA=0359db89793c313e90e4f8a8bc8a2b1514ba00ae
 MAMF_URL=https://raw.githubusercontent.com/stas00/ml-engineering/$MAMF_SHA/compute/accelerator/benchmarks/mamf-finder.py
 
-checkout=$(cd "$(dirname "$0")/../.." && pwd)
+checkout=$(cd "$(dirname "$0")/../../.." && pwd)
 agent_work="$WORK/agents/$(basename "$checkout")"
 mkdir -p "$agent_work"/{logs,results,mamf}
 

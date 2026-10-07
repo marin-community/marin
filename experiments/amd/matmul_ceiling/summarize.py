@@ -3,14 +3,14 @@
 
 """Summarize jax_matmul.py result files: the fastest shapes and the Snowball shapes.
 
-Run from the checkout root: python -m experiments.amd_matmul_ceiling.summarize <results.jsonl> ...
+Run from the checkout root: python -m experiments.amd.matmul_ceiling.summarize <results.jsonl> ...
 """
 
 import argparse
 import json
 from pathlib import Path
 
-from experiments.amd_matmul_ceiling.jax_matmul import RunHeader, ShapeResult
+from experiments.amd.matmul_ceiling.jax_matmul import RunHeader, ShapeResult
 
 SNOWBALL_SHAPES = Path(__file__).with_name("snowball_shapes.txt")
 
