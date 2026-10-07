@@ -838,11 +838,7 @@ class GrugModelConfig:
     kv_stream_dim: int = 0
     """KV side stream width ``w`` (0: off). A second residual stream, seeded by its own ``[vocab, w]`` token
     embedding and advanced by one small pre-norm block (causal document-masked softmax attention + ReLU^2
-    MLP, see ``KvStreamBlock``) per main layer, is the only source of keys and values: main layer ``l``'s
-    K/V projections (KDA ``w_k`` / ``w_v``, MLA ``w_dkv``, GQA ``w_k`` / ``w_v``) read the normed side stream
-    leaving side block ``l`` (shape ``[w, ...]``) instead of the main stream, so "what am I" is built apart
-    from "who comes next". Queries, gates, beta, decay and the Inkling bias stay on the main stream. Needs
-    ``attn_res`` (the side-stream states reach the layers as AttnRes layer extras)."""
+    MLP, see ``KvStreamBlock``) per main layer, is the only source of keys and values. Needs ``attn_res``."""
     kv_stream_heads: int = 1
     """Attention heads of the side-stream blocks (head dim ``kv_stream_dim / kv_stream_heads``; keep it 128
     for the FA4 kernel)."""
@@ -982,6 +978,8 @@ class GrugModelConfig:
     mla_match_append: MatchAppend = MatchAppend.OFF
     mla_value_lookahead: bool = False
     """MLA values also read the next token (``key_offset.value_lookahead``); attention then skips the query itself."""
+    mla_lookahead_self: bool = False
+    """With ``mla_value_lookahead``: a learned per-channel weight ``v_self`` on ``v_t`` too (init 1)."""
     mla_lookahead_sink: bool = False
     """With ``mla_value_lookahead``: each document's first (empty) slot gets a learned per-head key ``k_null``."""
     mla_tie_prev_qk: bool = False
@@ -2360,6 +2358,7 @@ class CausalSelfAttention(eqx.Module):
     match_head: Float[Array, "M NC"] | None  # per-head map of the shared match to the shifted half (M > half)
     match_gate: Float[Array, "D N"] | None  # MatchAppend.TOKEN
     v_ahead: Float[Array, "N D"] | None  # mla_value_lookahead
+    v_self: Float[Array, "N D"] | None  # mla_lookahead_self
     k_null: Float[Array, "N D"] | None  # mla_lookahead_sink
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
@@ -2470,6 +2469,7 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 match_gate=jnp.zeros((d, n), jnp.float32) if cfg.mla_match_append == MatchAppend.TOKEN else None,
                 v_ahead=jnp.zeros((n, h), jnp.float32) if cfg.mla_value_lookahead else None,
+                v_self=jnp.ones((n, h), jnp.float32) if cfg.mla_lookahead_self else None,
                 k_null=jnp.zeros((n, h), jnp.float32) if cfg.mla_lookahead_sink else None,
                 match_head=(
                     reshard(
@@ -2610,6 +2610,7 @@ class CausalSelfAttention(eqx.Module):
             match_head=None,
             match_gate=None,
             v_ahead=None,
+            v_self=None,
             k_null=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
@@ -2960,7 +2961,7 @@ class CausalSelfAttention(eqx.Module):
             head_spec = P(*_padded_spec(q)[:3], None)
             q, k, kernel_v = append_shared_match(q, k, kernel_v, match, gate, sconv_segment_ids, head_spec)
         if self.v_ahead is not None:
-            k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids, self.k_null)
+            k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids, self.k_null, self.v_self)
         attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
             assert self.gda_lambda is not None

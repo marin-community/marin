@@ -99,13 +99,16 @@ def value_lookahead(
     ahead: Float[Array, "N E"],
     segment_ids: Int[Array, "B S"] | None,
     k_null: Float[Array, "N D"] | None = None,
+    own_weight: Float[Array, "N E"] | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Each key token's value also reads the next token's, ``v'_t = v_t + ahead * v_{t+1}``; keys and values then
+    """Each key token's value also reads the next token's, ``v'_t = own_weight * v_t + ahead * v_{t+1}``
+    (``own_weight`` 1 if None); keys and values then
     move one slot later (zero at document starts), so under the causal mask query ``i`` sees tokens ``t <= i - 1``
     (never itself, so ``v_{t+1}`` never leaks the future) and every document's first slot is an empty sink: zero
     value, and key ``k_null`` (zero if None)."""
     spec_k, spec_v = jax.typeof(k).sharding.spec, jax.typeof(v).sharding.spec
-    mixed = v + ahead.astype(v.dtype) * next_token(v, segment_ids)
+    own = v if own_weight is None else own_weight.astype(v.dtype) * v
+    mixed = own + ahead.astype(v.dtype) * next_token(v, segment_ids)
     shifted_k = previous_token(k, segment_ids)
     if k_null is not None:
         first = jnp.zeros(k.shape[:2], bool).at[:, 0].set(True)
