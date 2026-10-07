@@ -47,6 +47,7 @@ from taskforge.sandbox.factories import (
     LOCAL_DOCKER,
     SHELLSIM,
     FactoryCapabilities,
+    LocalDocker,
     MachineHost,
     RefusalReason,
     factory_capabilities,
@@ -192,19 +193,31 @@ def test_explicit_file_timestamps_are_refused_where_they_are_not_kept():
     assert reasons(docker, IRIS_WORKING) == {(RefusalReason.FILE_TIMESTAMPS, "task")}
 
 
-def test_laptop_without_docker_reports_and_omits_the_docker_factory(monkeypatch):
+def test_laptop_without_docker_reports_and_omits_the_docker_factory(monkeypatch, tmp_path):
     monkeypatch.setattr(factories.shutil, "which", lambda name: None)
     factories.local_docker.cache_clear()
     try:
         docker = factory_capabilities(MachineHost.LAPTOP)[EnvironmentKind.DOCKER]
         assert docker.unavailable == "docker CLI not found on PATH"
-        assert EnvironmentKind.DOCKER not in machine_factories(MachineHost.LAPTOP, controller_url=None)
+        assert EnvironmentKind.DOCKER not in machine_factories(
+            MachineHost.LAPTOP, controller_url=None, image_cache=tmp_path
+        )
     finally:
         factories.local_docker.cache_clear()
 
 
+def test_laptop_docker_factory_caches_images_in_the_given_directory(monkeypatch, tmp_path):
+    skopeo = Path("/opt/bin/skopeo")
+    monkeypatch.setattr(factories, "local_docker", lambda: LocalDocker(skopeo=skopeo, unavailable=None))
+    docker = machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=tmp_path / "images")[
+        EnvironmentKind.DOCKER
+    ]
+    assert isinstance(docker, DockerMachineFactory)
+    assert (docker.image_cache, docker.skopeo) == (tmp_path / "images", skopeo)
+
+
 def test_iris_docker_factory_submits_to_the_given_controller():
-    docker = machine_factories(MachineHost.IRIS, controller_url="http://controller.example:10000")[
+    docker = machine_factories(MachineHost.IRIS, controller_url="http://controller.example:10000", image_cache=None)[
         EnvironmentKind.DOCKER
     ]
     assert isinstance(docker, IrisMachineFactory)
