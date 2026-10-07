@@ -71,9 +71,11 @@ def test_gate_router_decay_mask_selects_only_gate_and_router():
 def test_ladder_defaults_gate_router_weight_decay_on_with_opt_out():
     # Weight decay is on by default for the hero recipe, so a resume can never silently continue
     # without it; passing 0 is the explicit opt-out.
-    default_step = build_ladder_run(run_id="test-wd-default", size="d6144", num_steps=1, version="2026.08.18")
+    default_step = build_ladder_run(
+        seq_len=4096, run_id="test-wd-default", size="d6144", num_steps=1, version="2026.08.18"
+    )
     opt_out_step = build_ladder_run(
-        run_id="test-wd-off", size="d6144", num_steps=1, gate_router_weight_decay=0.0, version="2026.08.18"
+        seq_len=4096, run_id="test-wd-off", size="d6144", num_steps=1, gate_router_weight_decay=0.0, version="2026.08.18"
     )
 
     def optimizer_of(step):
@@ -93,7 +95,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         version="dev",
         gc_interval=100,
     )
-    ladder = build_ladder_run(run_id="test-ladder", size="d6144", version="dev")
+    ladder = build_ladder_run(seq_len=4096, run_id="test-ladder", size="d6144", version="dev")
     diagnostic_config = diagnostic.build_config(
         StepContext.for_fingerprint(runtime_arg_keys=diagnostic.runtime_args, deps=diagnostic.deps)
     )
@@ -136,7 +138,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     [("d2048", None, True), ("d6144", 1, True), ("d6144", None, False)],
 )
 def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, num_steps, expected_simulated_epoching):
-    step = build_ladder_run(run_id=f"test-{size}", size=size, num_steps=num_steps, version="2026.08.18")
+    step = build_ladder_run(seq_len=4096, run_id=f"test-{size}", size=size, num_steps=num_steps, version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
 
     data = step.build_config(ctx).data
@@ -148,7 +150,7 @@ def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, num_s
 def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
-    step = build_ladder_run(run_id="test-d6144", size="d6144", num_steps=1, version="2026.08.18")
+    step = build_ladder_run(seq_len=4096, run_id="test-d6144", size="d6144", num_steps=1, version="2026.08.18")
     output_path = "s3://marin-us-east-02a/marin/grug/test-d6144/v"
     ctx = dataclasses.replace(
         StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps),
@@ -163,7 +165,9 @@ def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
 
 
 def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
-    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18")
+    step = build_ladder_run(
+        seq_len=4096, run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18"
+    )
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
     keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
 
@@ -175,3 +179,18 @@ def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
         {"until": 55_000, "every": 55_000},
         {"until": None, "every": 6_000},
     ]
+
+
+@pytest.mark.parametrize("seq_len", [8192, 16384])
+def test_context_switch_preserves_optimizer_and_tokens_per_step(seq_len):
+    parent_step = build_ladder_run(run_id="context-parent", size="d6144", seq_len=4096, version="dev")
+    child_step = build_ladder_run(run_id="context-child", size="d6144", seq_len=seq_len, qk_mult=1.48, version="dev")
+    parent = parent_step.build_config(StepContext.for_fingerprint(parent_step.runtime_args, parent_step.deps))
+    child = child_step.build_config(StepContext.for_fingerprint(child_step.runtime_args, child_step.deps))
+    # The child resumes the parent's optimizer state, so its schedule and hyperparameters must not move.
+    assert child.trainer.trainer.num_train_steps == parent.trainer.trainer.num_train_steps
+    assert child.optimizer == parent.optimizer
+    assert (
+        child.trainer.trainer.train_batch_size * child.model.max_seq_len
+        == parent.trainer.trainer.train_batch_size * parent.model.max_seq_len
+    )
