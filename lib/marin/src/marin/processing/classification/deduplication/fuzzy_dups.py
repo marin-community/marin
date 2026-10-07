@@ -28,6 +28,7 @@ artifacts produces fresh markers without re-reading any source text.
 
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 from fray.types import ResourceConfig
 from pydantic import BaseModel
@@ -53,6 +54,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 logger = logging.getLogger(__name__)
 FUZZY_DUPS_ATTR_DATA_VERSION = 4
 DEFAULT_CC_MAX_ITERATIONS = 10
+_MISSING_FILE_WRITERS = 32
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -377,11 +379,14 @@ def compute_fuzzy_dups_attrs(
     )
     shard_results = outcome.results
     # A shard with no cluster members never reaches the reducer, so it gets its
-    # empty attribute file here; consumers resolve every shard to one.
+    # empty attribute file here; consumers resolve every shard to one. Each
+    # remote write is several round trips, so serial writes cost minutes at
+    # production shard counts.
     written = {r["file_idx"] for r in shard_results}
-    for entry in entries:
-        if entry.file_idx not in written:
-            write_parquet_file([], entry.output_path)
+    missing = [entry.output_path for entry in entries if entry.file_idx not in written]
+    if missing:
+        with ThreadPoolExecutor(max_workers=_MISSING_FILE_WRITERS) as pool:
+            list(pool.map(lambda path: write_parquet_file([], path), missing))
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     # Aggregate per-source counters across shards for the final artifact.
