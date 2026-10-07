@@ -182,7 +182,6 @@ Change these behaviors only together with the Harbor importer:
 - The private test script is `/tests/test.sh`. It writes its reward to `/logs/verifier`.
 - `reward.json` has priority over `reward.txt`. A malformed `reward.json` does not fall back to `reward.txt`.
 - A reward file can supply a grade after a nonzero exit code.
-- A nonzero exit code without a reward file is an execution failure, not a missing reward.
 - Empty reward files and unparsable reward files are different failures.
 - A positive reward is a pass (`pass_above=0`).
 - Artifacts use the Harbor source and exclusion fields. The importer always collects `/logs/artifacts`.
@@ -193,6 +192,7 @@ These behaviors are Marin design choices. Harbor does not supply them:
 - The grader command receives the conversation as JSON on standard input.
 - `FileReward` makes the reward paths, file formats, and JSON key configurable. Harbor keeps the full JSON object. The engine reads one numeric key.
 - `pass_above` is optional and separate from the grade.
+- A missing reward file is a missing-reward failure for each exit code. Harbor reports a nonzero exit code without a reward file as a verifier runtime error.
 - The engine removes existing reward files before the grader executes. Thus a reward file from the agent cannot supply the grade.
 - Shell grading requires a separate verifier machine and a prebuilt, digest-pinned image. Harbor also permits shared verifier environments and image builds.
 - The caller selects backend settings, users, and deadlines during lowering. The package does not select them.
