@@ -25,8 +25,8 @@ mapping, so replaying the raw text would make every later request fail. (Rollout
 ends a rollout on such arguments, so ``rollout_model`` replays them as served.)
 
 Exceptions raised by a tool handler propagate; the caller classifies them. Every model turn is
-recorded as an ``LLM_CALL`` ledger span and every executed or rejected tool call as a ``STEP``
-span, through the caller's ledger.
+recorded as an ``LLM_CALL`` ledger span (``llm.recording.recorded_complete``) and every executed or
+rejected tool call as a ``STEP`` span, through the caller's ledger.
 """
 
 import json
@@ -39,9 +39,10 @@ import jsonschema
 from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_tool_definition
 from shellbox.machine import Command, Machine
 
-from taskforge.ledger.records import EntryKind, Ledger, span
+from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion, FinishReason, GlmClient, GlmContextExhausted, ToolCall, Usage
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.recording import CallLedger, recorded_complete
 from taskforge.llm.rollout_model import assistant_wire_message
 
 INVALID_ARGUMENTS_KEY = "invalid_arguments"
@@ -110,16 +111,6 @@ class AgentRun:
     usage: Usage
 
 
-@dataclass(frozen=True)
-class AgentLedger:
-    """Where ``run_agent`` records its spans, all under one item, round and step."""
-
-    ledger: Ledger
-    item_id: str
-    round: int
-    step: str
-
-
 def replay_arguments(arguments: str) -> str:
     """The arguments to replay: unchanged if they parse to a JSON object, else wrapped in one."""
     try:
@@ -167,7 +158,7 @@ def _checked_arguments(call: ToolCall, tools: Mapping[str, AgentTool]) -> dict[s
 
 
 async def _tool_result(
-    call: ToolCall, truncated: bool, tools: Mapping[str, AgentTool], record: AgentLedger, turn: int
+    call: ToolCall, truncated: bool, tools: Mapping[str, AgentTool], record: CallLedger, turn: int
 ) -> ToolResult:
     """Run or reject ``call``; ``outcome`` is recorded only once known, so a handler exception leaves just ``cause``."""
     started = time.monotonic()
@@ -186,40 +177,13 @@ async def _tool_result(
     return ToolResult(call=call, outcome=outcome, output=output, wall_time=time.monotonic() - started)
 
 
-async def _complete(
-    client: GlmClient,
-    policy: LLMPolicy,
-    conversation: Sequence[Message],
-    request_fields: Mapping[str, object],
-    record: AgentLedger,
-    turn: int,
-) -> Completion:
-    with span(record.ledger, EntryKind.LLM_CALL, item_id=record.item_id, round=record.round, step=record.step) as fields:
-        fields.model = client.endpoint.model
-        fields.attrs["turn"] = str(turn)
-        completion = await client.complete(conversation, policy, request_fields)
-        fields.tokens_in = completion.usage.prompt_tokens
-        fields.tokens_out = completion.usage.completion_tokens
-        fields.tokens_reasoning = completion.usage.reasoning_tokens
-        fields.finish_reason = completion.finish_reason
-        fields.attrs.update(
-            {
-                "cached_tokens": str(completion.usage.cached_tokens),
-                "continuations": str(completion.continuations),
-                "attempts": str(len(completion.attempts)),
-                "tool_calls": str(len(completion.tool_calls)),
-            }
-        )
-    return completion
-
-
 async def run_agent(
     client: GlmClient,
     policy: LLMPolicy,
     messages: Sequence[Message],
     tools: Sequence[AgentTool],
     max_turns: int,
-    record: AgentLedger,
+    record: CallLedger,
 ) -> AgentRun:
     """Run the tool loop until the model answers, a reply stays cut off, the context fills, or ``max_turns`` replies.
 
@@ -243,7 +207,9 @@ async def run_agent(
     usage = NO_USAGE
     for turn in range(max_turns):
         try:
-            completion = await _complete(client, policy, conversation, request_fields, record, turn)
+            completion = await recorded_complete(
+                client, conversation, policy, request_fields, record, {"turn": str(turn)}
+            )
         except GlmContextExhausted:
             return AgentRun(tuple(conversation), tuple(turns), AgentStop.CONTEXT, usage)
         usage = usage + completion.usage

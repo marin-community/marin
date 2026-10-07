@@ -13,7 +13,6 @@ from shellbox.machine import MachineSpec, ShellSimBuiltins
 from taskforge.ledger.records import EntryKind, LedgerEntry
 from taskforge.llm.agent import (
     INVALID_ARGUMENTS_KEY,
-    AgentLedger,
     AgentRun,
     AgentStop,
     AgentTool,
@@ -23,6 +22,7 @@ from taskforge.llm.agent import (
 )
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
 
 MESSAGES = [{"role": "system", "content": "be useful"}, {"role": "user", "content": "do it"}]
 ECHO_SCHEMA = {
@@ -53,7 +53,7 @@ def run(fake_glm, tools, ledger=None, max_turns=8, policy=LLMPolicy()) -> AgentR
     async def go() -> AgentRun:
         endpoint = GlmEndpoint(base_url=fake_glm.base_url, token="test-token", pool=Pool.HIGH)
         backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
-        record = AgentLedger(ledger=ledger or ListLedger(), item_id="item-1", round=0, step="author")
+        record = CallLedger(ledger=ledger or ListLedger(), item_id="item-1", round=0, step="author")
         async with GlmClient(endpoint, backoff=backoff) as client:
             return await run_agent(client, policy, MESSAGES, tools, max_turns, record)
 

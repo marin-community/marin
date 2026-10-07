@@ -42,6 +42,7 @@ from rolloutengine.contracts import (
 
 from taskforge.llm.client import AttemptOutcome, Completion, FinishReason, GlmClient, GlmContextExhausted
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger, recorded_complete
 
 TOKEN_FIELDS: dict[str, object] = {"return_token_ids": True, "logprobs": True}
 
@@ -157,11 +158,15 @@ class GlmRolloutModel:
     """The RolloutEngine model callable over a shared ``GlmClient``.
 
     ``request.options`` (tools, ``tool_choice``, ``parallel_tool_calls``) are sent as request fields
-    after the token fields, so a task's options win.
+    after the token fields, so a task's options win. Every request is one ``LLM_CALL`` span under
+    ``record`` (``llm.recording.recorded_complete``), tagged with ``turn``, the number of assistant
+    turns already in the conversation. The model is shared across rollouts only within one item,
+    round and step; derive one per step with ``dataclasses.replace(model, record=...)``.
     """
 
     client: GlmClient
     policy: LLMPolicy
+    record: CallLedger
 
     def __post_init__(self) -> None:
         if self.policy.max_continuations != 0:
@@ -169,7 +174,14 @@ class GlmRolloutModel:
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         try:
-            completion = await self.client.complete(request.messages, self.policy, {**TOKEN_FIELDS, **request.options})
+            completion = await recorded_complete(
+                self.client,
+                request.messages,
+                self.policy,
+                {**TOKEN_FIELDS, **request.options},
+                self.record,
+                {"turn": str(sum(message.get("role") == "assistant" for message in request.messages))},
+            )
         except GlmContextExhausted as error:
             raise GenerationLimitReached(request.prefix_token_ids) from error
         turn = model_turn(completion)
