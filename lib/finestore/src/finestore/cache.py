@@ -8,12 +8,13 @@ from __future__ import annotations
 import atexit
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 
-from finestore.reader import ReadView
+from finestore.reader import BlobKeyIndex, BlobReadDiagnostics, ReadView
 from finestore.store import DataStore
 
 _CACHE_TTL_DAYS = 30
@@ -37,8 +38,10 @@ class PersistentKvCache:
         resolve_root: Callable[[], str] | None = None,
         *,
         is_writer: Callable[[], bool] | None = None,
+        key_index_directory: Path | None = None,
     ) -> None:
         self._resolve_root = resolve_root
+        self._key_index = None if key_index_directory is None else BlobKeyIndex(key_index_directory)
         self._is_writer = is_writer or (lambda: True)
         self._root: str | None = None
         self._store: DataStore | None = None
@@ -51,8 +54,8 @@ class PersistentKvCache:
         self._closed = False
 
     @classmethod
-    def at(cls, root: str) -> PersistentKvCache:
-        return cls(lambda: root)
+    def at(cls, root: str, *, key_index_directory: Path | None = None) -> PersistentKvCache:
+        return cls(lambda: root, key_index_directory=key_index_directory)
 
     @classmethod
     def in_memory(cls) -> PersistentKvCache:
@@ -67,21 +70,27 @@ class PersistentKvCache:
 
     def load(self, key: str) -> bytes | None:
         """Return ``key`` from memory or the latest committed FineStore view."""
+        return self.load_many((key,)).get(key)
+
+    def load_many(self, keys: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None) -> dict[str, bytes]:
+        """Read a batch from memory and one committed view, omitting cache misses."""
         with self._lock:
-            if key in self._memory:
-                return self._memory[key]
-        if self._resolve_root is None:
-            return None
+            values = {key: self._memory[key] for key in keys if key in self._memory}
+        missing = list(dict.fromkeys(key for key in keys if key not in values))
+        if not missing or self._resolve_root is None:
+            return values
         # The cache is best-effort: an unreadable, inconsistent, or corrupt archive is a miss.
         try:
-            value = ReadView(self._storage_root()).read_blob(key)
+            loaded = ReadView(self._storage_root(), blob_key_index=self._key_index).read_blobs(
+                missing, diagnostics=diagnostics
+            )
         except Exception as exc:
-            logger.warning("FineStore cache is unreadable, treating %s as a miss: %s", key, exc)
-            return None
-        if value is not None:
-            with self._lock:
+            logger.warning("FineStore cache is unreadable, treating %d keys as misses: %s", len(missing), exc)
+            return values
+        with self._lock:
+            for key, value in loaded.items():
                 self._memory.setdefault(key, value)
-        return value
+            return {key: self._memory[key] for key in keys if key in self._memory}
 
     def store(self, key: str, value: bytes) -> None:
         """Remember ``value`` and persist it synchronously or through the remote write queue."""

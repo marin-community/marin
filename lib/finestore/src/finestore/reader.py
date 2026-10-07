@@ -5,12 +5,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import io
 import itertools
+import logging
+import sqlite3
+import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator, Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO, ClassVar, Protocol
 
 import pyarrow as pa
@@ -35,6 +41,35 @@ from finestore.layout import (
 )
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
+_KEY_INDEX_BYTES = 128 * 1024 * 1024
+_KEY_INDEX_BATCH_ROWS = 4096
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BlobReadDiagnostics:
+    """Work performed by blob reads; returned bytes exclude storage read amplification."""
+
+    index_seconds: float = 0.0
+    descriptor_seconds: float = 0.0
+    payload_seconds: float = 0.0
+    indexed_reads: int = 0
+    scan_reads: int = 0
+    index_fallbacks: int = 0
+    index_warm_reads: int = 0
+    # Valid name scans performed, including work rolled back after a later failure.
+    index_refreshed_shards: int = 0
+    index_lock_seconds: float = 0.0
+    index_refresh_seconds: float = 0.0
+    selected_shards: int = 0
+    bytes_returned: int = 0
+
+
+class _BlobReadHandler(FSSpecHandler):
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
+        # read-ahead, which can fetch unrelated inline blobs after a small read.
+        return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
 
 
 @dataclass(frozen=True)
@@ -45,6 +80,7 @@ class _ScanProfile:
 
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
+_BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1)
 _BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1)
 
 
@@ -264,7 +300,7 @@ def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[M
 
 
 def _read_plan(
-    root: str,
+    filesystem: PyFileSystem,
     shards: tuple[_ReadableShard, ...],
     primary_key: tuple[str, ...],
     columns: Sequence[str] | None,
@@ -273,8 +309,6 @@ def _read_plan(
     if not shards:
         return None
     pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
-    fs, _ = factory.url_to_fs(root)
-    filesystem = PyFileSystem(FSSpecHandler(fs))
     schema = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
         promote_options="permissive",
@@ -303,7 +337,7 @@ def _read_plan(
     )
 
 
-def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
+def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: _ScanProfile | None = None) -> pa.Table:
     by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
     for shard in plan.shards:
         by_version[(shard.commit_sequence, shard.generation)].append(shard.path)
@@ -311,7 +345,20 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     parts: list[pa.Table] = []
     for (commit_sequence, generation), paths in sorted(by_version.items()):
         dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
-        part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
+        if scan_profile is None:
+            part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
+        else:
+            # Inline blob values can make a compacted shard gigabytes larger than the
+            # requested results. Bound decoding and disable whole-fragment prefetch.
+            part = dataset.scanner(
+                columns=plan.columns,
+                filter=_build_filter(plan.pushdown_where),
+                batch_size=scan_profile.batch_rows,
+                batch_readahead=scan_profile.batch_readahead,
+                fragment_readahead=scan_profile.fragment_readahead,
+                fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+                use_threads=False,
+            ).to_table()
         part = part.append_column(
             SystemColumns.GENERATION,
             pa.array([generation] * part.num_rows, pa.int32()),
@@ -358,7 +405,9 @@ class _ReadOperations:
         shards = tuple(self.list_shards(table))
         if not shards:
             return None
-        return _read_plan(self.root, shards, self.primary_key(table), columns, where)
+        fs, _ = factory.url_to_fs(self.root)
+        handler = _BlobReadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
+        return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
 
     def scan(
         self,
@@ -443,14 +492,53 @@ class _ReadOperations:
         with stream:
             return stream.read()
 
+    def read_blobs(self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None) -> dict[str, bytes]:
+        """Read named blobs, omitting absent names."""
+        if not names:
+            return {}
+        rows = self._blob_descriptors(names, diagnostics=diagnostics)
+        if rows is None:
+            return {}
+        started = time.monotonic()
+        values = {}
+        try:
+            for row in rows.to_pylist():
+                descriptor = BlobDescriptor.from_row(row)
+                with io.BufferedReader(_BlobReader(self.blob_parts(descriptor))) as stream:
+                    values[descriptor.name] = stream.read()
+        finally:
+            if diagnostics is not None:
+                diagnostics.payload_seconds += time.monotonic() - started
+        if diagnostics is not None:
+            diagnostics.bytes_returned += sum(len(value) for value in values.values())
+        return values
+
+    def _blob_descriptors(
+        self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
+    ) -> pa.Table | None:
+        started = time.monotonic()
+        if diagnostics is not None:
+            diagnostics.scan_reads += 1
+        try:
+            plan = self._read_plan(BlobTables.DESCRIPTORS, None, [(BlobColumns.NAME, "in", list(names))])
+            if plan is None:
+                return None
+            if diagnostics is not None:
+                diagnostics.selected_shards += len(plan.shards)
+            return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+        finally:
+            if diagnostics is not None:
+                diagnostics.descriptor_seconds += time.monotonic() - started
+
     def open_blob(self, name: str) -> BinaryIO | None:
         """Open a named blob as a forward-only stream, or return ``None`` when absent.
 
         Chunk and size validation completes when the caller reads through EOF.
         """
-        row = self.point(BlobTables.DESCRIPTORS, **{BlobColumns.NAME: name})
-        if row is None:
+        rows = self._blob_descriptors((name,))
+        if rows is None or rows.num_rows == 0:
             return None
+        row = rows.slice(0, 1).to_pylist()[0]
         return io.BufferedReader(_BlobReader(self.blob_parts(BlobDescriptor.from_row(row))))
 
     def blob_parts(self, descriptor: BlobDescriptor) -> Generator[bytes, None, None]:
@@ -502,11 +590,168 @@ class _ReadOperations:
         return self.read_blob(ref.key)
 
 
+def _key_index_read_plan(
+    connection: sqlite3.Connection,
+    shards: Sequence[Shard],
+    identities: Sequence[str],
+    indexed: Mapping[str, tuple[int, bytes]],
+    names: Sequence[str],
+    filesystem: PyFileSystem,
+) -> _ReadPlan | None:
+    matching_ids = set()
+    for start in range(0, len(names), _KEY_INDEX_BATCH_ROWS):
+        batch_names = names[start : start + _KEY_INDEX_BATCH_ROWS]
+        placeholders = ",".join("?" for _ in batch_names)
+        matching_ids.update(
+            row[0]
+            for row in connection.execute(
+                f"SELECT DISTINCT shard_id FROM names WHERE name IN ({placeholders})", batch_names
+            )
+        )
+    selected = []
+    schemas = []
+    # The local index may also contain another pinned view's identities.
+    # Only this manifest's shards participate in version selection.
+    for shard, identity in zip(shards, identities, strict=True):
+        shard_id, schema_bytes = indexed[identity]
+        if shard_id in matching_ids:
+            selected.append(shard)
+            schemas.append(pa.ipc.read_schema(pa.BufferReader(schema_bytes)))
+    if not selected:
+        return None
+    return _ReadPlan(
+        shards=tuple(selected),
+        primary_key=(BlobColumns.NAME,),
+        pushdown_where=[(BlobColumns.NAME, "in", list(names))],
+        post_dedup_where=[],
+        filesystem=filesystem,
+        schema=pa.unify_schemas(schemas, promote_options="permissive"),
+        columns=None,
+    )
+
+
+class BlobKeyIndex:
+    """Index descriptor names and schemas without caching payloads or row versions.
+
+    Reads select matching shards from the current manifest. Each archive's index
+    uses at most 128 MiB; refresh journals may consume another 128 MiB.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+
+    def read_plan(
+        self, view: ReadView, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
+    ) -> _ReadPlan | None:
+        """Select descriptor shards for names in this view, refreshing new identities."""
+        shards = view.list_shards(BlobTables.DESCRIPTORS)
+        primary_key = view.primary_key(BlobTables.DESCRIPTORS) if shards else (BlobColumns.NAME,)
+        if primary_key != (BlobColumns.NAME,):
+            raise ValueError(f"unexpected descriptor primary key: {primary_key}")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        root_digest = hashlib.sha256(view.root.encode()).hexdigest()
+        database = self.directory / f"blob-keys-v1-{root_digest}.sqlite"
+        fs, _ = factory.url_to_fs(view.root)
+        filesystem = PyFileSystem(_BlobReadHandler(fs))
+        identities = [
+            hashlib.sha256(
+                f"{shard.path}\0{shard.content_sha256}\0{shard.rows}\0{shard.size_bytes}".encode()
+            ).hexdigest()
+            for shard in shards
+        ]
+        with closing(sqlite3.connect(database, timeout=10, isolation_level=None)) as connection, connection:
+            connection.execute("PRAGMA cache_size = -8192")
+            # A read transaction keeps membership and name selection consistent
+            # while another subprocess refreshes the shared local index.
+            connection.execute("BEGIN")
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('shards', 'names')"
+                )
+            }
+            if tables == {"shards", "names"}:
+                indexed = {
+                    identity: (shard_id, schema)
+                    for shard_id, identity, schema in connection.execute("SELECT id, identity, schema FROM shards")
+                }
+                if all(identity in indexed for identity in identities):
+                    plan = _key_index_read_plan(connection, shards, identities, indexed, names, filesystem)
+                    if diagnostics is not None:
+                        diagnostics.index_warm_reads += 1
+                    return plan
+            connection.commit()
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+            connection.execute(f"PRAGMA max_page_count = {_KEY_INDEX_BYTES // page_size}")
+            connection.execute("PRAGMA foreign_keys = ON")
+            started = time.monotonic()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            finally:
+                if diagnostics is not None:
+                    diagnostics.index_lock_seconds += time.monotonic() - started
+            refresh_started = time.monotonic()
+            try:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS shards "
+                    "(id INTEGER PRIMARY KEY, identity TEXT UNIQUE, schema BLOB NOT NULL)"
+                )
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS names "
+                    "(name TEXT, shard_id INTEGER REFERENCES shards(id) ON DELETE CASCADE, "
+                    "PRIMARY KEY (name, shard_id)) WITHOUT ROWID"
+                )
+                connection.execute("CREATE INDEX IF NOT EXISTS names_by_shard ON names(shard_id)")
+                connection.execute("CREATE TEMP TABLE active (identity TEXT PRIMARY KEY)")
+                connection.executemany("INSERT INTO active VALUES (?)", ((identity,) for identity in identities))
+                connection.execute("DELETE FROM shards WHERE identity NOT IN (SELECT identity FROM active)")
+                indexed = {
+                    identity: (shard_id, schema)
+                    for shard_id, identity, schema in connection.execute("SELECT id, identity, schema FROM shards")
+                }
+                for shard, identity in zip(shards, identities, strict=True):
+                    if identity in indexed:
+                        continue
+                    # Avoid fsspec's payload readahead while indexing only the name column.
+                    with (
+                        filesystem.open_input_file(shard.path) as source,
+                        pq.ParquetFile(source, pre_buffer=False) as parquet,
+                    ):
+                        schema = parquet.schema_arrow.serialize().to_pybytes()
+                        cursor = connection.execute(
+                            "INSERT INTO shards(identity, schema) VALUES (?, ?)", (identity, schema)
+                        )
+                        shard_id = cursor.lastrowid
+                        row_count = 0
+                        for batch in parquet.iter_batches(
+                            columns=[BlobColumns.NAME], batch_size=_KEY_INDEX_BATCH_ROWS, use_threads=False
+                        ):
+                            keys = batch.column(0).to_pylist()
+                            if any(not isinstance(key, str) for key in keys):
+                                raise BlobCorruptionError(f"invalid descriptor name in {shard.path}")
+                            row_count += len(keys)
+                            connection.executemany(
+                                "INSERT OR IGNORE INTO names VALUES (?, ?)", ((key, shard_id) for key in keys)
+                            )
+                        if row_count != shard.rows:
+                            raise BlobCorruptionError(f"descriptor row count differs from manifest for {shard.path}")
+                        indexed[identity] = (shard_id, schema)
+                        if diagnostics is not None:
+                            diagnostics.index_refreshed_shards += 1
+            finally:
+                if diagnostics is not None:
+                    diagnostics.index_refresh_seconds += time.monotonic() - refresh_started
+            return _key_index_read_plan(connection, shards, identities, indexed, names, filesystem)
+
+
 class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
-    def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
+    def __init__(
+        self, root: str, snapshot: ArchiveSnapshot | None = None, *, blob_key_index: BlobKeyIndex | None = None
+    ) -> None:
         self.root = root
+        self._blob_key_index = blob_key_index
         self._layout = FineStoreLayout(self.root)
         # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
         # HEAD, and read_snapshot validates the format version HEAD carries. A missing marker
@@ -515,6 +760,35 @@ class ReadView(_ReadOperations):
         validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
+
+    def _blob_descriptors(
+        self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
+    ) -> pa.Table | None:
+        if self._blob_key_index is None:
+            return super()._blob_descriptors(names, diagnostics=diagnostics)
+        started = time.monotonic()
+        try:
+            plan = self._blob_key_index.read_plan(self, names, diagnostics=diagnostics)
+        except Exception as exc:
+            # Local index failure must not hide a valid expensive inference completion.
+            logger.warning("FineStore key index is unavailable, falling back to descriptor scan: %s", exc)
+            if diagnostics is not None:
+                diagnostics.index_seconds += time.monotonic() - started
+                diagnostics.index_fallbacks += 1
+            return super()._blob_descriptors(names, diagnostics=diagnostics)
+        if diagnostics is not None:
+            diagnostics.index_seconds += time.monotonic() - started
+            diagnostics.indexed_reads += 1
+        if plan is None:
+            return None
+        started = time.monotonic()
+        if diagnostics is not None:
+            diagnostics.selected_shards += len(plan.shards)
+        try:
+            return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+        finally:
+            if diagnostics is not None:
+                diagnostics.descriptor_seconds += time.monotonic() - started
 
     @property
     def token(self) -> CommitToken | None:

@@ -87,6 +87,22 @@ destination file to avoid another complete copy. A transaction's `max_bytes` lim
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
 
+Named-object lookups scan descriptors in 64-row batches with one batch and one
+fragment of readahead, without threaded decoding or Parquet pre-buffering. This
+bounds decoding of unrequested inline values after compaction. Descriptor and part
+files also disable fsspec read-ahead so a small column read does not fetch adjacent
+blob payloads. Ordinary table reads keep their filesystem caching behavior. Returned values
+still occupy memory, and dispersed keys can require reading most row groups;
+bounded decoding does not remove row-group read amplification. An optional
+`BlobKeyIndex` skips descriptor shards that contain none of the requested names.
+
+Pass a `finestore.reader.BlobReadDiagnostics` instance as `diagnostics=` to
+`ReadView.read_blobs` or `PersistentKvCache.load_many` to accumulate index,
+descriptor-scan and payload-assembly seconds, indexed/scan/fallback counts,
+selected descriptor-shard counts and returned value bytes. Returned bytes measure
+decoded output, not physical storage traffic. Memory hits do not add storage-read
+diagnostics.
+
 Two adapters build cache behavior on this primitive:
 
 - `finestore.cache.PersistentKvCache` stores serialized autotuning and compiled-kernel

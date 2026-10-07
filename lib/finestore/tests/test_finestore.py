@@ -389,6 +389,7 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     view = ReadView(root)
     assert view.read_blob("old") == inline
     assert view.read_blob("large") == payload
+    assert view.read_blobs(["old", "large", "absent", "old"]) == {"old": inline, "large": payload}
     parts = view.scan(
         BlobTables.PARTS,
         columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],

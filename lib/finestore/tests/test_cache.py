@@ -1,16 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import random
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
 
 import finestore.cache as cache_module
+import fsspec
+import pyarrow.dataset as pds
+import pytest
+from finestore import shard_writer
 from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
-from finestore.layout import BlobTables
-from finestore.reader import ReadView
-from finestore.store import DataStore
+from finestore.commit import read_snapshot
+from finestore.layout import BlobTables, FineStoreLayout
+from finestore.reader import BlobKeyIndex, BlobReadDiagnostics, ReadView
+from finestore.store import OBJECT_PART_BYTES, DataStore
+from fsspec.implementations.local import LocalFileSystem
+from fsspec.spec import AbstractBufferedFile
+from pyarrow.fs import FSSpecHandler, PyFileSystem
+from rigging.filesystem import factory
 from rigging.filesystem.storage_path import StoragePath
 
 _CACHE_PROCESS = textwrap.dedent(
@@ -49,6 +61,126 @@ _CACHE_PROCESS = textwrap.dedent(
 )
 
 
+class _RangeFile(AbstractBufferedFile):
+    def _fetch_range(self, start, end):
+        self.fs.fetched_bytes += end - start
+        with open(self.path, "rb") as source:
+            source.seek(start)
+            return source.read(end - start)
+
+
+class _RangeFileSystem(LocalFileSystem):
+    """Local bytes served through the same read-ahead cache as object storage."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.fetched_bytes = 0
+
+    def _open(self, path, mode="rb", *, cache_type="readahead", **kwargs):
+        assert mode == "rb"
+        return _RangeFile(self, path, mode=mode, block_size=50 * 1024 * 1024, cache_type=cache_type)
+
+
+class _IndexUriFileSystem(_RangeFileSystem):
+    """Exercise URI routing with file options rejected by the storage constructor."""
+
+    protocol = "blobindex"
+
+    def __init__(self, **kwargs):
+        if "cache_type" in kwargs:
+            raise TypeError("cache_type belongs to the file open, not the filesystem constructor")
+        super().__init__(**kwargs)
+        self.read_cache_types = []
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        return str(path).removeprefix("blobindex://")
+
+    def _open(self, path, mode="rb", *, cache_type="readahead", **kwargs):
+        if path.endswith(".parquet"):
+            self.read_cache_types.append(cache_type)
+        return super()._open(path, mode=mode, cache_type=cache_type, **kwargs)
+
+
+def test_cold_blob_index_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
+    fsspec.register_implementation("blobindex", _IndexUriFileSystem, clobber=True)
+    local_root = str(tmp_path / "archive")
+    root = f"blobindex://{local_root}"
+    chunked = b"x" * (OBJECT_PART_BYTES + 1)
+    with DataStore.open(local_root, flush_interval=600) as store:
+        store.write_object("inline", b"old")
+        store.flush()
+        store.write_object("inline", b"latest")
+        store.write_object("chunked", chunked)
+        store.flush()
+
+    # Keep real local conditional commits; route immutable shard reads through the URI backend.
+    snapshot = read_snapshot(FineStoreLayout(local_root))
+    tables = {
+        name: table.model_copy(
+            update={"shards": [shard.model_copy(update={"path": f"blobindex://{shard.path}"}) for shard in table.shards]}
+        )
+        for name, table in snapshot.manifest.tables.items()
+    }
+    snapshot = replace(snapshot, manifest=snapshot.manifest.model_copy(update={"tables": tables}))
+    filesystem, _ = factory.url_to_fs(root)
+    filesystem.read_cache_types.clear()
+    view = ReadView(root, snapshot=snapshot, blob_key_index=BlobKeyIndex(tmp_path / "index"))
+    diagnostics = BlobReadDiagnostics()
+    assert view.read_blobs(["inline", "chunked", "missing"], diagnostics=diagnostics) == {
+        "inline": b"latest",
+        "chunked": chunked,
+    }
+    assert diagnostics.indexed_reads == 1
+    assert diagnostics.index_fallbacks == 0
+    assert diagnostics.scan_reads == 0
+    assert diagnostics.bytes_returned == len(b"latest") + len(chunked)
+    assert filesystem.read_cache_types
+    assert set(filesystem.read_cache_types) == {"none"}
+
+
+@pytest.mark.parametrize("index_name", [None, "index"])
+def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, monkeypatch, index_name):
+    root = str(tmp_path / "archive")
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
+    random_bytes = random.Random(0)
+    with DataStore.open(root, max_buffer_bytes=64 * 1024 * 1024, flush_interval=600) as store:
+        store.write_object("matched", b"old")
+        store.flush()
+        store.write_object("matched", b"latest")
+        for index in range(16):
+            store.write_object(f"unmatched-{index:02d}", random_bytes.randbytes(1024 * 1024))
+        store.flush()
+
+    filesystem = _RangeFileSystem(skip_instance_cache=True)
+    monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
+    index = BlobKeyIndex(tmp_path / index_name) if index_name else None
+    view = ReadView(root, blob_key_index=index)
+    diagnostics = BlobReadDiagnostics()
+    assert view.read_blobs(["matched", "absent", "matched"], diagnostics=diagnostics) == {"matched": b"latest"}
+    bounded_bytes = filesystem.fetched_bytes
+    assert diagnostics.bytes_returned == len(b"latest")
+    assert diagnostics.indexed_reads == (1 if index_name else 0)
+    assert diagnostics.scan_reads == (0 if index_name else 1)
+
+    # The unchanged Arrow filter can prune the other row groups. Default fsspec
+    # read-ahead still pulls their bytes after reading the small matched group.
+    filesystem.fetched_bytes = 0
+    dataset = pds.dataset(
+        [shard.path for shard in view.list_shards(BlobTables.DESCRIPTORS)],
+        filesystem=PyFileSystem(FSSpecHandler(filesystem)),
+        format="parquet",
+    )
+    baseline = dataset.scanner(
+        filter=pds.field("name") == "matched",
+        fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+        use_threads=False,
+    ).to_table()
+    assert set(baseline.column("data").to_pylist()) == {b"old", b"latest"}
+    assert filesystem.fetched_bytes > 16 * 1024 * 1024
+    assert bounded_bytes < 512 * 1024
+
+
 def test_persistent_cache_round_trips_and_supersedes_named_bytes(tmp_path):
     root = str(tmp_path / "cache")
     cache = PersistentKvCache.at(root)
@@ -72,6 +204,68 @@ def test_persistent_cache_keeps_a_loaded_value_in_memory(tmp_path):
     assert reader.load("kernel") == b"object-code"
     drop_table(root, BlobTables.DESCRIPTORS)
     assert reader.load("kernel") == b"object-code"
+
+
+def test_batch_cache_reads_latest_persisted_values_and_preserves_memory_hits(tmp_path):
+    root = str(tmp_path / "cache")
+    writer = PersistentKvCache.at(root)
+    writer.store("first", b"old")
+    writer.store("first", b"new")
+    writer.store("second", b"other")
+    writer.close()
+
+    reader = PersistentKvCache.at(root)
+    assert reader.load_many(["first", "second", "missing", "first"]) == {"first": b"new", "second": b"other"}
+    drop_table(root, BlobTables.DESCRIPTORS)
+    assert reader.load_many(["first", "second", "missing"]) == {"first": b"new", "second": b"other"}
+    reader.close()
+
+
+@pytest.mark.parametrize("index_name", [None, "index"])
+def test_batch_cache_lookup_bounds_decoding_of_unrequested_inline_values(tmp_path, index_name):
+    root = str(tmp_path / "cache")
+    # A compacted review cache has large inline values spread across row groups.
+    # Requesting a few keys must not decode the whole shard at once.
+    with DataStore.open(root, max_buffer_bytes=512 * 1024 * 1024, flush_interval=600) as store:
+        for index in range(8192):
+            store.write_object(f"{index:08d}", index.to_bytes(8, "little") + b"x" * (32768 - 8))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import json
+                import sys
+                from pathlib import Path
+                import pyarrow as pa
+                from finestore.cache import PersistentKvCache
+
+                indexes = range(0, 8192, 128)
+                cache = PersistentKvCache.at(
+                    sys.argv[1], key_index_directory=Path(sys.argv[2]) if sys.argv[2] else None
+                )
+                values = cache.load_many([f"{index:08d}" for index in indexes])
+                cache.close()
+                assert values == {
+                    f"{index:08d}": index.to_bytes(8, "little") + b"x" * (32768 - 8)
+                    for index in indexes
+                }
+                print(json.dumps({"peak_bytes": pa.default_memory_pool().max_memory()}))
+                """
+            ),
+            root,
+            str(tmp_path / index_name) if index_name else "",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    # The requested values occupy 2 MiB. Allow two decoded 100 MiB row groups
+    # plus scratch space, but less than the full 256 MiB cache payload.
+    assert json.loads(result.stdout)["peak_bytes"] < 256 * 1024 * 1024
 
 
 def test_cache_reads_an_archive_without_its_format_marker_and_the_next_store_recreates_it(tmp_path):
