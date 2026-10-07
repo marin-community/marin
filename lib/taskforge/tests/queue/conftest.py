@@ -253,12 +253,14 @@ class SolverModel:
     """Replies ``ANSWER = 42`` to every other solver request and ``ANSWER = 41`` to the rest; each adversary
     role replies its sentinel (the ambiguity role a wrong answer), so a round is calibrated.
 
-    While ``unavailable`` is set every request raises it instead. With ``hang`` set, every request waits
-    until the test cancels the run.
+    A role in ``solves`` instead reads the question with a shell command and submits ``ANSWER = 42``: an
+    honest solve against its orders, which the calibration tiers ``NOTED``. While ``unavailable`` is set
+    every request raises it instead. With ``hang`` set, every request waits until the test cancels the run.
     """
 
     unavailable: Callable[[], Exception] | None = None
     hang: bool = False
+    solves: frozenset[AdversaryRole] = frozenset()
     solver_calls: int = 0
     requests: int = 0
     started: asyncio.Event = field(default_factory=asyncio.Event)
@@ -278,10 +280,27 @@ class SolverModel:
         if role is None:
             self.solver_calls += 1
             text = "ANSWER = 42" if self.solver_calls % 2 else "ANSWER = 41"
+        elif role in self.solves:
+            text = "ANSWER = 42"
         else:
             text = SENTINEL_REPLIES.get(role, "ANSWER = 7")
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
+        if role in self.solves and request.messages[-1]["role"] != "tool":
+            return ModelTurn(READ_QUESTION, prompt, (21,), (-0.5,), "tool_calls")
         return ModelTurn({"role": "assistant", "content": text}, prompt, (20,), (-0.5,), "stop")
+
+
+READ_QUESTION = {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {"name": "shell", "arguments": json.dumps({"command": "cat /workspace/question.txt"})},
+        }
+    ],
+}
 
 
 def loop_policy(k: int = 4, max_validation_retries: int = 0, max_build_retries: int = 0) -> LoopPolicy:
