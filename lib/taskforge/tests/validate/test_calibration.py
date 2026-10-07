@@ -39,9 +39,10 @@ from taskforge.validate.calibration import (
     write_summary,
     written_inputs,
 )
+from taskforge.validate.controls import control_outcome
 from taskforge.validate.evidence import Complete, Incomplete
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
-from taskforge.validate.run import ValidationEvidence, control_outcome
+from taskforge.validate.run import ValidationEvidence
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
 DIGEST = "ab" * 32

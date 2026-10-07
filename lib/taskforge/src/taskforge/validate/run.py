@@ -29,9 +29,16 @@ from taskforge.spec.controls import Control, validate_controls
 from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, role_preamble
 from taskforge.validate.attempts import trial_files
 from taskforge.validate.calibration import CalibrationBand, TaskFacts, task_facts
-from taskforge.validate.controls import ControlOutcome, ControlVerdict, ScriptedModel, Tokenize, control_turns
+from taskforge.validate.controls import (
+    ControlOutcome,
+    ControlVerdict,
+    ScriptedModel,
+    Tokenize,
+    control_outcome,
+    control_turns,
+)
 from taskforge.validate.evidence import Evidence
-from taskforge.validate.outcome import Graded, Outcome, TrialKind
+from taskforge.validate.outcome import Outcome, TrialKind
 from taskforge.validate.solver import ValidationSite, draft_settings
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, run_trial, task_digest
 
@@ -120,14 +127,6 @@ class ValidationEvidence:
                 TrialKind.ADVERSARY: tuple(o for outcomes in self.adversaries.values() for o in outcomes),
             }
         )
-
-
-def control_outcome(control: Control, outcome: Outcome) -> ControlOutcome:
-    """``outcome`` judged against ``control.expect``."""
-    if not isinstance(outcome, Graded):
-        return ControlOutcome(control, outcome, ControlVerdict.UNGRADED)
-    met = control.expect.met_by(outcome.grade)
-    return ControlOutcome(control, outcome, ControlVerdict.MET if met else ControlVerdict.VIOLATED)
 
 
 def controls_passed(controls: Sequence[ControlOutcome]) -> bool:
