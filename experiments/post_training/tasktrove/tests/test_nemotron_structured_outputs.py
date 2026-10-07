@@ -13,6 +13,7 @@ from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlEleme
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
+from experiments.post_training.tasktrove.converters.nemotron_structured_outputs import MISSING_VALUE
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
@@ -362,3 +363,50 @@ def test_missing_content_judge_is_an_infrastructure_error(tmp_path, unconfigured
     spec, workspace = _grounded_task(tmp_path, "csv", GROUNDING_CANDIDATES["csv"][0])
     verdict = grade(spec, tmp_path / "tests", workspace)
     assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
+
+
+@pytest.mark.parametrize("schema_type", ["json", "yaml", "toml"])
+def test_missing_fact_marker_passes_format_and_reaches_grounding_judge(tmp_path, fake_judge, schema_type):
+    task = read_task_binary(_fixture())
+    task.files["instruction.md"] = (
+        f"Extract name and servingTemperature as {schema_type} from this document: The drink is called Tea."
+    ).encode()
+    task.files["tests/verifier_data.json"] = json.dumps(
+        {
+            "schema_type": schema_type,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "servingTemperature": {"type": "number"},
+                },
+                "required": ["name", "servingTemperature"],
+                "additionalProperties": False,
+            },
+        }
+    ).encode()
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.CONVERTED
+    converted = read_task_binary(record.task_binary)
+    converted.write_to(tmp_path)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    candidates = {
+        "json": json.dumps({"name": "Tea", "servingTemperature": MISSING_VALUE}),
+        "yaml": f'name: Tea\nservingTemperature: "{MISSING_VALUE}"\n',
+        "toml": f'name = "Tea"\nservingTemperature = "{MISSING_VALUE}"\n',
+    }
+    (workspace / "answer.txt").write_text(candidates[schema_type])
+    fake_judge.replies = ["PASS"]
+    verdict = grade(parse_spec(converted.text(VERIFIER_TOML)), tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 1.0)
+    assert MISSING_VALUE in fake_judge.prompts[0]
+
+
+def test_missing_marker_cannot_replace_an_available_fact(tmp_path, fake_judge):
+    candidate = json.dumps({"fullName": MISSING_VALUE, "birth": MISSING_VALUE})
+    spec, workspace = _grounded_task(tmp_path, "json", candidate)
+    fake_judge.replies = ["FAIL"]
+    verdict = grade(spec, tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
+    assert candidate in fake_judge.prompts[0]

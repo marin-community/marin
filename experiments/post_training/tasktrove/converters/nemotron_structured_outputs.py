@@ -57,6 +57,15 @@ FORMAT_DIR = "format"
 CONTENT_DIR = "content"
 CHECKER_NAME = "grounded_structured.py"
 VERDICT_NAME = "grounded_verdict.json"
+MISSING_VALUE = "__MISSING__"
+MISSING_INSTRUCTION = (
+    "\n\n## Missing data convention\n"
+    f"If the source document does not provide a requested value, write the string {MISSING_VALUE!r} "
+    "for that field. This marker is permitted in place of any field value by the effective grading "
+    "schema, including fields whose original schema requires a number, boolean, array, or object. "
+    "Keep required field names. Extract all available facts; do not use the marker when the "
+    "document supplies the value, and do not invent missing facts.\n"
+)
 CHECKER_PY = (
     """import json
 import os
@@ -98,9 +107,11 @@ CONTENT_SYSTEM = (
 CONTENT_PROMPT = (
     "Original extraction task and source document:\n{reference}\n\n"
     "Candidate answer:\n{candidate}\n\n"
-    "Return PASS only if every supplied field value is supported by the source document and all "
-    "requested information is present. Accept equivalent representations of the same facts. "
-    "Return FAIL for invented, contradictory, unrelated, or missing values. Do not reward field "
+    "Return PASS only if supplied field values are supported by the source document and all "
+    "available requested information is extracted. Accept equivalent representations of the same facts. "
+    f"A field whose value is absent from the document must contain {MISSING_VALUE!r}; this marker is "
+    "wrong when the document provides that value. Return FAIL for invented, contradictory, unrelated, "
+    "or omitted available values. Do not reward field "
     "names alone. Return exactly PASS or FAIL."
 )
 
@@ -120,6 +131,43 @@ SCHEMA_FORMATS = {
 }
 NESTED_TYPES = frozenset({"object", "array"})
 """Property types a CSV cell cannot carry, so the old grader never asked for their column."""
+
+
+def missing_value_schema(schema: dict | bool) -> dict | bool:
+    """Allow the missing-data marker at field values while preserving all other constraints."""
+    if isinstance(schema, bool):
+        return schema
+    result = dict(schema)
+    for keyword in ("properties", "patternProperties"):
+        if keyword in schema:
+            result[keyword] = {
+                name: {"anyOf": [missing_value_schema(child), {"const": MISSING_VALUE}]}
+                for name, child in schema[keyword].items()
+            }
+    for keyword in ("$defs", "definitions", "dependentSchemas"):
+        if keyword in schema:
+            result[keyword] = {name: missing_value_schema(child) for name, child in schema[keyword].items()}
+    for keyword in (
+        "items",
+        "additionalItems",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "contains",
+        "propertyNames",
+        "if",
+        "then",
+        "else",
+        "not",
+    ):
+        child = schema.get(keyword)
+        if isinstance(child, dict | bool):
+            result[keyword] = missing_value_schema(child)
+        elif isinstance(child, list):
+            result[keyword] = [missing_value_schema(item) for item in child]
+    for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+        if keyword in schema:
+            result[keyword] = [missing_value_schema(child) for child in schema[keyword]]
+    return result
 
 
 def top_level_names(schema: dict) -> tuple[list[str], dict]:
@@ -184,7 +232,7 @@ def graded_by(schema_type: SchemaType, schema: object) -> tuple[Spec, dict[str, 
             if rejected is not None:
                 return rejected
         spec = JsonSchemaSpec(schema=SCHEMA_NAME, format=SCHEMA_FORMATS[schema_type])
-        return spec, {SCHEMA_FILE: json.dumps(validated, indent=2).encode()}
+        return spec, {SCHEMA_FILE: json.dumps(missing_value_schema(validated), indent=2).encode()}
 
     if not isinstance(schema, dict) or not schema:
         return Rejected(ConvertStatus.NULL_GRADER, f"schema missing or not an object: {type(schema).__name__}")
@@ -206,11 +254,12 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
     if isinstance(graded, Rejected):
         return graded
     format_spec, data_files = graded
+    instruction = task.text(INSTRUCTION) + MISSING_INSTRUCTION
     nested_files = {f"tests/{FORMAT_DIR}/{path.removeprefix('tests/')}": value for path, value in data_files.items()}
     content_spec = JudgeSpec(
         rubric="labels",
         exact_gate=False,
-        references=(task.text(INSTRUCTION),),
+        references=(instruction,),
         system_prompt=CONTENT_SYSTEM,
         prompt_template=CONTENT_PROMPT,
         label_scores={"PASS": 1.0, "FAIL": 0.0},
@@ -227,7 +276,7 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
         }
     )
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
+        instruction=instruction,
         spec=ScriptSpec(path=CHECKER_NAME, verdict_file=VERDICT_NAME, timeout=300.0),
         dockerfile=task.text(DOCKERFILE),
         tags=("structured-outputs", "grounded", "script", "nemotron", schema_type.value),
