@@ -21,6 +21,7 @@ from taskforge.proposal.sources.capability import (
     document_template,
     load_capability_ideas,
     null_slot_proposal,
+    proposal_prefix,
     slot_plan_type,
 )
 
@@ -118,6 +119,13 @@ def filled_document(idea, number: int) -> str:
     )
 
 
+def continuation(idea, number: int, document: str) -> str:
+    """What the model writes after the prefilled start of slot ``number``'s ``document``."""
+    prefix = proposal_prefix(f"d01.algebra.linear-transformations/{number}", idea)
+    assert document.startswith(prefix)
+    return document.removeprefix(prefix)
+
+
 def test_filled_template_parses_and_identity_is_checked(ideas):
     idea = ideas["d01.algebra.linear-transformations"]
     text = filled_document(idea, 4)
@@ -154,33 +162,44 @@ def author(fake_glm, idea) -> SlotOutcome:
     )
 
 
-def test_unparseable_document_is_repaired_once_with_the_prior_reply_and_error(fake_glm, ideas):
+def test_unparseable_document_is_repaired_once_after_the_prefilled_front_matter_start(fake_glm, ideas):
     idea = ideas["d01.algebra.linear-transformations"]
     valid = filled_document(idea, 1)
-    fake_glm.stream(content=valid.replace("verification: code\n", ""))
-    fake_glm.stream(content=valid)
+    broken = valid.replace("verification: code\n", "")
+    fake_glm.stream(content=broken)
+    fake_glm.stream(content=continuation(idea, 1, valid))
 
     outcome = author(fake_glm, idea)
 
     assert isinstance(outcome, SlotProposal)
     assert outcome.repair_error is not None and "verification" in outcome.repair_error
-    assert len(outcome.completions) == 2
+    assert [c.content for c in outcome.completions] == [broken, valid]
     repair_request = fake_glm.requests[1]["messages"]
     assert repair_request[:2] == list(outcome.request)
-    assert repair_request[2] == {"role": "assistant", "content": valid.replace("verification: code\n", "")}
+    assert repair_request[2] == {"role": "assistant", "content": broken}
     assert "missing key(s) ['verification']" in repair_request[3]["content"]
+    assert repair_request[4] == {
+        "role": "assistant",
+        "content": proposal_prefix("d01.algebra.linear-transformations/1", idea),
+    }
+    assert "enable_thinking" not in fake_glm.requests[0]["chat_template_kwargs"]
+    assert fake_glm.requests[1]["continue_final_message"] is True
 
 
 def test_document_still_invalid_after_repair_is_a_slot_failure_with_both_completions(fake_glm, ideas):
     idea = ideas["d01.algebra.linear-transformations"]
     fake_glm.stream(content="not a proposal")
-    fake_glm.stream(content=filled_document(idea, 2))
+    fake_glm.stream(content=" null\nenvironment: shellsim\n---\nstill no body")
 
     outcome = author(fake_glm, idea)
 
     assert isinstance(outcome, SlotFailure)
-    assert "id" in outcome.error
-    assert [c.content for c in outcome.completions] == ["not a proposal", filled_document(idea, 2)]
+    assert "invalid after repair" in outcome.error
+    prefix = proposal_prefix("d01.algebra.linear-transformations/1", idea)
+    assert [c.content for c in outcome.completions] == [
+        "not a proposal",
+        prefix + " null\nenvironment: shellsim\n---\nstill no body",
+    ]
 
 
 def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model_for_null_slots(fake_glm, ideas):
