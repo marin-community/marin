@@ -58,6 +58,7 @@ _METADATA_ACCELERATOR = "accelerator"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
+BACKEND_PORT_NAME = "backend"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 
 
@@ -223,7 +224,9 @@ def _prepared_local_inference(
     iris: IrisConfig,
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
-    with local_inference(resolved_model, engine, num_chips=num_chips) as session:
+    with local_inference(
+        resolved_model, engine, port=iris_ctx().get_port(BACKEND_PORT_NAME), num_chips=num_chips
+    ) as session:
         yield session
 
 
@@ -438,6 +441,7 @@ def _start_direct_inference(
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
             priority=iris.priority,
+            ports=(BACKEND_PORT_NAME,),
         )
     )
     try:
@@ -528,6 +532,7 @@ def _submit_broker_workers(
                     max_retries_failure=broker.max_retries_failure,
                     max_retries_preemption=broker.max_retries_preemption,
                     priority=iris.priority,
+                    ports=(BACKEND_PORT_NAME,),
                 )
             )
         )

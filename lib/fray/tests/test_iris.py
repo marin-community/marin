@@ -9,6 +9,7 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 
 import pickle
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import fray.iris_backend as iris_backend
@@ -29,6 +30,7 @@ from fray.types import (
     ResourceConfig,
     TpuConfig,
 )
+from iris.client.client import IrisClient
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import ResourceSpec, gpu_device
@@ -283,6 +285,28 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+
+
+def test_submit_job_forwards_named_ports_to_iris():
+    class RecordingIris:
+        def __init__(self):
+            self.port_names: list[str] = []
+
+        def submit(self, **kwargs):
+            self.port_names = kwargs["ports"]
+            return SimpleNamespace(job_id="job-with-port")
+
+    iris = RecordingIris()
+    client = FrayIrisClient.from_iris_client(cast(IrisClient, iris))
+    request = JobRequest(
+        name="job-with-port",
+        entrypoint=Entrypoint.from_callable(lambda: None),
+        ports=("backend",),
+    )
+
+    client.submit(request)
+
+    assert iris.port_names == ["backend"]
 
 
 class TestActorGroupEnvironment:

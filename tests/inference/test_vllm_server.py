@@ -368,6 +368,28 @@ def test_serves_when_startup_succeeds():
         assert environment.model_id == "fake-model"
 
 
+def test_environment_rejects_another_model_on_its_port(tmp_path):
+    port = _free_port()
+    incumbent = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=port,
+        launcher=_FakeLauncher("serve"),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    with incumbent:
+        challenger = VllmEnvironment(
+            vllm_server.InferenceModelConfig(name="requested-model", path=None, engine_kwargs={}),
+            port=port,
+            launcher=_FakeLauncher("hang", str(tmp_path / "starts")),
+            compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+            expected_model_id="requested-model",
+            wait_for_ready=False,
+        )
+        with pytest.raises(RuntimeError, match="requested-model"):
+            with challenger:
+                _wait_until_ready(challenger)
+
+
 def test_streamer_fault_fails_while_parent_is_still_running(tmp_path):
     counter = tmp_path / "starts"
     with pytest.raises(RuntimeError, match="Run:ai streamer read fault"):
