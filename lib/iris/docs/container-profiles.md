@@ -1,8 +1,8 @@
 # Container Security Profiles
 
 A job's **container profile** selects a named bundle of container/pod security
-settings instead of exposing individual docker/k8s knobs. Five profiles exist
-(defined in [`job.proto`](../src/iris/rpc/job.proto)), ordered by privilege:
+settings instead of exposing individual docker/k8s knobs. Profiles are defined
+in [`job.proto`](../src/iris/rpc/job.proto):
 
 | Profile | Selected via | Behavior |
 |---|---|---|
@@ -13,9 +13,26 @@ settings instead of exposing individual docker/k8s knobs. Five profiles exist
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
 `CONTAINER_PROFILE_UNSPECIFIED` (the wire default) resolves to
-`CONTAINER_PROFILE_DEFAULT`. The CLI choice is case-insensitive. The former
-`CONTAINER_PROFILE_GVISOR` (value 5) is retired: the controller rejects it at
-submission, and migration 0052 turned stored GVISOR jobs into SANDBOX jobs.
+`CONTAINER_PROFILE_DEFAULT`. The CLI choice is case-insensitive.
+
+### Temporary compatibility for legacy gVisor clients
+
+`CONTAINER_PROFILE_GVISOR` (wire value 5) is temporarily accepted for running
+clients that predate `SANDBOX`. It keeps the gVisor runtime and the original
+behavior: workspace bundles, inherited environment, cluster credentials,
+shared caches, service account, and `CLUSTER` egress by default. On Kubernetes
+it uses CNI pod networking for cluster egress, even when GPU tasks use host
+networking, and keeps the log-shipper and output-uploader sidecars. It is CPU-only and
+does not require an elevated role. It does not provide `SANDBOX`'s isolation
+from cluster services or credentials.
+
+New clients must use `SANDBOX`. The controller logs each legacy submission with
+`uses deprecated CONTAINER_PROFILE_GVISOR` and its job ID; use those records
+to find remaining callers. The controller rollout owner removes the deprecated
+profile and its runtime branches after those submitters have upgraded and
+all their profile-5 jobs have finished. Migration 0052 already converted
+stored GVISOR jobs to SANDBOX; this compatibility path does not reverse that
+migration or change the behavior of profile 6.
 
 ## Elevated profiles require authorization
 
