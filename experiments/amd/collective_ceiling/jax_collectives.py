@@ -9,13 +9,16 @@ compiles once, then makes one mandatory warm-up call. ``--extra-warmup-seconds``
 warm-up calls after it; 0 skips them. The mean time of all warm-up calls sizes the timed windows,
 and the script reports the median of ``--repeats`` windows of about ``--window-seconds``.
 
-Sizes and bus bandwidth follow rccl-tests: the size is the full (gathered) buffer for all-gather and
-reduce-scatter, the per-rank buffer for all-reduce, and the per-rank send buffer for all-to-all.
-Bus bandwidth is ``size / time`` times ``(n-1)/n`` (all-gather, reduce-scatter, all-to-all) or
-``2(n-1)/n`` (all-reduce).
+Sizes and bus bandwidth follow the nccl-tests conventions, which rccl-tests shares
+(https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md). The size is the full
+(gathered) buffer for all-gather and reduce-scatter, the per-rank buffer for all-reduce, and the
+per-rank send buffer for all-to-all. Bus bandwidth is ``size / time`` times ``(n-1)/n``
+(all-gather, reduce-scatter, all-to-all) or ``2(n-1)/n`` (all-reduce).
 
 ``--overlap`` also times each collective alongside an independent bf16 matmul in the same program,
-to show how much the two slow each other down when XLA runs the collective asynchronously.
+to show how much the two slow each other down when XLA runs the collective asynchronously. The matmul
+is timed alone once per run. Overlap rows divide the size by the time of the whole program, collective
+and matmul together, so their bandwidths are effective rates that include the matmul.
 """
 
 import argparse
@@ -115,7 +118,34 @@ def _time(fn: Callable[[], object], timing: Timing) -> tuple[float, int]:
     return statistics.median(windows), iterations
 
 
-def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, timing: Timing) -> OpResult:
+def _chained_matmul(a: jax.Array, b: jax.Array) -> jax.Array:
+    for _ in range(MATMUL_CHAIN):
+        a = a @ b
+    return a
+
+
+def _matmul_inputs(mesh: Mesh) -> tuple[jax.Array, jax.Array]:
+    sharding = NamedSharding(mesh, P(AXIS))
+    shape = (MATMUL_DIM * mesh.size, MATMUL_DIM)
+    return (
+        jax.device_put(jnp.zeros(shape, jnp.bfloat16), sharding),
+        jax.device_put(jnp.zeros(shape, jnp.bfloat16), sharding),
+    )
+
+
+def time_matmul(mesh: Mesh, timing: Timing) -> float:
+    """Median seconds per call of the overlap test's chained matmul, run alone."""
+    spec = P(AXIS)
+    mm = jax.jit(jax.shard_map(_chained_matmul, mesh=mesh, in_specs=(spec, spec), out_specs=spec, check_vma=False))
+    a, b = _matmul_inputs(mesh)
+    seconds, _ = _time(lambda: mm(a, b), timing)
+    return seconds
+
+
+def run_op(
+    mesh: Mesh, op: str, dtype: str, size_bytes: int, *, matmul_alone_seconds: float | None, timing: Timing
+) -> OpResult:
+    """Time one collective; with ``matmul_alone_seconds`` set, time it next to the chained matmul."""
     n = mesh.size
     hidden = MODEL_HIDDEN_DIM
     row_bytes = hidden * jnp.dtype(DTYPES[dtype]).itemsize
@@ -126,27 +156,15 @@ def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, t
     collective = _collective(op)
     actual_bytes = rows * row_bytes * (n if op == "all_gather" else 1)
 
-    matmul_alone = None
+    overlap = matmul_alone_seconds is not None
     if overlap:
-        a = jax.device_put(jnp.zeros((MATMUL_DIM * n, MATMUL_DIM), jnp.bfloat16), sharding)
-        b = jax.device_put(jnp.zeros((MATMUL_DIM * n, MATMUL_DIM), jnp.bfloat16), sharding)
-
-        def chain(a, b):
-            for _ in range(MATMUL_CHAIN):
-                a = a @ b
-            return a
+        a, b = _matmul_inputs(mesh)
 
         @partial(jax.shard_map, mesh=mesh, in_specs=(spec, spec, spec), out_specs=(spec, spec), check_vma=False)
         def both(x, a, b):
-            return collective(x), chain(a, b)
-
-        @partial(jax.shard_map, mesh=mesh, in_specs=(spec, spec), out_specs=spec, check_vma=False)
-        def mm(a, b):
-            return chain(a, b)
+            return collective(x), _chained_matmul(a, b)
 
         both_jit = jax.jit(both)
-        mm_jit = jax.jit(mm)
-        matmul_alone, _ = _time(lambda: mm_jit(a, b), timing)
         seconds, iterations = _time(lambda: both_jit(x, a, b), timing)
     else:
         fn = jax.jit(jax.shard_map(collective, mesh=mesh, in_specs=spec, out_specs=spec, check_vma=False))
@@ -162,7 +180,7 @@ def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, t
         median_seconds=seconds,
         algbw_gbps=algbw,
         busbw_gbps=algbw * _bus_factor(op, n),
-        matmul_alone_seconds=matmul_alone,
+        matmul_alone_seconds=matmul_alone_seconds,
     )
 
 
@@ -208,24 +226,26 @@ def main() -> None:
         "nccl_env": {k: v for k, v in os.environ.items() if k.startswith(("NCCL_", "RCCL_", "HSA_"))},
     }
     logger.info("%s", header)
+    matmul_alone_seconds = time_matmul(mesh, timing) if args.overlap else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a") as out:
         out.write(json.dumps({"header": header}) + "\n")
         for dtype in args.dtypes:
             for op in args.ops:
                 for size_mb in args.sizes_mb:
-                    for overlap in [False, True] if args.overlap else [False]:
-                        result = run_op(mesh, op, dtype, int(size_mb * 1e6), overlap=overlap, timing=timing)
+                    for matmul in [None, matmul_alone_seconds] if args.overlap else [None]:
+                        result = run_op(mesh, op, dtype, int(size_mb * 1e6), matmul_alone_seconds=matmul, timing=timing)
                         out.write(json.dumps({"label": args.label, **dataclasses.asdict(result)}) + "\n")
                         out.flush()
                         logger.info(
-                            "%s %-14s %-8s %8.1f MB overlap=%d %8.3f ms busbw %6.1f GB/s%s",
+                            "%s %-14s %-8s %8.1f MB overlap=%d %8.3f ms %s %6.1f GB/s%s",
                             args.label,
                             op,
                             dtype,
                             result.size_bytes / 1e6,
-                            overlap,
+                            result.overlap,
                             result.median_seconds * 1e3,
+                            "effective busbw" if result.overlap else "busbw",
                             result.busbw_gbps,
                             (
                                 ""
