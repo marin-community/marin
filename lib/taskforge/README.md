@@ -21,7 +21,8 @@ src/taskforge/
   proposal/   the TaskProposal document (model.py), the ProposalSource protocol (source.py), sources/
   triage/     structural checks, the GLM rubric, verdicts
   build/      builder programs: memoized steps, the Build SDK, program authoring, the standard template
-  validate/   trials, the failure classifier, control replay, evidence aggregation
+  validate/   trials, the failure classifier, control replay, evidence aggregation, solver and
+              adversary trials, calibration, attempt files as resumable evidence
 scripts/      Iris image builder, cluster probes, ledger summary
 ```
 
@@ -37,8 +38,8 @@ only each other and external packages. A later stage reaches an earlier one thro
 modules, each of which keeps its types beside the code that checks their invariants:
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
 `ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `build.run` (`TaskDraft`,
-`load_draft`, `item_id_for`), `build.author` (`BuildProgram`, `Revision`), `validate.outcome` and
-`validate.evidence`.
+`load_draft`, `item_id_for`), `build.author` (`BuildProgram`, `Revision`), `validate.outcome`,
+`validate.evidence` and `validate.calibration` (`CalibrationSummary`, `Finding`).
 
 ## Seams
 
