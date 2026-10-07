@@ -253,14 +253,11 @@ jobs:
           TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
           if [ -z "$TPU_TEST_PATHS" ]; then
             TPU_TEST_PATHS="lib/levanter/tests"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/recovery/test_supervisor.py"
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_audio.py"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_distributed.py"
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_new_cache.py"
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_checkpoints.py"
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py"
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_gdn_layer.py"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_sharded_dataset.py"
           fi
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
