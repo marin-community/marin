@@ -1524,6 +1524,114 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    "token_valid",
+    [[True] * 16, [True, False, True, True] * 4],
+    ids=["all_valid", "padded"],
+)
+def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: list[bool]):
+    """The ROCm gather combine gives the scatter-add combine's values, drops and gradients, without scatter-adds."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug._moe import ep_ring
+        from levanter.grug.grug_moe import moe_mlp
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden, inter, experts, topk = 16, 10, 6, 8, 3
+        keys = jax.random.split(jax.random.key(0), 6)
+        x = jax.random.normal(keys[0], (tokens, hidden))
+        # Skewed routing so some shards run out of capacity.
+        logits = jax.random.normal(keys[1], (tokens, experts)) + jnp.linspace(2.0, 0.0, experts)
+        selected_experts = jax.lax.top_k(logits, topk)[1].astype(jnp.int32)
+        combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
+        token_valid = jnp.asarray(__TOKEN_VALID__)
+        w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter))
+        w_down = jax.random.normal(keys[4], (experts, inter, hidden))
+        cotangent = jax.random.normal(keys[5], (tokens, hidden))
+
+        batch = NamedSharding(mesh, P(("data", "expert"), None))
+        expert = NamedSharding(mesh, P("expert", None, None))
+        x, selected_experts, combine_weights, cotangent = (
+            jax.device_put(a, batch) for a in (x, selected_experts, combine_weights, cotangent)
+        )
+        token_valid = jax.device_put(token_valid, NamedSharding(mesh, P(("data", "expert"))))
+        w_up_gate, w_down = jax.device_put(w_up_gate, expert), jax.device_put(w_down, expert)
+
+        def run(x, combine_weights, w_up_gate, w_down):
+            return moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                token_valid=token_valid,
+                activation=jax.nn.silu,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=0.5,
+                report_capacity_overflow=True,
+            )
+
+        def loss(*args):
+            out, counts = run(*args)
+            return jnp.sum(out * cotangent), counts.dropped
+
+        def token_row_scatter_adds(jaxpr):
+            # Scatter-adds that write [rows, hidden] token buffers, searched through nested jaxprs.
+            count = 0
+            for eqn in jaxpr.eqns:
+                shape = eqn.outvars[0].aval.shape if eqn.outvars else ()
+                count += eqn.primitive.name == "scatter-add" and len(shape) == 2 and shape[1] == hidden
+                for param in eqn.params.values():
+                    for sub in param if isinstance(param, (tuple, list)) else (param,):
+                        sub = getattr(sub, "jaxpr", sub)
+                        if hasattr(sub, "eqns"):
+                            count += token_row_scatter_adds(sub)
+            return count
+
+        results = {}
+        for gather in (False, True):
+            ep_ring.is_rocm_backend = lambda gather=gather: gather
+            jax.clear_caches()
+            with jax.set_mesh(mesh):
+                grad_fn = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)
+                args = (x, combine_weights, w_up_gate, w_down)
+                scatter_adds = token_row_scatter_adds(jax.make_jaxpr(grad_fn)(*args).jaxpr)
+                results[gather] = (grad_fn(*args), scatter_adds)
+
+        ((value_s, dropped_s), grads_s), scatter_adds_s = results[False]
+        ((value_g, dropped_g), grads_g), scatter_adds_g = results[True]
+        assert scatter_adds_s > 0, scatter_adds_s
+        assert scatter_adds_g == 0, scatter_adds_g
+        assert int(dropped_s) > 0, int(dropped_s)
+        assert int(dropped_g) == int(dropped_s)
+        np.testing.assert_allclose(np.asarray(value_g), np.asarray(value_s), rtol=1e-5, atol=1e-5)
+        for g, s in zip(grads_g, grads_s, strict=True):
+            np.testing.assert_allclose(np.asarray(g), np.asarray(s), rtol=1e-5, atol=1e-5)
+    """
+    script = script.replace("__TOKEN_VALID__", repr(token_valid))
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _simulate_ragged_a2a(operands, outputs, params):
     """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd.
 
