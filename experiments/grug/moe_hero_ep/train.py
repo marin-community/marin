@@ -350,6 +350,11 @@ class FlopsBaseline:
     total_flops: float
 
     def offset(self, batch_schedule: BatchSchedule, flops_per_example: float, restored_step: int) -> float:
+        """Return the FLOPs to add to ``flops_per_example`` times the examples seen so far.
+
+        The correction replaces the current shape's cost for the first ``completed_steps`` with the
+        parent's recorded total. It is negative when the current shape costs more per example.
+        """
         if self.completed_steps > restored_step:
             raise ValueError("FLOPs baseline must precede or equal the restored checkpoint step")
         return self.total_flops - flops_per_example * batch_schedule.global_data_offset_by_step(self.completed_steps)
