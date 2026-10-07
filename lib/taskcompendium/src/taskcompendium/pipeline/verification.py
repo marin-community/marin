@@ -7,7 +7,7 @@ from verifyit.grade import negative_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec
 
-from taskcompendium.grading import grade_task, resolve_verifier
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AssistantToolCalls,
@@ -18,9 +18,10 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
-from taskcompendium.submission import AnswerFormat, FinalAction, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import FinalAction, PlainText
 
-PLAIN = SubmissionConvention(id="pipeline-plain", answer_format=AnswerFormat.PLAIN)
+PLAIN = PlainText(id="pipeline-plain")
 
 
 def grader_readiness(checks: list[CheckResult]) -> GraderReadiness:
@@ -80,7 +81,7 @@ def answer_checks(task: TaskSpec, controls: tuple[tuple[str, str, float], ...]) 
         passed = (
             result.reward == expected
             if result.status == Outcome.GRADED
-            else (expected == 0.0 and result.status == Outcome.EXTRACTION_ERROR)
+            else (expected == 0.0 and result.status == Outcome.SUBMISSION_FAILURE)
         )
         status = CheckStatus.PASS if passed else CheckStatus.FAIL
         if result.status == Outcome.INFRA_ERROR:
@@ -109,7 +110,7 @@ def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckR
         ("perturbed", wrong, 0.0),
     ):
         grade = grade_task(task, convention, ConversationTrace(events=(*task.context.events, response)))
-        passed = grade.reward == expected or (expected == 0.0 and grade.status == Outcome.EXTRACTION_ERROR)
+        passed = grade.reward == expected or (expected == 0.0 and grade.status == Outcome.SUBMISSION_FAILURE)
         results.append(
             CheckResult(
                 check=name,

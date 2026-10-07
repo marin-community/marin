@@ -15,6 +15,7 @@ import shellsim
 
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    Backend,
     Command,
     ExitReason,
     MachineSpec,
@@ -165,6 +166,8 @@ class ShellSimMachine:
 
 class ShellSimMachineFactory:
     """Start a fresh ShellSim built-in environment for each trial."""
+
+    backend: Backend = Backend.SHELLSIM
 
     def __init__(
         self,

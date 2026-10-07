@@ -4,13 +4,16 @@
 """Exercise the Iris backend with a local subprocess exec provider and a scripted controller."""
 
 import asyncio
+import json
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
@@ -71,11 +74,15 @@ class LocalTask:
 
 
 class LocalJob:
-    def __init__(self):
-        self.terminated = False
+    def __init__(self, task: LocalTask | None = None):
+        self.cancelled = False
+        self.task = task
 
-    def terminate(self):
-        self.terminated = True
+    def tasks(self):
+        return [] if self.task is None else [self.task]
+
+    def cancel(self):
+        self.cancelled = True
 
 
 class LocalClient:
@@ -94,6 +101,14 @@ class RecordingClient(LocalClient):
     def submit(self, **kwargs):
         self.submitted = kwargs
         raise SubmissionRecorded
+
+
+class TaskClient(LocalClient):
+    def __init__(self, job: LocalJob):
+        self.job = job
+
+    def submit(self, **kwargs):
+        return self.job
 
 
 class LocalEndpoint:
@@ -144,9 +159,53 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
             assert target.read_bytes() == source.read_bytes()
         finally:
             await machine.close()
-        assert job.terminated
+        assert job.cancelled
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("private_credentials", [False, True])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
+    task_id = JobName.from_wire("/fixture/sandbox/0")
+    status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
+    job = LocalJob()
+    job.tasks = lambda: [SimpleNamespace(task_id=task_id, status=lambda: status)]
+    client = LocalClient()
+    submitted_environments = []
+
+    def submit(**kwargs):
+        submitted_environments.append(kwargs["environment"].env_vars)
+        return job
+
+    client.submit = submit
+    endpoint = LocalEndpoint()
+    endpoint.url = "http://fixture"
+    endpoint.credentials = None
+    monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
+    monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
+    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
+    secret = "private-fixture-credential"
+    monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
+    factory = IrisMachineFactory(
+        controller_url="http://fixture",
+        secret_env={"JUDGE_KEY": ("env:SHELLBOX_TEST_PRIVATE_KEY",)} if private_credentials else None,
+    )
+    spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert secret not in json.dumps(asdict(machine.spec), default=str)
+            result = await machine.run(Command(("sh", "-c", "printf ready")))
+            assert result.stdout == b"ready"
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert job.cancelled
+    assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
+    assert secret not in json.dumps(asdict(spec), default=str)
+    assert secret not in caplog.text
 
 
 def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
@@ -220,3 +279,35 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
 
     assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
     assert client.submitted["egress_policy"] == egress
+
+
+def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    workdir = tmp_path / "workspace"
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert workdir.is_dir()
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.FAILED))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
+
+    with pytest.raises(RuntimeError, match="container exited"):
+        asyncio.run(factory.create(spec))
+    assert job.cancelled

@@ -9,7 +9,7 @@ import json
 from verifyit.spec import ExactSpec, MathSpec
 
 from taskcompendium.grader import grader_package
-from taskcompendium.grading import resolve_verifier
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

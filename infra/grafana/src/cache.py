@@ -3,17 +3,20 @@
 
 """A TTL cache with per-key coordination and an optional size limit.
 
-Concurrent callers share a cached result or failure. Entries are pruned on
-write and may be evicted before their TTL to meet an optional size budget.
+Concurrent callers share a result or an expected, message-only failure. Entries
+are pruned on write and may be evicted before their TTL to meet a size budget.
 """
 
-import copy
 import sys
 import threading
 import time
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Generic, TypeVar
+
+from errors import UpstreamError
+from finelog.errors import StatsError
 
 V = TypeVar("V")
 
@@ -29,6 +32,23 @@ class _Entry(Generic[V]):
 class _Failure:
     error: Exception
     expires_at: float
+    size: int
+
+
+@dataclass
+class _KeyLock:
+    lock: threading.Lock
+    users: int = 0
+
+
+def _cacheable_error(error: Exception) -> Exception | None:
+    # Reconstruct only errors whose payload is a small message. Copying arbitrary
+    # exceptions can retain HTTP responses, JSON documents, and traceback locals.
+    if isinstance(error, UpstreamError):
+        return UpstreamError(error.source, str(error), status_code=error.status_code)
+    if isinstance(error, StatsError) or type(error) in (ValueError, RuntimeError):
+        return type(error)(str(error))
+    return None
 
 
 class TtlCache(Generic[V]):
@@ -50,12 +70,22 @@ class TtlCache(Generic[V]):
         self._max_size = max_size
         self._get_size = get_size
         self._entries: dict[Hashable, _Entry[V] | _Failure] = {}
-        self._key_locks: dict[Hashable, threading.Lock] = {}
+        self._key_locks: dict[Hashable, _KeyLock] = {}
         self._guard = threading.Lock()
 
-    def _lock_for(self, key: Hashable) -> threading.Lock:
+    @contextmanager
+    def _key_lock(self, key: Hashable) -> Iterator[None]:
         with self._guard:
-            return self._key_locks.setdefault(key, threading.Lock())
+            entry = self._key_locks.setdefault(key, _KeyLock(threading.Lock()))
+            entry.users += 1
+        try:
+            with entry.lock:
+                yield
+        finally:
+            with self._guard:
+                entry.users -= 1
+                if entry.users == 0:
+                    del self._key_locks[key]
 
     def _live(self, key: Hashable) -> _Entry[V] | _Failure | None:
         with self._guard:
@@ -72,24 +102,19 @@ class TtlCache(Generic[V]):
             expired = [k for k, e in self._entries.items() if e.expires_at <= now]
             for k in expired:
                 del self._entries[k]
-                # Dropping a key's lock here can race a concurrent refresh holding
-                # it, so both compute and one query is duplicated. Acquiring key
-                # locks under _guard would invert get_or_compute's lock order and
-                # deadlock.
-                self._key_locks.pop(k, None)
 
-            size = sum(entry.size for entry in self._entries.values() if isinstance(entry, _Entry))
+            size = sum(entry.size for entry in self._entries.values())
             while size > self._max_size:
                 oldest = next(iter(self._entries))
                 removed = self._entries.pop(oldest)
-                if isinstance(removed, _Entry):
-                    size -= removed.size
-                self._key_locks.pop(oldest, None)
+                size -= removed.size
 
     @staticmethod
     def _resolve(entry: _Entry[V] | _Failure) -> V:
         if isinstance(entry, _Failure):
-            raise copy.copy(entry.error).with_traceback(None) from None
+            error = _cacheable_error(entry.error)
+            assert error is not None
+            raise error from None
         return entry.value
 
     def get_or_compute(self, key: Hashable, compute: Callable[[], V]) -> V:
@@ -98,7 +123,7 @@ class TtlCache(Generic[V]):
         if entry is not None:
             return self._resolve(entry)
 
-        with self._lock_for(key):
+        with self._key_lock(key):
             # Another caller may have populated an outcome while we waited.
             entry = self._live(key)
             if entry is not None:
@@ -106,7 +131,12 @@ class TtlCache(Generic[V]):
             try:
                 value = compute()
             except Exception as error:
-                self._store(key, _Failure(error=error, expires_at=time.monotonic() + self._ttl))
+                cached = _cacheable_error(error)
+                if cached is not None:
+                    self._store(
+                        key,
+                        _Failure(cached, time.monotonic() + self._ttl, sys.getsizeof(str(cached))),
+                    )
                 raise
             self._store(
                 key,

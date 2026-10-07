@@ -105,6 +105,7 @@ class LegacyReadView(_ReadOperations):
     """
 
     def __init__(self, root: str) -> None:
+        super().__init__()
         self.root = root
         root_path = StoragePath(root)
         archive = _LegacyArchiveMetadata.model_validate_json((root_path / "_archive.json").read_bytes())

@@ -29,6 +29,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.node_agent.storage_health import run_storage_health
 from iris.cluster.node_agent.uv_cache_recovery import run_uv_cache_recovery
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -914,6 +915,15 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
         if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints
         else None
     )
+    storage_health: threading.Thread | None = None
+    if config.kubernetes_provider.node_health is not None and config.kubernetes_provider.node_health.storage is not None:
+        storage_health = threading.Thread(
+            target=run_storage_health,
+            args=(k8s, node_name, config.kubernetes_provider.node_health.storage, stop),
+            name="storage-health",
+            daemon=True,
+        )
+        storage_health.start()
     cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
     cache_recovery = threading.Thread(
         target=run_uv_cache_recovery,
@@ -939,6 +949,8 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
             stop.wait()
     finally:
         stop.set()
+        if storage_health is not None:
+            storage_health.join(timeout=NODE_AGENT_SHUTDOWN_TIMEOUT)
         cache_recovery.join(timeout=NODE_AGENT_SHUTDOWN_TIMEOUT)
         if cache_reclaimer is not None:
             cache_reclaimer.join(timeout=NODE_AGENT_SHUTDOWN_TIMEOUT)

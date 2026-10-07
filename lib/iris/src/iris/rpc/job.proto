@@ -663,9 +663,11 @@ enum ContainerProfile {
   CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
   CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
-  // The former whole-container gVisor profile, replaced by SANDBOX.
-  reserved 5;
-  reserved CONTAINER_PROFILE_GVISOR;
+  // Temporary compatibility for running clients: gVisor with the legacy
+  // cluster environment, workspace bundles, caches and CLUSTER egress default.
+  // New clients must use SANDBOX. The controller rollout owner removes this
+  // once legacy submitters are upgraded and their profile-5 jobs finish.
+  CONTAINER_PROFILE_GVISOR = 5 [deprecated = true];
   // For model-controlled workloads. Runs the whole container under the gVisor
   // runtime (docker --runtime=runsc / k8s runtimeClassName=gvisor), so
   // in-container root gets the docker default cap set (setuid/apt work) while

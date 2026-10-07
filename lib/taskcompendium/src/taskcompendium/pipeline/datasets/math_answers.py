@@ -16,7 +16,7 @@ from verifyit.modes.extract import extract_boxed
 from verifyit.spec import MathSpec, MathType
 
 from taskcompendium.grader import grader_package
-from taskcompendium.grading import resolve_verifier
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

@@ -7,8 +7,8 @@
 int), which the controller copies onto each ``RunTaskRequest``. Existing rows
 get the default for their profile: INTERNET for SANDBOX, CLUSTER otherwise.
 
-``CONTAINER_PROFILE_GVISOR`` (5) is gone; SANDBOX (6) replaces it. Its rows
-become SANDBOX, so a GVISOR job dispatched after this migration runs without
+This migration converts existing ``CONTAINER_PROFILE_GVISOR`` (5) rows to
+SANDBOX (6), so a converted job dispatched after this migration runs without
 cluster env, credentials or shared caches, and with internet-only egress.
 
 Idempotent: re-run from scratch if the controller crashes mid-migration.

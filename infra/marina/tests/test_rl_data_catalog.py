@@ -455,14 +455,17 @@ def test_confirmed_verifier_defect_survives_publication_and_refresh(
     assert displayed["difficulty"] is None
 
 
+@pytest.mark.parametrize("verifier_revision", ["code2", None])
 def test_verifier_defect_requires_a_validated_current_review_before_green_restoration(
     catalog_connection: Connection,
+    verifier_revision: str | None,
 ) -> None:
     connection = catalog_connection
-    source_id = "MarinSkyRL:math"
+    origin = "MarinSkyRL" if verifier_revision else "Task Trove"
+    source_id = f"{origin}:math"
     issue_url = "https://github.com/example/issues/1"
-    payload = {"id": source_id, "dataset_revision": "data2", "verifier_revision": "code2"}
-    save_snapshot(connection, Snapshot("MarinSkyRL", "code2", "2026-09-29", [payload]))
+    payload = {"id": source_id, "dataset_revision": "data2", "verifier_revision": verifier_revision}
+    save_snapshot(connection, Snapshot(origin, "code2", "2026-09-29", [payload]))
     connection.execute(
         text(
             """
@@ -498,7 +501,7 @@ def test_verifier_defect_requires_a_validated_current_review_before_green_restor
                     "resolved_verifier_issues": [
                         {
                             "issue_url": issue_url,
-                            "verifier_revision": "code2",
+                            "verifier_revision": verifier_revision,
                             "dataset_revision": "data2",
                             "fix_validated": True,
                         }
@@ -507,6 +510,23 @@ def test_verifier_defect_requires_a_validated_current_review_before_green_restor
             },
         ]
     }
+    resolution = collection["reviews"][1]["attributes"]["resolved_verifier_issues"][0]
+    current_resolution = dict(resolution)
+    for invalid_resolution in [
+        {key: value for key, value in current_resolution.items() if key != "verifier_revision"},
+        {**current_resolution, "verifier_revision": "stale-code"},
+        {**current_resolution, "dataset_revision": "stale-data"},
+    ]:
+        resolution.clear()
+        resolution.update(invalid_resolution)
+        connection.execute(
+            text("UPDATE catalog_reviews SET collection = CAST(:collection AS JSONB) WHERE id = 'new-review'"),
+            {"collection": json.dumps(collection)},
+        )
+        with pytest.raises(DBAPIError, match="fresh native review"), connection.begin_nested():
+            connection.execute(resolve)
+    resolution.clear()
+    resolution.update(current_resolution)
     connection.execute(
         text("UPDATE catalog_reviews SET collection = CAST(:collection AS JSONB) WHERE id = 'new-review'"),
         {"collection": json.dumps(collection)},

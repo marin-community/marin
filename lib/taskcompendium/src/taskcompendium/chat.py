@@ -1,15 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize OpenAI chat messages at the Harbor harness boundary."""
+"""Convert OpenAI chat messages to typed conversation evidence."""
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from verifyit.json_objects import unique_object
 
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationEvent,
+    ConversationInput,
     ConversationToolCall,
     ConversationTrace,
     TextMessage,
@@ -21,7 +24,14 @@ class ChatFunction(BaseModel):
     model_config = ConfigDict(strict=True, allow_inf_nan=False)
 
     name: str = Field(min_length=1)
-    arguments: Json[dict[str, JsonValue]]
+    arguments: dict[str, JsonValue]
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def decode_arguments(cls, value: str) -> dict[str, JsonValue]:
+        if not isinstance(value, str):
+            raise ValueError("Provider tool arguments must be a JSON string")
+        return json.loads(value, object_pairs_hook=unique_object)
 
 
 class ChatToolCall(BaseModel):
@@ -43,7 +53,7 @@ class ChatAssistantMessage(BaseModel):
 def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCalls:
     """Validate chat wire data and return protocol-independent submission evidence.
 
-    Malformed protocol data raises at this harness boundary. A valid text reply,
+    Malformed protocol data raises at this ingestion boundary. A valid text reply,
     wrong function name, or wrong arguments remain available for grading.
     """
     validated = ChatAssistantMessage.model_validate(message)
@@ -60,8 +70,7 @@ def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCal
     return TextMessage(role="assistant", content=validated.content)
 
 
-def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
-    """Normalize a complete chat transcript for any TaskCompendium verifier."""
+def _conversation_events(messages: list[dict[str, Any]]) -> tuple[ConversationEvent, ...]:
     events: list[ConversationEvent] = []
     for message in messages:
         role = message.get("role")
@@ -71,4 +80,14 @@ def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
             events.append(ToolResult(call_id=message["tool_call_id"], content=message["content"]))
         else:
             events.append(TextMessage.model_validate(message))
-    return ConversationTrace(events=tuple(events))
+    return tuple(events)
+
+
+def chat_input(messages: list[dict[str, Any]]) -> ConversationInput:
+    """Normalize a public task prefix before model inference."""
+    return ConversationInput(events=_conversation_events(messages))
+
+
+def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
+    """Normalize a complete chat transcript for a TaskCompendium verifier."""
+    return ConversationTrace(events=_conversation_events(messages))

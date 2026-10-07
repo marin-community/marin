@@ -392,3 +392,15 @@ def test_threaded_batch_writer_close_raises_when_writer_fails_with_full_queue():
 
     with pytest.raises(ValueError, match="writer failed"):
         writer.close()
+
+
+def test_threaded_batch_writer_discards_partial_output_when_producer_fails(tmp_path):
+    output_path = str(tmp_path / "out.parquet")
+
+    with pytest.raises(RuntimeError, match="producer failed"):
+        with ThreadedBatchWriter(lambda items: write_parquet_file(items, output_path)) as writer:
+            writer.submit({"id": 1})
+            writer.submit({"id": 2})
+            raise RuntimeError("producer failed")
+
+    assert list(tmp_path.iterdir()) == []
