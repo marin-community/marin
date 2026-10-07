@@ -674,6 +674,21 @@ def test_the_carry_offload_lets_rematerialization_discount_host_buffers(monkeypa
     assert settings == ([] if expected is None else [expected])
 
 
+def test_the_carry_offload_raises_the_memory_budget_with_host_offloading(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == train.OFFLOAD_CARRY_MEM_FRACTION
+    slop = f"--xla_gpu_memory_limit_slop_factor={train.OFFLOAD_CARRY_SLOP_FACTOR}"
+    assert slop in os.environ["XLA_FLAGS"].split()
+
+
 @pytest.mark.parametrize(
     ("moe_implementation", "expected_remat_mode"),
     [
