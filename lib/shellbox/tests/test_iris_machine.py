@@ -74,8 +74,12 @@ class LocalTask:
 
 
 class LocalJob:
-    def __init__(self):
+    def __init__(self, task: LocalTask | None = None):
         self.cancelled = False
+        self.task = task
+
+    def tasks(self):
+        return [] if self.task is None else [self.task]
 
     def cancel(self):
         self.cancelled = True
@@ -97,6 +101,14 @@ class RecordingClient(LocalClient):
     def submit(self, **kwargs):
         self.submitted = kwargs
         raise SubmissionRecorded
+
+
+class TaskClient(LocalClient):
+    def __init__(self, job: LocalJob):
+        self.job = job
+
+    def submit(self, **kwargs):
+        return self.job
 
 
 class LocalEndpoint:
@@ -267,3 +279,35 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
 
     assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
     assert client.submitted["egress_policy"] == egress
+
+
+def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    workdir = tmp_path / "workspace"
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert workdir.is_dir()
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.FAILED))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
+
+    with pytest.raises(RuntimeError, match="container exited"):
+        asyncio.run(factory.create(spec))
+    assert job.cancelled
