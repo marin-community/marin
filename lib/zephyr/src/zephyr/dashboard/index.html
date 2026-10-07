@@ -33,9 +33,18 @@
   .pipeline-list { display: grid; gap: 14px; }
   .pipeline-card, .panel, .chart { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
   .pipeline-card { display: block; width: 100%; min-width: 0; padding: 18px; text-align: left; box-shadow: 0 2px 7px #152d3610; color: inherit; text-decoration: none; }
-  .pipeline-card .stage-flow { margin-top: 18px; }
+  .pipeline-card .pipeline-bar { margin-top: 16px; }
+  .pipeline-bar { display: flex; gap: 6px; max-width: 100%; padding: 2px 0 5px; }
+  .pipeline-step { flex: 1 1 0; min-width: 0; }
+  .pipeline-step-label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .pipeline-step-state { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; text-transform: capitalize; }
+  .pipeline-progress { height: 6px; margin-top: 8px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .pipeline-progress span { display: block; height: 100%; background: var(--idle); }
+  .pipeline-step.succeeded .pipeline-progress span { background: var(--good); }
+  .pipeline-step.running .pipeline-progress span { background: var(--active); }
+  .pipeline-step.failed .pipeline-progress span { background: var(--bad); }
   .panel { padding: 20px; margin-bottom: 18px; }
-  .panel > h2 { margin-top: 22px; }
+  .panel > h2:not(:first-child) { margin-top: 22px; }
   #content > button { margin-bottom: 12px; }
   .phase { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; text-transform: capitalize; white-space: nowrap; }
   .phase::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--idle); }
@@ -61,6 +70,18 @@
   .heatmap-key span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 1px; margin-right: 5px; background: var(--idle); }
   .heatmap-key .done::before { background: var(--good); }
   .heatmap-key .work::before { background: var(--active); }
+  .heatmap-key .stop::before { background: var(--bad); }
+  .stage-sparkline { display: block; margin-top: 9px; }
+  .stage-sparkline svg { display: block; height: 30px; }
+  .stage-sparkline small { display: block; }
+  .shard-grid { display: grid; grid-template-columns: repeat(32, minmax(0, 1fr)); gap: 4px; max-width: 720px; margin: 14px 0; }
+  .shard-tile { height: 19px; min-width: 0; padding: 0; border: 0; border-radius: 2px; background: var(--idle); }
+  .shard-tile.succeeded { background: var(--good); }
+  .shard-tile.running { background: var(--active); }
+  .shard-tile.stopped { background: var(--bad); }
+  .shard-tile:focus-visible, .shard-tile.selected { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .shard-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+  .shard-controls input { width: 80px; }
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 18px; margin: 20px 0 0; }
   .summary div { min-width: 0; }
   dt { font-size: 12px; }
@@ -79,7 +100,7 @@
   #filters { margin-bottom: 16px; }
   #updated { margin-top: 20px; font-size: 12px; }
   [hidden] { display: none !important; }
-  @media (max-width: 650px) { body { padding: 14px; } .pipeline-card, .panel { padding: 14px; } .stage-card { flex-basis: 140px; min-width: 140px; } th, td { padding: 8px 5px; } }
+  @media (max-width: 650px) { body { padding: 14px; } .pipeline-card, .panel { padding: 14px; } .stage-card { flex-basis: 140px; min-width: 140px; } .shard-grid { grid-template-columns: repeat(16, minmax(0, 1fr)); } th, td { padding: 8px 5px; } }
   @media (prefers-color-scheme: dark) { :root { --surface: #1c2a30; --background: #111e24; --ink: #e8eff1; --muted: #b4c0c5; --line: #35454c; --accent: #72c6d0; --good: #54ae85; --active: #e0a254; --bad: #e68181; --idle: #677a83; } }
 </style>
 </head>
@@ -106,6 +127,7 @@ function startDashboard() {
   const byId = (id) => document.getElementById(id);
   const number = (value) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
   const pageSize = 50;
+  const shardPageSize = 256;
   const maxHeatCells = 32;
   const refreshDelay = 5000;
   const requestTimeout = 15000;
@@ -121,6 +143,9 @@ function startDashboard() {
   let timer;
   let request;
   let metricCache;
+  let shardOffset = 0;
+  let shardStage = '';
+  let selectedShardIndex = null;
 
   function bytes(value) {
     const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -221,6 +246,12 @@ function startDashboard() {
       card.lastChild.className = 'stage-state';
       card.append(element('small', state.total_shards ? ` · ${state.completed_shards}/${state.total_shards} shards` : ` · ${node.output_shards} output shards`));
       card.append(heatmap(node, state));
+      if (node.stage_name && node.stage_type !== 'RESHARD') {
+        const sparkline = element('span');
+        sparkline.className = 'stage-sparkline';
+        sparkline.dataset.stageName = node.stage_name;
+        card.append(sparkline);
+      }
       target.append(card);
     };
     plan.nodes.filter((node) => !node.auxiliary).forEach((node, index) => appendStage(node, index, flow));
@@ -234,6 +265,35 @@ function startDashboard() {
     auxiliary.forEach((node, index) => appendStage(node, index, branches));
     group.append(flow, label, branches);
     return group;
+  }
+
+  function pipelineBar(plan, status) {
+    const bar = element('div');
+    bar.className = 'pipeline-bar';
+    bar.setAttribute('aria-label', 'Pipeline stage progress');
+    const states = new Map(status.node_statuses.map((item) => [item.node_id, item]));
+    for (const node of plan.nodes.filter((item) => !item.auxiliary)) {
+      const state = states.get(node.node_id) || { state: 'pending', completed_shards: 0, total_shards: 0 };
+      const current = node.stage_name && node.stage_name === status.current_stage;
+      const complete = current ? status.completed_shards : state.completed_shards;
+      const total = current ? status.total_shards : state.total_shards;
+      const fraction = state.state === 'succeeded' ? 1 : total ? complete / total : 0;
+      const step = element('div');
+      step.className = `pipeline-step ${state.state}`;
+      step.title = `${node.label}: ${phaseLabel(state.state)}${total ? ` · ${complete}/${total} shards` : ''}`;
+      const label = element('span', node.label);
+      label.className = 'pipeline-step-label';
+      const detail = element('span', total ? `${complete}/${total} shards` : phaseLabel(state.state));
+      detail.className = 'pipeline-step-state';
+      const track = element('div');
+      track.className = 'pipeline-progress';
+      const fill = element('span');
+      fill.style.width = `${Math.max(0, Math.min(100, fraction * 100))}%`;
+      track.append(fill);
+      step.append(label, detail, track);
+      bar.append(step);
+    }
+    return bar;
   }
 
   function summary(status) {
@@ -258,6 +318,9 @@ function startDashboard() {
   function selectPipeline(id) {
     executionId = id;
     offset = 0;
+    shardOffset = 0;
+    shardStage = '';
+    selectedShardIndex = null;
     const url = new URL(location.href);
     if (id) url.searchParams.set('execution_id', id);
     else url.searchParams.delete('execution_id');
@@ -296,7 +359,13 @@ function startDashboard() {
       name.append(element('h3', item.plan.pipeline_name || item.status.execution_id), element('p', `${item.status.current_stage || 'No active stage'} · ${item.status.completed_shards}/${item.status.total_shards} current-stage shards`));
       name.lastChild.className = 'muted';
       head.append(name, badge(item.status.phase));
-      card.append(head, stageFlow(item.plan, item.status));
+      card.append(head, pipelineBar(item.plan, item.status));
+      const auxiliary = item.plan.nodes.filter((node) => node.auxiliary).length;
+      if (auxiliary) {
+        const note = element('small', `${auxiliary} join input stage${auxiliary === 1 ? '' : 's'} in detail`);
+        note.className = 'muted';
+        card.append(note);
+      }
       list.append(card);
     }
     if (!pipelines.length) list.append(element('p', 'No pipelines are currently held by this coordinator. Completed executions disappear after the driver releases them.'));
@@ -349,8 +418,33 @@ function startDashboard() {
     return figure;
   }
 
+  function renderStageSparklines(points) {
+    for (const container of document.querySelectorAll('.stage-sparkline')) {
+      const stage = container.dataset.stageName;
+      const samples = points.filter((point) => point.stage === stage).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+      container.replaceChildren();
+      if (samples.length < 2 || !samples.some((point) => point.item_rate > 0)) continue;
+      const rates = samples.map((point) => point.item_rate);
+      const high = Math.max(...rates);
+      const low = Math.min(...rates);
+      const y = (rate) => high === low ? 15 : 26 - 22 * (rate - low) / (high - low);
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 120 30');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', `${stage}: latest ${number(rates.at(-1))} items per second, peak ${number(high)}`);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      line.setAttribute('points', samples.map((point, index) => `${120 * index / (samples.length - 1)},${y(point.item_rate)}`).join(' '));
+      line.setAttribute('fill', 'none');
+      line.setAttribute('stroke', 'var(--accent)');
+      line.setAttribute('stroke-width', '2');
+      svg.append(line);
+      container.append(svg, element('small', `${number(rates.at(-1))} items/s · peak ${number(high)}`));
+    }
+  }
+
   function renderFocused(item) {
     const status = item.status;
+    const scrollPositions = [...byId('content').querySelectorAll('.stage-flow')].map((flow) => flow.scrollLeft);
     const back = element('button', '← All pipelines');
     back.type = 'button';
     back.onclick = () => selectPipeline('');
@@ -371,11 +465,18 @@ function startDashboard() {
       key.append(part);
     }
     panel.append(key);
+    const shardPanel = element('section');
+    shardPanel.className = 'panel';
+    shardPanel.append(element('h2', 'Current-stage shards'));
+    const shardArea = element('div', 'Loading shard status…');
+    shardArea.id = 'shard-area';
+    shardPanel.append(shardArea);
     const metricTitle = element('h2', 'Metrics');
     metricTitle.style.marginTop = '24px';
     const metricsArea = element('div');
     metricsArea.id = 'metrics-area';
-    byId('content').replaceChildren(back, panel, metricTitle, metricsArea);
+    byId('content').replaceChildren(back, panel, shardPanel, metricTitle, metricsArea);
+    [...panel.querySelectorAll('.stage-flow')].forEach((flow, index) => { flow.scrollLeft = scrollPositions[index] || 0; });
     byId('failure').textContent = status.fatal_error;
     byId('failure').hidden = !status.fatal_error;
   }
@@ -391,6 +492,74 @@ function startDashboard() {
     );
     const context = element('p', '15-second averages, including work from failed attempts. Memory is estimated between samples.');
     byId('metrics-area').replaceChildren(...(metrics.warning ? [element('p', metrics.warning)] : []), context, charts);
+    renderStageSparklines(metrics.points);
+  }
+
+  function renderShards(page) {
+    const area = byId('shard-area');
+    if (!page.total) {
+      area.replaceChildren(element('p', 'No shards in the current stage.'));
+      return;
+    }
+    const range = element('p', `${page.stage_name} · shards ${shardOffset + 1}–${shardOffset + page.shards.length} of ${page.total}`);
+    range.className = 'muted';
+    const grid = element('div');
+    grid.className = 'shard-grid';
+    const detail = element('p', 'Select a shard to see its status.');
+    detail.className = 'muted';
+    for (const shard of page.shards) {
+      const tile = element('button');
+      tile.type = 'button';
+      tile.className = `shard-tile ${shard.state}`;
+      tile.title = `Shard ${shard.index}: ${shard.state}`;
+      tile.setAttribute('aria-label', tile.title);
+      if (shard.index === selectedShardIndex) {
+        detail.textContent = tile.title;
+        tile.classList.add('selected');
+      }
+      tile.onclick = () => {
+        selectedShardIndex = shard.index;
+        grid.querySelector('.selected')?.classList.remove('selected');
+        tile.classList.add('selected');
+        detail.textContent = tile.title;
+      };
+      grid.append(tile);
+    }
+    const key = element('p');
+    key.className = 'heatmap-key';
+    for (const [label, className] of [['Complete', 'done'], ['Running', 'work'], ['Pending', 'wait'], ['Stopped', 'stop']]) {
+      const part = element('span', label);
+      part.className = className;
+      key.append(part);
+    }
+    const controls = element('div');
+    controls.className = 'shard-controls';
+    if (page.total > shardPageSize) {
+      const previous = element('button', 'Previous');
+      previous.type = 'button';
+      previous.disabled = shardOffset === 0;
+      previous.onclick = () => { shardOffset = Math.max(0, shardOffset - shardPageSize); void refresh(); };
+      const next = element('button', 'Next');
+      next.type = 'button';
+      next.disabled = shardOffset + page.shards.length >= page.total;
+      next.onclick = () => { shardOffset += shardPageSize; void refresh(); };
+      const jump = element('input');
+      jump.type = 'number';
+      jump.min = '0';
+      jump.max = String(page.total - 1);
+      jump.placeholder = 'Shard #';
+      jump.setAttribute('aria-label', 'Shard number');
+      const go = element('button', 'Go');
+      go.type = 'button';
+      go.onclick = () => {
+        const index = Number(jump.value);
+        if (!jump.value || !Number.isInteger(index) || index < 0 || index >= page.total) return;
+        shardOffset = Math.floor(index / shardPageSize) * shardPageSize;
+        void refresh();
+      };
+      controls.append(previous, next, jump, go);
+    }
+    area.replaceChildren(range, grid, detail, key, controls);
   }
 
   function renderPage(data) {
@@ -443,17 +612,29 @@ function startDashboard() {
       byId('failure').hidden = true;
       if (view === 'overview') {
         if (selected) {
+          if (selected.status.current_stage !== shardStage) {
+            shardStage = selected.status.current_stage;
+            shardOffset = 0;
+            selectedShardIndex = null;
+          }
           renderFocused(selected);
           renderMetrics(metricCache?.executionId === executionId ? metricCache.data : { points: [], warning: 'Loading metrics…' });
-          try {
-            const metrics = await get('metrics', { execution_id: executionId, max_points: 300 });
-            if (current !== request) return;
-            metricCache = { executionId, data: metrics };
-            renderMetrics(metrics);
-          } catch (error) {
-            if (current !== request) return;
-            renderMetrics({ points: [], warning: current.signal.aborted ? 'Metrics request timed out.' : `Metrics unavailable: ${error.message}` });
-          }
+          const metricsRequest = get('metrics', { execution_id: executionId, max_points: 300 }).then(
+            (metrics) => {
+              if (current !== request) return;
+              metricCache = { executionId, data: metrics };
+              renderMetrics(metrics);
+            },
+            (error) => {
+              if (current !== request) return;
+              renderMetrics({ points: [], warning: current.signal.aborted ? 'Metrics request timed out.' : `Metrics unavailable: ${error.message}` });
+            },
+          );
+          const shardsRequest = get('shards', { execution_id: executionId, offset: shardOffset, limit: shardPageSize }).then(
+            (page) => { if (current === request) renderShards(page); },
+            (error) => { if (current === request) byId('shard-area').textContent = `Shard status unavailable: ${error.message}`; },
+          );
+          await Promise.all([metricsRequest, shardsRequest]);
         }
         else renderFleet(overview.pipelines);
       } else if (view === 'counters' && !selected) {

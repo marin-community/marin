@@ -28,6 +28,8 @@ DEFAULT_WORKER_LIMIT = 50
 MAX_WORKER_LIMIT = 200
 DEFAULT_METRIC_POINTS = 200
 MAX_METRIC_POINTS = 500
+DEFAULT_SHARD_LIMIT = 256
+MAX_SHARD_LIMIT = 512
 _BASE_ELEMENT = '<base href="/"'
 
 
@@ -119,6 +121,26 @@ class DashboardOverview:
     pipelines: tuple[PipelineOverview, ...]
 
 
+class ShardState(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    STOPPED = "stopped"
+
+
+@dataclass(frozen=True)
+class ShardStatus:
+    index: int
+    state: ShardState
+
+
+@dataclass(frozen=True)
+class ShardPage:
+    shards: tuple[ShardStatus, ...]
+    total: int
+    stage_name: str
+
+
 @dataclass(frozen=True)
 class PipelineMetrics:
     points: tuple[PipelineMetricPoint, ...] = ()
@@ -192,6 +214,7 @@ class DashboardData(Protocol):
     """Queries used by the dashboard HTTP routes."""
 
     def overview(self) -> DashboardOverview: ...
+    def shards(self, execution_id: str, offset: int, limit: int) -> ShardPage: ...
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics: ...
     def counters(self, query: CounterQuery) -> CounterPage: ...
     def workers(self, query: WorkerQuery) -> WorkerPage: ...
@@ -269,6 +292,12 @@ def create_dashboard_application(data: DashboardData) -> ASGIApp:
     async def overview(_request: Request) -> Response:
         return _json_response(await run_in_threadpool(data.overview))
 
+    async def shards(request: Request) -> Response:
+        execution_id = request.query_params.get("execution_id", "")
+        offset = max(_integer_parameter(request, "offset"), 0)
+        limit = bounded_limit(_integer_parameter(request, "limit"), DEFAULT_SHARD_LIMIT, MAX_SHARD_LIMIT)
+        return _json_response(await run_in_threadpool(data.shards, execution_id, offset, limit))
+
     async def metrics(request: Request) -> Response:
         execution_id = request.query_params.get("execution_id", "")
         max_points = bounded_limit(_integer_parameter(request, "max_points"), DEFAULT_METRIC_POINTS, MAX_METRIC_POINTS)
@@ -302,6 +331,7 @@ def create_dashboard_application(data: DashboardData) -> ASGIApp:
     return Starlette(
         routes=[
             Route("/api/overview", overview),
+            Route("/api/shards", shards),
             Route("/api/metrics", metrics),
             Route("/api/counters", counters),
             Route("/api/workers", workers),

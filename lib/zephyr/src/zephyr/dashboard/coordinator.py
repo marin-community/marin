@@ -23,6 +23,9 @@ from zephyr.dashboard.app import (
     PlanNodeStatus,
     ResourceUsage,
     ShardBucket,
+    ShardPage,
+    ShardState,
+    ShardStatus,
     WorkerAssignment,
     WorkerPage,
     WorkerQuery,
@@ -253,6 +256,23 @@ class CoordinatorDashboard:
                 plan = self._plan_locked(run)
                 pipelines.append(PipelineOverview(plan=plan, status=self._status_locked(run, plan)))
             return DashboardOverview(pipelines=tuple(pipelines))
+
+    def shards(self, execution_id: str, offset: int, limit: int) -> ShardPage:
+        with self._coordinator._lock:
+            run = self._run_locked(execution_id)
+            if run is None:
+                return ShardPage(shards=(), total=0, stage_name="")
+            stopped = self._phase_locked(run) == PipelinePhase.FAILED
+            shards = []
+            for index in range(offset, min(run.total_shards, offset + limit)):
+                if index in run.results:
+                    state = ShardState.SUCCEEDED
+                elif index in run.in_flight:
+                    state = ShardState.RUNNING
+                else:
+                    state = ShardState.STOPPED if stopped else ShardState.PENDING
+                shards.append(ShardStatus(index=index, state=state))
+            return ShardPage(shards=tuple(shards), total=run.total_shards, stage_name=run.stage_name)
 
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._coordinator._lock:

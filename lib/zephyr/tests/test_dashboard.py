@@ -37,7 +37,8 @@ def test_overview_reports_current_shard_heatmap_for_multiple_pipelines(coordinat
     run.in_flight = {20: MagicMock(worker_id="worker-0")}
     start_test_stage(coordinator, [], execution_id="second")
 
-    response = TestClient(coordinator.web_application).get("/api/overview")
+    client = TestClient(coordinator.web_application)
+    response = client.get("/api/overview")
 
     assert response.status_code == 200
     second, first = response.json()["pipelines"]
@@ -50,3 +51,16 @@ def test_overview_reports_current_shard_heatmap_for_multiple_pipelines(coordinat
     assert sum(bucket["completed"] for bucket in node["shard_buckets"]) == 3
     assert sum(bucket["running"] for bucket in node["shard_buckets"]) == 1
     assert sum(bucket["pending"] for bucket in node["shard_buckets"]) == 36
+
+    shards = client.get("/api/shards", params={"execution_id": "first", "offset": 19, "limit": 22}).json()
+    assert shards["total"] == 40
+    assert [shard["state"] for shard in shards["shards"]] == [
+        "pending",
+        "running",
+        *(["pending"] * 18),
+        "succeeded",
+    ]
+
+    run.terminal_error = RuntimeError("failed stage")
+    failed = client.get("/api/shards", params={"execution_id": "first", "offset": 19, "limit": 2}).json()
+    assert [shard["state"] for shard in failed["shards"]] == ["stopped", "running"]
