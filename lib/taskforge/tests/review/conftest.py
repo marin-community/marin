@@ -17,7 +17,7 @@ from taskforge.build.run import Provenance, TaskDraft
 from taskforge.build.step import Blob, CacheStatus, StepRecord, StepRole
 from taskforge.spec.draft import assemble, environment, shell_verifier, stage, staged, task_execution
 from taskforge.validate.adversary import AdversaryRole
-from taskforge.validate.calibration import CalibrationBand, CalibrationSummary, Finding, RoleStats
+from taskforge.validate.calibration import CalibrationBand, CalibrationSummary, DefectTier, Finding, RoleStats
 from taskforge.validate.evidence import Complete, Incomplete, RewardStats
 from taskforge.validate.outcome import Cause
 
@@ -92,10 +92,24 @@ def staged_draft() -> TaskDraft:
     )
 
 
+def role_stats(passes: int) -> RoleStats:
+    """Two graded trials of one role: ``passes`` noted passes, the rest given up."""
+    return RoleStats(
+        required=2,
+        graded=2,
+        passes=passes,
+        gave_up=2 - passes,
+        exhausted=0,
+        output_tokens=3000,
+        tiers={DefectTier.REPAIR: 0, DefectTier.NOTED: passes, DefectTier.NONE: 2 - passes},
+    )
+
+
 def make_summary(
     findings: tuple[Finding, ...] = (),
     causes: Counter[Cause] | None = None,
     solved: int = 4,
+    notes: tuple[Finding, ...] = (),
 ) -> CalibrationSummary:
     status = Incomplete(causes) if causes else Complete()
     graded = K - (sum(causes.values()) if causes else 0)
@@ -110,8 +124,10 @@ def make_summary(
         controls_met=("pos-0", "neg-0"),
         controls_violated=(),
         controls_ungraded=(),
-        roles={role: RoleStats(required=2, graded=2, passes=0, sentinel_replies=2) for role in AdversaryRole},
+        roles={role: role_stats(passes=0) for role in AdversaryRole},
         findings=findings,
+        assessments=(),
+        notes=notes,
     )
 
 

@@ -52,9 +52,13 @@ class Reject:
 
 @dataclass(frozen=True)
 class RepairBrief:
-    """What the author receives as ``Revision.failure``: the findings rendered, new controls as JSON."""
+    """What the author receives as ``Revision.failure``: the findings rendered, the noted adversary
+    passes after them as information, and the findings' new controls as JSON."""
 
     findings: tuple[Finding, ...]
+    """What the author must fix: decisive or band findings."""
+    notes: tuple[Finding, ...]
+    """Adversary passes the calibration only noted: shown to the author, never required to fix."""
     failure: str
 
 
