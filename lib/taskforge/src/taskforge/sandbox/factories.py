@@ -36,7 +36,6 @@ from taskcompendium.environment import (
 from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
 
-IMAGE_CACHE_DIR = Path("~/.cache/taskforge/images").expanduser()
 DOCKER_PROBE_TIMEOUT = 20
 # ShellSim accepts no execution user other than root (shellbox.backends.shellsim.machine.ShellSimMachine.run).
 SHELLSIM_USERS = frozenset({"0", "root"})
@@ -171,21 +170,27 @@ def factory_capabilities(where: MachineHost) -> dict[EnvironmentKind, FactoryCap
     return {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: LOCAL_DOCKER}
 
 
-def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping[EnvironmentKind, MachineFactory]:
+def machine_factories(
+    where: MachineHost, controller_url: str | None, image_cache: Path | None
+) -> Mapping[EnvironmentKind, MachineFactory]:
     """The factories ``ShellboxRolloutEngine`` takes. DOCKER is absent when the laptop has no Docker.
 
     On Iris the DOCKER factory submits sandboxes to ``controller_url``, the controller of the task
-    Taskforge runs in; on a laptop ``controller_url`` must be ``None``.
+    Taskforge runs in, and ``image_cache`` must be ``None``. On a laptop ``controller_url`` must be
+    ``None`` and ``image_cache`` is the directory where the Docker factory keeps the registry images
+    and Dockerfile builds it prepares with Skopeo.
     """
     if (where is MachineHost.IRIS) != (controller_url is not None):
         raise ValueError(f"{where} factories take a controller URL only on Iris, got {controller_url!r}")
+    if (where is MachineHost.LAPTOP) != (image_cache is not None):
+        raise ValueError(f"{where} factories take an image cache only on a laptop, got {image_cache!r}")
     factories: dict[EnvironmentKind, MachineFactory] = {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
     if controller_url is not None:
         factories[EnvironmentKind.DOCKER] = IrisMachineFactory(controller_url=controller_url)
         return factories
     docker = local_docker()
     if docker.skopeo is not None:
-        factories[EnvironmentKind.DOCKER] = DockerMachineFactory(skopeo=docker.skopeo, image_cache=IMAGE_CACHE_DIR)
+        factories[EnvironmentKind.DOCKER] = DockerMachineFactory(skopeo=docker.skopeo, image_cache=image_cache)
     return factories
 
 
