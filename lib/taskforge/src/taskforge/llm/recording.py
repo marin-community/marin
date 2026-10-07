@@ -54,7 +54,7 @@ def attempt_attrs(attempts: Sequence[Attempt], wall_time: float) -> dict[str, st
     return attrs
 
 
-def _record_completions(fields: SpanFields, completions: Sequence[Completion]) -> None:
+def record_completions(fields: SpanFields, completions: Sequence[Completion]) -> None:
     """Sum token usage and attempts over ``completions``; the finish reason is the last one's."""
     fields.tokens_in = sum(c.usage.prompt_tokens for c in completions)
     fields.tokens_out = sum(c.usage.completion_tokens for c in completions)
@@ -92,7 +92,7 @@ async def recorded_complete(
         except GlmUnavailable as error:
             fields.attrs.update(attempt_attrs(error.attempts, time.monotonic() - started))
             raise
-        _record_completions(fields, (completion,))
+        record_completions(fields, (completion,))
     return completion
 
 
@@ -117,12 +117,12 @@ async def recorded_structured(
         try:
             result = await complete_structured(client, messages, policy, tool)
         except StructuredOutputError as error:
-            _record_completions(fields, error.completions)
+            record_completions(fields, error.completions)
             fields.attrs["requests"] = str(len(error.completions))
             raise
         except GlmUnavailable as error:
             fields.attrs.update(attempt_attrs(error.attempts, time.monotonic() - started))
             raise
-        _record_completions(fields, result.completions)
+        record_completions(fields, result.completions)
         fields.attrs["requests"] = str(len(result.completions))
     return result
