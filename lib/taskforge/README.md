@@ -23,6 +23,7 @@ src/taskforge/
   build/      builder programs: memoized steps, the Build SDK, program authoring, the standard template
   validate/   trials, the failure classifier, control replay, evidence aggregation, solver and
               adversary trials, calibration, attempt files as resumable evidence
+  review/     the Decision contract and the rules that derive it from validation evidence
 scripts/      Iris image builder, cluster probes, ledger summary
 ```
 
@@ -30,7 +31,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> spec -> sandbox -> llm -> proposal -> triage -> build -> validate
+content_hash -> atomic_file -> ledger -> spec -> sandbox -> llm -> proposal -> triage -> build -> validate -> review
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `spec`, `sandbox`, `llm`) import
