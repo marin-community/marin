@@ -137,6 +137,7 @@ class VllmBackend:
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,
+                expected_model_id=spec.api_model,
                 wait_for_ready=False,
             ) as environment:
                 yield environment
