@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLM_CALL recording of rollout-model and agent calls against the scripted GLM server."""
+"""LLM_CALL recording of rollout-model, agent and structured calls against the scripted GLM server."""
 
 import pytest
+from pydantic import BaseModel
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest
 
@@ -11,8 +12,9 @@ from taskforge.ledger.records import EntryKind, Ledger
 from taskforge.llm.agent import run_agent
 from taskforge.llm.client import GlmClient, GlmEndpoint, GlmUnavailable, Pool
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.recording import CallLedger
+from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.llm.structured import StructuredTool
 
 ROLLOUT_POLICY = LLMPolicy(max_continuations=0)
 CONVERSATION = (
@@ -76,3 +78,25 @@ async def test_agent_turns_record_retried_statuses(fake_glm, client, ledger):
     [entry] = ledger.entries
     assert (entry.attrs["attempts"], entry.attrs["attempts_retryable_status"]) == ("2", "1")
     assert entry.attrs["http_statuses"] == "429"
+
+
+class Answer(BaseModel):
+    value: int
+
+
+async def test_structured_call_records_both_requests_and_their_attempts(fake_glm, client):
+    fake_glm.status(429, "slow down")
+    fake_glm.stream(tool_calls=(("answer", '{"value": "x"}'),), prompt_tokens=10, completion_tokens=4)
+    fake_glm.stream(tool_calls=(("answer", '{"value": 7}'),), prompt_tokens=20, completion_tokens=3)
+    ledger = ListLedger()
+    tool = StructuredTool(name="answer", description="answer", output_type=Answer)
+
+    result = await recorded_structured(
+        client, CONVERSATION[:1], LLMPolicy(), tool, call_ledger(ledger), {"tool": "answer"}
+    )
+
+    assert result.value == Answer(value=7)
+    [entry] = ledger.entries
+    assert (entry.tokens_in, entry.tokens_out) == (30, 7)
+    assert (entry.attrs["tool"], entry.attrs["requests"]) == ("answer", "2")
+    assert (entry.attrs["attempts"], entry.attrs["http_statuses"]) == ("3", "429")
