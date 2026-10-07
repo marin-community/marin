@@ -10,7 +10,16 @@ from taskcompendium.grading_result import Outcome
 
 from taskforge.build.step import StepRole
 from taskforge.review.decision import Accept, Reject, RejectKind, Repair, Retry
-from taskforge.review.rules import STAGED_BRIEF, ItemHistory, decide, render_brief, staged_repair, steps_for
+from taskforge.review.rules import (
+    NEW_CONTROLS_HEADER,
+    NOTES_HEADER,
+    STAGED_BRIEF,
+    ItemHistory,
+    decide,
+    render_brief,
+    staged_repair,
+    steps_for,
+)
 from taskforge.spec.controls import (
     REJECTION_CEILING,
     Control,
@@ -41,6 +50,20 @@ SHORTCUT_CONTROL = Control(
 
 def finding(kind: FindingKind, detail: str = "", new_controls: tuple[Control, ...] = ()) -> Finding:
     return Finding(kind=kind, detail=detail or f"{kind} detail", roles=FINDING_ROLES[kind], new_controls=new_controls)
+
+
+NOTES = (
+    finding(
+        FindingKind.SHORTCUT_PASSED,
+        "The shortcut adversary 0 was graded as passing. Tier noted (row 7): solved against orders: read "
+        '["/workspace/numbers.txt"] and submitted the answer; a role violation, not a task defect',
+    ),
+    finding(
+        FindingKind.AMBIGUOUS,
+        "The ambiguity adversary 1 was graded as passing. Tier noted (row 7): passed under a stated reading; "
+        "the submission cannot be compared for a machine-state answer",
+    ),
+)
 
 
 def test_decisive_finding_repairs_even_when_trials_are_ungraded(draft, summary):
@@ -160,7 +183,7 @@ def test_brief_carries_new_controls_the_author_can_copy_verbatim():
         finding(FindingKind.SHORTCUT_PASSED, new_controls=(SHORTCUT_CONTROL,)),
         finding(FindingKind.LEAK_PASSED, new_controls=(leak,)),
     )
-    brief = render_brief(findings)
+    brief = render_brief(findings, ())
 
     blocks = re.findall(r"```json\n(.*?)\n```", brief.failure, re.DOTALL)
     assert len(blocks) == 1
@@ -171,3 +194,45 @@ def test_brief_carries_new_controls_the_author_can_copy_verbatim():
 def test_steps_for_names_each_step_once_in_build_order(draft):
     steps = (*draft.provenance.steps, draft.provenance.steps[3])
     assert steps_for([StepRole.CONTROLS, StepRole.GRADER], steps) == ("grader", "controls")
+
+
+def test_notes_never_change_the_decision(draft, summary):
+    accepted = summary(notes=NOTES)
+    assert decide(draft, accepted, FRESH) == Accept(summary=accepted)
+
+    shortcut = finding(FindingKind.SHORTCUT_PASSED, "listed three answers and passed", (SHORTCUT_CONTROL,))
+    decision = decide(draft, summary((shortcut,), notes=NOTES), FRESH)
+
+    assert isinstance(decision, Repair)
+    assert decision.brief.findings == (shortcut,)
+    assert decision.brief.notes == NOTES
+    assert decision.invalidate == ("grader", "controls")
+    failure = decision.brief.failure
+    assert failure.index(shortcut.detail) < failure.index(NOTES_HEADER) < failure.index(NEW_CONTROLS_HEADER)
+    assert f"Note 2: ambiguous (instructions)\n{NOTES[1].detail}" in failure
+    blocks = re.findall(r"```json\n(.*?)\n```", failure, re.DOTALL)
+    assert [parse_controls(block) for block in blocks] == [(SHORTCUT_CONTROL,)]
+
+
+def test_notes_ride_along_a_band_repair(draft, summary):
+    too_easy = finding(FindingKind.TOO_EASY, "8 of 8 solved")
+    decision = decide(draft, summary((too_easy,), solved=8, notes=NOTES), FRESH)
+
+    assert isinstance(decision, Repair)
+    assert decision.brief.findings == (too_easy,)
+    assert decision.brief.notes == NOTES
+    assert NOTES[0].detail in decision.brief.failure
+    assert "```json" not in decision.brief.failure
+
+
+def test_a_rejection_names_findings_not_notes(draft, summary):
+    violated = finding(FindingKind.CONTROL_VIOLATED, "neg-0 scored 1.0")
+    decision = decide(draft, summary((violated,), notes=NOTES), SPENT)
+
+    assert isinstance(decision, Reject)
+    assert decision.reasons == ("control_violated: neg-0 scored 1.0", "repairs exhausted: 2 of 2")
+
+
+def test_render_brief_needs_a_finding():
+    with pytest.raises(ValueError, match="at least one finding"):
+        render_brief((), NOTES)

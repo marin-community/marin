@@ -5,8 +5,9 @@
 
 Rules, in order; the first that fires decides:
 
-1. Decisive findings (a violated control, a shortcut or leak pass, an ambiguity, a task defect) give a
-   ``Repair``, even when the evidence is incomplete: retrying cannot improve them.
+1. Decisive findings (a violated control, a shortcut or leak pass the calibration tiered as a repair, an
+   ambiguity, a task defect) give a ``Repair``, even when the evidence is incomplete: retrying cannot
+   improve them.
 2. Incomplete evidence with ``MACHINE_UNSUPPORTED`` or ``SUBMISSION_UNSUPPORTED`` gives ``Reject(HOST)``:
    this host's factories or conventions cannot run the task, and no rebuild here changes that.
 3. Other incomplete evidence gives ``Retry`` for its most frequent cause. The loop bounds retries and
@@ -16,6 +17,8 @@ Rules, in order; the first that fires decides:
 5. Complete evidence with no findings gives ``Accept``.
 
 A ``Repair`` the item cannot afford (``repairs_used >= max_repairs``) becomes ``Reject(BUDGET)``.
+
+Noted adversary passes ride along in the brief and in an accepted summary; they never change the decision.
 
 Staged tasks are not validated. ``staged_repair`` gives the fixed repair the loop applies to a staged
 draft before validation: build the sequence as separate tasks.
@@ -51,6 +54,11 @@ them against the revised grader and shows that the grader now rejects them. Do n
 submissions with `b.try_grader` during the build: a build whose controls include a candidate it graded \
 fails. Prototype the grader on a different submission of the same kind:"""
 
+NOTES_HEADER = """\
+Validation also observed the adversary passes below. They are recorded, not defects to fix: in each the \
+adversary read the task's inputs or stated a reading that did not change the answer, and was graded correct for \
+a correct answer. Do not add controls for them. Mention them only if the finding you are fixing is related."""
+
 STAGED_BRIEF = """\
 Staged tasks are not validated. Build the sequence as separate single-stage tasks whose environment \
 files and setup reconstruct the state the earlier stages leave, and grade each one on its own."""
@@ -82,19 +90,25 @@ def steps_for(roles: Iterable[StepRole], steps: Sequence[StepRecord]) -> tuple[s
     return tuple(dict.fromkeys(record.name for record in steps if record.role in wanted))
 
 
-def render_brief(findings: Sequence[Finding]) -> RepairBrief:
+def render_brief(findings: Sequence[Finding], notes: Sequence[Finding]) -> RepairBrief:
     """The revision brief for ``findings``: each finding's kind, responsible roles and detail, then
-    every new control as JSON the revised CONTROLS step must include verbatim."""
+    ``notes`` under ``NOTES_HEADER`` when there are any, then every new control of ``findings`` as JSON
+    the revised CONTROLS step must include verbatim. Notes contribute no controls."""
     if not findings:
         raise ValueError("a repair brief needs at least one finding")
     sections = [BRIEF_HEADER]
     for number, finding in enumerate(findings, start=1):
         roles = ", ".join(role.value for role in finding.roles)
         sections.append(f"Finding {number}: {finding.kind.value} (revise the {roles} steps)\n{finding.detail}")
+    if notes:
+        sections.append(NOTES_HEADER)
+        for number, note in enumerate(notes, start=1):
+            roles = ", ".join(role.value for role in note.roles)
+            sections.append(f"Note {number}: {note.kind.value} ({roles})\n{note.detail}")
     new_controls = tuple(control for finding in findings for control in finding.new_controls)
     if new_controls:
         sections.append(f"{NEW_CONTROLS_HEADER}\n\n```json\n{controls_json(new_controls).decode()}\n```")
-    return RepairBrief(findings=tuple(findings), failure="\n\n".join(sections))
+    return RepairBrief(findings=tuple(findings), notes=tuple(notes), failure="\n\n".join(sections))
 
 
 def _reason(finding: Finding) -> str:
@@ -114,7 +128,7 @@ def _repair(
     roles = {role for finding in findings for role in finding.roles}
     return Repair(
         program_digest=draft.provenance.program_digest,
-        brief=render_brief(findings),
+        brief=render_brief(findings, summary.notes),
         invalidate=steps_for(roles, draft.provenance.steps),
     )
 
@@ -159,5 +173,5 @@ def staged_repair(draft: TaskDraft, history: ItemHistory) -> Repair | Reject:
             f"repairs exhausted: {history.repairs_used} of {history.max_repairs}",
         )
         return Reject(kind=RejectKind.BUDGET, reasons=reasons, summary=None)
-    brief = RepairBrief(findings=(), failure=STAGED_BRIEF)
+    brief = RepairBrief(findings=(), notes=(), failure=STAGED_BRIEF)
     return Repair(program_digest=draft.provenance.program_digest, brief=brief, invalidate=())

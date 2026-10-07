@@ -46,11 +46,16 @@ LEAK = Finding(
         ),
     ),
 )
+NOTE = Finding(
+    kind=FindingKind.SHORTCUT_PASSED,
+    detail="The shortcut adversary 1 was graded as passing. Tier noted (row 7): solved against orders",
+    roles=(StepRole.GRADER, StepRole.CONTROLS),
+)
 
 
 def decisions(summary):
     return [
-        Accept(summary=summary()),
+        Accept(summary=summary(notes=(NOTE,))),
         Reject(
             kind=RejectKind.HOST,
             reasons=("machine_unsupported: 8",),
@@ -58,7 +63,9 @@ def decisions(summary):
         ),
         Reject(kind=RejectKind.BUDGET, reasons=("build revisions exhausted",), summary=None),
         Repair(
-            program_digest="abc", brief=RepairBrief(findings=(LEAK,), failure="fix the leak"), invalidate=("fixtures",)
+            program_digest="abc",
+            brief=RepairBrief(findings=(LEAK,), notes=(NOTE,), failure="fix the leak"),
+            invalidate=("fixtures",),
         ),
         Retry(cause=Cause.TOKEN_CONTRACT, count=2),
     ]
