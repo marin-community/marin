@@ -69,7 +69,9 @@ from experiments.grug.fast_track.head_loss import prototype_target_logits, reduc
 from experiments.grug.fast_track.key_offset import (
     MatchAppend,
     append_shared_match,
+    apply_lag_groups,
     future_heads,
+    parse_lag_groups,
     partial_key_offset,
     shifted_channels,
     value_lookahead,
@@ -934,11 +936,7 @@ class GrugModelConfig:
     expert_read_groups: int = 0
     """If > 0 (G), routed expert ``e`` reads only channel group ``e mod G`` of its input (the MoE latent when
     ``latent_dim`` is set, so the G slices are G separate latent down-projections, "multi-head LatentMoE"; else the
-    MLP-pre-normed stream): the input is split into G contiguous slices, each re-normalized by its own learnable
-    RMSNorm (``expert_read_norm``, a stacked ``[G, W]`` gain), and the experts' ``w_up`` are real ``[E, W, I]``
-    matrices. Each (token, slot) assignment dispatches only its expert's slice, so the dispatch bytes shrink by
-    G. The gather-based, per-slice-normed counterpart of ``expert_read_subset``; needs an explicit
-    ``latent_out_dim``."""
+    MLP-pre-normed stream), each slice with its own RMSNorm; needs an explicit ``latent_out_dim``."""
     expert_write_groups: int = 0
     """G > 0: each routed expert's neurons split into G contiguous groups and group g writes only output block g
     of the expert's output (a fixed 0/1 mask on ``w_down``, block-diagonal per expert, so MuonH keeps the masked
@@ -982,6 +980,8 @@ class GrugModelConfig:
     mla_future_heads: int = 0
     """The last this many MLA heads remember each token's next ``mla_future_window`` tokens (``future_heads``)."""
     mla_future_window: int = 0
+    mla_lag_groups: tuple[str, ...] = ()
+    """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
     mla_lookahead_sink: bool = False
     """With ``mla_value_lookahead``: each document's first (empty) slot gets a learned per-head key ``k_null``."""
     mla_tie_prev_qk: bool = False
@@ -1909,6 +1909,8 @@ class GrugModelConfig:
                 "softmax tail stack"
             )
         appended = self.mla_match_append != MatchAppend.OFF
+        if self.mla_lag_groups and (self.mla_key_offset or not self.mla):
+            raise ValueError("mla_lag_groups needs mla and replaces mla_key_offset")
         if appended and (not self.mla_shared_match_dim or self.mla_key_offset or not self.mla):
             raise ValueError("mla_match_append needs mla, mla_shared_match_dim, no mla_key_offset")
         if (self.mla_key_offset_channels or self.mla_shared_match_dim) and not (
@@ -2883,6 +2885,8 @@ class CausalSelfAttention(eqx.Module):
 
         def _transform_qk(q: jax.Array, k: jax.Array) -> tuple[jax.Array, jax.Array]:
             """Key offset, q/k norms, RoPE, qk_mult and SSMax: everything between the projections and the kernel."""
+            if self.cfg.mla and self.cfg.mla_lag_groups:
+                q, k = apply_lag_groups(q, k, sconv_segment_ids, parse_lag_groups(self.cfg.mla_lag_groups, head_dim))
             if self.cfg.mla and self.cfg.mla_key_offset:
                 k = partial_key_offset(k, sconv_segment_ids, _partition_spec_of(k), self.cfg.mla_key_offset_channels)
             if self.cfg.qk_norm:

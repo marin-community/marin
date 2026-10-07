@@ -164,3 +164,36 @@ def future_heads(
     v_mem = (vf + future).astype(v.dtype)
     v_out = jnp.concatenate([v[:, :, :-heads], shift_tokens(v_mem, segment_ids, window)], axis=2)
     return reshard(k_out, spec_k), reshard(v_out, spec_v)
+
+
+def parse_lag_groups(spec: tuple[str, ...], head_dim: int) -> tuple[tuple[int, int, int], ...]:
+    """``"count:q_lag:k_lag"`` channel groups (``mla_lag_groups``), checked to tile the head."""
+    groups = tuple(tuple(int(p) for p in item.split(":")) for item in spec)
+    if any(len(g) != 3 or g[0] <= 0 or g[1] < 0 or g[2] < 0 for g in groups):
+        raise ValueError(f"mla_lag_groups entries are count:q_lag:k_lag with count > 0, lags >= 0; got {spec}")
+    if sum(g[0] for g in groups) != head_dim:
+        raise ValueError(f"mla_lag_groups counts must sum to the head dim {head_dim}; got {spec}")
+    return groups  # pyrefly: ignore[bad-return]
+
+
+def _lag_channels(x: jax.Array, segment_ids: Int[Array, "B S"] | None, lags: list[int]) -> jax.Array:
+    """Channel ``c`` of every head taken from ``lags[c]`` tokens back (zero across document starts)."""
+    lag_of = jnp.asarray(lags)
+    out = x
+    for lag in sorted(set(lags) - {0}):
+        out = jnp.where(lag_of == lag, shift_tokens(x, segment_ids, lag).astype(x.dtype), out)
+    return reshard(out, jax.typeof(x).sharding.spec)
+
+
+def apply_lag_groups(
+    q: Float[Array, "B S N D"],
+    k: Float[Array, "B S N D"],
+    segment_ids: Int[Array, "B S"] | None,
+    groups: tuple[tuple[int, int, int], ...],
+) -> tuple[jax.Array, jax.Array]:
+    """Each channel group ``(count, a, b)`` scores the query's token ``i - a`` against the key's token ``t - b``
+    (``mla_lag_groups``; the key offset is ``(64, 0, 1), (64, 0, 0)``). Values are never shifted: only past tokens
+    of the query are read, so nothing leaks."""
+    q_lags = [a for count, a, _ in groups for _ in range(count)]
+    k_lags = [b for count, _, b in groups for _ in range(count)]
+    return _lag_channels(q, segment_ids, q_lags), _lag_channels(k, segment_ids, k_lags)
