@@ -14,6 +14,7 @@ from experiments.post_training.tasktrove.converters.converted_task import Conver
 PLUGIN = "pytest-json-report"
 SWESMITH_REPO = re.compile(r"https://github\.com/swesmith/(?P<repo>[^\s/]+)")
 PYTEST_CONSTRAINT = "/opt/verifyit-pytest-constraints.txt"
+SWESMITH_PYTEST = "pytest>=8.4,<9"
 CONFIG_JSON = "tests/config.json"
 TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
 TESTBED = "/testbed"
@@ -170,12 +171,12 @@ def swe_test_environment(dockerfile: str, instruction: str) -> str:
     match = SWESMITH_REPO.search(instruction)
     if match is None:
         return dockerfile
-    packages = '"pytest>=8.4,<9"'
+    packages = f'"{SWESMITH_PYTEST}"'
     if match["repo"] == "marshmallow-code__marshmallow.9716fc62":
         packages += " simplejson"
     return (
         dockerfile.rstrip("\n")
-        + f"\nRUN printf 'pytest>=8.4,<9\\n' > {PYTEST_CONSTRAINT}\n"
+        + f"\nRUN printf '{SWESMITH_PYTEST}\\n' > {PYTEST_CONSTRAINT}\n"
         + f"ENV PIP_CONSTRAINT={PYTEST_CONSTRAINT}\n"
         + f"RUN python -m pip install --no-cache-dir {packages}\n"
     )

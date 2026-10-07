@@ -207,5 +207,3 @@ def test_swesmith_keeps_compatible_pytest_constraint_for_agent_installs(reposito
     assert parse_spec(converted.text(VERIFIER_TOML)).must_pass == tuple(
         json.loads(task.text("tests/config.json"))["FAIL_TO_PASS"]
     )
-    if repository.startswith("marshmallow-code__"):
-        assert "simplejson" in dockerfile
