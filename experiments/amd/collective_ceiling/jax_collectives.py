@@ -30,6 +30,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
@@ -42,7 +43,6 @@ from jax.sharding import PartitionSpec as P
 logger = logging.getLogger(__name__)
 
 AXIS = "x"
-OPS = ("all_gather", "reduce_scatter", "all_reduce", "all_to_all")
 DTYPES = {"bfloat16": jnp.bfloat16, "float32": jnp.float32}
 # Row width of the EP all-gather output in the June 67B-A2B MoE model (experiments/june_tpu_67b_a2b):
 # 262,144 tokens x 2,560 hidden at batch 64.
@@ -50,6 +50,13 @@ MODEL_HIDDEN_DIM = 2560
 MATMUL_DIM = 8192
 # Chained matmuls in the overlap test: about 4-5 ms on MI350X, close to a 1.3 GB all-gather.
 MATMUL_CHAIN = 4
+
+
+class Collective(StrEnum):
+    ALL_GATHER = "all_gather"
+    REDUCE_SCATTER = "reduce_scatter"
+    ALL_REDUCE = "all_reduce"
+    ALL_TO_ALL = "all_to_all"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,7 +68,7 @@ class Timing:
 
 @dataclasses.dataclass(frozen=True)
 class OpResult:
-    op: str
+    op: Collective
     dtype: str
     size_bytes: int
     overlap: bool
@@ -72,26 +79,26 @@ class OpResult:
     matmul_alone_seconds: float | None
 
 
-def _bus_factor(op: str, n: int) -> float:
-    return 2 * (n - 1) / n if op == "all_reduce" else (n - 1) / n
+def _bus_factor(op: Collective, n: int) -> float:
+    return 2 * (n - 1) / n if op == Collective.ALL_REDUCE else (n - 1) / n
 
 
-def _collective(op: str) -> Callable[[jax.Array], jax.Array]:
-    if op == "all_gather":
+def _collective(op: Collective) -> Callable[[jax.Array], jax.Array]:
+    if op == Collective.ALL_GATHER:
         return lambda x: jax.lax.all_gather(x, AXIS, tiled=True)
-    if op == "reduce_scatter":
+    if op == Collective.REDUCE_SCATTER:
         return lambda x: jax.lax.psum_scatter(x, AXIS, scatter_dimension=0, tiled=True)
-    if op == "all_reduce":
+    if op == Collective.ALL_REDUCE:
         return lambda x: jax.lax.psum(x, AXIS)
-    if op == "all_to_all":
+    if op == Collective.ALL_TO_ALL:
         return lambda x: jax.lax.all_to_all(x, AXIS, split_axis=0, concat_axis=0, tiled=True)
     raise ValueError(f"unknown op {op}")
 
 
-def _input_rows_per_rank(op: str, size_bytes: int, row_bytes: int, n: int) -> int:
+def _input_rows_per_rank(op: Collective, size_bytes: int, row_bytes: int, n: int) -> int:
     """Rows of the per-rank input so the rccl-tests size convention holds; rounded to a multiple of n."""
     rows = size_bytes // row_bytes
-    if op == "all_gather":
+    if op == Collective.ALL_GATHER:
         rows = rows // n
     return max(n, rows - rows % n)
 
@@ -142,7 +149,7 @@ def time_matmul(mesh: Mesh, timing: Timing) -> float:
     return seconds
 
 
-def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, timing: Timing) -> OpResult:
+def run_op(mesh: Mesh, op: Collective, dtype: str, size_bytes: int, *, overlap: bool, timing: Timing) -> OpResult:
     n = mesh.size
     hidden = MODEL_HIDDEN_DIM
     row_bytes = hidden * jnp.dtype(DTYPES[dtype]).itemsize
@@ -151,7 +158,7 @@ def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, t
     sharding = NamedSharding(mesh, spec)
     x = jax.device_put(jnp.ones((rows * n, hidden), DTYPES[dtype]), sharding)
     collective = _collective(op)
-    actual_bytes = rows * row_bytes * (n if op == "all_gather" else 1)
+    actual_bytes = rows * row_bytes * (n if op == Collective.ALL_GATHER else 1)
 
     if overlap:
         a, b = _matmul_inputs(mesh)
@@ -182,7 +189,7 @@ def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, t
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ops", nargs="+", default=list(OPS), choices=OPS)
+    parser.add_argument("--ops", nargs="+", type=Collective, default=list(Collective), choices=list(Collective))
     parser.add_argument("--dtypes", nargs="+", default=["bfloat16"], choices=sorted(DTYPES))
     parser.add_argument(
         "--sizes-mb",
