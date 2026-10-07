@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -380,7 +381,8 @@ class _FakeCompletionContext:
         return "req_0"
 
 
-def test_completion_echo_logprobs_are_lm_eval_aligned():
+@pytest.mark.parametrize("as_token_ids", [False, True])
+def test_completion_echo_logprobs_are_lm_eval_aligned(as_token_ids):
     ctx = _FakeCompletionContext()
     app = InferenceServer._create_app(ctx)
 
@@ -395,6 +397,7 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
                 "logprobs": 1,
                 "seed": 1234,
                 "echo": True,
+                "return_tokens_as_token_ids": as_token_ids,
             },
         )
 
@@ -406,14 +409,15 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
 
     assert choice["finish_reason"] == "length"
     assert choice["text"] == "A B X"
-    assert logprobs["tokens"] == ["A", " B", " X"]
+    token_labels = ["token_id:0", "token_id:1", "token_id:3"] if as_token_ids else ["A", " B", " X"]
+    assert logprobs["tokens"] == token_labels
     assert logprobs["token_logprobs"] == pytest.approx([0.0, expected_prompt_logprob, expected_completion_logprob])
     assert logprobs["text_offset"] == [0, 1, 3]
     assert len(logprobs["tokens"]) == len(logprobs["token_logprobs"])
     assert len(logprobs["tokens"]) == len(logprobs["top_logprobs"])
-    assert logprobs["top_logprobs"][0] == {"A": 0.0}
-    assert logprobs["top_logprobs"][1][" B"] == pytest.approx(expected_prompt_logprob)
-    assert logprobs["top_logprobs"][2][" X"] == pytest.approx(expected_completion_logprob)
+    assert logprobs["top_logprobs"][0] == {token_labels[0]: 0.0}
+    assert logprobs["top_logprobs"][1][token_labels[1]] == pytest.approx(expected_prompt_logprob)
+    assert logprobs["top_logprobs"][2][token_labels[2]] == pytest.approx(expected_completion_logprob)
 
 
 def test_completion_echo_logprobs_rejects_scored_sequence_over_context():
@@ -650,3 +654,131 @@ def test_completion_stop_alternatives_and_length_report_actual_termination():
         assert stop_response.json()["usage"]["completion_tokens"] == 1
     finally:
         server.inference_context.shutdown()
+
+
+class _AliasingChatTokenizer(_OpenAITestTokenizer):
+    # IDs 2 and 3 decode identically, but encode chooses 2. Retokenizing sampled
+    # text would therefore change the model's next-token distribution.
+    _id_to_piece = {0: "A", 1: " B", 2: " X", 3: " X"}
+    chat_template = "test"
+
+    def encode(self, text, add_special_tokens=False):
+        return [2] if text == " X" else super().encode(text, add_special_tokens)
+
+    def apply_chat_template(self, messages, *, add_generation_prompt, continue_final_message, **kwargs):
+        if continue_final_message:
+            return [0, 1, 2]
+        return [0, 1] if add_generation_prompt else [0]
+
+
+class _TokenSensitiveCompletionModel(_DeterministicCompletionScoringModel):
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        return hax.nn.one_hot((input_ids + 2) % 4, self.Vocab, dtype=jnp.float32), cache
+
+
+@pytest.fixture
+def exact_token_client():
+    config = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=4,
+            max_seqs=2,
+            page_size=4,
+            max_queued_tokens=4,
+            max_seqs_in_prefill=2,
+            compute_dtype=jnp.float32,
+        )
+    )
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _TokenSensitiveCompletionModel(), _AliasingChatTokenizer())
+    try:
+        with TestClient(server.app) as client:
+            yield client
+    finally:
+        server.inference_context.shutdown()
+
+
+def test_completion_integer_prompts_keep_token_identity_through_stopping(exact_token_client):
+    response = exact_token_client.post(
+        "/v1/completions",
+        json={
+            "model": "gpt2",
+            "prompt": [[0, 3], [0, 2]],
+            "temperature": 0,
+            "max_tokens": 3,
+            "stop_token_ids": [1],
+            "return_token_ids": True,
+            "return_tokens_as_token_ids": True,
+            "logprobs": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+    first, second = response.json()["choices"]
+    assert first["prompt_token_ids"] == [0, 3]
+    assert second["prompt_token_ids"] == [0, 2]
+    assert first["token_ids"] == [1]
+    assert second["token_ids"] == [0, 2, 0]
+    assert [first["finish_reason"], second["finish_reason"]] == ["stop", "length"]
+    assert first["logprobs"]["tokens"] == ["token_id:1"]
+    assert len(second["logprobs"]["token_logprobs"]) == 3
+    flat = exact_token_client.post(
+        "/v1/completions",
+        json={
+            "model": "gpt2",
+            "prompt": [0, 3],
+            "temperature": 0,
+            "max_tokens": 1,
+            "return_token_ids": True,
+        },
+    )
+    assert flat.status_code == 200, flat.text
+    assert flat.json()["choices"][0]["token_ids"] == [1]
+
+
+def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_client):
+    messages = [{"role": "user", "content": "A B"}]
+    tokenized = exact_token_client.post(
+        "/tokenize",
+        json={
+            "model": "gpt2",
+            "messages": messages,
+            "add_generation_prompt": True,
+        },
+    )
+    assert tokenized.status_code == 200, tokenized.text
+    assert tokenized.json() == {"tokens": [0, 1], "count": 2, "max_model_len": 8}
+    body = {
+        "model": "gpt2",
+        "messages": messages,
+        "temperature": 0,
+        "max_completion_tokens": 2,
+        "return_token_ids": True,
+        "logprobs": True,
+    }
+    full_response = exact_token_client.post("/v1/chat/completions", json=body)
+    partial_response = exact_token_client.post("/v1/chat/completions", json={**body, "max_completion_tokens": 1})
+    assert full_response.status_code == partial_response.status_code == 200
+    full, partial = full_response.json(), partial_response.json()
+    assert full["prompt_token_ids"] == partial["prompt_token_ids"] == [0, 1]
+    assert partial["choices"][0]["token_ids"] == [3]
+    retry = {
+        **body,
+        "max_completion_tokens": 1,
+        "continue_final_message": True,
+        "add_generation_prompt": False,
+        "_skyrl_exact_prompt_token_ids": [0, 1, 3],
+        "messages": [*messages, partial["choices"][0]["message"]],
+    }
+    resumed_response = exact_token_client.post("/v1/chat/completions", json=retry)
+    assert resumed_response.status_code == 200, resumed_response.text
+    resumed = resumed_response.json()
+    assert resumed["prompt_token_ids"] == [0, 1, 3]
+    prefix, suffix, expected = partial["choices"][0], resumed["choices"][0], full["choices"][0]
+    assert prefix["token_ids"] + suffix["token_ids"] == expected["token_ids"] == [3, 1]
+    assert prefix["logprobs"]["content"] + suffix["logprobs"]["content"] == expected["logprobs"]["content"]
+    assert suffix["finish_reason"] == expected["finish_reason"] == "length"
+    streamed = exact_token_client.post("/v1/chat/completions", json={**body, "stream": True})
+    chunks = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    assert chunks[0]["prompt_token_ids"] == full["prompt_token_ids"]
+    assert chunks[0]["choices"][0]["token_ids"] == expected["token_ids"]
+    assert chunks[-1]["choices"][0]["finish_reason"] == "length"
