@@ -26,7 +26,7 @@ from taskforge.build.run import TaskDraft
 from taskforge.canonical import digest
 from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import Control, validate_controls
-from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole
+from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, role_preamble
 from taskforge.validate.attempts import trial_files
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.controls import ControlOutcome, ControlVerdict, ScriptedModel, Tokenize, control_turns
@@ -43,6 +43,8 @@ class ValidationPolicy:
     Attributes:
         k: Solver trials.
         adversary_k: Trials per adversary role.
+        adversary_output_tokens: Served response tokens, reasoning included, each adversary attempt may spend
+            before it ends with stop reason ``length``.
         roles: The adversary roles to run.
         band: Solve rates that count as calibrated.
         sampling: The solver's and adversaries' sampling; ``max_continuations`` must be 0.
@@ -54,6 +56,7 @@ class ValidationPolicy:
 
     k: int
     adversary_k: int
+    adversary_output_tokens: int
     roles: tuple[AdversaryRole, ...]
     band: CalibrationBand
     sampling: LLMPolicy
@@ -65,6 +68,8 @@ class ValidationPolicy:
     def __post_init__(self) -> None:
         if self.k < 1 or self.adversary_k < 1:
             raise ValueError("A validation policy needs k >= 1 and adversary_k >= 1")
+        if self.adversary_output_tokens < 1:
+            raise ValueError(f"adversary_output_tokens must be >= 1, got {self.adversary_output_tokens}")
         if len(set(self.roles)) != len(self.roles):
             raise ValueError(f"Adversary roles repeat: {self.roles}")
         if self.sampling.max_continuations != 0:
@@ -79,6 +84,7 @@ class ValidationPolicy:
             {
                 "k": self.k,
                 "adversary_k": self.adversary_k,
+                "adversary_output_tokens": self.adversary_output_tokens,
                 "roles": self.roles,
                 "band": self.band,
                 "sampling": self.sampling,
@@ -86,7 +92,7 @@ class ValidationPolicy:
                 "max_retries": self.max_retries,
                 "token_contract_retries": self.token_contract_retries,
                 "retry_backoff": self.retry_backoff,
-                "preambles": {str(role): ROLE_PREAMBLES[role] for role in self.roles},
+                "preambles": {str(role): role_preamble(role, self.adversary_output_tokens) for role in self.roles},
                 "sentinels": {str(role): reply for role, reply in SENTINEL_REPLIES.items()},
             }
         )
