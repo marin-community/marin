@@ -142,10 +142,7 @@ def time_matmul(mesh: Mesh, timing: Timing) -> float:
     return seconds
 
 
-def run_op(
-    mesh: Mesh, op: str, dtype: str, size_bytes: int, *, matmul_alone_seconds: float | None, timing: Timing
-) -> OpResult:
-    """Time one collective; with ``matmul_alone_seconds`` set, time it next to the chained matmul."""
+def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, timing: Timing) -> OpResult:
     n = mesh.size
     hidden = MODEL_HIDDEN_DIM
     row_bytes = hidden * jnp.dtype(DTYPES[dtype]).itemsize
@@ -156,7 +153,6 @@ def run_op(
     collective = _collective(op)
     actual_bytes = rows * row_bytes * (n if op == "all_gather" else 1)
 
-    overlap = matmul_alone_seconds is not None
     if overlap:
         a, b = _matmul_inputs(mesh)
 
@@ -180,7 +176,7 @@ def run_op(
         median_seconds=seconds,
         algbw_gbps=algbw,
         busbw_gbps=algbw * _bus_factor(op, n),
-        matmul_alone_seconds=matmul_alone_seconds,
+        matmul_alone_seconds=None,
     )
 
 
@@ -233,8 +229,10 @@ def main() -> None:
         for dtype in args.dtypes:
             for op in args.ops:
                 for size_mb in args.sizes_mb:
-                    for matmul in [None, matmul_alone_seconds] if args.overlap else [None]:
-                        result = run_op(mesh, op, dtype, int(size_mb * 1e6), matmul_alone_seconds=matmul, timing=timing)
+                    for overlap in [False, True] if args.overlap else [False]:
+                        result = run_op(mesh, op, dtype, int(size_mb * 1e6), overlap=overlap, timing=timing)
+                        if overlap:
+                            result = dataclasses.replace(result, matmul_alone_seconds=matmul_alone_seconds)
                         out.write(json.dumps({"label": args.label, **dataclasses.asdict(result)}) + "\n")
                         out.flush()
                         logger.info(
