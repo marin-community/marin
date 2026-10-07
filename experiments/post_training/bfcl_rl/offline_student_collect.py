@@ -29,6 +29,7 @@ def native_student_collection_step(
     policy_checkpoint_step: int,
     seed: int,
     task: str | None,
+    generation_batch_size: int,
     harnesses: tuple[str, ...],
 ) -> ArtifactStep:
     """Bind the recovered student to the teacher's task and native harness schedule."""
@@ -41,7 +42,7 @@ def native_student_collection_step(
     generator["model_loading"] = "stage_local"
     generator["engine_init_kwargs"]["model_loader_extra_config"] = {"concurrency": 4}
     recipe["trainer"]["seed"] = seed
-    recipe["trainer"]["eval_batch_size"] = 128
+    recipe["trainer"]["eval_batch_size"] = generation_batch_size
     policy = replace(
         recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
     )
@@ -64,6 +65,7 @@ def native_student_collection_step(
 @click.option("--policy-export-version", required=True)
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**31 - 1), required=True)
+@click.option("--generation-batch-size", type=click.IntRange(min=1), required=True)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
 @click.option(
     "--harness",
@@ -79,6 +81,7 @@ def main(
     policy_export_version: str,
     policy_checkpoint_step: int,
     seed: int,
+    generation_batch_size: int,
     harnesses: tuple[str, ...],
     task: str | None,
 ) -> ArtifactStep:
@@ -88,6 +91,7 @@ def main(
         policy_checkpoint_step,
         seed,
         task,
+        generation_batch_size,
         harnesses,
     )
 
