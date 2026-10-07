@@ -20,7 +20,7 @@ import numpy as np
 
 from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug._moe import ep_ring
-from levanter.grug._moe.routing_top_k import triton_top_k_indices
+from levanter.grug._moe.routing_top_k import _total_order_key, triton_top_k_indices
 from levanter.utils.jax_utils import is_rocm_backend
 
 p = argparse.ArgumentParser()
@@ -183,8 +183,7 @@ def main_moe():
 
 def max_mask_top_k(x, k):
     """Pure-JAX k rounds of argmax over total-order keys."""
-    bits = jax.lax.bitcast_convert_type(x, jnp.int32)
-    key = bits ^ ((bits >> 31) & 0x7FFFFFFF)
+    key = _total_order_key(x)
     out = []
     taken = jnp.zeros(x.shape, bool)
     col = jnp.arange(x.shape[1], dtype=jnp.int32)[None, :]
