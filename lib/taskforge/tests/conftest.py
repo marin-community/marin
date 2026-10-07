@@ -5,8 +5,7 @@
 
 Live tests carry ``@pytest.mark.live_glm`` and request the ``glm_settings`` fixture, which skips
 them unless the interactive GLM-5.3 endpoint is configured through the environment. Web tests take
-``parallel_key``, which skips unless the Parallel key file (``TASKFORGE_PARALLEL_KEY_FILE``, default
-``~/openathena/build_envs/.parallel_key``) exists.
+``parallel_key``, which skips unless ``TASKFORGE_PARALLEL_KEY_FILE`` names the Parallel key file.
 
 ``fake_glm`` is a scripted fake of the GLM router: ``POST /v1/chat/completions`` streams queued
 responses and ``GET /health`` reports queued worker counts. It runs as a real local HTTP server.
@@ -29,7 +28,6 @@ BASE_URL_ENV = "TASKFORGE_GLM_BASE_URL"
 TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
 TOKEN_KEY = "GLM_API_TOKEN"
 PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
-DEFAULT_PARALLEL_KEY_FILE = "~/openathena/build_envs/.parallel_key"
 PARALLEL_KEY = "PARALLEL_KEY"
 
 
@@ -70,10 +68,10 @@ def glm_settings() -> GlmSettings:
 @pytest.fixture(scope="session")
 def parallel_key() -> ParallelKey:
     """The Parallel API key from the ``PARALLEL_KEY=...`` line of ``TASKFORGE_PARALLEL_KEY_FILE``."""
-    path = Path(os.environ.get(PARALLEL_KEY_FILE_ENV, DEFAULT_PARALLEL_KEY_FILE)).expanduser()
-    if not path.exists():
-        pytest.skip(f"live web test: no Parallel key file at {path}; set {PARALLEL_KEY_FILE_ENV}")
-    return ParallelKey(read_key_line(path, PARALLEL_KEY))
+    key_file = os.environ.get(PARALLEL_KEY_FILE_ENV)
+    if not key_file:
+        pytest.skip(f"live web test: set {PARALLEL_KEY_FILE_ENV} to the Parallel key file")
+    return ParallelKey(read_key_line(Path(key_file).expanduser(), PARALLEL_KEY))
 
 
 @dataclass

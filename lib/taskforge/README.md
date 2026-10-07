@@ -68,11 +68,11 @@ skip with a reason when their inputs are missing.
 They call GLM-5.3 on the interactive tier through the router port-forward:
 
 ```bash
-KUBECONFIG=~/.kube/open-athena kubectl -n open-athena port-forward svc/glm53-router 18000:8000 &
+kubectl -n open-athena port-forward svc/glm53-router 18000:8000 &
 curl -s http://127.0.0.1:18000/health   # "status":"ok"
 
 export TASKFORGE_GLM_BASE_URL=http://127.0.0.1:18000/v1
-export TASKFORGE_GLM_TOKEN_FILE=~/openathena/glm-infer/glm_api_token.txt   # line: GLM_API_TOKEN=...
+export TASKFORGE_GLM_TOKEN_FILE=<path to the token file>   # line: GLM_API_TOKEN=...
 uv run --group test pytest tests -m live_glm
 ```
 
@@ -83,7 +83,7 @@ task, `llm.endpoint.resolve_glm_base_url` resolves the endpoint.
 Other live inputs:
 
 - `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent
-  live tests (`parallel_key` fixture, default `~/openathena/build_envs/.parallel_key`).
+  live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
 
 The package pytest config sets `timeout = 60` and `asyncio_mode = "auto"`. Long live tests carry
 `@pytest.mark.timeout(<seconds>)`.
