@@ -369,3 +369,21 @@ Registration establishes no quality or difficulty rating. Publish assessments
 separately against the deployed registration. The shared Atlas intake accepts
 Git, Hugging Face, and Harbor Hub references; it does not change the Harbor fork's
 Git/local-path registry schema or add task download and training adapters.
+
+### PDBThink coordinate tasks
+
+`Registered releases:pdbthink-coordinate-tasks` pins
+[PDBThink Coordinate Tasks v1.3.0](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/tree/3734406cb97b1702844319f9a5d860cbbf8fe660):
+100,000 tasks across 19 families, with 91,154 train, 4,411 validation, and 4,435
+test tasks. The population excludes the frozen benchmark's source entries,
+exact protein sequences, and associated RCSB 30% clusters. Publisher validation
+is linked; Atlas quality and difficulty remain unreviewed.
+
+PDBThink requires one tool-free response using `CoordinateNoToolsAgent`. Supply
+only `prompt.json` to the solver; gold, provenance, tests, and oracle solutions
+are evaluator-only. Follow the pinned release's
+[execution instructions and native-token budget manifest](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/USAGE.md).
+Atlas's default Terminus-2 runner permits tools and requires a separate adapter
+before evaluating this population. The GLM teacher traces retain their task
+v1.2.0 prompts and scores and do not establish difficulty for the registered
+v1.3.0 release.
