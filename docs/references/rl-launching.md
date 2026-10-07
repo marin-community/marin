@@ -56,7 +56,7 @@ Marin experiment
   SkyRLSpec + IrisSkyRLExecution + resolved artifacts
                          |
                          v
-  source launch.yaml: run, runtime, iris, ray,
+  source launch.yaml: run, runtime, iris, ingress, ray,
                       artifacts, inputs, skyrl recipe
                          |
                          v

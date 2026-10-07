@@ -465,6 +465,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # The rollout runner samples through the OpenAI-compatible chat route.
         "enable_http_endpoint": True,
         # Use the model tokenizer's built-in template for exact sampled completion IDs.
+        "use_conversation_multi_turn": True,
         "chat_template": None,
         "engine_init_kwargs": dict(recipe.engine_init_kwargs),
         "sampling_params": {

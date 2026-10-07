@@ -545,10 +545,6 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
-    for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
-        if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
-            raise ValueError(f"SkyRL task sessions do not support generator.{key}. Remove this setting.")
-
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
@@ -630,7 +626,6 @@ def _launcher_command(requirement: str, config_path: str) -> list[str]:
         "run",
         "--isolated",
         "--no-project",
-        "--no-sources",
         "--prerelease=allow",
         "--python",
         _LAUNCHER_PYTHON,
@@ -751,6 +746,10 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
+    terminal_bench = recipe.get("terminal_bench", {})
+    harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
+    agent_name = harbor.get("name") if isinstance(harbor, dict) else None
+    controller_ingress = agent_name == "opencode"
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
@@ -789,6 +788,12 @@ def _launch_config_yaml(
             "timeout": execution.job_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
+        },
+        "ingress": {
+            "mode": "controller" if controller_ingress else "direct",
+            "host": "iris.oa.dev" if controller_ingress and execution.cluster.startswith("cw-") else "",
+            "record_literal": controller_ingress,
+            "vllm_http_port": 8000,
         },
         "ray": {
             "port": 6379,

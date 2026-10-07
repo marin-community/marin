@@ -2,14 +2,16 @@
 
 `ShellboxRolloutEngine.run(lowered)` executes one single-stage task and returns `RolloutData`.
 The caller supplies the model callable, configured Shellbox factories, and optional task-session factories.
-SkyRL owns concurrency, retries, group grading, and training projections.
+The caller owns concurrency, retries, group grading, and training projections.
+TaskCompendium defines `TaskSpec` and grading outcomes. VerifyIT supplies verifier schemas and implementations.
+Shellbox supplies machine backends. RolloutEngine supplies the execution loop and session interface.
 
 ```mermaid
 flowchart TD
     Source[Source row or task package] --> Task[TaskSpec: task definition and private verifier]
     Task --> Lower[LoweredTaskSpec: preserved task, runtime, session limits]
     Config[Deployment configuration] --> Lower
-    Lower --> Worker[SkyRL rollout worker]
+    Lower --> Worker[Caller: task scheduler or rollout worker]
     Worker --> Engine[ShellboxRolloutEngine]
     Engine --> Model[Model callable: public messages and exact tokens]
     Model --> Engine
@@ -46,7 +48,7 @@ Other deadlines accept `None` or a finite, positive value.
 `backend` identifies a factory in the engine's `factories` mapping.
 `task_session` identifies a factory in its `sessions` mapping.
 The reserved session identifier `shellbox` selects the engine's shell-tool session.
-Custom factories receive `(lowered, machine)` and return a fresh session for each attempt.
+Custom session factories receive `(lowered, machine)` and return a fresh session for each attempt.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
 `verifier_machine=None` selects host execution for supported answer graders.
@@ -114,7 +116,7 @@ Worker-only resources do not enter a separate verifier.
 
 The total-turn deadline excludes startup, session preparation, and final verification.
 Its expiration ends the turn loop and starts grading with `stop_reason="total_turn_timeout"`.
-No model response means an unavailable grade.
+No model response means `grade.status=Outcome.UNAVAILABLE` and `grade.reward=None`.
 Backend command limits also stop commands that outlive an enclosing coroutine deadline.
 The command limit is separate from the tool-turn deadline.
 When these limits are finite, lowering requires the command limit to be less than the tool-turn deadline.
@@ -123,10 +125,11 @@ A timed-out shell command returns a `timed_out` tool observation. The model can 
 Expiration of the tool-turn deadline interrupts the transition.
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
+Its `rollout` field contains the retained record. Its `operation` field identifies the failed operation.
 Startup failures retain an empty record.
 A model failure after a completed turn triggers grading of the completed state.
 An interrupted transition retains a terminal step with `advance_incomplete=1`.
-SkyRL excludes an incomplete, ungraded custom-session step from its training projection.
+Training callers must exclude incomplete, ungraded custom-session steps from their training projections.
 Token-contract failures propagate as `RolloutContractError`.
 External cancellation remains cancellation.
 
@@ -141,8 +144,8 @@ Thread-backed sessions retain their pending operations until session cleanup can
 ## Grading
 
 The built-in session accepts shared VerifyIT verifier kinds, private shell graders, and explicit skipped grading.
-SkyRL sessions use private `ExternalVerifierSpec` parameters from `skyrl_gym.source_task`.
-Group grading belongs to SkyRL.
+External verifiers require a custom session.
+Group grading belongs to the caller.
 
 Text, JSON, and final-action submissions use typed grading contracts.
 A malformed submission receives `Outcome.SUBMISSION_FAILURE` with reward 0.
@@ -169,15 +172,14 @@ A valid reward file can supply a grade after a nonzero exit code. A command time
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
 An incorrect answer receives a numeric grade. A verifier failure has no reward.
-Score bounds describe the verifier's native range. SkyRL's metric normalization does not change optimization rewards.
+Score bounds describe the verifier's native range.
 
-Harbor lowering uses package machine settings, agent users, total-turn deadlines, and verifier deadlines.
-Other session limits come from launch configuration.
+The Harbor importer reads the package environment and private verifier.
+The caller selects backend settings, users, and deadlines during lowering.
 The Harbor importer accepts only separate verifier environments.
 An unset verifier mode without a separate environment selects shared mode and causes rejection.
 Shell grading requires a prebuilt, digest-pinned verifier image and a separate machine.
-Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so native Harbor execution is unsupported on Iris.
-Disabling Harbor verification removes private grader resources before lowering and selects skipped grading.
+The Shellbox session's Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so this Harbor path is unsupported on Iris.
 Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.
 SWE tasks require prebuilt images and initialize `refs/taskcompendium/base` before inference.
@@ -193,13 +195,16 @@ A continuation prompt preserves the full served prefix, including earlier respon
 The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities or token credit.
 
 `RolloutData` contains the conversation, token IDs, loss mask, optional log probabilities, grade, and per-step records.
+`prompt_token_ids` contains the initial prompt. `response_token_ids` contains subsequent model responses and intervening observation tokens.
+The loss mask and log probabilities align with `response_token_ids`, which excludes the initial prompt.
 Model tokens have loss mask 1. Observation tokens have mask 0 and log probability 0.
-SkyRL applies its training and failure policies when it projects the record.
+The caller applies its training and failure policies when it projects the record.
 A conversation reset discards earlier turns from the training record when another turn is available.
 The session supplies new public messages in `Transition.reset_conversation`.
 The engine clears the accumulated prefix, turns, and token evidence, then starts a fresh prefix check.
+The reset preserves session state and workspace files.
 Final grading receives the new conversation and its subsequent turns.
-Lean refinement uses this operation after a failed proof attempt.
+A custom session can use this operation after a failed proof attempt.
 
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
 The engine grades completed state with stop reason `length`.
@@ -210,6 +215,7 @@ It does not add an oversized observation to retained response evidence.
 The submission convention controls final-answer extraction and model-visible submission instructions.
 The Shellbox session selects native-action or JSON extraction when the task's answer type requires it.
 
+Construct the record with `lower_task(...)`. The [rollout tests](../../lib/rolloutengine/tests/test_rollout.py) contain executable examples.
 This function accepts a fully lowered record and a model callable:
 
 ```python
@@ -233,10 +239,6 @@ async def run_task(
     )
     return await engine.run(lowered)
 ```
-
-SkyRL stores one private JSON record per `lowered_task_spec` column in task Parquet exports and Harbor caches.
-Source rows use Hugging Face `Dataset.map` with prepared tasks in memory.
-Application metadata, including teacher routes, stays in the request envelope outside `TaskSpec`.
 
 From the Marin repository root, with the test environment installed:
 
