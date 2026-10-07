@@ -61,14 +61,10 @@ def recovery_cache_step(
 
 @click.command(help=__doc__)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
-@click.option("--python-image", required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @rl_build_options
-def main(task: str | None, python_image: str, java_image: str, javascript_image: str) -> ArtifactStep:
-    images = (python_image, java_image, javascript_image)
-    teacher = collection_step("teacher", task, images)
-    student = collection_step("student", task, images)
+def main(task: str | None) -> ArtifactStep:
+    teacher = collection_step("teacher", task)
+    student = collection_step("student", task)
     return recovery_cache_step(teacher, student, selection_name=task or "full", max_length=40960)
 
 

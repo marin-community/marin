@@ -204,9 +204,6 @@ def recovery_optimizer_step(
 @click.option("--collection-version", default=None, help="Build preferences from completed paired collection artifacts.")
 @click.option("--resume-version", default=None, help="Resume a native checkpoint from an earlier recovery run.")
 @click.option("--resume-checkpoint-step", type=click.IntRange(min=0), default=None)
-@click.option("--python-image", required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @click.option("--num-train-steps", type=click.IntRange(min=1), required=True)
 @click.option("--batch-size", type=click.IntRange(min=1), required=True)
 @click.option("--beta", type=click.FloatRange(min=0, min_open=True), required=True)
@@ -223,9 +220,6 @@ def main(
     collection_version: str | None,
     resume_version: str | None,
     resume_checkpoint_step: int | None,
-    python_image: str,
-    java_image: str,
-    javascript_image: str,
     num_train_steps: int,
     batch_size: int,
     beta: float,
@@ -270,9 +264,8 @@ def main(
         )
         cache = recovery_cache_step(*rollouts, selection_name=selection, max_length=RECOVERY_CONTEXT)
     else:
-        images = (python_image, java_image, javascript_image)
-        teacher = collection_step("teacher", task, images)
-        student = collection_step("student", task, images)
+        teacher = collection_step("teacher", task)
+        student = collection_step("student", task)
         cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
     optimization = RecoveryOptimization(
         num_train_steps=num_train_steps,

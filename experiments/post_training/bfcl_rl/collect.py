@@ -3,7 +3,6 @@
 
 """Collect pinned teacher or student BFCL complement trajectories without optimizer updates."""
 
-import re
 from dataclasses import dataclass
 
 import click
@@ -32,11 +31,6 @@ from experiments.post_training.bfcl_rl.data import DATASET_COMMIT
 
 DATA_URI = f"s3://marin-us-east-02a/marin/users/benfeuer/bfcl-rl/data/bfcl-complement-{DATASET_COMMIT}"
 SMOKE_TASKS = ("bfcl-irrelevance-0", "bfcl-simple-java-0", "bfcl-simple-javascript-0")
-DOCKERFILE_HASHES = (
-    "66449a5ed97b0f0feaa6e484e7128dd869a31305bab1a26333ddeda59170e965",
-    "b607af0e6fdd7f7519fcdad1b7ee02cf684300f3fd867c2990e7947a1c59067e",
-    "f78a98ce9c108903392ad7bb44f5ae2f680bb3b5e187911bddd43d1503c814f5",
-)
 NATIVE_AGENT_PROFILES = (
     {"name": "opencode", "version": "1.18.2", "collect_rollout_details": True},
     {"name": "claude-code", "version": "2.1.284", "collect_rollout_details": True},
@@ -93,10 +87,8 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def collection_recipe(images: tuple[str, str, str]) -> str:
+def collection_recipe() -> str:
     """Render policy-matched Pi collection with required, complete token retention."""
-    if any(re.fullmatch(r".+@sha256:[0-9a-f]{64}", image) is None for image in images):
-        raise ValueError("BFCL task images must be immutable registry digests")
     return yaml.safe_dump(
         {
             "entrypoint": "terminal_bench_generate",
@@ -115,20 +107,17 @@ def collection_recipe(images: tuple[str, str, str]) -> str:
                     "override_timeout_sec": 1800,
                     "eval_timeout_override_sec": 1800,
                     "verifier_override_timeout_sec": 300,
-                    "import_path": "marinskyrl.iris_harbor_environment:IrisEnvironment",
-                    "container_profile": "gvisor",
-                    "prebuilt_images": dict(zip(DOCKERFILE_HASHES, images, strict=True)),
+                    "environment_type": "daytona",
                     "override_cpus": 1,
                     "override_memory_mb": 2048,
                     "override_storage_mb": 10240,
-                    "auto_snapshot": False,
+                    "auto_snapshot": True,
                     "n_concurrent_trials": 32,
                     "max_retries": 0,
                     "collect_rollout_details": True,
                     "enable_reward_shaping": False,
                     "enable_error_classification": True,
                     "mask_exceptions": [
-                        "IrisSandboxError",
                         "EnvironmentStartTimeoutError",
                         "NetworkError",
                         "ConnectionError",
@@ -197,7 +186,7 @@ def complement_data_step() -> ArtifactStep:
     )
 
 
-def collection_spec(model: str, task: str | None, images: tuple[str, str, str]) -> SkyRLSpec:
+def collection_spec(model: str, task: str | None) -> SkyRLSpec:
     """Bind unchanged complement tasks and one pinned model into a rollout specification."""
     source = MODELS[model]
     model_step = ArtifactStep.adopt(
@@ -213,7 +202,7 @@ def collection_spec(model: str, task: str | None, images: tuple[str, str, str]) 
         name=name,
         version=resolve_version(name, None),
         runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-        config_yaml=collection_recipe(images),
+        config_yaml=collection_recipe(),
         model=ArtifactHfModel(model_step, source.model, source.revision, relative_path=""),
         train_data=(
             ArtifactDataSource(data_step, relative_path=f"bfcl_complement/{task}" if task else "bfcl_complement"),
@@ -245,19 +234,16 @@ COLLECTION_EXECUTION = IrisSkyRLExecution(
 )
 
 
-def collection_step(model: str, task: str | None, images: tuple[str, str, str]) -> ArtifactStep:
-    return skyrl_step(collection_spec(model, task, images), COLLECTION_EXECUTION)
+def collection_step(model: str, task: str | None) -> ArtifactStep:
+    return skyrl_step(collection_spec(model, task), COLLECTION_EXECUTION)
 
 
 @click.command(help=__doc__)
 @click.option("--model", type=click.Choice(tuple(MODELS)), required=True)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None, help="Unchanged complement task for a smoke.")
-@click.option("--python-image", required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @rl_build_options
-def main(model: str, task: str | None, python_image: str, java_image: str, javascript_image: str) -> ArtifactStep:
-    return collection_step(model, task, (python_image, java_image, javascript_image))
+def main(model: str, task: str | None) -> ArtifactStep:
+    return collection_step(model, task)
 
 
 if __name__ == "__main__":

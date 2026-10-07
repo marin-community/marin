@@ -29,11 +29,10 @@ def native_student_collection_step(
     policy_checkpoint_step: int,
     seed: int,
     task: str | None,
-    images: tuple[str, str, str],
     harnesses: tuple[str, ...],
 ) -> ArtifactStep:
     """Bind the recovered student to the teacher's task and native harness schedule."""
-    spec = collection_spec("student", task, images)
+    spec = collection_spec("student", task)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
     harbor.update(name="opencode", version="1.18.2", agent_profiles=native_agent_profiles(harnesses))
@@ -66,9 +65,6 @@ def native_student_collection_step(
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**31 - 1), required=True)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
-@click.option("--python-image", required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @click.option(
     "--harness",
     "harnesses",
@@ -85,9 +81,6 @@ def main(
     seed: int,
     harnesses: tuple[str, ...],
     task: str | None,
-    python_image: str,
-    java_image: str,
-    javascript_image: str,
 ) -> ArtifactStep:
     return native_student_collection_step(
         recovery_version,
@@ -95,7 +88,6 @@ def main(
         policy_checkpoint_step,
         seed,
         task,
-        (python_image, java_image, javascript_image),
         harnesses,
     )
 

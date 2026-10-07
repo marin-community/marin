@@ -16,9 +16,9 @@ from marin.rl.skyrl import skyrl_step
 from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, SMOKE_TASKS, collection_spec
 
 
-def harness_capture_step(task: str, agent: str, agent_version: str, images: tuple[str, str, str]) -> ArtifactStep:
+def harness_capture_step(task: str, agent: str, agent_version: str) -> ArtifactStep:
     """Build a generation-only native harness capture check."""
-    spec = collection_spec("student", task, images)
+    spec = collection_spec("student", task)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
     harbor["name"] = agent
@@ -38,14 +38,9 @@ def harness_capture_step(task: str, agent: str, agent_version: str, images: tupl
 @click.option("--task", type=click.Choice(SMOKE_TASKS), required=True)
 @click.option("--agent", type=click.Choice(("mini-swe-agent", "opencode", "claude-code", "codex")), required=True)
 @click.option("--agent-version", required=True)
-@click.option("--python-image", required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @rl_build_options
-def main(
-    task: str, agent: str, agent_version: str, python_image: str, java_image: str, javascript_image: str
-) -> ArtifactStep:
-    return harness_capture_step(task, agent, agent_version, (python_image, java_image, javascript_image))
+def main(task: str, agent: str, agent_version: str) -> ArtifactStep:
+    return harness_capture_step(task, agent, agent_version)
 
 
 if __name__ == "__main__":

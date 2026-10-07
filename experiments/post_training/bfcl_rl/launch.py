@@ -62,12 +62,12 @@ def recovered_model(recovery_version: str, policy_export_version: str | None) ->
     return ArtifactHfModel(step, source.model, source.revision)
 
 
-def rl_recipe(images: tuple[str, str, str], num_train_steps: int, reader_concurrency: int, model_loading: str) -> str:
+def rl_recipe(num_train_steps: int, reader_concurrency: int, model_loading: str) -> str:
     """Adapt the copied v125 recipe to Harbor without changing optimizer settings."""
     recipe = yaml.safe_load(Path(__file__).with_name("v125_async.yaml").read_text())["skyrl"]
     recipe["entrypoint"] = "terminal_bench"
     recipe["config_groups"] = {"terminal_bench_config": "terminal_bench"}
-    collection = yaml.safe_load(collection_recipe(images))
+    collection = yaml.safe_load(collection_recipe())
     recipe["context_budget"] = collection["context_budget"]
     recipe["terminal_bench"] = collection["terminal_bench"]
     harbor = recipe["terminal_bench"]["harbor"]
@@ -127,16 +127,15 @@ def rl_step(
     recovery_version: str,
     policy_export_version: str | None,
     num_train_steps: int,
-    images: tuple[str, str, str],
     reader_concurrency: int,
     model_loading: str,
 ) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name("models/bfcl-rl-multi-harness")
     spec = replace(
-        collection_spec("student", None, images),
+        collection_spec("student", None),
         name=name,
         version=resolve_version(name, None),
-        config_yaml=rl_recipe(images, num_train_steps, reader_concurrency, model_loading),
+        config_yaml=rl_recipe(num_train_steps, reader_concurrency, model_loading),
         model=recovered_model(recovery_version, policy_export_version),
         topology=SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
     )
@@ -153,10 +152,7 @@ def rl_step(
     required=True,
     help="Concurrent S3 checkpoint readers per rollout-engine process.",
 )
-@click.option("--python-image", required=True)
 @click.option("--model-loading", type=click.Choice(["stream", "stage_local"]), required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @rl_build_options
 def main(
     recovery_version: str,
@@ -164,15 +160,11 @@ def main(
     num_train_steps: int,
     reader_concurrency: int,
     model_loading: str,
-    python_image: str,
-    java_image: str,
-    javascript_image: str,
 ) -> ArtifactStep[SkyRLRun]:
     return rl_step(
         recovery_version,
         policy_export_version,
         num_train_steps,
-        (python_image, java_image, javascript_image),
         reader_concurrency,
         model_loading,
     )

@@ -44,12 +44,11 @@ def offline_collection_step(
     teacher_source: str,
     seed: int,
     task: str | None,
-    images: tuple[str, str, str],
     generation_batch_size: int,
     harnesses: tuple[str, ...],
 ) -> ArtifactStep:
     """Bind the pinned Qwen teacher and unchanged complement to a generation-only run."""
-    spec = collection_spec("teacher", task, images)
+    spec = collection_spec("teacher", task)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
     harbor.update(name="opencode", version="1.18.2", agent_profiles=native_agent_profiles(harnesses))
@@ -92,9 +91,6 @@ def offline_collection_step(
 @click.option("--seed", type=click.IntRange(min=0, max=2**31 - 1), required=True)
 @click.option("--generation-batch-size", type=click.IntRange(min=1), required=True)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
-@click.option("--python-image", required=True)
-@click.option("--java-image", required=True)
-@click.option("--javascript-image", required=True)
 @click.option(
     "--harness",
     "harnesses",
@@ -110,13 +106,8 @@ def main(
     generation_batch_size: int,
     harnesses: tuple[str, ...],
     task: str | None,
-    python_image: str,
-    java_image: str,
-    javascript_image: str,
 ) -> ArtifactStep:
-    return offline_collection_step(
-        teacher_source, seed, task, (python_image, java_image, javascript_image), generation_batch_size, harnesses
-    )
+    return offline_collection_step(teacher_source, seed, task, generation_batch_size, harnesses)
 
 
 if __name__ == "__main__":
