@@ -5,8 +5,9 @@
 
 Times ``all_gather``, ``psum_scatter`` (reduce-scatter), ``psum`` (all-reduce) and ``all_to_all``
 inside ``shard_map`` over a 1-D mesh of every local device, at a list of message sizes. Each case
-compiles once, runs back to back for ``--warmup-seconds``, then reports the median of ``--repeats``
-windows of about ``--window-seconds``.
+compiles once, then makes one mandatory warm-up call. ``--extra-warmup-seconds`` adds back-to-back
+warm-up calls after it; 0 skips them. The mean time of all warm-up calls sizes the timed windows,
+and the script reports the median of ``--repeats`` windows of about ``--window-seconds``.
 
 Sizes and bus bandwidth follow rccl-tests: the size is the full (gathered) buffer for all-gather and
 reduce-scatter, the per-rank buffer for all-reduce, and the per-rank send buffer for all-to-all.
@@ -49,7 +50,7 @@ MATMUL_CHAIN = 4
 
 @dataclasses.dataclass(frozen=True)
 class Timing:
-    warmup_seconds: float
+    extra_warmup_seconds: float
     window_seconds: float
     repeats: int
 
@@ -92,12 +93,12 @@ def _input_rows_per_rank(op: str, size_bytes: int, row_bytes: int, n: int) -> in
 
 
 def _time(fn: Callable[[], object], timing: Timing) -> tuple[float, int]:
-    jax.block_until_ready(fn())
-    # Warm up for at least one call so the per-call estimate below is defined.
+    jax.block_until_ready(fn())  # Compile.
     start = time.perf_counter()
-    out = fn()
+    out = jax.block_until_ready(fn())  # Mandatory warm-up call; always defines the per-call time.
+    extra_start = time.perf_counter()
     calls = 1
-    while time.perf_counter() - start < timing.warmup_seconds:
+    while time.perf_counter() - extra_start < timing.extra_warmup_seconds:
         out = fn()
         calls += 1
     jax.block_until_ready(out)
@@ -176,7 +177,16 @@ def main() -> None:
         help="Message sizes in MB (1e6 bytes); 1342.177 is the June EP all-gather at batch 64.",
     )
     parser.add_argument("--overlap", action="store_true", help="Also time each op next to an independent matmul.")
-    parser.add_argument("--warmup-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--extra-warmup-seconds",
+        type=float,
+        default=1.0,
+        help=(
+            "Back-to-back warm-up calls to add after the one mandatory warm-up call. The mandatory call "
+            "always runs and, with these calls, measures the per-call time that sizes the timed windows. "
+            "0 runs only the mandatory call."
+        ),
+    )
     parser.add_argument("--window-seconds", type=float, default=0.2)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--label", default="default", help="Name of the environment configuration.")
@@ -185,7 +195,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     mesh = Mesh(np.array(jax.devices()), (AXIS,))
-    timing = Timing(warmup_seconds=args.warmup_seconds, window_seconds=args.window_seconds, repeats=args.repeats)
+    timing = Timing(
+        extra_warmup_seconds=args.extra_warmup_seconds, window_seconds=args.window_seconds, repeats=args.repeats
+    )
     header = {
         "label": args.label,
         "jax": jax.__version__,

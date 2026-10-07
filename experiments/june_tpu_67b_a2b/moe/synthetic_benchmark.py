@@ -14,6 +14,8 @@ Example, 8 GPUs, full 67B shape, expert parallelism over all 8, profile of steps
 
     RAGGED_DOT_IMPL=xla python experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py \\
         --size full --steps 20 --expert-axis 8 --profile-steps 3
+
+On the AMD HPC Fund cluster, submit it through ``experiments/amd/hpcfund/run_gpu.sh``.
 """
 
 import argparse
