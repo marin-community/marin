@@ -51,7 +51,7 @@ class EventKind(StrEnum):
     """Every batch of the idea yielded zero proposals. attrs: reproposals."""
     # proposal items
     OPENED = "opened"
-    """input_hash: the proposal digest. attrs: proposal, idea, policy_digest."""
+    """input_hash: the proposal digest. attrs: proposal, idea, origin (a ``ProposalOrigin``), policy_digest."""
     TRIAGED = "triaged"
     """input_hash: the proposal digest. attrs: decision, tally, repairs."""
     TRIAGE_REPAIRED = "triage_repaired"
@@ -80,6 +80,13 @@ class EventKind(StrEnum):
     TERMINAL = "terminal"
     """attrs: terminal (a ``Terminal``), reason, kind (a ``RejectKind``) when rejected, and causes
     (``cause:count`` pairs, comma-separated) when abandoned."""
+
+
+class ProposalOrigin(StrEnum):
+    """Where an item's proposal came from: a ``PROPOSED`` batch, or the caller of ``run_item``."""
+
+    GENERATED = "generated"
+    SUPPLIED = "supplied"
 
 
 IDEA_EVENTS = frozenset({EventKind.PROPOSED, EventKind.SLOT_FAILED, EventKind.IDEA_EXHAUSTED})
