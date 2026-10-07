@@ -603,6 +603,12 @@ def _joined_prefilled(parts: Sequence[Completion], content: str, started: float)
     )
 
 
+def prefill_request_fields(policy: LLMPolicy, request_fields: Mapping[str, object] | None) -> dict[str, object]:
+    """The request fields ``complete_prefilled`` sends: continue the prefilled turn, with thinking off."""
+    template_kwargs = {**policy.template_kwargs(), **PREFILL_TEMPLATE_KWARGS}
+    return {**(request_fields or {}), **CONTINUE_FINAL_MESSAGE_FIELDS, "chat_template_kwargs": template_kwargs}
+
+
 async def complete_prefilled(
     client: GlmClient,
     messages: Sequence[Message],
@@ -637,8 +643,7 @@ async def complete_prefilled(
     """
     if not prefix or prefix != prefix.strip():
         raise ValueError(f"prefix must be non-empty without surrounding whitespace, got {prefix!r}")
-    template_kwargs = {**policy.template_kwargs(), **PREFILL_TEMPLATE_KWARGS}
-    fields = {**(request_fields or {}), **CONTINUE_FINAL_MESSAGE_FIELDS, "chat_template_kwargs": template_kwargs}
+    fields = prefill_request_fields(policy, request_fields)
     segment_policy = replace(policy, max_continuations=0)
     started = time.monotonic()
     parts: list[Completion] = []

@@ -38,6 +38,7 @@ canonical -> ledger -> llm
 - `llm.client.complete_prefilled(client, messages, policy, prefix, request_fields=None)` sends
   `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
   with it. Use it to force an output format such as proposal front matter.
+  `llm.client.prefill_request_fields(policy, request_fields)` returns the request fields it sends.
 
 ## Decisions
 
