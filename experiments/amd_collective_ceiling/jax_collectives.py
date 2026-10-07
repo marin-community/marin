@@ -93,8 +93,10 @@ def _input_rows_per_rank(op: str, size_bytes: int, row_bytes: int, n: int) -> in
 
 def _time(fn: Callable[[], object], timing: Timing) -> tuple[float, int]:
     jax.block_until_ready(fn())
-    calls = 0
+    # Warm up for at least one call so the per-call estimate below is defined.
     start = time.perf_counter()
+    out = fn()
+    calls = 1
     while time.perf_counter() - start < timing.warmup_seconds:
         out = fn()
         calls += 1
