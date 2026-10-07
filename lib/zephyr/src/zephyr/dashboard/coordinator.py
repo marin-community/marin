@@ -13,15 +13,16 @@ from typing import Protocol
 from zephyr.dashboard.app import (
     CounterPage,
     CounterQuery,
-    PipelineList,
+    DashboardOverview,
     PipelineMetrics,
+    PipelineOverview,
     PipelinePhase,
     PipelinePlan,
     PipelineStatus,
-    PipelineSummary,
     PlanNodeState,
     PlanNodeStatus,
     ResourceUsage,
+    ShardBucket,
     WorkerAssignment,
     WorkerPage,
     WorkerQuery,
@@ -34,6 +35,8 @@ from zephyr.plan import SOURCE_STAGE_TYPE, PhysicalPlan
 from zephyr.stage_io import ZephyrTaskResources
 from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CURRENT_KEY, StatsWriter
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
+
+MAX_SHARD_BUCKETS = 32
 
 
 class InFlightTask(Protocol):
@@ -65,6 +68,9 @@ class DashboardExecution(Protocol):
 
     @property
     def task_queue(self) -> Sized: ...
+
+    @property
+    def results(self) -> Mapping[int, object]: ...
 
     @property
     def completed_totals(self) -> Mapping[tuple[str | None, str, Aggregation], CounterEntry]: ...
@@ -127,20 +133,6 @@ class CoordinatorDashboard:
             return PipelinePhase.WAITING_FOR_WORKERS
         return PipelinePhase.RUNNING
 
-    def pipelines(self) -> PipelineList:
-        with self._coordinator._lock:
-            runs = list(self._coordinator._executions.values())
-            return PipelineList(
-                pipelines=tuple(
-                    PipelineSummary(
-                        execution_id=run.execution_id,
-                        pipeline_name=run.pipeline_name or run.execution_id,
-                        current_stage=run.stage_name,
-                    )
-                    for run in reversed(runs)
-                )
-            )
-
     def _plan_locked(self, run: DashboardExecution) -> PipelinePlan:
         if run.dashboard_plan is None and run.plan is not None:
             run.dashboard_plan = pipeline_plan(
@@ -149,13 +141,6 @@ class CoordinatorDashboard:
                 execution_id=run.execution_id,
             )
         return run.dashboard_plan or PipelinePlan(pipeline_name="", execution_id=run.execution_id)
-
-    def plan(self, execution_id: str) -> PipelinePlan:
-        with self._coordinator._lock:
-            run = self._run_locked(execution_id)
-            if run is None:
-                return PipelinePlan(pipeline_name="", execution_id=execution_id)
-            return self._plan_locked(run)
 
     def _worker_counter_entries_locked(self) -> dict[str, dict[str, CounterEntry]]:
         """Merge live counter entries for every worker, keyed by worker id.
@@ -173,64 +158,101 @@ class CoordinatorDashboard:
             merged_by_worker[worker_id] = {name: entry for name, entry in merged.items() if name not in conflicted}
         return merged_by_worker
 
-    def status(self, execution_id: str) -> PipelineStatus:
+    def _shard_buckets_locked(self, run: DashboardExecution) -> tuple[ShardBucket, ...]:
+        total = run.total_shards
+        if total <= 0:
+            return ()
+        count = min(MAX_SHARD_BUCKETS, total)
+        completed = [0] * count
+        running = [0] * count
+        for shard in run.results:
+            completed[shard * count // total] += 1
+        for shard in run.in_flight:
+            running[shard * count // total] += 1
+        return tuple(
+            ShardBucket(
+                completed=completed[index],
+                running=running[index],
+                pending=(
+                    ((index + 1) * total + count - 1) // count
+                    - (index * total + count - 1) // count
+                    - completed[index]
+                    - running[index]
+                ),
+            )
+            for index in range(count)
+        )
+
+    def _status_locked(self, run: DashboardExecution, safe_plan: PipelinePlan) -> PipelineStatus:
+        worker_states = Counter(state for state in self._coordinator._worker_states.values())
+        worker_snapshots = [
+            snapshot
+            for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
+            if worker_id in self._coordinator._worker_states and snapshot_execution_id == run.execution_id
+        ]
+        cpu_percent = sum(
+            float(snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value)
+            for snapshot in worker_snapshots
+        )
+        memory_bytes = sum(
+            int(snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value)
+            for snapshot in worker_snapshots
+        )
+        active_workers = worker_states.get(self._active_worker_state, 0)
+        cpu_capacity = active_workers * self._coordinator._worker_resources.cpu
+        memory_capacity = active_workers * self._coordinator._worker_resources.memory
+        node_statuses: list[PlanNodeStatus] = []
+        phase = self._phase_locked(run)
+        buckets = self._shard_buckets_locked(run)
+        for node in safe_plan.nodes:
+            if node.stage_type == SOURCE_STAGE_TYPE:
+                state = PlanNodeState.SUCCEEDED
+            else:
+                state = run.node_states.get(node.node_id, PlanNodeState.PENDING)
+            active = state == PlanNodeState.RUNNING and node.stage_name == run.stage_name
+            node_statuses.append(
+                PlanNodeStatus(
+                    node_id=node.node_id,
+                    state=state,
+                    completed_shards=run.completed_shards if active else 0,
+                    total_shards=run.total_shards if active else 0,
+                    shard_buckets=buckets if active else (),
+                )
+            )
+
+        return PipelineStatus(
+            execution_id=run.execution_id,
+            phase=phase,
+            current_stage=run.stage_name,
+            completed_shards=run.completed_shards,
+            total_shards=run.total_shards,
+            in_flight_shards=len(run.in_flight),
+            queued_shards=len(run.task_queue),
+            retries=run.retries,
+            started_at_ms=run.started_at_ms,
+            finished_at_ms=run.finished_at_ms,
+            fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
+            coordinator_task_id=self._coordinator._coordinator_task_id,
+            expected_workers=self._coordinator._expected_workers,
+            worker_states=tuple(
+                WorkerStateCount(state=state, count=count) for state, count in sorted(worker_states.items())
+            ),
+            resources=ResourceUsage(
+                cpu_cores=cpu_percent / 100,
+                cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
+                memory_bytes=memory_bytes,
+                memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
+            ),
+            node_statuses=tuple(node_statuses),
+        )
+
+    def overview(self) -> DashboardOverview:
         with self._coordinator._lock:
-            run = self._run_locked(execution_id)
-            if run is None:
-                return PipelineStatus(execution_id=execution_id)
-
-            worker_states = Counter(state for state in self._coordinator._worker_states.values())
-            worker_snapshots = [
-                snapshot
-                for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
-                if worker_id in self._coordinator._worker_states and snapshot_execution_id == run.execution_id
-            ]
-            cpu_percent = sum(
-                float(snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value)
-                for snapshot in worker_snapshots
-            )
-            memory_bytes = sum(
-                int(snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value)
-                for snapshot in worker_snapshots
-            )
-            active_workers = worker_states.get(self._active_worker_state, 0)
-            cpu_capacity = active_workers * self._coordinator._worker_resources.cpu
-            memory_capacity = active_workers * self._coordinator._worker_resources.memory
-            safe_plan = self._plan_locked(run)
-            node_statuses: list[PlanNodeStatus] = []
-            phase = self._phase_locked(run)
-            for node in safe_plan.nodes:
-                if node.stage_type == SOURCE_STAGE_TYPE:
-                    state = PlanNodeState.SUCCEEDED
-                else:
-                    state = run.node_states.get(node.node_id, PlanNodeState.PENDING)
-                node_statuses.append(PlanNodeStatus(node_id=node.node_id, state=state))
-
-            return PipelineStatus(
-                execution_id=run.execution_id,
-                phase=phase,
-                current_stage=run.stage_name,
-                completed_shards=run.completed_shards,
-                total_shards=run.total_shards,
-                in_flight_shards=len(run.in_flight),
-                queued_shards=len(run.task_queue),
-                retries=run.retries,
-                started_at_ms=run.started_at_ms,
-                finished_at_ms=run.finished_at_ms,
-                fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
-                coordinator_task_id=self._coordinator._coordinator_task_id,
-                expected_workers=self._coordinator._expected_workers,
-                worker_states=tuple(
-                    WorkerStateCount(state=state, count=count) for state, count in sorted(worker_states.items())
-                ),
-                resources=ResourceUsage(
-                    cpu_cores=cpu_percent / 100,
-                    cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
-                    memory_bytes=memory_bytes,
-                    memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
-                ),
-                node_statuses=tuple(node_statuses),
-            )
+            pipelines = []
+            for run in reversed(tuple(self._coordinator._executions.values())):
+                plan = self._plan_locked(run)
+                pipelines.append(PipelineOverview(plan=plan, status=self._status_locked(run, plan)))
+            return DashboardOverview(pipelines=tuple(pipelines))
 
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._coordinator._lock:

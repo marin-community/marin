@@ -6,53 +6,91 @@
 <base href="/">
 <title>Zephyr coordinator</title>
 <style>
-  :root { color-scheme: light dark; font: 14px system-ui, sans-serif; --border: #8885; --muted: #777; }
-  body { max-width: 1400px; margin: auto; padding: 24px; }
-  h1 { font-size: 22px; margin: 0; }
-  h2 { font-size: 16px; }
-  header, nav, form, footer { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-  header > div { margin-right: auto; }
-  label { display: flex; align-items: center; gap: 6px; }
-  button, select, input { font: inherit; padding: 6px 10px; }
-  button, select, a { cursor: pointer; }
-  a { color: #548cdb; }
-  nav { border-bottom: 1px solid var(--border); padding: 12px 0; }
-  nav a { text-decoration: none; padding: 6px; }
-  nav a[aria-current] { color: inherit; font-weight: bold; border-bottom: 2px solid; }
-  #summary { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 20px 0; }
-  #summary div { min-width: 110px; }
-  dt, .muted { color: var(--muted); font-size: 12px; }
-  dd { margin: 4px 0; font-size: 17px; }
-  #error, #failure { color: #b33; white-space: pre-wrap; }
-  #content { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-  th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
-  th { font-weight: 600; white-space: nowrap; }
-  tbody tr:hover { background: #8881; }
-  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
-  .chart { margin: 0; padding: 16px; border: 1px solid var(--border); }
+  :root { color-scheme: light dark; font: 14px system-ui, sans-serif; --surface: #fff; --background: #f5f7f8; --ink: #17262d; --muted: #5d6c73; --line: #d9e0e3; --accent: #136d78; --good: #28765c; --active: #b46716; --bad: #b84343; --idle: #9eaeb5; }
+  * { box-sizing: border-box; }
+  body { max-width: 1500px; margin: auto; padding: 28px; background: var(--background); color: var(--ink); }
+  h1 { font-size: 26px; letter-spacing: -.03em; margin: 0; }
+  h2 { font-size: 17px; margin: 0 0 14px; }
+  h3 { font-size: 15px; margin: 0; overflow-wrap: anywhere; }
+  p { line-height: 1.45; }
+  header { display: flex; align-items: start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  header p { margin: 4px 0 0; }
+  .actions, nav, form, footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  button, select, input { font: inherit; padding: 7px 10px; }
+  button, a { cursor: pointer; }
+  button { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: inherit; }
+  button:hover, button:focus-visible, .pipeline-card:hover, .pipeline-card:focus-visible { border-color: var(--accent); }
+  a { color: var(--accent); }
+  nav { border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+  nav a { display: inline-block; padding: 10px 12px; text-decoration: none; }
+  nav a[aria-current] { color: var(--ink); font-weight: 700; border-bottom: 3px solid var(--accent); }
+  #error, #failure { color: var(--bad); white-space: pre-wrap; }
+  .muted, dt { color: var(--muted); }
+  .eyebrow { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+  .section-heading, .card-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .section-heading { margin-bottom: 14px; }
+  .section-heading p, .card-heading p { margin: 4px 0 0; }
+  .pipeline-list { display: grid; gap: 14px; }
+  .pipeline-card, .panel, .chart { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
+  .pipeline-card { display: block; width: 100%; min-width: 0; padding: 18px; text-align: left; box-shadow: 0 2px 7px #152d3610; color: inherit; text-decoration: none; }
+  .pipeline-card .stage-flow { margin-top: 18px; }
+  .panel { padding: 20px; margin-bottom: 18px; }
+  .panel > h2 { margin-top: 22px; }
+  #content > button { margin-bottom: 12px; }
+  .phase { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; text-transform: capitalize; white-space: nowrap; }
+  .phase::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--idle); }
+  .phase.running::before { background: var(--active); }
+  .phase.succeeded::before { background: var(--good); }
+  .phase.failed::before { background: var(--bad); }
+  .stage-flow { display: flex; gap: 8px; align-items: stretch; max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
+  .stage-card { flex: 1 0 150px; min-width: 150px; max-width: 270px; padding: 11px; border: 1px solid var(--line); border-top: 4px solid var(--idle); border-radius: 5px; background: var(--background); }
+  .stage-card.running { border-top-color: var(--active); }
+  .stage-card.succeeded { border-top-color: var(--good); }
+  .stage-card.failed { border-top-color: var(--bad); }
+  .stage-card.auxiliary { border-style: dashed; }
+  .stage-card small { color: var(--muted); }
+  .stage-card strong { display: block; margin: 4px 0; overflow-wrap: anywhere; }
+  .stage-card .stage-state { color: var(--muted); text-transform: capitalize; }
+  .stage-arrow { align-self: center; color: var(--muted); font-size: 20px; flex: none; }
+  .heatmap { display: grid; grid-template-columns: repeat(32, minmax(0, 1fr)); gap: 2px; margin-top: 9px; }
+  .heat-cell { height: 13px; border-radius: 2px; background: var(--idle); }
+  .heat-cell.succeeded { background: var(--good); }
+  .heat-cell.running { background: var(--active); }
+  .heat-cell.failed { background: var(--bad); }
+  .heatmap-key { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .heatmap-key span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 1px; margin-right: 5px; background: var(--idle); }
+  .heatmap-key .done::before { background: var(--good); }
+  .heatmap-key .work::before { background: var(--active); }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 18px; margin: 20px 0 0; }
+  .summary div { min-width: 0; }
+  dt { font-size: 12px; }
+  dd { margin: 4px 0 0; font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .chart { margin: 0; padding: 16px; }
   svg { width: 100%; height: auto; overflow: visible; }
   .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; }
   .legend span { border-bottom: 3px solid; }
+  #content { min-width: 0; }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; background: var(--surface); }
+  th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  th { font-weight: 600; white-space: nowrap; }
+  tbody tr:hover { background: var(--background); }
+  #filters { margin-bottom: 16px; }
+  #updated { margin-top: 20px; font-size: 12px; }
   [hidden] { display: none !important; }
-  @media (max-width: 600px) { body { padding: 12px; } th, td { padding: 8px 4px; } }
+  @media (max-width: 650px) { body { padding: 14px; } .pipeline-card, .panel { padding: 14px; } .stage-card { flex-basis: 140px; min-width: 140px; } th, td { padding: 8px 5px; } }
+  @media (prefers-color-scheme: dark) { :root { --surface: #1c2a30; --background: #111e24; --ink: #e8eff1; --muted: #b4c0c5; --line: #35454c; --accent: #72c6d0; --good: #54ae85; --active: #e0a254; --bad: #e68181; --idle: #677a83; } }
 </style>
 </head>
 <body>
 <header>
-  <div><h1>Zephyr coordinator</h1><p id="phase" class="muted">Loading</p></div>
-  <label>Pipeline <select id="pipeline" aria-label="Pipeline"></select></label>
-  <label><input id="live" type="checkbox" checked> Live</label>
-  <button id="refresh" type="button">Refresh</button>
-  <a id="coordinator" target="_top" hidden>Coordinator task</a>
+  <div><h1>Zephyr coordinator</h1><p id="phase" class="muted">Loading pipelines</p></div>
+  <div class="actions"><label><input id="live" type="checkbox" checked> Live</label><button id="refresh" type="button">Refresh</button><a id="coordinator" target="_top" hidden>Coordinator task</a></div>
 </header>
 <p id="error" role="alert" hidden></p>
 <p id="failure" role="alert" hidden></p>
-<dl id="summary"></dl>
-<nav aria-label="Views">
-  <a href="#plan">Plan</a><a href="#counters">Counters</a>
-  <a href="#workers">Workers</a><a href="#metrics">Metrics</a>
-</nav>
+<nav aria-label="Views"><a href="#overview">Overview</a><a href="#counters" id="counters-link">Counters</a><a href="#workers">Workers</a></nav>
 <form id="filters" hidden>
   <label>Search <input id="search" type="search"></label>
   <label id="stage-filter">Stage <select id="stage" aria-label="Stage"><option value="">All stages</option></select></label>
@@ -61,17 +99,14 @@
   <button type="submit">Apply</button>
 </form>
 <main id="content" aria-live="polite"></main>
-<footer id="pager" hidden>
-  <span id="range"></span>
-  <button id="previous" type="button">Previous</button>
-  <button id="next" type="button">Next</button>
-</footer>
+<footer id="pager" hidden><span id="range"></span><button id="previous" type="button">Previous</button><button id="next" type="button">Next</button></footer>
 <p id="updated" class="muted"></p>
 <script>
 function startDashboard() {
   const byId = (id) => document.getElementById(id);
   const number = (value) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
   const pageSize = 50;
+  const maxHeatCells = 32;
   const refreshDelay = 5000;
   const requestTimeout = 15000;
   const chartLeft = 65;
@@ -85,6 +120,7 @@ function startDashboard() {
   let offset = 0;
   let timer;
   let request;
+  let metricCache;
 
   function bytes(value) {
     const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -130,61 +166,141 @@ function startDashboard() {
       cell.colSpan = headers.length;
       cell.textContent = 'No data for this view.';
     }
-    return result;
+    const scroll = element('div');
+    scroll.className = 'table-scroll';
+    scroll.append(result);
+    return scroll;
   }
 
-  function renderStatus(status) {
-    byId('phase').textContent = `${executionId || 'No active pipelines'} · ${status.phase.replaceAll('_', ' ')}`;
-    byId('failure').textContent = status.fatal_error;
-    byId('failure').hidden = !status.fatal_error;
+  function phaseLabel(phase) {
+    return phase.replaceAll('_', ' ');
+  }
+
+  function badge(phase) {
+    const label = element('span', phaseLabel(phase));
+    label.className = `phase ${phase}`;
+    return label;
+  }
+
+  function heatmap(node, state) {
+    const cells = element('div');
+    cells.className = 'heatmap';
+    const buckets = state.shard_buckets.length ? state.shard_buckets : Array.from({ length: Math.min(node.output_shards || 1, maxHeatCells) }, () => ({ completed: state.state === 'succeeded' ? 1 : 0, running: 0, pending: state.state === 'succeeded' ? 0 : 1 }));
+    for (const bucket of buckets) {
+      const cell = element('span');
+      cell.className = 'heat-cell';
+      const kinds = [bucket.completed, bucket.running, bucket.pending].filter(Boolean).length;
+      if (state.state === 'failed') cell.classList.add('failed');
+      else if (kinds > 1) {
+        const total = bucket.completed + bucket.running + bucket.pending;
+        const done = 100 * bucket.completed / total;
+        const work = 100 * (bucket.completed + bucket.running) / total;
+        cell.style.background = `linear-gradient(90deg, var(--good) ${done}%, var(--active) ${done}% ${work}%, var(--idle) ${work}%)`;
+      }
+      else if (bucket.completed) cell.classList.add('succeeded');
+      else if (bucket.running) cell.classList.add('running');
+      cell.title = `${bucket.completed} complete · ${bucket.running} running · ${bucket.pending} pending`;
+      cells.append(cell);
+    }
+    cells.setAttribute('aria-label', state.total_shards ? `${state.completed_shards} of ${state.total_shards} shards complete` : `${phaseLabel(state.state)} stage`);
+    cells.setAttribute('role', 'img');
+    return cells;
+  }
+
+  function stageFlow(plan, status) {
+    const flow = element('div');
+    flow.className = 'stage-flow';
+    const states = new Map(status.node_statuses.map((item) => [item.node_id, item]));
+    const appendStage = (node, index, target) => {
+      if (index && !node.auxiliary) { const arrow = element('span', '→'); arrow.className = 'stage-arrow'; arrow.setAttribute('aria-hidden', 'true'); target.append(arrow); }
+      const state = states.get(node.node_id) || { state: 'pending', shard_buckets: [], total_shards: 0, completed_shards: 0 };
+      const card = element('div');
+      card.className = `stage-card ${state.state}${node.auxiliary ? ' auxiliary' : ''}`;
+      const type = node.stage_type.replaceAll('_', ' ').toLowerCase();
+      card.append(element('small', node.auxiliary ? `Join input · ${type}` : type), element('strong', node.label), element('span', phaseLabel(state.state)));
+      card.lastChild.className = 'stage-state';
+      card.append(element('small', state.total_shards ? ` · ${state.completed_shards}/${state.total_shards} shards` : ` · ${node.output_shards} output shards`));
+      card.append(heatmap(node, state));
+      target.append(card);
+    };
+    plan.nodes.filter((node) => !node.auxiliary).forEach((node, index) => appendStage(node, index, flow));
+    const auxiliary = plan.nodes.filter((node) => node.auxiliary);
+    if (!auxiliary.length) return flow;
+    const group = element('div');
+    const label = element('p', 'Join inputs');
+    label.className = 'eyebrow';
+    const branches = element('div');
+    branches.className = 'stage-flow';
+    auxiliary.forEach((node, index) => appendStage(node, index, branches));
+    group.append(flow, label, branches);
+    return group;
+  }
+
+  function summary(status) {
     const active = status.worker_states.find((worker) => worker.state === 'active')?.count || 0;
     const elapsed = status.started_at_ms ? `${number(((status.finished_at_ms || Date.now()) - status.started_at_ms) / 1000)} s` : '—';
     const values = [
-      ['Stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
+      ['Current stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
       ['Workers', `${active}/${status.expected_workers}`], ['CPU', `${number(status.resources.cpu_cores)} cores`],
       ['Memory', bytes(status.resources.memory_bytes)], ['Elapsed', elapsed],
       ['In flight / queued', `${status.in_flight_shards} / ${status.queued_shards}`], ['Retries', status.retries],
     ];
-    byId('summary').replaceChildren(...values.map(([label, value]) => {
+    const list = element('dl');
+    list.className = 'summary';
+    list.append(...values.map(([label, value]) => {
       const item = element('div');
       item.append(element('dt', label), element('dd', value));
       return item;
     }));
-    byId('coordinator').hidden = !status.coordinator_task_id;
-    if (status.coordinator_task_id) byId('coordinator').href = taskLink(status.coordinator_task_id, '').href;
+    return list;
   }
 
-  function renderPlan(plan, status) {
-    const states = new Map(status.node_statuses.map((node) => [node.node_id, node.state]));
-    const rows = plan.nodes.map((node) => [
-      node.label, (states.get(node.node_id) || 'pending').replaceAll('_', ' '), node.output_shards,
-      node.operation_types.join(', '), node.auxiliary ? `Join input for ${node.parent_node_id}` : 'Pipeline',
-    ]);
-    byId('content').replaceChildren(
-      element('p', `${plan.pipeline_name || 'Pipeline'} · ${number(plan.source_item_count)} source items`),
-      table(['Stage', 'State', 'Output shards', 'Operations', 'Plan'], rows),
-    );
+  function selectPipeline(id) {
+    executionId = id;
+    offset = 0;
+    const url = new URL(location.href);
+    if (id) url.searchParams.set('execution_id', id);
+    else url.searchParams.delete('execution_id');
+    url.hash = 'overview';
+    history.pushState(null, '', url);
+    selectView();
   }
 
-  function renderPage(data) {
-    let headers, rows;
-    if (view === 'counters') {
-      options(byId('stage'), [['', 'All stages'], ...data.stages.map((stage) => [stage, stage])], byId('stage').value);
-      headers = ['Name', 'Stage', 'Value', 'Aggregation', 'Samples'];
-      rows = data.counters.map((counter) => [counter.name, counter.stage || 'pipeline', number(counter.value), counter.aggregation, counter.observations]);
-    } else {
-      headers = ['Worker', 'State', 'Active shards', 'CPU', 'Memory', 'Heartbeat age', 'Task'];
-      rows = data.workers.map((worker) => [
-        worker.worker_id, worker.state, worker.assignments.map((item) => `${item.execution_id}:${item.shard}`).join(', ') || '—',
-        `${number(worker.cpu_percent)}%`, bytes(worker.memory_bytes), `${number(worker.last_seen_age_seconds)} s`,
-        worker.task_id ? taskLink(worker.task_id, 'Open task') : '—',
-      ]);
+  function renderFleet(pipelines) {
+    const content = byId('content');
+    const heading = element('div');
+    heading.className = 'section-heading';
+    const title = element('div');
+    title.append(element('span', 'ALL PIPELINES'), element('h2', `${pipelines.length} pipeline${pipelines.length === 1 ? '' : 's'}`));
+    title.firstChild.className = 'eyebrow';
+    const counts = new Map();
+    for (const item of pipelines) counts.set(item.status.phase, (counts.get(item.status.phase) || 0) + 1);
+    heading.append(title, element('p', [...counts].map(([phase, count]) => `${count} ${phaseLabel(phase)}`).join(' · ')));
+    const list = element('div');
+    list.className = 'pipeline-list';
+    for (const item of pipelines) {
+      const card = element('a');
+      card.className = 'pipeline-card';
+      const url = new URL(location.href);
+      url.searchParams.set('execution_id', item.status.execution_id);
+      url.hash = 'overview';
+      card.href = url.href;
+      card.onclick = (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        selectPipeline(item.status.execution_id);
+      };
+      const head = element('div');
+      head.className = 'card-heading';
+      const name = element('div');
+      name.append(element('h3', item.plan.pipeline_name || item.status.execution_id), element('p', `${item.status.current_stage || 'No active stage'} · ${item.status.completed_shards}/${item.status.total_shards} current-stage shards`));
+      name.lastChild.className = 'muted';
+      head.append(name, badge(item.status.phase));
+      card.append(head, stageFlow(item.plan, item.status));
+      list.append(card);
     }
-    byId('content').replaceChildren(table(headers, rows));
-    const count = rows.length;
-    byId('range').textContent = `${count ? offset + 1 : 0}–${offset + count} of ${data.total}`;
-    byId('previous').disabled = offset === 0;
-    byId('next').disabled = offset + count >= data.total;
+    if (!pipelines.length) list.append(element('p', 'No pipelines are currently held by this coordinator. Completed executions disappear after the driver releases them.'));
+    content.replaceChildren(heading, list);
   }
 
   function chart(points, field, title, format) {
@@ -233,20 +349,69 @@ function startDashboard() {
     return figure;
   }
 
-  function renderMetrics(data) {
+  function renderFocused(item) {
+    const status = item.status;
+    const back = element('button', '← All pipelines');
+    back.type = 'button';
+    back.onclick = () => selectPipeline('');
+    const panel = element('section');
+    panel.className = 'panel';
+    const head = element('div');
+    head.className = 'card-heading';
+    const name = element('div');
+    name.append(element('h2', item.plan.pipeline_name || status.execution_id), element('p', status.execution_id));
+    name.lastChild.className = 'muted';
+    head.append(name, badge(status.phase));
+    panel.append(head, summary(status), element('h2', 'Pipeline stages'), stageFlow(item.plan, status));
+    const key = element('p');
+    key.className = 'heatmap-key';
+    for (const [label, className] of [['Complete', 'done'], ['Running', 'work'], ['Pending', 'wait']]) {
+      const part = element('span', label);
+      part.className = className;
+      key.append(part);
+    }
+    panel.append(key);
+    const metricTitle = element('h2', 'Metrics');
+    metricTitle.style.marginTop = '24px';
+    const metricsArea = element('div');
+    metricsArea.id = 'metrics-area';
+    byId('content').replaceChildren(back, panel, metricTitle, metricsArea);
+    byId('failure').textContent = status.fatal_error;
+    byId('failure').hidden = !status.fatal_error;
+  }
+
+  function renderMetrics(metrics) {
     const charts = element('div');
     charts.className = 'charts';
     charts.append(
-      chart(data.points, 'item_rate', 'Items / second', number),
-      chart(data.points, 'byte_rate', 'Bytes / second', bytes),
-      chart(data.points, 'cpu_cores', 'CPU cores', number),
-      chart(data.points, 'memory_bytes', 'Memory', bytes),
+      chart(metrics.points, 'item_rate', 'Items / second', number),
+      chart(metrics.points, 'byte_rate', 'Bytes / second', bytes),
+      chart(metrics.points, 'cpu_cores', 'CPU cores', number),
+      chart(metrics.points, 'memory_bytes', 'Memory', bytes),
     );
-    byId('content').replaceChildren(
-      element('p', data.warning),
-      element('p', '15-second averages, including work from failed attempts. Memory is estimated between samples.'),
-      charts,
-    );
+    const context = element('p', '15-second averages, including work from failed attempts. Memory is estimated between samples.');
+    byId('metrics-area').replaceChildren(...(metrics.warning ? [element('p', metrics.warning)] : []), context, charts);
+  }
+
+  function renderPage(data) {
+    let headers, rows;
+    if (view === 'counters') {
+      options(byId('stage'), [['', 'All stages'], ...data.stages.map((stage) => [stage, stage])], byId('stage').value);
+      headers = ['Name', 'Stage', 'Value', 'Aggregation', 'Samples'];
+      rows = data.counters.map((counter) => [counter.name, counter.stage || 'pipeline', number(counter.value), counter.aggregation, counter.observations]);
+    } else {
+      headers = ['Worker', 'State', 'Active shards', 'CPU', 'Memory', 'Heartbeat age', 'Task'];
+      rows = data.workers.map((worker) => [
+        worker.worker_id, worker.state, worker.assignments.map((item) => `${item.execution_id}:${item.shard}`).join(', ') || '—',
+        `${number(worker.cpu_percent)}%`, bytes(worker.memory_bytes), `${number(worker.last_seen_age_seconds)} s`,
+        worker.task_id ? taskLink(worker.task_id, 'Open task') : '—',
+      ]);
+    }
+    byId('content').replaceChildren(table(headers, rows));
+    const count = rows.length;
+    byId('range').textContent = `${count ? offset + 1 : 0}–${offset + count} of ${data.total}`;
+    byId('previous').disabled = offset === 0;
+    byId('next').disabled = offset + count >= data.total;
   }
 
   async function refresh() {
@@ -260,30 +425,50 @@ function startDashboard() {
       return response.json();
     }
     try {
-      const { pipelines } = await get('pipelines');
+      const overview = await get('overview');
       if (current !== request) return;
-      if (!pipelines.some((pipeline) => pipeline.execution_id === executionId)) {
-        executionId = pipelines[0]?.execution_id || '';
-        offset = 0;
-        byId('stage').value = '';
+      const selected = overview.pipelines.find((item) => item.status.execution_id === executionId);
+      if (executionId && !selected) {
+        executionId = '';
+        const url = new URL(location.href);
+        url.searchParams.delete('execution_id');
+        history.replaceState(null, '', url);
       }
-      options(byId('pipeline'), pipelines.length ? pipelines.map((pipeline) => [pipeline.execution_id, pipeline.pipeline_name]) : [['', 'No active pipelines']], executionId);
-      const url = new URL(location.href);
-      if (executionId) url.searchParams.set('execution_id', executionId);
-      else url.searchParams.delete('execution_id');
-      history.replaceState(null, '', url);
-      const query = view === 'workers' ? {} : { execution_id: executionId };
-      if (sortFields[view]) Object.assign(query, {
-        search: byId('search').value, stage: byId('stage').value, sort_field: byId('sort').value,
-        sort_descending: byId('descending').checked, offset, limit: pageSize,
-      });
-      if (view === 'metrics') query.max_points = 300;
-      const [status, data] = await Promise.all([get('status', { execution_id: executionId }), get(view, query)]);
+      byId('counters-link').hidden = !selected;
+      byId('filters').hidden = byId('pager').hidden = !sortFields[view] || (view === 'counters' && !selected);
+      byId('phase').textContent = selected ? `${selected.plan.pipeline_name || executionId} · ${phaseLabel(selected.status.phase)}` : `${overview.pipelines.length} pipelines held by this coordinator`;
+      const coordinatorTask = selected?.status.coordinator_task_id || overview.pipelines[0]?.status.coordinator_task_id;
+      byId('coordinator').hidden = !coordinatorTask;
+      if (coordinatorTask) byId('coordinator').href = taskLink(coordinatorTask, '').href;
+      byId('failure').hidden = true;
+      if (view === 'overview') {
+        if (selected) {
+          renderFocused(selected);
+          renderMetrics(metricCache?.executionId === executionId ? metricCache.data : { points: [], warning: 'Loading metrics…' });
+          try {
+            const metrics = await get('metrics', { execution_id: executionId, max_points: 300 });
+            if (current !== request) return;
+            metricCache = { executionId, data: metrics };
+            renderMetrics(metrics);
+          } catch (error) {
+            if (current !== request) return;
+            renderMetrics({ points: [], warning: current.signal.aborted ? 'Metrics request timed out.' : `Metrics unavailable: ${error.message}` });
+          }
+        }
+        else renderFleet(overview.pipelines);
+      } else if (view === 'counters' && !selected) {
+        byId('content').replaceChildren(element('p', 'Choose a pipeline from Overview to inspect its counters.'));
+      } else {
+        const query = view === 'workers' ? {} : { execution_id: executionId };
+        Object.assign(query, {
+          search: byId('search').value, stage: byId('stage').value, sort_field: byId('sort').value,
+          sort_descending: byId('descending').checked, offset, limit: pageSize,
+        });
+        const page = await get(view, query);
+        if (current !== request) return;
+        renderPage(page);
+      }
       if (current !== request) return;
-      renderStatus(status);
-      if (view === 'plan') renderPlan(data, status);
-      else if (view === 'metrics') renderMetrics(data);
-      else renderPage(data);
       byId('error').hidden = true;
       byId('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
     } catch (error) {
@@ -291,8 +476,7 @@ function startDashboard() {
       byId('error').textContent = current.signal.aborted ? 'The request timed out. Select Refresh to try again.' : error.message;
       byId('error').hidden = false;
       byId('content').replaceChildren();
-      byId('summary').replaceChildren();
-      byId('phase').textContent = `${executionId || 'No active pipelines'} · data unavailable`;
+      byId('phase').textContent = 'Data unavailable';
       byId('failure').hidden = true;
     } finally {
       clearTimeout(timeout);
@@ -304,7 +488,7 @@ function startDashboard() {
   }
 
   function selectView() {
-    view = ['plan', 'counters', 'workers', 'metrics'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'plan';
+    view = ['overview', 'counters', 'workers'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
     offset = 0;
     byId('search').value = '';
     byId('stage').value = '';
@@ -320,13 +504,6 @@ function startDashboard() {
     void refresh();
   }
 
-  byId('pipeline').onchange = () => {
-    executionId = byId('pipeline').value;
-    offset = 0;
-    byId('stage').value = '';
-    byId('content').replaceChildren();
-    void refresh();
-  };
   byId('filters').onsubmit = (event) => { event.preventDefault(); offset = 0; void refresh(); };
   byId('stage').onchange = () => { offset = 0; void refresh(); };
   byId('previous').onclick = () => { offset = Math.max(0, offset - pageSize); void refresh(); };
@@ -340,6 +517,7 @@ function startDashboard() {
     location.hash = link.hash;
   };
   window.addEventListener('hashchange', selectView);
+  window.addEventListener('popstate', () => { executionId = new URL(location.href).searchParams.get('execution_id') || ''; selectView(); });
   selectView();
 }
 startDashboard();
