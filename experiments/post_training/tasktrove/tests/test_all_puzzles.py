@@ -4,6 +4,8 @@
 """Converter behaviour on the ``all_puzzles`` exemplar (laion all-puzzles-v2)."""
 
 import json
+import shlex
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -68,11 +70,12 @@ def test_exemplar_passes_verification():
     assert verify_task(record.task_binary) is None
 
 
-def test_solution_files_carry_the_baked_gold_answer():
+def test_solution_files_write_the_baked_gold_answer(tmp_path):
     record = _convert()
     assert record.has_solution and record.solution_binary is not None
     solve = read_task_binary(record.solution_binary).text("solution/solve.sh")
-    assert "Defect, Salt, chair, donate" in solve
+    subprocess.run(["bash", "-c", solve.replace("/app", shlex.quote(str(tmp_path)))], check=True)
+    assert (tmp_path / "answer.txt").read_text().strip() == "Defect, Salt, chair, donate"
 
 
 @pytest.mark.parametrize("direction", ["ascending", "descending"])
@@ -99,7 +102,9 @@ def test_sorting_gold_and_oracle_follow_requested_ascii_order(tmp_path, directio
     (tmp_path / "answer.txt").write_text(wrong)
     assert grade(spec, tmp_path, tmp_path).reward == 0.0
     solution = read_task_binary(record.solution_binary).text("solution/solve.sh")
-    assert correct in solution
+    subprocess.run(["bash", "-c", solution.replace("/app", shlex.quote(str(tmp_path)))], check=True)
+    assert (tmp_path / "answer.txt").read_text().strip() == correct
+    assert grade(spec, tmp_path, tmp_path).reward == 1.0
 
 
 def test_number_answer_type_converts_to_math_spec():
