@@ -25,6 +25,8 @@ sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh
 The wrapper sets `RAGGED_DOT_IMPL=xla`, turns off XLA command buffers, keeps
 XLA autotune results out of the JAX compilation cache, and filters repeated
 ROCm log lines. Variables already set in the environment take precedence.
+XLA's `ragged_dot` rejects bf16 on MI350X, so bf16 runs there need
+`RAGGED_DOT_IMPL=triton`.
 
 ## Build the venv
 

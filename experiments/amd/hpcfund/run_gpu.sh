@@ -7,7 +7,9 @@
 # README.md in this directory has the venv recipe and known issues.
 cd "$SLURM_SUBMIT_DIR" || exit 1
 
-# On GPU, Haliax's ragged_dot otherwise picks its Triton kernel, which targets CUDA.
+# Haliax's ragged_dot otherwise picks its Triton kernel on GPU. That kernel runs on ROCm, but XLA's
+# expert matmuls were faster on MI300X. XLA's ragged_dot rejects bf16 on MI350X (gfx950),
+# so bf16 runs there set RAGGED_DOT_IMPL=triton.
 export RAGGED_DOT_IMPL=${RAGGED_DOT_IMPL:-xla} PYTHONUNBUFFERED=1
 
 # Command buffers (HIP graphs) corrupt memory on this ROCm stack: NaN gradients and segfaults after a few steps.
