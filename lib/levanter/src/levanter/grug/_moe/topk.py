@@ -29,8 +29,6 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from levanter.grug._moe.availability import gpu_device_present
-
 try:
     import jax_triton as jt
     import triton
@@ -133,7 +131,10 @@ def top_k_indices(x: Float[Array, "T N"], k: int) -> Int[Array, "T K"]:
     rows, n = x.shape
     if not 0 < k <= n:
         raise ValueError(f"k must be in [1, {n}], got {k}")
-    if jt is None or not gpu_device_present() or x.dtype != jnp.float32 or n >= _XLA_TOPK_MIN_ROW:
+    # The default device rather than jax.default_backend(): a test that stubs the backend still runs on
+    # CPU devices, which cannot launch the kernel.
+    on_gpu = jax.devices()[0].platform == "gpu"
+    if jt is None or not on_gpu or x.dtype != jnp.float32 or n >= _XLA_TOPK_MIN_ROW:
         return jax.lax.top_k(x, k)[1]
     width, tiles = _tile_layout(n)
     # XLA compiles the int32 view to a bitcast. An integer input carries no gradient, so autodiff

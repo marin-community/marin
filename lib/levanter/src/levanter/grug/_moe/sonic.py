@@ -19,7 +19,6 @@ from haliax.nn.ragged_dot import ragged_dot
 from jax.typing import DTypeLike
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug._moe.availability import gpu_device_present
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
@@ -159,13 +158,15 @@ def _require_sonic_deps() -> None:
 def sonic_gather_sum_available() -> bool:
     """Whether the fused gather-and-weighted-sum kernel can run in this process.
 
-    The kernel is Triton, so a non-GPU device rules it out however the imports went.
+    The kernel is Triton, so a non-GPU device rules it out however the imports went. The check asks
+    the default device rather than ``jax.default_backend()``: a test that stubs the backend to trace a
+    GPU-only path still runs on CPU devices, which cannot launch the kernel.
     """
     return (
         jt is not None
         and _sonic_token_gather_sum_kernel is not None
         and _sonic_token_gather_sum_bwd_kernel is not None
-        and gpu_device_present()
+        and jax.devices()[0].platform == "gpu"
     )
 
 
