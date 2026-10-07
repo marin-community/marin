@@ -26,8 +26,9 @@ row order* -- the store's positional join relies on both. ``from_list`` +
 single sequential stream. A tokenize shard that does not line up with its
 normalize shard document-for-document is refused at the first row that
 differs, and any shard that fails mid-stream (that mismatch, the streaming
-reader rejecting out-of-order chunk rows, a writer error) has its partial
-outputs removed, so a re-run scores it again instead of skipping it as done.
+reader rejecting out-of-order chunk rows, a writer error) commits no output,
+because ``ThreadedBatchWriter`` aborts its stream on an exception, so a re-run
+scores it again instead of skipping it as done.
 
 The stage is forward-bound (~30 CPU-s per 35k docs at batch 64 on a laptop
 CPU), not I/O-bound. The model dir holds the scorer artifacts (``*.eqx`` +
@@ -162,25 +163,11 @@ def _output_paths(output_path: str, shard_file: str) -> tuple[str, str]:
     )
 
 
-def _discard_outputs(*writers: tuple[ThreadedBatchWriter, str]) -> None:
-    """Remove the outputs of a shard that failed mid-stream so a re-run scores it again."""
-    for writer, path in writers:
-        # The writer thread finishes its parquet file and renames it into place even
-        # after the exception; wait for it so the file is not removed before it lands.
-        try:
-            writer.close()
-        except Exception:
-            logger.warning("closing the writer for %s failed during discard", path, exc_info=True)
-        target = StoragePath(path)
-        if target.exists():
-            target.rm()
-
-
 def _make_scored_writer(output_path: str, sample_pct: float):
     """A ``map_shard`` split-writer. One input file per shard, so all its records share
     an output name: fan them to ``outputs/main/`` (lean) and a ~``sample_pct``
     systematic sample *with text* to ``outputs/samples/``. A shard that raises
-    mid-stream leaves no output behind."""
+    mid-stream leaves no output behind: the writers abort instead of committing."""
 
     def scored_writer(records: Iterator[dict], shard: ShardInfo) -> Iterator[dict]:
         records = iter(records)
@@ -197,19 +184,16 @@ def _make_scored_writer(output_path: str, sample_pct: float):
 
             return _fn
 
-        main_writer = ThreadedBatchWriter(write_to(main_path, "main"))
-        sample_writer = ThreadedBatchWriter(write_to(sample_path, "samples"))
-        try:
-            with main_writer, sample_writer:
-                for i, r in enumerate(itertools.chain((first,), records)):
-                    main_writer.submit({k: r[k] for k in ("source", "id", "score", "quality_bucket")})
-                    counters.pipeline.update_counter("ft_quality/scored", 1)
-                    if _systematic_take(i, sample_pct):
-                        sample_writer.submit({k: r[k] for k in ("source", "id", "score", "quality_bucket", "text")})
-                        counters.pipeline.update_counter("ft_quality/sampled", 1)
-        except BaseException:
-            _discard_outputs((main_writer, main_path), (sample_writer, sample_path))
-            raise
+        with (
+            ThreadedBatchWriter(write_to(main_path, "main")) as main_writer,
+            ThreadedBatchWriter(write_to(sample_path, "samples")) as sample_writer,
+        ):
+            for i, r in enumerate(itertools.chain((first,), records)):
+                main_writer.submit({k: r[k] for k in ("source", "id", "score", "quality_bucket")})
+                counters.pipeline.update_counter("ft_quality/scored", 1)
+                if _systematic_take(i, sample_pct):
+                    sample_writer.submit({k: r[k] for k in ("source", "id", "score", "quality_bucket", "text")})
+                    counters.pipeline.update_counter("ft_quality/sampled", 1)
         yield results
 
     return scored_writer
