@@ -4,9 +4,9 @@
 """The adversary tiers over the fifteen recorded live rounds of the file task, re-summarized offline.
 
 Each round under ``.evidence/validate/e_evidence_round-<ts>/evidence-776baa368c39/`` ran the file task
-(``tests/validate/conftest.py``) against GLM-5.3 under the earlier adversary preambles. Its grader admits
-no shortcut, so every adversary pass in them is a false finding of the old rules: the shortcut role read
-the input and submitted the sum, the ambiguity role solved under a cosmetic reading. Re-summarized under
+(``tests/validate/conftest.py``) against GLM-5.3 with preambles that did not forbid the adversaries from
+solving. Its grader admits no shortcut, so no adversary pass in them is a task defect: the shortcut role
+read the input and submitted the sum, the ambiguity role solved under a cosmetic reading. Summarized under
 the coded tiers, none is a defect to repair. ``.evidence`` is local, so the test skips where the rounds
 are absent.
 """
