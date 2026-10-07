@@ -66,7 +66,7 @@ class CapabilityIdea:
 
 
 def load_capability_ideas(path: Path) -> dict[str, CapabilityIdea]:
-    """Read a capability catalog (``new_catalog.json`` shape) into ideas keyed by capability id.
+    """Read a capability catalog (``catalog_version``, ``curricula``, ``learning_progression``) into ideas by id.
 
     Each idea carries the learning-progression edges whose ``dependent_id`` is that capability.
     """

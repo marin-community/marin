@@ -474,8 +474,8 @@ Other live inputs:
 
 - `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent and
   build live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
-- `TASKFORGE_CAPABILITY_CATALOG` names the capability catalog (`new_catalog.json`), which is not
-  checked in, for the capability proposal and triage live tests (`capability_catalog` fixture).
+- `TASKFORGE_CAPABILITY_CATALOG` names the capability catalog JSON file, which is not checked in,
+  for the capability proposal and triage live tests (`capability_catalog` fixture).
 
 The package pytest config sets `timeout = 60` and `asyncio_mode = "auto"`. Long live tests carry
 `@pytest.mark.timeout(<seconds>)`.
