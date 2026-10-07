@@ -49,16 +49,16 @@ def test_routing_top_k_on_token_sharded_mesh_matches_lax_top_k_on_rocm():
         pytest.skip("Pallas-Triton routing top-k runs on ROCm")
     mesh = Mesh(np.asarray(jax.devices()), axis_names=("data",), axis_types=(AxisType.Explicit,))
     x = _router_matrix("ties", 4096 * len(jax.devices()), 256)
+    expected_values, expected_indices = jax.lax.top_k(x, 5)
+    expected_grad = jax.grad(lambda x: jnp.sum(jax.lax.top_k(x, 5)[0] ** 2))(x)
 
     def routed_sum_of_squares(x):
         return jnp.sum(routing_top_k(x, 5, mesh=mesh, batch_axes=("data",))[0] ** 2)
 
     with jax.set_mesh(mesh):
-        x = jax.device_put(x, NamedSharding(mesh, P("data", None)))
-        values, indices = jax.jit(lambda x: routing_top_k(x, 5, mesh=mesh, batch_axes=("data",)))(x)
-        grad = jax.jit(jax.grad(routed_sum_of_squares))(x)
-    expected_values, expected_indices = jax.lax.top_k(x, 5)
-    expected_grad = jax.grad(lambda x: jnp.sum(jax.lax.top_k(x, 5)[0] ** 2))(x)
+        x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", None)))
+        values, indices = jax.jit(lambda x: routing_top_k(x, 5, mesh=mesh, batch_axes=("data",)))(x_sharded)
+        grad = jax.jit(jax.grad(routed_sum_of_squares))(x_sharded)
     np.testing.assert_array_equal(np.asarray(indices), np.asarray(expected_indices))
     np.testing.assert_array_equal(np.asarray(values), np.asarray(expected_values))
     np.testing.assert_array_equal(np.asarray(grad), np.asarray(expected_grad))
