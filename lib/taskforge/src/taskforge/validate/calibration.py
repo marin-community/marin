@@ -494,14 +494,26 @@ def gave_up(role: AdversaryRole, rollout: RolloutData) -> bool:
     return text is not None and last_line(text) == SENTINEL_REPLIES[role]
 
 
+def _shell_command(arguments: str) -> str | None:
+    """The ``command`` in one shell call's raw arguments, or None when they are not a JSON object with a string
+    ``command``: a call cut at the output budget, or one the engine answered with an error and never ran."""
+    try:
+        decoded = json.loads(arguments)
+    except ValueError:
+        return None
+    command = decoded.get("command") if isinstance(decoded, dict) else None
+    return command if isinstance(command, str) else None
+
+
 def shell_commands(rollout: RolloutData) -> list[str]:
-    """The ``command`` argument of every shell call, in order."""
-    return [
-        json.loads(call["function"]["arguments"])["command"]
+    """The ``command`` of every well-formed shell call, in order. Malformed calls ran nothing and are skipped."""
+    found = (
+        _shell_command(call["function"]["arguments"])
         for step in rollout.steps
         for call in step.turn.message.get("tool_calls") or ()
         if call["function"]["name"] == SHELL_TOOL_NAME
-    ]
+    )
+    return [command for command in found if command is not None]
 
 
 def _path(path: str) -> str:

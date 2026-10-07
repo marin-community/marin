@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import ConversationInput, TextMessage
@@ -227,3 +228,36 @@ async def test_adversary_evidence_lands_per_role_and_index(tmp_path, file_task, 
     assert sorted((r.item_id, r.round, r.step) for r in records) == sorted(
         (site.item_id, site.round, f"adversary/{role}/{i}") for role in AdversaryRole for i in range(2)
     )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ['{"command": "ls /workspa', '{"cmd": "ls"}', '"just a string"'],
+    ids=["cut-at-budget", "wrong-key", "not-an-object"],
+)
+async def test_a_malformed_shell_call_in_a_graded_rollout_is_skipped_by_the_signals(
+    tmp_path, file_task, file_facts, rounds, fakes, arguments
+):
+    malformed = fakes.shell("unused")
+    malformed["tool_calls"][0]["function"]["arguments"] = arguments
+    inner = TemplateModel([fakes.shell("cat /workspace/numbers.txt"), malformed, fakes.text("Done.")])
+    policy = replace(rounds.policy(adversary_k=1), roles=(AdversaryRole.SHORTCUT,))
+
+    (outcome,) = (
+        await run_adversaries(
+            rounds.draft(file_task, (), PLAIN),
+            policy,
+            rounds.site(tmp_path),
+            settings(fakes.flaky_factory(0, RuntimeError)),
+            lambda _: inner,
+        )
+    )[AdversaryRole.SHORTCUT]
+
+    assert isinstance(outcome, Graded) and outcome.reward == 0.0
+    assert any(
+        call["function"]["arguments"] == arguments
+        for step in outcome.rollout.steps
+        for call in step.turn.message.get("tool_calls") or ()
+    )
+    signals = adversary_signals(AdversaryRole.SHORTCUT, outcome, file_facts, ())
+    assert signals.shell_calls == 1 and signals.inputs_consumed == ("/workspace/numbers.txt",)
