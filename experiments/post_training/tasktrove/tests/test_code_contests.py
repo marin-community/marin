@@ -126,6 +126,33 @@ def test_two_hidden_cases_still_convert():
     assert record.status == ConvertStatus.CONVERTED
 
 
+def test_converted_grader_enforces_declared_fractional_time_limit(tmp_path):
+    task = read_task_binary(_fixture())
+    task.files["instruction.md"] = b"Print OK.\n- **Time Limit**: {'seconds': 0, 'nanos': 200000000} seconds\n"
+    task.files["tests/test_data.json"] = json.dumps(
+        {"inputs": ["hidden-a", "hidden-b"], "outputs": ["OK", "OK"]}
+    ).encode()
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    assert record.status == ConvertStatus.CONVERTED
+    converted = read_task_binary(record.task_binary)
+    for name, content in converted.under("tests/").items():
+        destination = tmp_path / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    program = workspace / "solution.py"
+    spec = parse_spec(converted.text(VERIFIER_TOML))
+    assert isinstance(spec, StdioSpec)
+    spec = replace(spec, command=f"{sys.executable} solution.py", workspace=str(workspace))
+    program.write_text("print('OK')\n")
+    assert grade_stdio.grade(spec, tmp_path / "tests", workspace).reward == 1
+    # Authored timing control: correct output arriving after the declared deadline must fail.
+    program.write_text("import time\nend = time.monotonic() + 0.6\nwhile time.monotonic() < end: pass\nprint('OK')\n")
+    late = grade_stdio.grade(spec, tmp_path / "tests", workspace)
+    assert late.reward == 0 and late.detail["reason"] == "timeout"
+
+
 def test_cases_that_are_all_prompt_samples_are_rejected():
     task = read_task_binary(_fixture())
     data = json.loads(task.text("tests/test_data.json"))

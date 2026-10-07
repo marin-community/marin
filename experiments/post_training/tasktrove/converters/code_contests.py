@@ -10,7 +10,9 @@ A source-specific stdio checker preserves that comparison; prompts with an expli
 tolerance use float comparison so the grader honors the task contract.
 """
 
+import ast
 import json
+import re
 
 from verifyit.spec import Compare, StdioSpec
 
@@ -31,7 +33,9 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 
 TEST_DATA = "tests/test_data.json"
 PER_CASE_TIMEOUT = 30.0
-"""The old grader's SOLUTION_TIMEOUT_SEC, uniform across the source."""
+"""The old grader's timeout for tasks whose time limit is unavailable."""
+NANOSECONDS_PER_SECOND = 1_000_000_000
+TIME_LIMIT = re.compile(r"(?m)^- \*\*Time Limit\*\*:\s*(\{[^\n]+\}|None)\s+seconds\s*$")
 OUTPUT_CHECKER = "compare_output.py"
 OUTPUT_CHECKER_PY = """import sys
 from pathlib import Path
@@ -41,6 +45,26 @@ expected = Path(expected_path).read_text().strip().split("\\n")
 actual = Path(actual_path).read_text().strip().split("\\n")
 print(int(actual == expected))
 """
+
+
+def timeout_from_instruction(instruction: str) -> float:
+    """Use the stated protobuf Duration, retaining the source policy when it is absent."""
+    match = TIME_LIMIT.search(instruction)
+    if match is None or match.group(1) == "None":
+        return PER_CASE_TIMEOUT
+    duration = ast.literal_eval(match.group(1))
+    seconds, nanos = duration["seconds"], duration["nanos"]
+    if (
+        not isinstance(seconds, int)
+        or not isinstance(nanos, int)
+        or seconds < 0
+        or not 0 <= nanos < NANOSECONDS_PER_SECOND
+    ):
+        raise ValueError(f"Invalid CodeContests time limit: {duration}")
+    timeout = seconds + nanos / NANOSECONDS_PER_SECOND
+    if timeout <= 0:
+        raise ValueError(f"CodeContests time limit must be positive: {duration}")
+    return timeout
 
 
 def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -66,7 +90,7 @@ def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
         spec=StdioSpec(
             command=SOLUTION_COMMAND,
             compare=compare,
-            per_case_timeout=PER_CASE_TIMEOUT,
+            per_case_timeout=timeout_from_instruction(instruction),
             float_tolerance=float_tolerance,
             special_judge=special_judge,
         ),
