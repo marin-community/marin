@@ -409,6 +409,7 @@ def build_h100_ladder_run(
     final_param_dump: tuple[str, ...] = (),
     head_probe: bool = False,
     logit_decomp: bool = False,
+    attn_distance: bool = False,
     xla_memory_report: bool = False,
     pgle_runs: int = 0,
     pipeline_depth: int = 0,
@@ -663,6 +664,7 @@ def build_h100_ladder_run(
                 final_param_dump_path=prefix_join(ctx.output_path, "final_params.npz") if final_param_dump else None,
                 head_probe_path=prefix_join(ctx.output_path, "head_probe.npz") if head_probe else None,
                 logit_decomp_path=prefix_join(ctx.output_path, "logit_decomp.npz") if logit_decomp else None,
+                attn_distance_path=prefix_join(ctx.output_path, "attn_distance.npz") if attn_distance else None,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 final_param_dump_patterns=final_param_dump,
                 pipeline_depth=pipeline_depth,
@@ -830,6 +832,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     "--final-param-dump",
     multiple=True,
     help="Regex (repeatable) of param paths to write to <output>/final_params.npz after training.",
+)
+@click.option(
+    "--attn-distance",
+    is_flag=True,
+    help="After training, write the MLA layers' softmax rows for queries at fixed in-document positions to "
+    "<output>/attn_distance.npz.",
 )
 @click.option(
     "--logit-decomp",
@@ -1067,6 +1075,7 @@ def main(
     final_param_dump: tuple[str, ...],
     head_probe: bool,
     logit_decomp: bool,
+    attn_distance: bool,
     xla_memory_report: bool,
     pgle_runs: int,
     pipeline_depth: int,
@@ -1129,6 +1138,7 @@ def main(
         final_param_dump=tuple(final_param_dump),
         head_probe=head_probe,
         logit_decomp=logit_decomp,
+        attn_distance=attn_distance,
         xla_memory_report=xla_memory_report,
         pgle_runs=pgle_runs,
         pipeline_depth=pipeline_depth,

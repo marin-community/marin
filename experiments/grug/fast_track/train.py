@@ -93,6 +93,7 @@ from experiments.grug.fast_track.logit_decomp import LOGIT_DECOMP_FIELDS, logit_
 from experiments.grug.fast_track.model import (
     ATTN_PROBE_KEYS,
     ATTN_PROBE_STAT,
+    ATTN_ROWS_STAT,
     FINAL_HIDDEN_KEY,
     HEAD_PROBE_FIELDS,
     HEAD_PROBE_STAT,
@@ -108,6 +109,7 @@ from experiments.grug.fast_track.model import (
     Transformer,
     ZeroCenteredRMSNorm,
     _long_layer_schedule,
+    attention_rows_probe,
     forward_probe,
     head_probe,
     ngram_stat_table_add,
@@ -330,6 +332,10 @@ class GrugTrainerConfig:
     # the ``lm_head_extra_dim`` slice (``model.logit_decomp_stats``) on held-out sequences to this npz.
     logit_decomp_path: str | None = None
     logit_decomp_sequences: int = 64
+    # After training, write the MLA layers' full softmax rows for queries at fixed in-document positions
+    # (``ATTN_PROBE_DISTANCES``) of held-out sequences to this npz (``_attn_distance_dump``).
+    attn_distance_path: str | None = None
+    attn_distance_sequences: int = 256
     # Written by process 0 once the final eval has run; a restarted job that finds it exits instead of retraining
     # (a preemption during the post-training blend evals otherwise reran the whole run).
     completion_marker_path: str | None = None
@@ -1897,6 +1903,83 @@ def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
         logger.info("wrote %d final params to %s", len(host), path)
 
 
+# In-document query positions probed by ``_attn_distance_dump``, and the most queries kept per position.
+ATTN_PROBE_DISTANCES = (20, 40, 100, 200, 400, 1000, 2000, 4000)
+_ATTN_PROBE_PER_DISTANCE = 64
+_ATTN_PROBE_QUERIES_PER_BATCH = 32
+
+
+def _attn_distance_dump(
+    config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str
+) -> None:
+    """Write every MLA layer's softmax rows ``[Q, L, H, S]`` (float16) for queries at in-document positions
+    ``ATTN_PROBE_DISTANCES`` of fixed held-out sequences to ``path`` (process 0), with ``tokens`` / ``segments``,
+    each query's ``query_seq`` / ``query_pos`` / ``query_doc_pos`` and the probed ``layers``."""
+    params = _apply_qb_betas(params, qb_betas)
+    mp = config.trainer.trainer.mp
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _routing_dump_sequences,
+            config.data,
+            seq_len=config.model.max_seq_len,
+            num_sequences=config.trainer.attn_distance_sequences,
+        ).result()
+    seq = tokens.shape[1]
+    starts = np.zeros_like(segments)
+    for r in range(len(segments)):
+        change = np.flatnonzero(np.diff(segments[r]) != 0) + 1
+        bounds = np.concatenate([[0], change])
+        starts[r] = np.repeat(bounds, np.diff(np.concatenate([bounds, [seq]])))
+    doc_pos = np.arange(seq)[None, :] - starts
+    batch = jax.device_count()
+    picks: list[tuple[int, int, int]] = []
+    for distance in ATTN_PROBE_DISTANCES:
+        rows, cols = np.nonzero((doc_pos == distance) & (segments >= 0))
+        picks += [(int(r), int(c), distance) for r, c in list(zip(rows, cols, strict=True))[:_ATTN_PROBE_PER_DISTANCE]]
+    by_batch: dict[int, list[tuple[int, int, int]]] = {}
+    for r, c, distance in picks:
+        by_batch.setdefault(r // batch, []).append((r, c, distance))
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+
+    def global_batch(host: np.ndarray) -> jax.Array:
+        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
+
+    @jax.jit
+    def probe(params, ids, segs, rows, positions):
+        model = _cast_to_compute(mp, params)
+        with attention_rows_probe(rows, positions):
+            _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
+        return {k: v for k, v in metrics.items() if k.startswith(ATTN_ROWS_STAT)}
+
+    attn, meta = [], []
+    with set_mesh(mesh):
+        for b, queries in sorted(by_batch.items()):
+            ids = global_batch(tokens[b * batch : (b + 1) * batch])
+            segs = global_batch(segments[b * batch : (b + 1) * batch])
+            for start in range(0, len(queries), _ATTN_PROBE_QUERIES_PER_BATCH):
+                chunk = queries[start : start + _ATTN_PROBE_QUERIES_PER_BATCH]
+                padded = chunk + [chunk[0]] * (_ATTN_PROBE_QUERIES_PER_BATCH - len(chunk))
+                rows = jnp.asarray([r - b * batch for r, _, _ in padded], jnp.int32)
+                positions = jnp.asarray([c for _, c, _ in padded], jnp.int32)
+                out = probe(params, ids, segs, rows, positions)
+                names = sorted(out, key=lambda k: int(k.rsplit("_L", 1)[1]))
+                stacked = np.stack([np.asarray(out[k]) for k in names], axis=1)[: len(chunk)]  # [Q, L, H, S]
+                attn.append(stacked.astype(np.float16))
+                meta += chunk
+    if jax.process_index() == 0:
+        with fsspec.open(path, "wb") as f:
+            np.savez(
+                f,
+                attn=np.concatenate(attn, axis=0),
+                tokens=tokens,
+                segments=segments,
+                query_seq=np.asarray([r for r, _, _ in meta]),
+                query_pos=np.asarray([c for _, c, _ in meta]),
+                query_doc_pos=np.asarray([d for _, _, d in meta]),
+                layers=np.asarray([int(k.rsplit("_L", 1)[1]) for k in names]),
+            )
+
+
 def _logit_decomp_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
     """Write ``model.logit_decomp_stats`` for fixed held-out sequences to ``path`` (process 0): ``tokens`` /
     ``segments`` ``[N, S]``, ``stats`` ``[N, S, F]`` (``LOGIT_DECOMP_FIELDS``) and the probe tokens' ``unigram``
@@ -2930,6 +3013,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if config.trainer.head_probe_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _head_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.head_probe_path)
+            if config.trainer.attn_distance_path is not None:
+                probed = state.ema_params if state.ema_params is not None else state.params
+                _attn_distance_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.attn_distance_path)
             if config.trainer.logit_decomp_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _logit_decomp_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.logit_decomp_path)

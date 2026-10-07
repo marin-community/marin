@@ -132,6 +132,9 @@ class ForwardProbe:
 
 
 _FORWARD_PROBE: ForwardProbe | None = None
+# ``attention_rows_probe``: traced (rows, positions) [Q] of the queries whose full softmax rows the MLA layers record.
+ATTN_ROWS_STAT = f"{_LAYER_KNOB_PREFIX}probe_attn_rows"
+_ATTN_ROWS_PROBE: tuple[jax.Array, jax.Array] | None = None
 
 # Per-token, per-query-head attention statistics (``head_probe``), ``[B, S, H, len(HEAD_PROBE_FIELDS)]`` per layer:
 # softmax mass on the document's first token and on the query's own position, attention entropy (nats), the head's
@@ -2847,6 +2850,8 @@ class CausalSelfAttention(eqx.Module):
             if fox_key_bias is not None or second_qk is not None:
                 raise ValueError("forward_probe attention supports MLA without FoX or differential attention")
             stats[ATTN_PROBE_STAT] = _probe_attention(q, k, mask, rel_bias, _FORWARD_PROBE.attn_queries)
+        if _ATTN_ROWS_PROBE is not None and self.cfg.mla:
+            stats[ATTN_ROWS_STAT] = _probe_attention_rows(q, k, mask, rel_bias, *_ATTN_ROWS_PROBE)
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
@@ -6132,6 +6137,51 @@ def forward_probe(probe: ForwardProbe) -> Iterator[None]:
         yield
     finally:
         _FORWARD_PROBE = previous
+
+
+@contextmanager
+def attention_rows_probe(rows: jax.Array, positions: jax.Array) -> Iterator[None]:
+    """MLA layers traced inside this context record each query ``(rows[i], positions[i])``'s full softmax row over the
+    sequence (``ATTN_ROWS_STAT``, ``[Q, H, S]``). The arrays may be traced, so one compile serves any queries."""
+    global _ATTN_ROWS_PROBE
+    previous, _ATTN_ROWS_PROBE = _ATTN_ROWS_PROBE, (rows, positions)
+    try:
+        yield
+    finally:
+        _ATTN_ROWS_PROBE = previous
+
+
+def _probe_attention_rows(
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S Hk D"],
+    mask: AttentionMask | jax.Array,
+    rel_bias: Float[Array, "B H S W"] | None,
+    rows: Int[Array, " Q"],
+    positions: Int[Array, " Q"],
+) -> Float[Array, "Q H S"]:
+    """``_probe_attention`` over every key and for traced queries: scale ``1/sqrt(head_dim)``, the banded Inkling
+    bias, causal, document-masked."""
+    if not isinstance(mask, AttentionMask):
+        raise ValueError("attention_rows_probe needs an AttentionMask")
+    k = align_kv_heads(k, num_q_heads=q.shape[2])
+    seq = q.shape[1]
+    rep = P(None, None, None)
+    q_rows = q.at[rows, positions].get(out_sharding=rep).astype(jnp.float32)  # [Q, H, D]
+    k_rows = k.at[rows].get(out_sharding=P(None, None, None, None)).astype(jnp.float32)  # [Q, S, H, D]
+    logits = jnp.einsum("qhd,qkhd->qhk", q_rows, k_rows) / math.sqrt(q.shape[-1])
+    keys = jnp.arange(seq)
+    valid = keys[None, :] <= positions[:, None]
+    if rel_bias is not None:
+        band = rel_bias.at[rows, :, positions].get(out_sharding=rep)  # [Q, H, W]
+        column = keys[None, :] - (positions[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent_of_band(rel_bias)
+        in_band = (column >= 0) & (column < band.shape[-1])
+        gathered = jnp.take_along_axis(band, jnp.clip(column, 0, band.shape[-1] - 1)[:, None, :], axis=-1)
+        logits = logits + jnp.where(in_band[:, None, :], gathered, 0.0)
+    if mask.segment_ids is not None:
+        segments = mask.segment_ids[1].at[rows].get(out_sharding=P(None, None))  # [Q, S]
+        own = jnp.take_along_axis(segments, positions[:, None], axis=1)
+        valid &= segments == own
+    return jax.lax.stop_gradient(jax.nn.softmax(jnp.where(valid[:, None, :], logits, -jnp.inf), axis=-1))
 
 
 def _probe_spot() -> tuple[int, int] | None:
