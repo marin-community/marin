@@ -8,15 +8,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter
-from verifyit.candidate import CandidateSpec, candidate_spec
+from verifyit.candidate import candidate_spec, supports_candidate_mode
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
-from verifyit.spec import ExactSpec, PredictedActionSpec, StructuredExactSpec
+from verifyit.spec import ExactSpec, PredictedActionSpec, Spec, StructuredExactSpec, spec_from_table
 
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationTrace,
-    EnvironmentRequirements,
     TextMessage,
     VerifierSpec,
 )
@@ -71,19 +70,20 @@ class SubmissionFailure(ValueError):
     """The agent ended the interaction without a valid submission."""
 
 
-def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
-    """Read a shared verifier spec without any TaskCompendium registration step."""
-    if specification.environment_requirements != EnvironmentRequirements():
-        raise NotImplementedError("Pure verifiers cannot satisfy private environment requirements")
+def resolve_verifier(specification: VerifierSpec) -> Spec:
+    """Read a candidate or file-based verifier without acquiring runtime evidence."""
     try:
-        return candidate_spec(
-            specification.kind, json.loads(specification.parameters_json, object_pairs_hook=unique_object)
-        )
+        parameters = json.loads(specification.parameters_json, object_pairs_hook=unique_object)
+        if "mode" in parameters:
+            raise ValueError("Verifier parameters must not override the mode")
+        if supports_candidate_mode(specification.kind):
+            return candidate_spec(specification.kind, parameters)
+        return spec_from_table({"mode": specification.kind, **parameters})
     except (ValueError, InvalidTask) as error:
         raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
 
-def accepted_submission_types(verifier: CandidateSpec) -> tuple[type[Submission], ...]:
+def accepted_submission_types(verifier: Spec) -> tuple[type[Submission], ...]:
     """Declare the evidence envelopes accepted by the TaskCompendium scoring bridge."""
     if isinstance(verifier, StructuredExactSpec):
         return (JsonSubmission, StateSubmission)

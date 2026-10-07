@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer, validate_verifier
 from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
@@ -20,7 +21,6 @@ from taskcompendium.models import (
     ConversationTrace,
     TaskSpec,
 )
-from taskcompendium.pipeline.chat_messages import assistant_message, chat_conversation
 from taskcompendium.submission import FinalAction, chat_request, render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"

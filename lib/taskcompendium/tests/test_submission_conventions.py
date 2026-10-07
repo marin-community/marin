@@ -3,6 +3,8 @@
 
 """Submission extraction and model-visible requests preserve task contracts."""
 
+import json
+
 import pytest
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
@@ -18,6 +20,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    VerifierSpec,
 )
 from taskcompendium.submission import (
     AnswerCall,
@@ -75,6 +78,34 @@ def test_plain_text_rejects_tool_call_evidence(specification):
     attempt = _attempt(specification, _answer_action("12"))
     result = grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+@pytest.mark.parametrize(
+    "kind,parameters,private_image",
+    [
+        ("numeric", {"expected": "12", "tolerance_abs": 0, "tolerance_rel": 0}, True),
+        ("script", {"path": "/tests/grade.py"}, True),
+        ("script", {"path": "/tests/grade.py"}, False),
+    ],
+)
+def test_submission_compatibility_accepts_private_runtime_verifiers_without_executing_them(
+    specification, kind, parameters, private_image
+):
+    task = specification.model_copy(
+        update={
+            "verifier": VerifierSpec(
+                kind=kind,
+                parameters_json=json.dumps(parameters),
+                environment_requirements=EnvironmentRequirements(
+                    docker_image="fixture@sha256:" + "0" * 64 if private_image else None
+                ),
+            )
+        }
+    )
+    convention = PlainText(id="plain")
+    assert submission_compatibility(task, convention).compatible
+    with pytest.raises(NotImplementedError):
+        grade_answer(task, convention, _attempt(task, TextMessage(role="assistant", content="12")))
 
 
 @pytest.mark.parametrize(

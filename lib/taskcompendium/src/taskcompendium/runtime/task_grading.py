@@ -4,17 +4,15 @@
 """Grade acquired runtime evidence with packaged VerifyIT specifications."""
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from rigging.filesystem.path_validation import validate_relative_file_path
 from shellbox.backends.docker.machine import DockerMachineFactory
-from verifyit.candidate import candidate_spec, supports_candidate_mode
-from verifyit.grade import InvalidTask, Reward, Status
+from verifyit.candidate import supports_candidate_mode
+from verifyit.grade import InvalidTask
 from verifyit.grade import grade as verifyit_grade
-from verifyit.json_objects import unique_object
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -27,16 +25,16 @@ from verifyit.spec import (
     ScriptSpec,
     Spec,
     StdioSpec,
-    spec_from_table,
 )
 
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_answer, grade_result
 from taskcompendium.grading_contract import (
     GradingAttempt,
     StateSubmission,
     SubmissionFailure,
     TextSubmission,
     decode_json_value,
+    resolve_verifier,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
@@ -45,25 +43,11 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskResource,
     TaskSpec,
-    VerifierSpec,
 )
 from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import SubmissionConvention
-
-
-def resolve_verifier(specification: VerifierSpec) -> Spec:
-    """Read a candidate or file-based verifier without acquiring runtime evidence."""
-    try:
-        parameters = json.loads(specification.parameters_json, object_pairs_hook=unique_object)
-        if "mode" in parameters:
-            raise ValueError("Verifier parameters must not override the mode")
-        if supports_candidate_mode(specification.kind):
-            return candidate_spec(specification.kind, parameters)
-        return spec_from_table({"mode": specification.kind, **parameters})
-    except (ValueError, InvalidTask) as error:
-        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
 
 def grade_task(
@@ -77,7 +61,10 @@ def grade_task(
     requirements = specification.verifier.environment_requirements
     if requirements != EnvironmentRequirements() and requirements.docker_image is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Private grading environment is unavailable")
-    candidate_mode = supports_candidate_mode(specification.verifier.kind)
+    candidate_mode = supports_candidate_mode(specification.verifier.kind) and specification.answer_type not in {
+        AnswerType.FILE,
+        AnswerType.WORKSPACE_STATE,
+    }
     if candidate_mode and requirements.docker_image:
         return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare an isolated grader")
     attempt = GradingAttempt(conversation)
@@ -118,13 +105,6 @@ def grade_task(
     if isinstance(verifier, ReasoningGymSpec):
         return GradeResult(Outcome.INFRA_ERROR, None, "Reasoning-gym grading requires an isolated runner")
     return _grade_files(specification, verifier, candidate, evidence)
-
-
-def _grade_result(verdict: Reward) -> GradeResult:
-    if verdict.status == Status.SCORED:
-        return GradeResult(Outcome.GRADED, verdict.reward, detail=verdict.detail)
-    status = Outcome.INVALID_TASK if verdict.status == Status.INVALID_TASK else Outcome.INFRA_ERROR
-    return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
 
 
 def _answer_output(verifier: Spec) -> Path:
@@ -199,7 +179,7 @@ def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence
         except ValueError as error:
             return GradeResult(Outcome.INVALID_TASK, None, str(error))
         try:
-            return _grade_result(verifyit_grade(verifier, tests, workspace))
+            return grade_result(verifier, verifyit_grade(verifier, tests, workspace))
         except InvalidTask as error:
             return GradeResult(Outcome.INVALID_TASK, None, str(error))
         except Exception as error:

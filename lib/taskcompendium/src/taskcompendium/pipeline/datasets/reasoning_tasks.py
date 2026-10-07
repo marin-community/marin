@@ -9,6 +9,7 @@ import json
 from verifyit.spec import ExactSpec, MathSpec
 
 from taskcompendium.grader import grader_package
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -28,7 +29,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 UNSCORABLE_DATASETS = frozenset({"arc_agi", "rearc"})
 REASONING_RUBRIC = ReviewRubric(

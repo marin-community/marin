@@ -19,11 +19,14 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
         # docker cp would use a different overlay, as on a runsc host.
         assert args[0] == "exec"
         index = next(i for i, value in enumerate(args) if value.startswith("harbor-machine-"))
+        command = args[index + 1 :]
         # Private fixtures are unreadable to the image's default unprivileged user.
+        # Command lookup does not access private files.
         options = args[1:index]
-        if "--user" not in options or options[options.index("--user") + 1] != "0":
+        lookup = command[:2] == ("sh", "-c") and command[2].startswith("command -v ")
+        if not lookup and ("--user" not in options or options[options.index("--user") + 1] != "0"):
             return DockerCommandResult(1, b"", b"Permission denied")
-        result = subprocess.run(args[index + 1 :], input=stdin, capture_output=True, timeout=30)
+        result = subprocess.run(command, input=stdin, capture_output=True, timeout=30)
         return DockerCommandResult(result.returncode, result.stdout, result.stderr)
 
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker)

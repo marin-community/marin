@@ -189,7 +189,8 @@ def submission_compatibility(specification: TaskSpec, convention: SubmissionConv
     """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
         return SubmissionCompatibility((f"{type(convention).__name__} cannot carry {specification.answer_type.value}",))
-    accepted = accepted_submission_types(resolve_verifier(specification.verifier))
+    verifier = resolve_verifier(specification.verifier)
+    accepted = accepted_submission_types(verifier)
     if not any(produced in accepted for produced in convention.submission_types):
         return SubmissionCompatibility(("Submission envelope is not accepted by the selected verifier",))
     if isinstance(convention, FinalAction):
