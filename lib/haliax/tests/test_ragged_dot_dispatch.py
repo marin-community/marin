@@ -71,24 +71,39 @@ def test_triton_kernel_traces_with_jax_0_9_pallas_memory_api_on_cpu_interpreter(
     assert jnp.allclose(pallas_call(lhs, rhs, lo, hi), lhs @ rhs, rtol=1e-5, atol=1e-5)
 
 
-def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
+@dataclasses.dataclass(frozen=True)
+class _FakeGpu:
+    device_kind: str
+    compute_capability: str
+
+
+@pytest.mark.parametrize(
+    "device, expected",
+    [
+        (_FakeGpu("AMD Instinct MI300X", "gfx942"), "xla"),
+        (_FakeGpu("AMD Instinct MI325X", "gfx942"), "xla"),
+        (_FakeGpu("AMD Instinct MI350X", "gfx950"), "triton"),
+        (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "triton"),
+        (_FakeGpu("NVIDIA B200", "10.0"), "triton"),
+    ],
+    ids=["mi300x", "mi325x", "mi350x", "h100", "b200"],
+)
+def test_gpu_auto_prefers_xla_only_on_gfx942(monkeypatch, device, expected):
     lhs, rhs, group_sizes = _inputs()
-    expected = jnp.full((lhs.shape[0], rhs.shape[2]), 17.0, dtype=lhs.dtype)
+    monkeypatch.delenv("RAGGED_DOT_IMPL", raising=False)
     monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(ragged_dot_module.jax, "devices", lambda backend=None: [device])
     monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
 
-    def triton_result(lhs, rhs, group_sizes):
-        return jnp.full((lhs.shape[0], rhs.shape[2]), expected[0, 0], dtype=lhs.dtype)
+    def constant_result(value):
+        return lambda lhs, rhs, group_sizes: jnp.full((lhs.shape[0], rhs.shape[2]), value, dtype=lhs.dtype)
 
-    def unexpected_xla(*args):
-        raise AssertionError("GPU auto dispatch selected XLA instead of Triton")
-
-    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_triton_impl", triton_result)
-    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_xla_impl", unexpected_xla)
+    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_triton_impl", constant_result(1.0))
+    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_xla_impl", constant_result(2.0))
 
     auto_out = ragged_dot(lhs, rhs, group_sizes, implementation="auto")
 
-    assert jnp.array_equal(auto_out, expected)
+    assert float(auto_out[0, 0]) == {"triton": 1.0, "xla": 2.0}[expected]
 
 
 def test_triton_default_block_sizes_use_blackwell_n_tile(monkeypatch):
@@ -146,17 +161,11 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     ]
 
 
-@dataclasses.dataclass(frozen=True)
-class _FakeGpu:
-    device_kind: str
-    compute_capability: str | None = None
-
-
 @pytest.mark.parametrize(
     "device, expected",
     [
-        (_FakeGpu("AMD Instinct MI350X"), "tile_map"),
-        (_FakeGpu("AMD Instinct MI300X"), "tile_map"),
+        (_FakeGpu("AMD Instinct MI350X", "gfx950"), "tile_map"),
+        (_FakeGpu("AMD Instinct MI300X", "gfx942"), "tile_map"),
         (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "group_grid"),
         (_FakeGpu("NVIDIA B200", "10.0"), "group_grid"),
     ],
