@@ -85,7 +85,7 @@ def capability_inputs(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("config", type=Path)
-    parser.add_argument("--catalog", type=Path, required=True, help="the capability catalog (new_catalog.json)")
+    parser.add_argument("--catalog", type=Path, required=True, help="the capability catalog JSON file")
     parser.add_argument("--rubric-samples", type=int, required=True, help="independent triage rubric samples")
     parser.add_argument("--capability", action="append", default=[], help="run only this capability id; repeatable")
     parser.add_argument("--retry-failed", action="store_true", help="re-enter items that ended FAILED")
