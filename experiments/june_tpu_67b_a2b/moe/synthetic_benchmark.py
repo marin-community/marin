@@ -54,6 +54,7 @@ SNOWBALL_HIDDEN_DIM = 2560
 # The production window (half of the 4096-token training context), which Levanter's SnowballConfig pins as well.
 # The width heuristic would otherwise derive seq_len // 2 and give the medium preset a shorter window than Snowball's.
 SNOWBALL_SLIDING_WINDOW = 2048
+POOLED_WAVE_MOE_IMPL = "fixed_pooled_wave_all_to_all"
 
 
 def snowball_model(seq_len: int) -> GrugModelConfig:
@@ -161,6 +162,16 @@ def main() -> None:
         model = dataclasses.replace(model, capacity_factor=args.capacity_factor)
     if args.layers is not None:
         model = dataclasses.replace(model, num_layers=args.layers)
+    if args.moe_impl == POOLED_WAVE_MOE_IMPL:
+        # The backend checks these only on the first step, after the full model state is built.
+        if args.pooled_transport_capacity_factor is None:
+            raise ValueError(f"--moe-impl {POOLED_WAVE_MOE_IMPL} requires --pooled-transport-capacity-factor")
+        local_experts = model.num_experts // args.expert_axis
+        if local_experts % args.num_expert_waves != 0:
+            raise ValueError(
+                f"--num-expert-waves {args.num_expert_waves} must divide the {local_experts} local experts "
+                f"({model.num_experts} experts over --expert-axis {args.expert_axis})"
+            )
     batch_size = jax.device_count() if args.batch_size is None else args.batch_size
     if batch_size == 1:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
