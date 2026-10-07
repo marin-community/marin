@@ -9,7 +9,7 @@ example). ``--inputs MODULE:FUNCTION`` names a ``queue.job.InputsFactory``: a fu
 writes ``summary.json`` into the run root and exits non-zero when any item ended ``FAILED``.
 
 Laptop, through the GLM port-forward on the interactive pool (``"glm": {"kind": "laptop", ...,
-"pool": "high"}``, ``"host": "laptop"``, ``"image_cache"`` a local directory)::
+"pool": "high"}``, ``"host": "laptop"``; ``root``, ``image_cache`` and ``token_file`` absolute paths)::
 
     cd lib/taskforge && uv run python scripts/run_queue.py run.json --inputs my_inputs:inputs
 

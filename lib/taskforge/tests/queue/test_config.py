@@ -77,16 +77,41 @@ def test_the_pool_is_explicit():
         run_config(obj)
 
 
-def test_a_laptop_config_reads_a_token_file_path_and_a_local_root():
+def laptop_example() -> dict:
     obj = example()
-    obj |= {"host": "laptop", "root": "~/runs/a", "image_cache": "~/images"}
-    obj["glm"] = {"kind": "laptop", "base_url": "http://127.0.0.1:18000/v1", "token_file": "~/t.txt", "pool": "high"}
+    obj |= {"host": "laptop", "root": "/runs/a", "image_cache": "/cache/images"}
+    obj["glm"] = {"kind": "laptop", "base_url": "http://127.0.0.1:18000/v1", "token_file": "/keys/t.txt", "pool": "high"}
+    obj["web"] = {"kind": "key_file", "path": "/keys/parallel"}
+    return obj
 
-    config = run_config(obj)
 
-    assert config.glm == LaptopGlm("http://127.0.0.1:18000/v1", Path("~/t.txt").expanduser(), Pool.HIGH)
-    assert config.root == Path("~/runs/a").expanduser()
-    assert config.image_cache == Path("~/images").expanduser()
+def test_a_laptop_config_reads_a_token_file_path_and_a_local_root():
+    config = run_config(laptop_example())
+
+    assert config.glm == LaptopGlm("http://127.0.0.1:18000/v1", Path("/keys/t.txt"), Pool.HIGH)
+    assert config.root == Path("/runs/a")
+    assert config.image_cache == Path("/cache/images")
+
+
+@pytest.mark.parametrize(
+    ("path", "field", "value"),
+    [
+        ((), "root", "runs/a"),
+        ((), "image_cache", "~/images"),
+        (("glm",), "token_file", "~/t.txt"),
+        (("web",), "path", "keys/parallel"),
+    ],
+)
+def test_a_laptop_config_takes_only_absolute_local_paths(path, field, value):
+    obj = laptop_example()
+    target = obj
+    for key in path:
+        target = target[key]
+    target[field] = value
+
+    # A "~" or a relative path would mean something different for each launching shell.
+    with pytest.raises(ValueError, match="is an absolute path"):
+        run_config(obj)
 
 
 @pytest.mark.parametrize(("host", "image_cache"), [("laptop", None), ("iris", "/images")])
