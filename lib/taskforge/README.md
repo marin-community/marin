@@ -191,7 +191,8 @@ or on a package the order does not name.
   `REJECTED` is skipped, `FAILED` is skipped unless `failed` is `FailedItems.RETRY`, and `ABANDONED`
   re-enters. One item's exception is recorded in `RunSummary.failed` and never cancels a sibling.
   `RunSummary` also counts ungraded trial attempts by cause, `GlmUnavailable` outside trials, and
-  `BuildInfrastructureFailure` by `InfrastructureCause` (`build_infrastructure`).
+  build host failures by `InfrastructureCause` over its items' `BUILD_INFRASTRUCTURE` events
+  (`build_infrastructure`).
 - `queue.job.run_job(config, inputs, failed)`: the laptop and Iris boundary. `queue.config.RunConfig`
   (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
   laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or

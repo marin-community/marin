@@ -20,11 +20,13 @@
     "max_build_revisions": 3,
     "max_repairs": 2,
     "max_validation_retries": 2,
+    "max_build_retries": 2,
     "retry_backoff": {"initial": 60.0, "maximum": 900.0, "factor": 2.0, "jitter": 0.1},
     "output_token_budget": 1000000,
     "validation": {
       "k": 8,
       "adversary_k": 2,
+      "adversary_output_tokens": 32768,
       "roles": ["shortcut", "leak", "ambiguity"],
       "band": {"min_solve_rate": 0.125, "max_solve_rate": 0.875},
       "sampling": {

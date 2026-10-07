@@ -104,6 +104,7 @@ def policy() -> LoopPolicy:
     validation = ValidationPolicy(
         k=4,
         adversary_k=1,
+        adversary_output_tokens=32768,
         roles=tuple(AdversaryRole),
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
@@ -119,6 +120,7 @@ def policy() -> LoopPolicy:
         max_build_revisions=2,
         max_repairs=0,
         max_validation_retries=1,
+        max_build_retries=1,
         retry_backoff=RetryBackoff(initial=10, maximum=60, factor=2, jitter=0.1),
         output_token_budget=1_000_000,
         validation=validation,

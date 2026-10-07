@@ -13,7 +13,8 @@ first throttle is added after a failure ``RunSummary`` shows.
 An item's status is its event log (``loop.events.derive_state``). A launch on an existing run root
 skips items whose log ends in ``TERMINAL(ACCEPTED)`` or ``TERMINAL(REJECTED)``, skips ``FAILED`` items
 unless ``FailedItems.RETRY`` asks for them, and re-enters ``ABANDONED`` ones (validation retries ran
-out on an infrastructure cause, which a later launch may not hit). Inside an item ``run_item`` resumes
+out on an infrastructure cause, or build retries on a machine host failure, which a later launch may
+not hit). Inside an item ``run_item`` resumes
 from the sub-phase its log names, and validation only from the trials not settled on disk. An idea
 whose batch is in its log is not proposed again.
 """
@@ -27,12 +28,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from taskforge.build.infrastructure import BuildInfrastructureFailure, InfrastructureCause
+from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.build.run import item_id_for
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmUnavailable
-from taskforge.loop.events import FINAL, Terminal, derive_state
+from taskforge.loop.events import FINAL, Terminal, build_host_failures, derive_state
 from taskforge.loop.policy import LoopPolicy
 from taskforge.loop.program import LEDGER_DIR, LoopServices, idea_item_id, run_idea, run_item
 from taskforge.proposal.model import TaskProposal
@@ -60,8 +61,10 @@ class RunSummary:
         ungraded_causes: Ungraded trial attempts by cause over every TRIAL entry in the run's ledger, so a
             ``MODEL_UNAVAILABLE`` wave is observed rather than guessed.
         model_unavailable: ``GlmUnavailable`` raised outside trials (proposing, triage, authoring, building).
-        build_infrastructure: ``BuildInfrastructureFailure`` raised by builds, by cause; the item ends
-            ``FAILED`` without spending a revision and re-enters its build when a launch retries it.
+        build_infrastructure: Build host failures by cause over the ``BUILD_INFRASTRUCTURE`` events of every
+            item that reached a terminal. ``run_item`` retries such a build up to
+            ``LoopPolicy.max_build_retries`` times, then ends the item ``ABANDONED``, and the next launch
+            re-enters its build.
     """
 
     items: Mapping[str, Terminal]
@@ -122,8 +125,6 @@ class _Tally:
         self.failed[key] = type(error).__name__
         if isinstance(error, GlmUnavailable):
             self.model_unavailable += 1
-        if isinstance(error, BuildInfrastructureFailure):
-            self.build_infrastructure[error.cause] += 1
 
 
 async def _gather(coroutines: Sequence[Coroutine[Any, Any, None]]) -> None:
@@ -138,13 +139,14 @@ async def _item(
     proposal: TaskProposal, policy: LoopPolicy, services: LoopServices, failed: FailedItems, tally: _Tally
 ) -> None:
     item_id = item_id_for(proposal)
+    ledger_dir = services.root / LEDGER_DIR
     try:
-        terminal = item_terminal(services.root / LEDGER_DIR, item_id)
-        if not enters(terminal, failed):
-            assert terminal is not None
-            tally.items[item_id] = terminal
-            return
-        tally.items[item_id] = await run_item(proposal, policy, services)
+        terminal = item_terminal(ledger_dir, item_id)
+        if enters(terminal, failed):
+            terminal = await run_item(proposal, policy, services)
+        assert terminal is not None
+        tally.items[item_id] = terminal
+        tally.build_infrastructure += build_host_failures(read_entries(JsonlLedger(ledger_dir).path_for(item_id)))
     except Exception as error:
         tally.items[item_id] = Terminal.FAILED
         tally.failure(item_id, error)
