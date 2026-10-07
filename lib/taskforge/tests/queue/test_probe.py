@@ -13,7 +13,7 @@ SCRIPT = PACKAGE / "scripts" / "cluster_queue_probe.py"
 
 def test_a_probe_that_fails_before_its_first_check_reports_the_error(tmp_path):
     config = json.loads((PACKAGE / "docs" / "policy.example.json").read_text())
-    config |= {"host": "laptop", "root": str(tmp_path / "run")}
+    config |= {"host": "laptop", "root": str(tmp_path / "run"), "image_cache": str(tmp_path / "images")}
     config["glm"] = {"kind": "laptop", "base_url": "http://127.0.0.1:1/v1", "token_file": "/nonexistent", "pool": "high"}
     config["web"] = {"kind": "key_env", "env": "TASKFORGE_PROBE_TEST_KEY"}
     path = tmp_path / "config.json"

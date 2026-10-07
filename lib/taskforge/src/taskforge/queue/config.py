@@ -12,7 +12,7 @@ request.
 
 A config file looks like ``docs/policy.example.json``::
 
-    {"run_id": ..., "root": ..., "host": "laptop" | "iris",
+    {"run_id": ..., "root": ..., "host": "laptop" | "iris", "image_cache": "<laptop directory>" | null,
      "glm": {"kind": "laptop", "base_url": ..., "token_file": ..., "pool": "high" | "bulk"}
           | {"kind": "relay", "relay_job": ..., "token_env": ..., "pool": "high" | "bulk"},
      "web": null | {"kind": "key_file", "path": ...} | {"kind": "key_env", "env": ...},
@@ -41,7 +41,9 @@ from taskforge.sandbox.factories import FactoryCapabilities, MachineHost
 from taskforge.validate.trials import EngineSettings
 
 ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
-RUN_FIELDS = frozenset({"run_id", "root", "host", "glm", "web", "policy", "engine", "width", "restore_from"})
+RUN_FIELDS = frozenset(
+    {"run_id", "root", "host", "image_cache", "glm", "web", "policy", "engine", "width", "restore_from"}
+)
 
 
 class GlmKind(StrEnum):
@@ -144,6 +146,8 @@ class RunConfig:
         root: The run root (``items/``, ``cache/``, ``ledger/``, ``policy.json``, ``summary.json``).
             On Iris it is relative and placed under ``$IRIS_OUTPUT_DIR``, which Iris archives per attempt.
         host: Where machine factories come from.
+        image_cache: Where the laptop Docker factory keeps the images it prepares; required on a
+            laptop, None on Iris (``sandbox.factories.machine_factories``).
         glm: The GLM endpoint, resolved once by ``queue.job``.
         web: Where the builders' Parallel key comes from, or None for builders without web tools.
         policy: Every bound of the run.
@@ -155,6 +159,7 @@ class RunConfig:
     run_id: str
     root: Path
     host: MachineHost
+    image_cache: Path | None
     glm: GlmConfig
     web: WebConfig | None
     policy: LoopPolicy
@@ -165,6 +170,8 @@ class RunConfig:
     def __post_init__(self) -> None:
         if self.width < 1:
             raise ValueError(f"width must be at least 1, got {self.width}")
+        if (self.host is MachineHost.LAPTOP) != (self.image_cache is not None):
+            raise ValueError(f"a {self.host} run takes an image_cache only on a laptop, got {self.image_cache}")
         if self.host is MachineHost.IRIS and self.root.is_absolute():
             raise ValueError(f"an Iris run root is relative to $IRIS_OUTPUT_DIR, got {self.root}")
 
@@ -223,6 +230,7 @@ def run_config(obj: Mapping[str, Any]) -> RunConfig:
         run_id=obj["run_id"],
         root=Path(obj["root"]).expanduser(),
         host=MachineHost(obj["host"]),
+        image_cache=None if obj["image_cache"] is None else Path(obj["image_cache"]).expanduser(),
         glm=glm_config(obj["glm"]),
         web=web_config(obj["web"]),
         policy=POLICY.validate_python(obj["policy"]),

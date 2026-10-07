@@ -222,7 +222,8 @@ or on a package the order does not name.
   re-enters. One item's exception is recorded in `RunSummary.failed` and never cancels a sibling.
   `RunSummary` also counts ungraded trial attempts by cause and `GlmUnavailable` outside trials.
 - `queue.job.run_job(config, inputs, failed)`: the laptop and Iris boundary. `queue.config.RunConfig`
-  (`load_run_config`; every field required) names the host, the GLM endpoint as `LaptopGlm` or
+  (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
+  laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or
   `RelayGlm` with an explicit `Pool`, the builders' Parallel key source, the `LoopPolicy`, the
   `EngineConfig`, the width and `restore_from`. `inputs` is an `InputsFactory`: a function of the
   run's `GlmClient` and run root that returns `RunInputs(ideas, source, checks, rubric,
@@ -435,7 +436,7 @@ an Iris attempt restored from the previous attempt's archive (`restore_from`), r
 
 The GLM pool is always named. Validation we drive ourselves (live tests, probes, laptop runs) uses
 the interactive `high` pool; the committed unattended configuration (`docs/policy.example.json`)
-names `bulk`. A config holds no secret: `LaptopGlm` names a token file and `RelayGlm` the environment
+names `bulk`, with a `<relay-job>` placeholder the launcher sets per cluster. A config holds no secret: `LaptopGlm` names a token file and `RelayGlm` the environment
 variable that holds the token, and the Parallel key is a file or a variable name in the same way.
 Under Iris, `queue.job.host_secrets` removes those variables and the submitter keys Iris forwards
 from the process environment and from `IRIS_JOB_ENV` before any sandbox exists, because Iris copies

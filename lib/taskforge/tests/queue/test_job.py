@@ -55,6 +55,7 @@ def test_a_laptop_run_reads_its_secrets_from_files_and_leaves_the_environment_al
     config = replace(
         iris_config,
         host=MachineHost.LAPTOP,
+        image_cache=tmp_path / "images",
         root=tmp_path / "run",
         glm=LaptopGlm("http://127.0.0.1:18000/v1/", tmp_path / "glm.txt", Pool.HIGH),
         web=ParallelKeyFile(tmp_path / "parallel"),

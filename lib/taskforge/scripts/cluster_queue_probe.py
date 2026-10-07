@@ -3,17 +3,18 @@
 
 """Preflight for an unattended queue run: six checks with the real run config, failing fast.
 
-Run it inside an Iris task on the target cluster, with the run's own config and the shipped
-libraries (no in-process patch). It writes ``probe.json`` into ``$IRIS_OUTPUT_DIR/queue_probe`` and
-exits non-zero at the first failed check. Probes drive validation themselves, so they run on the
-interactive pool: ``--pool high`` replaces the config's pool for every request the probe sends, while
-check 1 also requires workers in the config's own pool::
+Run it inside an Iris task on the target cluster, with the run's own config (``run.json``, the
+committed example with ``relay_job`` set) and the shipped libraries (no in-process patch). It
+writes ``probe.json`` into ``$IRIS_OUTPUT_DIR/queue_probe`` and exits non-zero at the first failed
+check. Probes drive validation themselves, so they run on the interactive pool: ``--pool high``
+replaces the config's pool for every request the probe sends, while check 1 also requires workers in
+the config's own pool::
 
     lib/taskforge/.venv/bin/iris --cluster=marin job run --no-wait --no-sync \\
       --job-name taskforge-queue-probe-NN --target-cluster cw-rno2a --priority interactive \\
       --cpu 4 --memory 8GB --timeout 7200 -e GLM_API_TOKEN "$GLM_API_TOKEN" -e PARALLEL_KEY "$PARALLEL_KEY" -- \\
       bash -c 'cd lib/taskforge && uv run --frozen python scripts/cluster_queue_probe.py \\
-        docs/policy.example.json --pool high --items 256 \\
+        run.json --pool high --items 256 \\
         --image docker.io/library/python@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d'
 
 ``GLM_API_TOKEN`` must then hold the interactive (``high``) token. With a ``host: laptop`` config the
@@ -49,6 +50,7 @@ import traceback
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -85,7 +87,7 @@ from taskforge.queue.job import (
 )
 from taskforge.queue.run import FailedItems, item_terminal, run_queue
 from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
-from taskforge.spec.controls import Control, ControlCategory, ControlKind, Expectation, Transcript, reply
+from taskforge.spec.controls import Control, ControlCategory, ControlConcern, ControlKind, Expectation, Transcript, reply
 from taskforge.spec.draft import assemble, environment
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
 from taskforge.triage.program import RubricAssessment
@@ -164,15 +166,28 @@ def math_draft(index: int) -> TaskDraft:
     wrong = Expectation(status=Outcome.GRADED, reward_max=0.0)
     controls = (
         Control(
-            "correct", ControlKind.POSITIVE, ControlCategory.KNOWN_CORRECT, "probe", Transcript((reply("395"),)), correct
+            "correct",
+            ControlKind.POSITIVE,
+            ControlCategory.KNOWN_CORRECT,
+            ControlConcern.REFERENCE,
+            "probe",
+            Transcript((reply("395"),)),
+            correct,
         ),
         Control(
-            "wrong", ControlKind.NEGATIVE, ControlCategory.PLAUSIBLE_WRONG, "probe", Transcript((reply("391"),)), wrong
+            "wrong",
+            ControlKind.NEGATIVE,
+            ControlCategory.PLAUSIBLE_WRONG,
+            ControlConcern.ACCEPTANCE,
+            "probe",
+            Transcript((reply("391"),)),
+            wrong,
         ),
         Control(
             "two-answers",
             ControlKind.NEGATIVE,
             ControlCategory.TASK_SPECIFIC_SHORTCUT,
+            ControlConcern.SHORTCUT,
             "probe",
             Transcript((reply("395 or 391"),)),
             wrong,
@@ -181,6 +196,7 @@ def math_draft(index: int) -> TaskDraft:
             "empty",
             ControlKind.MALFORMED,
             ControlCategory.EMPTY_OR_MALFORMED,
+            ControlConcern.EXTRACTION,
             "probe",
             Transcript((reply(""),)),
             Expectation(status=Outcome.SUBMISSION_FAILURE),
@@ -232,7 +248,7 @@ async def check_glm(probe: Probe, endpoint: GlmEndpoint) -> dict[str, Any]:
 
 
 async def check_machines(probe: Probe) -> dict[str, Any]:
-    factories = machine_factories(probe.config.host, controller_url(probe.config.host))
+    factories = machine_factories(probe.config.host, controller_url(probe.config.host), probe.config.image_cache)
     report: dict[str, Any] = {}
     for kind, factory in factories.items():
         started = time.monotonic()
@@ -258,11 +274,11 @@ async def check_machines(probe: Probe) -> dict[str, Any]:
 async def check_width(probe: Probe, endpoint: GlmEndpoint, ledger: Ledger, root: Path) -> dict[str, Any]:
     config = probe.config
     validation = replace(config.policy.validation, k=1)
-    factories = machine_factories(config.host, controller_url(config.host))
+    factories = machine_factories(config.host, controller_url(config.host), config.image_cache)
     settings = config.engine.settings(factories, factory_capabilities(config.host))
     slots = asyncio.Semaphore(config.width)
     async with GlmClient(endpoint) as client:
-        model = GlmRolloutModel(client, validation.sampling)
+        models = partial(GlmRolloutModel, client, validation.sampling)
         tokenize = ServerTokenizer(client, validation.sampling)
 
         async def item(index: int) -> tuple[bool, Evidence]:
@@ -270,7 +286,7 @@ async def check_width(probe: Probe, endpoint: GlmEndpoint, ledger: Ledger, root:
             site = ValidationSite(f"probe-width-{index}", 0, root / "width" / str(index), ledger)
             async with slots:
                 controls = await replay_controls(draft, validation, site, settings, tokenize)
-                solver = await run_solver(draft, validation, site, settings, model)
+                solver = await run_solver(draft, validation, site, settings, models)
             evidence = Evidence({TrialKind.CONTROL: tuple(c.outcome for c in controls), TrialKind.SOLVER: solver})
             return controls_passed(controls), evidence
 
@@ -372,7 +388,7 @@ async def check_finelog(remote_flush: FlushResult | None, run_id: str) -> dict[s
 
 
 async def check_image(probe: Probe) -> dict[str, Any]:
-    factories = machine_factories(probe.config.host, controller_url(probe.config.host))
+    factories = machine_factories(probe.config.host, controller_url(probe.config.host), probe.config.image_cache)
     factory = factories.get(EnvironmentKind.DOCKER)
     if factory is None:
         raise CheckFailed(f"{probe.config.host} has no docker factory to pull {probe.image}")

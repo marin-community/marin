@@ -131,12 +131,13 @@ def entries(root: Path) -> list[LedgerEntry]:
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_call(glm_settings):
+async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_call(glm_settings, image_cache):
     root = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
     config = RunConfig(
         run_id=f"queue-live-{root.name}",
         root=root,
         host=MachineHost.LAPTOP,
+        image_cache=image_cache,
         glm=LaptopGlm(glm_settings.base_url, Path(os.environ[TOKEN_FILE_ENV]).expanduser(), Pool.HIGH),
         web=None,
         policy=policy(),
