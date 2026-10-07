@@ -109,8 +109,9 @@ class ActorServer:
 
     RPC arguments use cloudpickle and can execute code during deserialization.
     This listener has no authentication middleware; restrict network access to
-    trusted peers or route external calls through the authenticated controller
-    endpoint proxy. Sharing an actor endpoint delegates the same trust.
+    trusted peers or route external calls through a controller endpoint proxy
+    configured to enforce authentication. Null-auth proxies are permissive and
+    must stay on trusted networks. Sharing an actor endpoint delegates the same trust.
     """
 
     def __init__(

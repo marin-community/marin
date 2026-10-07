@@ -126,11 +126,12 @@ RPCs across all resolved endpoints.
 Actor RPC uses `cloudpickle` for arguments, results, and exceptions. Deserializing
 these payloads can execute Python code, so clients must trust servers and servers
 must trust clients. `ActorServer` has no authentication middleware and binds to
-`0.0.0.0` by default: restrict direct
-listeners to trusted networks and use the authenticated controller endpoint proxy
-for external access. A token or share link that exposes an actor RPC endpoint
-grants code execution in the actor process; give it only to trusted recipients.
-This also applies when the actor serves a web application.
+`0.0.0.0` by default: restrict direct listeners to trusted networks. Expose a
+controller endpoint proxy externally only with authentication enforced. Null-auth
+proxies are permissive and must stay on trusted networks. A token or share link
+that exposes an actor RPC endpoint grants code execution in the actor process;
+give it only to trusted recipients. This also applies when the actor serves a web
+application.
 
 Run model-controlled or other untrusted jobs with
 [`CONTAINER_PROFILE_SANDBOX`](docs/container-profiles.md#sandbox-jobs) and
