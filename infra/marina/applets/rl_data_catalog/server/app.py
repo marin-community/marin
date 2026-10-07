@@ -331,6 +331,18 @@ def save_snapshot(connection: Connection, snapshot: Snapshot) -> None:
     )
 
 
+def refresh_result(connection: Connection, origin: str, revision: str, snapshot: Snapshot | None) -> dict[str, Any]:
+    """Save changed sources or record a successful check of an unchanged catalog."""
+    if snapshot is not None:
+        save_snapshot(connection, snapshot)
+    else:
+        connection.execute(
+            text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
+            {"origin": origin},
+        )
+    return {"origin": origin, "revision": revision, "changed": snapshot is not None}
+
+
 def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -> dict[str, Any]:
     lock = connection.execute(
         text("SELECT pg_try_advisory_xact_lock(hashtext(current_schema() || '/catalog-refresh'))")
@@ -387,27 +399,13 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
             )
             results.append({"origin": origin, "error": message})
             continue
-        if snapshot is not None:
-            save_snapshot(connection, snapshot)
-        else:
-            connection.execute(
-                text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
-                {"origin": origin},
-            )
-        results.append({"origin": origin, "revision": revision, "changed": snapshot is not None})
+        results.append(refresh_result(connection, origin, revision, snapshot))
     previous = connection.execute(
         text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": REGISTERED_ORIGIN}
     ).scalar_one_or_none()
-    changed = force or registered.revision != previous
-    if changed:
-        # An empty snapshot retires the final removed source while retaining reviews.
-        save_snapshot(connection, registered)
-    else:
-        connection.execute(
-            text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
-            {"origin": REGISTERED_ORIGIN},
-        )
-    results.append({"origin": REGISTERED_ORIGIN, "revision": registered.revision, "changed": changed})
+    # An empty snapshot also retires the final removed source while retaining reviews.
+    snapshot = registered if force or registered.revision != previous else None
+    results.append(refresh_result(connection, REGISTERED_ORIGIN, registered.revision, snapshot))
     return {"busy": False, "results": results}
 
 

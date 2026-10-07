@@ -135,7 +135,7 @@ REGISTERED_SOURCES = (
             tools="Allowed",
             agent="Terminal agent; preserve task network restrictions and resource limits",
             scoring=(
-                "Native tests/test.sh component rewards; Atlas reports their arithmetic mean and requires "
+                "Native tests/test.sh component rewards; the Atlas contract uses their arithmetic mean and requires "
                 "all components to equal one within 1e-9 tolerance for a full pass. "
                 "The additional LLM reward from tests/rubric.md is separate."
             ),

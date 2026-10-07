@@ -256,6 +256,8 @@ Python definitions used by the difficulty task loader, worker launcher, and
 MarinSkyRL code identity check, including their referenced definitions and imports.
 The original and executed script's whole-file hashes remain recorded.
 
+## Create and publish a review
+
 The review tooling, example configuration, and JSON schema are checked in under
 `experiments/rl_data_reviews/`. Copy `review-config.example.json` to a local file,
 then set the model endpoint and the solver checkpoint commit in `model.revision`, native checkout and
@@ -339,6 +341,9 @@ Add a `RegisteredSource` to
 `infra/marina/applets/rl_data_catalog/server/registered_sources.py`. These entries
 appear under **Registered releases** and require no training registration. The
 storage host is separate from the execution environment and interaction type.
+Set `release` with `ReleaseReference(host, repository, revision)` and `execution`
+with `ExecutionContract(environment, type, turns, tools, agent, scoring)`. Set
+`verifier_revision` to the bundled release pin or a separately pinned verifier.
 HF and Git references require a full commit SHA; Harbor Hub references require
 a `sha256:` release digest. Register native release identities without copying
 tasks into another repository.
@@ -360,7 +365,8 @@ The source's `registration_revision` fingerprints the release reference, counted
 populations, execution contract, and verifier revision. Changes to these fields
 make prior ratings stale; edits to notes and evidence links preserve applicability.
 Before starting a review, copy this value from `api/sources` or the details panel
-into `source.registration_revision` in the review configuration. Keep
+into `source.registration_revision` in the configuration described in the
+[review workflow](#create-and-publish-a-review). Keep
 `source.revision` equal to the native dataset commit or package digest. The
 publisher checks both identities and archives the run configuration. A missing
 or mismatched registration revision cannot publish a current assessment.
@@ -375,8 +381,9 @@ Git/local-path registry schema or add task download and training adapters.
 `Registered releases:pdbthink-coordinate-tasks` pins
 [PDBThink Coordinate Tasks v1.3.0](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/tree/3734406cb97b1702844319f9a5d860cbbf8fe660):
 100,000 tasks across 19 families, with 91,154 train, 4,411 validation, and 4,435
-test tasks. The population excludes the frozen benchmark's source entries,
-exact protein sequences, and associated RCSB 30% clusters. Publisher validation
+test tasks. The population excludes the frozen PDBThink benchmark's source
+entries, exact protein sequences, and associated RCSB 30% clusters, as described
+in the [release manifest](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/manifest.json). Publisher validation
 is linked; Atlas quality and difficulty remain unreviewed.
 
 PDBThink requires one tool-free response using `CoordinateNoToolsAgent`. Supply
@@ -384,8 +391,9 @@ only `prompt.json` to the solver; gold, provenance, tests, and oracle solutions
 are evaluator-only. Follow the pinned release's
 [execution instructions and native-token budget manifest](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/USAGE.md).
 Atlas's default Terminus-2 runner permits tools and requires a separate adapter
-before evaluating this population. The GLM teacher traces retain their task
-v1.2.0 prompts and scores and do not establish difficulty for the registered
+before evaluating this population. The
+[GLM teacher traces v1.0.0](https://huggingface.co/datasets/open-athena/pdbthink-glm53-teacher-traces/tree/v1.0.0)
+retain their task v1.2.0 prompts and scores and do not establish difficulty for the registered
 v1.3.0 release.
 
 ### Skill2Env
@@ -400,7 +408,7 @@ skills and assets retain their own terms.
 These tasks use multi-turn terminal interaction. Preserve their resource limits
 and network restrictions. The Atlas scoring contract retains the executable
 grader's component rewards, reports their arithmetic mean, and requires every
-component to reach one within numerical tolerance for a full pass. The paper's
+component to reach one within `1e-9` tolerance for a full pass. The paper's
 additional LLM rubric reward is separate from those scores and Atlas's quality
 audit. The component-reward adapter and offline Terminus tooling in
 [PR #9632](https://github.com/marin-community/marin/pull/9632) remain separate
