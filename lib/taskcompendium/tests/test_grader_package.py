@@ -74,7 +74,8 @@ status = 'infra_error' if actual == -2 else 'invalid_task' if actual < 0 else 's
 verdict = {
     'status': status,
     'reward': 0 if actual < 0 else reward,
-    'detail': {'error': 'runner failed' if actual == -2 else 'bad reference'} if actual < 0 else {},
+    'detail': {'error': 'runner failed' if actual == -2 else 'bad reference'} if actual < 0
+        else {'reason': 'invalid_numeric_candidate'},
 }
 (logs / 'verdict.json').write_text(json.dumps(verdict))
 """
@@ -91,6 +92,7 @@ verdict = {
 
     assert (good.status, good.reward) == (Outcome.GRADED, 1.0)
     assert (bad.status, bad.reward) == (Outcome.GRADED, 0.0)
+    assert good.detail["reason"] == bad.detail["reason"] == "invalid_numeric_candidate"
     assert (invalid.status, invalid.reward, invalid.error) == (Outcome.INVALID_TASK, None, "bad reference")
     assert (infrastructure.status, infrastructure.reward, infrastructure.error) == (
         Outcome.INFRA_ERROR,

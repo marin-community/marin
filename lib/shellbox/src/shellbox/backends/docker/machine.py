@@ -4,6 +4,7 @@
 """Docker reference implementation of the machine contract."""
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,21 @@ from shellbox.machine import (
     NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
+)
+
+logger = logging.getLogger(__name__)
+
+# The parent waits so setsid is not a process-group leader and cannot detach.
+# Keep stdin available because non-interactive shells redirect background jobs to /dev/null.
+START_COMMAND = 'exec 3<&0; setsid "$@" <&3 3<&- & wait "$!"'
+RUN_COMMAND = 'pidfile=$1; shift; echo $$ > "$pidfile"; ' 'trap \'rm -f "$pidfile"\' EXIT; "$@"'
+INTERRUPT_TIMEOUT = 10
+STOP_COMMAND = (
+    '[ -f "$1" ] || exit 1; read -r pid < "$1"; '
+    'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
+    '[ "$pid" -gt 1 ] || exit 1; '
+    'kill -KILL "-$pid" || exit 1; '
+    'rm -f "$1"'
 )
 
 
@@ -63,16 +79,36 @@ class DockerMachine:
             args.extend(("--user", command.user))
         for key, value in command.env.items():
             args.extend(("-e", f"{key}={value}"))
-        args.extend((self.name, *command.argv))
+        pidfile = f"/tmp/.shellbox-command-{uuid.uuid4().hex}"
+        args.extend(
+            (
+                self.name,
+                "sh",
+                "-c",
+                START_COMMAND,
+                "shellbox-start",
+                "sh",
+                "-c",
+                RUN_COMMAND,
+                "shellbox-command",
+                pidfile,
+                *command.argv,
+            )
+        )
         try:
             completed = await docker(*args, stdin=command.stdin, timeout=command.timeout)
-        except TimeoutError:
-            # docker exec has no reliable process-tree cancellation; dispose of the trial.
-            await self.close()
+        except (TimeoutError, asyncio.CancelledError) as interruption:
+            try:
+                await self._interrupt(pidfile)
+            except Exception:
+                logger.exception("Cannot stop the Docker command process group")
+                try:
+                    await self.close()
+                finally:
+                    raise interruption
+            if isinstance(interruption, asyncio.CancelledError):
+                raise
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError:
-            await self.close()
-            raise
         limit = command.output_limit_bytes
         return Result(
             completed.exit_code,
@@ -82,6 +118,22 @@ class DockerMachine:
             len(completed.stderr) > limit,
             ExitReason.EXITED,
         )
+
+    async def _interrupt(self, pidfile: str) -> None:
+        result = await docker(
+            "exec",
+            "--user",
+            "0",
+            self.name,
+            "sh",
+            "-c",
+            STOP_COMMAND,
+            "stop-command",
+            pidfile,
+            timeout=INTERRUPT_TIMEOUT,
+        )
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def upload(self, source: Path, target: str) -> None:
         parent = str(PurePosixPath(target).parent)
@@ -108,7 +160,7 @@ class DockerMachine:
         if self._closed:
             return
         self._closed = True
-        result = await docker("rm", "-f", self.name)
+        result = await docker("rm", "-f", self.name, timeout=INTERRUPT_TIMEOUT)
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
@@ -151,6 +203,7 @@ class DockerMachineFactory:
         args = [
             "run",
             "--rm",
+            "--init",
             "--pull=never",
             "-d",
             "--name",
@@ -173,9 +226,12 @@ class DockerMachineFactory:
         args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
         try:
             result = await docker(*args)
+            if result.exit_code:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
+            prepared = await docker("exec", name, "sh", "-c", "command -v setsid")
+            if prepared.exit_code:
+                raise UnsupportedMachineSpec("Docker task images require setsid for command cancellation")
         except BaseException:
             await docker("rm", "-f", name)
             raise
-        if result.exit_code:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
         return DockerMachine(name, spec)

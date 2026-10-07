@@ -59,7 +59,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
-from levanter.kernels.pallas.short_conv import short_conv
+from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -487,7 +487,7 @@ class ShortConv(eqx.Module):
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
     routed to Adam. Context shards exchange a left halo of ``W-1`` sequence positions.
 
-    The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
+    The body dispatches to ``levanter.kernels.triton.short_conv``, which selects a streaming Triton
     kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 

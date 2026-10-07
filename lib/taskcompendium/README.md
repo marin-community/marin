@@ -4,7 +4,7 @@
 
 TaskCompendium stores a task's semantic contract, extracts one final submission, and grades it through the shared verifier library. A caller can choose a submission convention while keeping expected answers and verifier resources private.
 
-Execution, model requests, tool dispatch, environment setup, and lifecycle management belong to the caller’s runtime. Rolloutengine is proposed in [PR #9623](https://github.com/marin-community/marin/pull/9623); TaskCompendium currently has no dependency on it.
+Execution, model requests, tool dispatch, environment setup, and cleanup belong to the caller's runtime. [RolloutEngine](../../docs/references/task-rollouts.md) executes tasks through TaskSession and Shellbox. TaskCompendium has no dependency on RolloutEngine.
 
 ## What does it contain?
 
@@ -38,7 +38,7 @@ flowchart LR
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
-A task has one final result. Ordered steps and reward aggregation are deferred.
+A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON.
 
@@ -57,6 +57,8 @@ A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` 
 ### Numeric answers
 
 A numeric task uses `answer_type=number` and can use the same submission conventions as text. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` verifier reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
+
+TaskCompendium normalizes VerifyIT verdicts through the same grading contract for candidate, local-file, and isolated-file execution. Malformed numeric text remains `submission_failure` with reward `0.0`, independent of the verifier runtime.
 
 ### Final function calls
 
@@ -87,7 +89,7 @@ Public expectations belong in `context`: for example, the columns a CSV must con
 
 Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
-The task's `docker_image` and worker file mounts describe worker initial state. A verifier declares its own capabilities, image, and workspace requirements in private `VerifierSpec.environment_requirements`. A future runtime must keep those requirements and private resources separate from the worker environment.
+The task's `docker_image` and worker file mounts describe worker initial state. A verifier declares its own capabilities, image, and workspace requirements in private `VerifierSpec.environment_requirements`. Execution runtimes must not expose the verifier's requirements or private resources to the model.
 
 ## Resource mounts
 
@@ -267,5 +269,3 @@ uv run --package taskcompendium --extra pipeline --group test pytest lib/taskcom
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
-
-Schema `0.22` adds the distinct JSON result kind. Decoders reject other schema versions; existing conversion pipelines must emit the current contract.

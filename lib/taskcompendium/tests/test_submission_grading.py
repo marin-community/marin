@@ -165,6 +165,24 @@ def test_canonical_verifier_kinds_serialize_load_and_grade(wire_kind, verifier, 
     assert (wrong_result.status, wrong_result.reward) == (Outcome.GRADED, 0.0)
 
 
+@pytest.mark.parametrize(
+    "answer,status,reward",
+    [("12", Outcome.GRADED, 1.0), ("13", Outcome.GRADED, 0.0), ("garbage", Outcome.SUBMISSION_FAILURE, 0.0)],
+)
+def test_numeric_candidate_and_file_grading_preserve_submission_outcome(answer, status, reward):
+    task = _task(numeric_answer("12", tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER)
+    convention = PlainText(id="plain")
+    attempt = _attempt(task, answer)
+    candidate = grade_answer(task, convention, attempt)
+    file_task = task.model_copy(update={"answer_type": AnswerType.FILE, "output_paths": ("/app/answer.txt",)})
+    file_result = grade_task(
+        file_task, convention, attempt.conversation, RuntimeEvidence({"/app/answer.txt": answer.encode()}, "{}")
+    )
+    assert (candidate.status, candidate.reward) == (status, reward)
+    assert (file_result.status, file_result.reward) == (candidate.status, candidate.reward)
+    assert file_result.error == candidate.error
+
+
 @pytest.mark.parametrize("number", [float("nan"), float("inf"), float("-inf")])
 def test_structured_exact_rejects_nonfinite_gold_before_serialization_but_preserves_null(number):
     with pytest.raises(ValueError):

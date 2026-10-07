@@ -319,11 +319,7 @@ class IrisMachineFactory:
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
                         return machine
-                    if status.state not in (
-                        TaskState.PENDING,
-                        TaskState.BUILDING,
-                        TaskState.ASSIGNED,
-                    ):
+                    if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
                 time.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")

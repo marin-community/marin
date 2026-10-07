@@ -13,6 +13,7 @@ from jsonschema.validators import validator_for
 from verifyit.spec import JsonSchemaSpec, SchemaFormat
 
 from taskcompendium.grader import grader_package
+from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -33,7 +34,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 
 def required_object_conflicts(schema: dict[str, Any], path: str = "$") -> list[str]:

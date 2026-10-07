@@ -3,12 +3,14 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import re
 import subprocess
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from infra.ci.select_tests import (
     SCOPES,
@@ -261,33 +263,49 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_taskcompendium_change_selects_dedicated_suite(tmp_path: Path) -> None:
-    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
+@pytest.mark.parametrize(
+    "changed_path,suites",
+    [
+        ("lib/taskcompendium/src/taskcompendium/lowering.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
+        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        ("lib/shellbox/tests/test_docker_machine.py", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        ("lib/shellbox/pyproject.toml", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        (
+            "lib/verifyit/src/verifyit/grading.py",
+            ["rolloutengine-unit", "taskcompendium-unit"],
+        ),
+        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+    ],
+)
+def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
+    selection = select_changed_tests([changed_path], tmp_path)
 
     assert selection.matrix == []
-    assert selection.suites == ["taskcompendium-unit"]
+    assert selection.suites == suites
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
-    assert "taskcompendium-unit" in full_selection.suites
+    assert set(suites) <= set(full_selection.suites)
 
 
 @pytest.mark.parametrize(
-    "changed_file",
-    [
-        "lib/shellbox/src/shellbox/machine.py",
-        "lib/shellbox/tests/test_docker_machine.py",
-        "lib/shellbox/pyproject.toml",
-    ],
+    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
 )
-def test_shellbox_change_selects_own_and_consumer_suites(tmp_path: Path, changed_file: str) -> None:
-    selection = select_changed_tests([changed_file], tmp_path)
+def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+    workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
+    aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
+    results = dict.fromkeys(aggregate["needs"], "success")
+    if "shellbox" in results:
+        results["shellbox"] = shellbox_result
+    script = re.sub(
+        r"\$\{\{ needs\.(\w+)\.result \}\}",
+        lambda match: results.get(match.group(1), ""),
+        aggregate["steps"][0]["run"],
+    )
 
-    assert selection.matrix == []
-    assert selection.suites == ["shellbox-unit", "taskcompendium-unit"]
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
-
-def test_scheduled_full_selection_includes_shellbox_suite(tmp_path: Path) -> None:
-    assert "shellbox-unit" in select_all_tests(tmp_path).suites
+    assert result.returncode == expected_exit
 
 
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
@@ -475,6 +493,7 @@ def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
     selection = select_all_tests(tmp_path)
 
     assert selection.reason == "run-all-tests"
+    assert "shellbox-unit" in selection.suites
     assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
 
 
