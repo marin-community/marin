@@ -1083,6 +1083,7 @@ source = { editable = "." }
 dependencies = [
     { name = "harbor-config" },
     { name = "marin-shellbox" },
+    { name = "pydantic" },
     { name = "taskcompendium" },
 ]
 
@@ -1098,6 +1099,7 @@ test = [
 requires-dist = [
     { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
     { name = "marin-shellbox", editable = "../shellbox" },
+    { name = "pydantic", specifier = ">=2" },
     { name = "taskcompendium", editable = "../taskcompendium" },
 ]
 

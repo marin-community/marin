@@ -8,13 +8,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ProviderRequirement
 from taskcompendium.grader import script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     FunctionDefinition,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -84,17 +85,13 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             context=ConversationInput(events=(TextMessage(role="user", content=data["instruction"]),)),
             environment_requirements=EnvironmentRequirements(
                 capabilities=("shell", "filesystem"),
-            ),
-            environment=EnvironmentSpec(
-                kind=EnvironmentKind.SHELLSIM,
-                files=tuple(worker),
                 tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
             ),
             interaction_tools=(BASH,),
-            oracle_files=tuple(oracle),
+            resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=package.resources),
             output_paths=(OUTPUT_PATH,),
             answer_type=AnswerType.FILE,
-            verifier=package,
+            verifier=package.verifier,
             source=row.source,
         )
     except ValueError as error:

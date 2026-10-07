@@ -14,6 +14,7 @@ from shellbox.machine import Command, Machine, MachineFactory, MachineSpec
 
 from taskcompendium.models import FunctionCall, TaskSpec
 from taskcompendium.runtime.models import RuntimeEvidence
+from taskcompendium.runtime.resources import resource_bytes
 
 INTERFACE = "shell:v1"
 OUTPUT_PATH = "/output/command_capture.txt"
@@ -102,17 +103,17 @@ class ShellFactory:
         }
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
-        environment = task.environment
-        provider = environment.tool_providers.get("shell")
+        provider = task.environment_requirements.tool_providers.get("shell")
         if provider is None or provider.action_interface != INTERFACE or provider.initial_state != {}:
             raise ValueError("Unsupported shell fixture")
         requirements = task.environment_requirements
         if (
             set(requirements.capabilities) - {"shell", "filesystem"}
-            or environment.image is not None
-            or environment.setup
-            or environment.env
-            or set(environment.tool_providers) != {"shell"}
+            or requirements.docker_image is not None
+            or requirements.working_directory is not None
+            or requirements.setup_commands
+            or requirements.environment_variables
+            or set(requirements.tool_providers) != {"shell"}
         ):
             raise ValueError("Shell factory cannot satisfy these environment requirements")
         machine = await self.machine_factory.create(self.machine_spec)
@@ -124,18 +125,18 @@ class ShellFactory:
                 raise RuntimeError("Could not initialize shell workspace")
             with TemporaryDirectory() as directory:
                 roles = {
-                    "worker": environment.files,
-                    "oracle": task.oracle_files,
+                    "worker": task.resources.worker,
+                    "oracle": task.resources.oracle,
                 }
-                resources = []
+                resources = list(task.resources.all)
                 for role in self.mounted_roles:
                     resources.extend(roles[role])
                 for index, resource in enumerate(resources):
-                    if resource.mode != 0o644 or resource.mtime_ns is not None:
+                    if resource.mode is not None or resource.mtime_ns is not None:
                         raise ValueError("Shell factory cannot mount resource metadata")
                     local = Path(directory) / str(index)
-                    local.write_bytes(resource.content)
-                    await machine.upload(local, resource.path)
+                    local.write_bytes(resource_bytes(resource))
+                    await machine.upload(local, f"/{resource.path}")
         except BaseException:
             await machine.close()
             raise

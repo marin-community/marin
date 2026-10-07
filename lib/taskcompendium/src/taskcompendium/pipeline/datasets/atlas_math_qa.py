@@ -17,6 +17,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -154,31 +155,27 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
     except (KeyError, ValueError, TypeError) as error:
         return ImportRejection(reason="unsupported_answer_contract", detail=str(error))
     files = row.data.get("files", {})
-    spec = spec.model_copy(
-        update={
-            "files": (
-                spec.files
-                + tuple(
-                    inline_resource("tests/source/" + path, base64.b64decode(encoded, validate=True))
-                    for path, encoded in files.items()
-                    if path.startswith("tests/")
-                )
-            ),
-        }
-    )
-    oracle = tuple(
-        inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
-        for path, encoded in files.items()
-        if not path.startswith("tests/")
+    resources = ResourceGroups(
+        verifier=spec.resources
+        + tuple(
+            inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
+            for path, encoded in files.items()
+            if path.startswith("tests/")
+        ),
+        oracle=tuple(
+            inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
+            for path, encoded in files.items()
+            if not path.startswith("tests/")
+        ),
     )
     return TaskSpec(
         id=row.id,
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=public),)),
         environment_requirements=EnvironmentRequirements(),
-        oracle_files=oracle,
+        resources=resources,
         answer_type=AnswerType.TEXT,
-        verifier=spec,
+        verifier=spec.verifier,
     )
 
 

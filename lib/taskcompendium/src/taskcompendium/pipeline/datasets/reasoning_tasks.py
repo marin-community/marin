@@ -13,6 +13,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -133,7 +134,8 @@ def _task(row: RawRow, instruction: str, package) -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package,
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 

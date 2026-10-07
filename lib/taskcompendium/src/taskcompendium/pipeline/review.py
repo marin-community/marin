@@ -15,6 +15,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import cached_batch_output
 from taskcompendium.pipeline.review_transport import BatchClient, batch_output, typed_batch_records
+from taskcompendium.runtime.resources import resource_bytes
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -97,7 +98,7 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
     contract = parameters["contract"]
     messages = [event for event in payload["context"]["events"] if event["type"] == "message"]
     public = {(message["role"], message["content"]): index for index, message in enumerate(messages)}
-    providers = payload["environment"]["tool_providers"]
+    providers = payload["environment_requirements"]["tool_providers"]
     for provider in providers.values():
         state = provider["initial_state"]
         if not isinstance(state, dict):
@@ -193,29 +194,22 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
 
 def review_payload(task: TaskSpec) -> dict[str, Any]:
     """Expose bounded readable fixture evidence without duplicating encoded bytes."""
-    payload = task.model_dump(
-        mode="json",
-        exclude={
-            "environment": {"files": True},
-            "verifier": {"files": True, "environment": {"files": True}},
-            "oracle_files": True,
-        },
-    )
+    payload = task.model_dump(mode="json")
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
     resources = [
         (role, resource)
         for role, group in (
-            ("worker", task.environment.files),
-            ("oracle", task.oracle_files),
-            ("verifier", task.verifier.files),
-            ("verifier_environment", () if task.verifier.environment is None else task.verifier.environment.files),
+            ("all", task.resources.all),
+            ("worker", task.resources.worker),
+            ("oracle", task.resources.oracle),
+            ("verifier", task.resources.verifier),
         )
         for resource in group
     ]
     for role, resource in resources[:MAX_RESOURCE_PREVIEWS]:
-        data = resource.content
-        preview = resource.model_dump(mode="json", exclude={"content"})
+        data = resource_bytes(resource)
+        preview = resource.model_dump(mode="json", exclude={"source"})
         preview["role"] = role
         preview["sha256"] = hashlib.sha256(data).hexdigest()
         preview["byte_count"] = len(data)
@@ -232,8 +226,8 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
     manifest = [
         {
             "role": role,
-            **resource.model_dump(mode="json", exclude={"content"}),
-            "sha256": hashlib.sha256(resource.content).hexdigest(),
+            **resource.model_dump(mode="json", exclude={"source"}),
+            "sha256": hashlib.sha256(resource_bytes(resource)).hexdigest(),
         }
         for role, resource in resources
     ]
@@ -243,9 +237,9 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         "omitted_count": len(resources) - len(previews),
         "sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
     }
-    for resource in task.verifier.files:
-        if resource.path == "/tests/config.json":
-            parameters = json.loads(resource.content)
+    for resource in task.resources.verifier:
+        if resource.path == "config.json":
+            parameters = json.loads(resource_bytes(resource))
             if "contract" in parameters:
                 project_source_contract(parameters, payload)
             payload["grader_data"] = parameters

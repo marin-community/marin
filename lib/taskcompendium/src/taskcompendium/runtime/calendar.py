@@ -123,18 +123,19 @@ class CalendarFactory:
 
     async def create(self, task: TaskSpec) -> CalendarEnvironment:
         requirements = task.environment_requirements
-        environment = task.environment
-        provider = environment.tool_providers.get("calendar")
+        provider = requirements.tool_providers.get("calendar")
         if provider is None or provider.action_interface != INTERFACE:
             raise ValueError("Unsupported calendar fixture")
         if (
             requirements.capabilities
-            or environment.image is not None
-            or environment.setup
-            or environment.env
-            or set(environment.tool_providers) != {"calendar"}
-            or environment.files
-            or task.oracle_files
+            or requirements.docker_image is not None
+            or requirements.working_directory is not None
+            or requirements.setup_commands
+            or requirements.environment_variables
+            or set(requirements.tool_providers) != {"calendar"}
+            or task.resources.all
+            or task.resources.worker
+            or task.resources.oracle
         ):
             raise ValueError("Calendar factory cannot satisfy these environment requirements")
         state = CalendarState.model_validate(provider.initial_state)

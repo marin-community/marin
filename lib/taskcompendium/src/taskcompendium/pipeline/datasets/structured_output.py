@@ -3,6 +3,7 @@
 
 """Preserve TaskTrove's explicit any-valid-instance contract and JSON Schema."""
 
+import base64
 import json
 import re
 from typing import Any
@@ -16,6 +17,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -109,7 +111,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         ),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package,
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 
@@ -131,8 +134,8 @@ def pipeline() -> TaskPipeline:
 def verification_report(task: TaskSpec) -> VerificationReport:
     spec = resolve_verifier(task.verifier)
     assert isinstance(spec, JsonSchemaSpec)
-    schema_resource = next(resource for resource in task.verifier.files if resource.path == "/tests/" + spec.schema)
-    conflicts = required_object_conflicts(json.loads(schema_resource.content))
+    schema_resource = next(resource for resource in task.resources.verifier if resource.path == spec.schema)
+    conflicts = required_object_conflicts(json.loads(base64.b64decode(schema_resource.source.content_base64)))
     checks = [
         CheckResult(check="required_object_contract", status=CheckStatus.FAIL, detail=conflict) for conflict in conflicts
     ]

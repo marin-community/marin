@@ -11,7 +11,7 @@ from taskcompendium.grading_result import GradeResult
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
-AGENT_TIMEOUT_STOP_REASON = "agent_timeout"
+TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 
 
 @dataclass(frozen=True)

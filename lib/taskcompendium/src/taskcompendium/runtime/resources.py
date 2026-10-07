@@ -3,9 +3,16 @@
 
 """Inline resources used by the optional episode runtime."""
 
-from taskcompendium.environment import EnvironmentFile
+import base64
+
+from taskcompendium.models import InlineFile, TaskResource
 
 
-def inline_resource(path: str, data: bytes) -> EnvironmentFile:
-    """Build a file from a source path relative to the filesystem root."""
-    return EnvironmentFile(path="/" + path.lstrip("/"), content=data)
+def inline_resource(path: str, data: bytes) -> TaskResource:
+    """Build an inline resource at a relative workspace path."""
+    return TaskResource(path=path, source=InlineFile(content_base64=base64.b64encode(data).decode("ascii")))
+
+
+def resource_bytes(resource: TaskResource) -> bytes:
+    """Decode a validated inline resource."""
+    return base64.b64decode(resource.source.content_base64, validate=True)

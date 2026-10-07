@@ -5,33 +5,28 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.environment import (
-    ArtifactKind,
-    EnvironmentCommand,
-    EnvironmentFile,
-    EnvironmentKind,
-    EnvironmentSpec,
-    ExitCodeReward,
-    ShellVerifierSpec,
-    VerifierArtifact,
-)
 from taskcompendium.models import (
-    FILESYSTEM_CAPABILITY,
-    SHELL_CAPABILITY,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
+)
+from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.shell_verifier import (
+    ArtifactKind,
+    ExitCodeReward,
+    ShellVerifierSpec,
+    VerifierArtifact,
+    VerifierCommand,
 )
 
 PATCH_PATH = "/tmp/taskcompendium/model.patch"
-GRADER_PATH = "/tmp/taskcompendium/evaluate.sh"
+GRADER_PATH = "/tests/evaluate.sh"
 BASE_REF = "refs/taskcompendium/base"
-BASE_REF_TIMEOUT = 30
 
 
 class SWEInstance(BaseModel):
@@ -57,36 +52,30 @@ def swe_image(instance: SWEInstance, dataset: str) -> str:
     raise ValueError(f"SWE tasks require image_name for dataset {dataset!r}")
 
 
-def swe_task(
-    instance: SWEInstance, *, source: Source, environment: EnvironmentSpec, verifier_timeout: float
-) -> TaskSpec:
-    """Keep the evaluation script private and grade only the submitted Git patch."""
-    if environment.kind == EnvironmentKind.NULL or environment.interaction is not None:
-        raise ValueError("SWE tasks require an executable shell environment")
+def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentRequirements) -> TaskSpec:
+    """Keep evaluation private and grade the submitted Git patch in a fresh image."""
+    if environment.docker_image is None or environment.tool_providers:
+        raise ValueError("SWE tasks require a prebuilt, digest-pinned shell image")
     task_environment = environment.model_copy(
         update={
-            "setup": (
-                *environment.setup,
-                EnvironmentCommand(argv=("git", "update-ref", BASE_REF, "HEAD"), timeout=BASE_REF_TIMEOUT),
-            )
+            "capabilities": ("shell", "filesystem"),
+            "setup_commands": (*environment.setup_commands, f"git update-ref {BASE_REF} HEAD"),
         }
     )
     verifier = ShellVerifierSpec(
         collect=(
-            EnvironmentCommand(
+            VerifierCommand(
                 argv=(
                     "sh",
                     "-c",
                     f'mkdir -p "$(dirname "$1")" && git add -A && git diff --cached --binary {BASE_REF} > "$1"',
                     "collect-patch",
                     PATCH_PATH,
-                ),
-                timeout=verifier_timeout,
+                )
             ),
         ),
         artifacts=(VerifierArtifact(source=PATCH_PATH, target=PATCH_PATH, kind=ArtifactKind.FILE),),
         argv=("sh", "-c", 'git apply --binary "$1" && bash "$2"', "evaluate-patch", PATCH_PATH, GRADER_PATH),
-        timeout=verifier_timeout,
         reward=ExitCodeReward(),
     )
     return TaskSpec(
@@ -103,14 +92,13 @@ def swe_task(
                 TextMessage(role="user", content=instance.problem_statement),
             )
         ),
-        environment_requirements=EnvironmentRequirements(capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY)),
-        answer_type=AnswerType.STATE,
-        environment=task_environment,
+        environment_requirements=task_environment,
+        answer_type=AnswerType.WORKSPACE_STATE,
         verifier=VerifierSpec(
-            kind=VerifierKind.SHELL,
+            kind="shell",
             parameters_json=verifier.model_dump_json(),
-            environment=environment,
-            files=(EnvironmentFile(path=GRADER_PATH, content=instance.eval_script.encode()),),
+            environment_requirements=environment,
         ),
+        resources=ResourceGroups(verifier=(inline_resource("evaluate.sh", instance.eval_script.encode()),)),
         source=source,
     )

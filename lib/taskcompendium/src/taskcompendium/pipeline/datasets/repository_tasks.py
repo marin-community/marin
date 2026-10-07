@@ -8,12 +8,13 @@ import hashlib
 import json
 import re
 
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ProviderRequirement
 from taskcompendium.grader import grader_config
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -71,21 +72,17 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         },
         ("Isolated repository checkout and patch capture",),
     )
-    public_files = tuple(
-        inline_resource(path, content) for path, content in files.items() if path.startswith("setup_files/")
-    )
-    oracle_files = tuple(
-        inline_resource(path, content)
-        for path, content in files.items()
-        if path.startswith(("environment/", "solution/"))
-    )
-    package = package.model_copy(
-        update={
-            "files": (
-                package.files
-                + tuple(inline_resource(path, content) for path, content in files.items() if path.startswith("tests/"))
-            ),
-        }
+    resources = ResourceGroups(
+        worker=tuple(
+            inline_resource(path, content) for path, content in files.items() if path.startswith("setup_files/")
+        ),
+        oracle=tuple(
+            inline_resource(path, content)
+            for path, content in files.items()
+            if path.startswith(("environment/", "solution/"))
+        ),
+        verifier=package.resources
+        + tuple(inline_resource(path, content) for path, content in files.items() if path.startswith("tests/")),
     )
     return TaskSpec(
         id=row.id,
@@ -93,10 +90,6 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
             capabilities=("shell", "filesystem", "git_repository"),
-        ),
-        environment=EnvironmentSpec(
-            kind=EnvironmentKind.SHELLSIM,
-            files=public_files,
             tool_providers={
                 "shell": ProviderRequirement(
                     action_interface=INTERFACE,
@@ -110,9 +103,9 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             },
         ),
         interaction_tools=(BASH,),
-        oracle_files=oracle_files,
+        resources=resources,
         answer_type=AnswerType.STATE,
-        verifier=package,
+        verifier=package.verifier,
     )
 
 

@@ -4,24 +4,20 @@
 """Rollout iteration, cancellation, and model execution."""
 
 import asyncio
-import math
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
-from functools import partial
 
 from shellbox.machine import Machine, MachineFactory
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import StageExecution, TaskExecution
-from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import StageVerifierSpec, TaskSpec
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import TaskSpec
 from taskcompendium.submission import Submission, conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
-    AGENT_TIMEOUT_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
     ModelRequest,
     ModelTurn,
@@ -33,8 +29,9 @@ from rolloutengine.contracts import (
     TaskSession,
     Transition,
 )
-from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, _validate_task
-from rolloutengine.machines import _task_machine
+from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
+from rolloutengine.machines import _prepare_machine
+from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.task_session import _ShellboxTaskSession
 
 
@@ -52,45 +49,37 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts with one isolated machine per task."""
+    """Generate exact-token rollouts from lowered single-stage tasks."""
 
     def __init__(
         self,
         model: Callable[[ModelRequest], Awaitable[ModelTurn]],
-        factories: Mapping[EnvironmentKind, MachineFactory],
+        factories: Mapping[str, MachineFactory],
         *,
-        max_turns: int,
-        command_timeout: float,
-        cleanup_timeout: float,
         convention: Submission,
-        sessions: Mapping[str, Callable[[TaskSpec, Machine | None], TaskSession]] | None = None,
+        sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
     ):
-        if max_turns < 1 or command_timeout <= 0 or cleanup_timeout <= 0:
-            raise ValueError("Rollout limits must be positive")
         self.model = model
         self.factories = factories
-        self.max_turns = max_turns
-        self.command_timeout = command_timeout
-        self.cleanup_timeout = cleanup_timeout
         self.convention = convention
         self.sessions = {} if sessions is None else sessions
 
-    async def run(self, task: TaskSpec, *, execution: TaskExecution) -> RolloutData:
-        """Run one task with bounded session and machine cleanup."""
-        _validate_task(task, execution)
-        deadline = asyncio.timeout(execution.attempt_timeout)
-        cleanup = _Cleanup(self.cleanup_timeout)
+    async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
+        """Run one attempt; release its resources outside the attempt deadline."""
+        validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
+        deadline = asyncio.timeout(lowered.session.attempt_timeout)
+        cleanup = _Cleanup(lowered.session.cleanup_timeout)
         operation = None
         cause = None
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    record = await self._run_task(task, execution, resources, cleanup)
+                    record = await self._run_task(lowered, resources, cleanup, deadline)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
                 operation, cause = RolloutOperation.ATTEMPT, error
-                record = _empty_rollout(task)
+                record = _empty_rollout(lowered.task)
             except RolloutInterrupted as error:
                 operation, cause = error.operation, error.__cause__
                 record = error.rollout
@@ -111,186 +100,74 @@ class ShellboxRolloutEngine:
         return record
 
     async def _run_task(
-        self, task: TaskSpec, execution: TaskExecution, resources: AsyncExitStack, cleanup: _Cleanup
+        self, lowered: LoweredTaskSpec, resources: AsyncExitStack, cleanup: _Cleanup, attempt: asyncio.Timeout
     ) -> RolloutData:
+        task = lowered.task
         try:
-            machine = await resources.enter_async_context(_task_machine(task.environment, self.factories, cleanup))
-        except Exception as error:
-            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
-        if task.stages:
-            assert machine is not None
-            return await self._run_stages(task, execution, machine, self.convention, cleanup)
-        if task.environment.interaction is None:
-            session = _ShellboxTaskSession(
-                task,
-                machine,
-                self.convention,
-                self.command_timeout,
+            machine = await _prepare_machine(
+                task.environment_requirements,
+                lowered.runtime.task_machine,
+                task.resources.all + task.resources.worker,
                 self.factories,
                 cleanup,
-                StageExecution(agent_user=execution.agent_user),
+                resources,
             )
-        else:
-            session = self.sessions[task.environment.interaction](task, machine)
+        except Exception as error:
+            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+        try:
+            if lowered.session.task_session == SHELLBOX_SESSION:
+                session = _ShellboxTaskSession(lowered, machine, self.convention, self.factories, cleanup, resources)
+            else:
+                session = self.sessions[lowered.session.task_session](lowered, machine)
+        except Exception as error:
+            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        return await self._run_session(task, session, agent_timeout=execution.agent_timeout)
-
-    async def _run_stages(
-        self, task: TaskSpec, execution: TaskExecution, machine: Machine, convention: Submission, cleanup: _Cleanup
-    ) -> RolloutData:
-        specification = StageVerifierSpec.model_validate_json(task.verifier.parameters_json)
-        record = None
-        grades = []
-        stage_names = []
-        last_graded_step = None
-        operation = None
-        cause = None
-        for stage_index, stage in enumerate(task.stages):
-            phase = task.model_copy(
-                update={
-                    "context": stage.context or task.context,
-                    "verifier": stage.verifier,
-                    "stages": (),
-                }
-            )
-            initial_steps = 0 if record is None else len(record.steps)
-            initial_tokens = 0 if record is None else len(record.response_token_ids)
-            stage_execution = execution.stages[stage.name]
-            stage_execution = stage_execution.model_copy(
-                update={
-                    "agent_timeout": stage_execution.agent_timeout or execution.agent_timeout,
-                    "agent_user": (
-                        execution.agent_user if stage_execution.agent_user is None else stage_execution.agent_user
-                    ),
-                }
-            )
-            session = _ShellboxTaskSession(
-                phase, machine, convention, self.command_timeout, self.factories, cleanup, stage_execution
-            )
-            try:
-                record = await self._run_session(phase, session, record, agent_timeout=stage_execution.agent_timeout)
-            except RolloutInterrupted as error:
-                record = error.rollout
-                operation, cause = error.operation, error.__cause__
-            finally:
-                try:
-                    await cleanup.run("session_close", session.close)
-                finally:
-                    removal_error = await cleanup.run(
-                        "stage_grader_remove", partial(_remove_stage_grader, stage, machine)
-                    )
-            grade = record.grade
-            grades.append(grade)
-            stage_names.append(stage.name)
-            steps = tuple(
-                (
-                    replace(step, transition=replace(step.transition, grade=grade, reward=0.0))
-                    if index >= initial_steps
-                    else step
-                )
-                for index, step in enumerate(record.steps)
-            )
-            record = replace(record, steps=steps)
-            if grade.status != Outcome.SKIPPED:
-                if grade.status != Outcome.GRADED:
-                    record = replace(
-                        record,
-                        loss_mask=record.loss_mask[:initial_tokens] + (0,) * (len(record.loss_mask) - initial_tokens),
-                    )
-                    break
-                last_graded_step = len(record.steps) - 1
-                assert grade.reward is not None
-                rewards = grade.rewards or {"reward": grade.reward}
-                if any(rewards.get(key, -math.inf) < minimum for key, minimum in stage.minimum_rewards.items()):
-                    break
-            if operation is not None:
-                break
-            if record.stop_reason == AGENT_TIMEOUT_STOP_REASON:
-                break
-            if removal_error is not None and stage_index + 1 < len(task.stages):
-                operation, cause = RolloutOperation.CLEANUP, removal_error
-                break
-        assert record is not None
-        final = _combined_stage_grade(grades, specification.strategy)
-        if last_graded_step is not None and final.status == Outcome.GRADED:
-            steps = list(record.steps)
-            last = steps[last_graded_step]
-            steps[last_graded_step] = replace(last, transition=replace(last.transition, reward=final.reward))
-            record = replace(record, steps=tuple(steps))
-        record = replace(
-            record,
-            grade=replace(
-                final,
-                diagnostics={
-                    **final.diagnostics,
-                    "stages": [
-                        {
-                            "name": name,
-                            "status": grade.status.value,
-                            "reward": grade.reward,
-                            "passed": grade.passed,
-                            "error": grade.error,
-                            "rewards": grade.rewards,
-                        }
-                        for name, grade in zip(stage_names, grades, strict=True)
-                    ],
-                },
-            ),
-        )
-        if operation is not None:
-            raise RolloutInterrupted(record, operation) from cause
-        return record
+        return await self._run_session(lowered, session, attempt)
 
     async def _run_session(
-        self, task: TaskSpec, session: TaskSession, prefix: RolloutData | None = None, *, agent_timeout: float | None
+        self, lowered: LoweredTaskSpec, session: TaskSession, attempt: asyncio.Timeout
     ) -> RolloutData:
+        task = lowered.task
+        limits = lowered.session
         completed = _empty_rollout(task)
-        if prefix is not None:
-            completed = replace(prefix, grade=completed.grade)
+        owner = asyncio.current_task()
+        assert owner is not None
+        cancellation_count = owner.cancelling()
         try:
             start = await session.prepare()
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
         messages = list(start.messages)
-        if prefix is not None:
-            messages = [*prefix.messages, *prefix.steps[-1].transition.observations, *messages]
-        if prefix is None:
-            completed = replace(completed, messages=tuple(messages))
+        completed = replace(completed, messages=tuple(messages))
         prompt: tuple[int, ...] = ()
         tokens: tuple[int, ...] = ()
         masks: tuple[int, ...] = ()
         logprobs: tuple[float, ...] | None = ()
         steps: list[RolloutStep] = []
         assistant_index = None
-        if prefix is not None:
-            prompt = prefix.prompt_token_ids
-            tokens = prefix.prompt_token_ids + prefix.response_token_ids
-            masks = prefix.loss_mask
-            logprobs = prefix.logprobs
-            steps = list(prefix.steps)
-            assistant_index = len(prefix.messages) - 1
-        initial_step_count = len(steps)
         stop_reason = MAX_TURNS_STOP_REASON
         model_error = None
-        pending_turn = None
-        deadline = asyncio.timeout(agent_timeout)
+        deadline = asyncio.timeout(limits.total_turn_timeout)
         try:
             async with deadline:
-                for index in range(self.max_turns):
+                for index in range(limits.max_turns):
                     try:
-                        turn = await self.model(ModelRequest(tuple(messages), start.options, tokens, assistant_index))
+                        async with asyncio.timeout(limits.model_turn_timeout):
+                            turn = await self.model(
+                                ModelRequest(tuple(messages), start.options, tokens, assistant_index)
+                            )
                     except GenerationLimitReached as limit:
                         stop_reason = LENGTH_STOP_REASON
-                        if len(steps) == initial_step_count:
+                        if not steps:
                             return replace(
                                 completed,
-                                prompt_token_ids=prompt if prefix is not None else limit.prompt_token_ids,
+                                prompt_token_ids=limit.prompt_token_ids,
                                 grade=GradeResult(
                                     Outcome.UNAVAILABLE, None, "Generation limit reached before the first response"
                                 ),
                                 stop_reason=stop_reason,
                             )
-                        messages = list(steps[-1].messages)
+                        messages = list(completed.messages)
                         break
                     except RolloutContractError:
                         raise
@@ -315,9 +192,28 @@ class ShellboxRolloutEngine:
                     tokens = turn.prompt_token_ids + turn.response_token_ids
                     assistant_index = len(messages)
                     messages.append(turn.message)
-                    pending_turn = turn
+                    pending = RolloutStep(
+                        turn,
+                        Transition(done=True, metrics={"advance_incomplete": 1.0}),
+                        len(tokens) - len(prompt) - 1,
+                        tuple(messages),
+                    )
+                    # Token evidence belongs to the attempt even if a tool operation fails.
+                    completed = RolloutData(
+                        task.id,
+                        tuple(messages),
+                        prompt,
+                        tokens[len(prompt) :],
+                        masks,
+                        logprobs,
+                        completed.grade,
+                        turn.stop_reason,
+                        (*steps, pending),
+                        pending.transition.metrics,
+                    )
                     try:
-                        transition = await session.advance(turn)
+                        async with asyncio.timeout(limits.tool_turn_timeout):
+                            transition = await session.advance(turn)
                     except RolloutContractError:
                         raise
                     except Exception as error:
@@ -328,7 +224,7 @@ class ShellboxRolloutEngine:
                                 "Transition rewards and credit must align with model response tokens"
                             )
                     stop_reason = turn.stop_reason
-                    if transition.reset_conversation is not None and index + 1 < self.max_turns:
+                    if transition.reset_conversation is not None and index + 1 < limits.max_turns:
                         messages = list(transition.reset_conversation)
                         prompt = tokens = masks = ()
                         logprobs = ()
@@ -344,63 +240,51 @@ class ShellboxRolloutEngine:
                             metrics={},
                         )
                         assistant_index = None
-                        pending_turn = None
                         continue
-                    steps.append(RolloutStep(turn, transition, len(tokens) - len(prompt) - 1, tuple(messages)))
-                    pending_turn = None
-                    completed = RolloutData(
-                        task.id,
-                        tuple(messages),
-                        prompt,
-                        tokens[len(prompt) :],
-                        masks,
-                        logprobs,
-                        completed.grade,
-                        stop_reason,
-                        tuple(steps),
-                        transition.metrics,
+                    steps.append(replace(pending, transition=transition))
+                    completed = replace(
+                        completed, steps=tuple(steps), stop_reason=stop_reason, metrics=transition.metrics
                     )
                     if transition.done or stop_reason == LENGTH_STOP_REASON:
                         break
-                    if index + 1 == self.max_turns:
+                    if index + 1 == limits.max_turns:
                         stop_reason = MAX_TURNS_STOP_REASON
                         break
                     messages.extend(transition.observations)
         except TimeoutError:
             if not deadline.expired():
                 raise
-            stop_reason = AGENT_TIMEOUT_STOP_REASON
-            if pending_turn is not None:
-                pending_step = RolloutStep(
-                    pending_turn,
-                    Transition(done=True, metrics={"advance_incomplete": 1.0}),
-                    len(tokens) - len(prompt) - 1,
-                    tuple(messages),
-                )
-                steps.append(pending_step)
-                completed = replace(
-                    completed,
-                    messages=tuple(messages),
-                    prompt_token_ids=prompt,
-                    response_token_ids=tokens[len(prompt) :],
-                    loss_mask=masks,
-                    logprobs=logprobs,
-                    steps=tuple(steps),
-                    metrics=pending_step.transition.metrics,
-                )
-            if len(steps) == initial_step_count:
+            stop_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
+            if not completed.steps:
                 return replace(
                     completed,
-                    grade=GradeResult(Outcome.UNAVAILABLE, None, "Agent deadline expired before the first response"),
+                    grade=GradeResult(Outcome.UNAVAILABLE, None, "Turn deadline expired before the first response"),
                     stop_reason=stop_reason,
                 )
             messages = list(completed.messages)
+        except asyncio.CancelledError:
+            if not attempt.expired() or owner.cancelling() > cancellation_count + 1:
+                raise
+            raise RolloutInterrupted(completed, RolloutOperation.ATTEMPT) from TimeoutError("Attempt deadline expired")
         if model_error is not None:
-            if len(steps) == initial_step_count:
+            if not completed.steps:
                 raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error
             messages = list(completed.messages)
         try:
-            grade = await session.grade(tuple(messages))
+            async with asyncio.timeout(limits.verifier_timeout):
+                grade = await session.grade(tuple(messages))
+        except asyncio.CancelledError:
+            if not attempt.expired() or owner.cancelling() > cancellation_count + 1:
+                raise
+            raise RolloutInterrupted(completed, RolloutOperation.ATTEMPT) from TimeoutError("Attempt deadline expired")
+        except TimeoutError as error:
+            completed = replace(
+                completed,
+                grade=GradeResult(
+                    Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
+                ),
+            )
+            raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         completed = replace(completed, grade=grade, stop_reason=stop_reason)

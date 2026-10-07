@@ -7,14 +7,14 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
-from taskcompendium.grader import script_package
+from taskcompendium.grader import GraderPackage, script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.models import RawRow
 
@@ -26,7 +26,7 @@ def source_contract_package(
     source_revision: str,
     contract: dict[str, JsonValue],
     runtime_requirements: tuple[str, ...],
-) -> VerifierSpec:
+) -> GraderPackage:
     data = {
         "evaluator": evaluator,
         "source_revision": source_revision,
@@ -51,5 +51,6 @@ def contract_task(
         context=ConversationInput(events=events),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package,
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
     )

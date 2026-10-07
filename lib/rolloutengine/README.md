@@ -6,10 +6,11 @@
 Callers supply a model callable, machine factories, and optional `TaskSession`
 factories for task actions and grading.
 The default session handles shell tools.
-The engine owns model calls, conversation and token accumulation, stage progression, and resource cleanup.
+The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
 
-`ShellboxRolloutEngine.run(task, execution=...)` accepts a `TaskSpec` and separate
-`TaskExecution` settings, then asynchronously returns one rollout.
+`ShellboxRolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
+The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
+The supported scope is single-stage tasks with prebuilt, digest-pinned images or the built-in ShellSim filesystem.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
 for the session lifecycle, exact-token contract, failure handling, and backend configuration.
 

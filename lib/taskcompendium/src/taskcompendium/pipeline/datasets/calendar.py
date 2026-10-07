@@ -12,13 +12,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ProviderRequirement
 from taskcompendium.grader import script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     FunctionDefinition,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -86,16 +87,15 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
-        environment_requirements=EnvironmentRequirements(),
-        environment=EnvironmentSpec(
-            kind=EnvironmentKind.NULL,
+        environment_requirements=EnvironmentRequirements(
             tool_providers={
                 "calendar": ProviderRequirement(action_interface=INTERFACE, initial_state=state.model_dump(mode="json"))
-            },
+            }
         ),
         interaction_tools=TOOLS,
         answer_type=AnswerType.STATE,
-        verifier=package,
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 

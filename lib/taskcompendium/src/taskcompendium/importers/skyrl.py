@@ -1,34 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert SkyRL source rows to tasks with private verifier inputs."""
+"""Convert source rows to semantic tasks with private verifier inputs."""
 
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, JsonValue
+
 from taskcompendium.chat import chat_input
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ExternalVerifierSpec
-from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec, VerifierSpec
+
+
+class ExternalVerifierSpec(BaseModel):
+    """Private inputs for a verifier supplied by the execution application."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    parameters: dict[str, JsonValue]
 
 
 def source_task(
     prompt: list[dict[str, Any]],
-    session: str,
     extras: dict[str, Any],
     config: dict[str, Any],
     source: Source,
     *,
-    environment: EnvironmentSpec | None = None,
+    environment: EnvironmentRequirements | None = None,
 ) -> TaskSpec:
-    """Convert a source row to a self-contained task with private grading inputs."""
+    """Preserve source semantics without selecting a session or machine backend."""
     verifier = ExternalVerifierSpec(parameters={"extras": extras, "config": config})
-    resolved_environment = EnvironmentSpec(kind=EnvironmentKind.NULL) if environment is None else environment
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
         context=chat_input(prompt),
-        environment_requirements=EnvironmentRequirements(),
+        environment_requirements=EnvironmentRequirements() if environment is None else environment,
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.EXTERNAL, parameters_json=verifier.model_dump_json()),
-        environment=resolved_environment.model_copy(update={"interaction": session}),
+        verifier=VerifierSpec(kind="external", parameters_json=verifier.model_dump_json()),
         source=source,
-        metadata={"teacher_route": extras["teacher_route"]} if "teacher_route" in extras else {},
     )

@@ -30,10 +30,10 @@ class GradeResult:
     status: Outcome
     reward: float | None
     error: str | None = None
+    detail: dict | None = None
     passed: bool | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
     failure: GradingFailure | None = None
     score_min: float = 0.0
     score_max: float = 1.0
     rewards: dict[str, float] = field(default_factory=dict)
-    detail: dict | None = None

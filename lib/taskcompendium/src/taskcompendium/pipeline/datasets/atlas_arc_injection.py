@@ -15,6 +15,7 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -112,16 +113,14 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             )
     except (KeyError, TypeError, ValueError) as error:
         return ImportRejection(reason="invalid_verifier_data", detail=str(error))
-    package = package.model_copy(
-        update={
-            "files": (
-                package.files
-                + tuple(inline_resource(path, value) for path, value in files.items() if path.startswith("tests/"))
-            ),
-        }
-    )
-    oracle = tuple(
-        inline_resource(path, value) for path, value in files.items() if path.startswith(("environment/", "solution/"))
+    resources = ResourceGroups(
+        verifier=package.resources
+        + tuple(inline_resource(path, value) for path, value in files.items() if path.startswith("tests/")),
+        oracle=tuple(
+            inline_resource(path, value)
+            for path, value in files.items()
+            if path.startswith(("environment/", "solution/"))
+        ),
     )
     inductive = name == "arc_inductive"
     return TaskSpec(
@@ -133,10 +132,10 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             )
         ),
         environment_requirements=EnvironmentRequirements(capabilities=("filesystem", "python") if inductive else ()),
-        oracle_files=oracle,
+        resources=resources,
         output_paths=("/app/solution.py", "/app/answer.txt") if inductive else (),
         answer_type=AnswerType.FILE if inductive else AnswerType.TEXT,
-        verifier=package,
+        verifier=package.verifier,
     )
 
 

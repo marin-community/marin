@@ -1,123 +1,113 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shellbox task operations and model request preparation."""
+"""Shellbox task operations and public model request preparation."""
 
 import json
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from typing import Any
 
 from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import StageExecution
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import (
-    FILESYSTEM_CAPABILITY,
-    SHELL_CAPABILITY,
-    AnswerType,
-    AssistantToolCalls,
-    TaskSpec,
-)
+from taskcompendium.models import AnswerType, AssistantToolCalls, TaskSpec
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
     AnswerFormat,
     FinalAction,
     Submission,
+    answer_call_tool,
     conversation_messages,
-    submission_request,
+    submission_compatible,
+    submission_instruction,
 )
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
 from rolloutengine.grading import _grade_rollout
-from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
+from rolloutengine.spec import LoweredTaskSpec
 
 SHELL_TOOL_NAME = "shell"
+SHELL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": SHELL_TOOL_NAME,
+        "description": "Run a shell command in the task workspace. Files persist between commands.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 def _task_submission(task: TaskSpec, convention: Submission) -> Submission:
-    if task.answer_type == AnswerType.NATIVE_ACTION:
+    if task.answer_type == AnswerType.NATIVE_ACTION and not isinstance(convention, FinalAction):
         return FinalAction(id="final-action")
     return convention
 
 
 def session_start(task: TaskSpec, convention: Submission) -> SessionStart:
-    """Prepare only the public task fields for inference."""
+    """Render only public task fields, with the selected final-action limits."""
     convention = _task_submission(task, convention)
-    if task.environment.interaction is not None or task.answer_type in (AnswerType.FILE, AnswerType.STATE):
-        messages = conversation_messages(task.context)
-        options = {}
-    else:
-        request = submission_request(task, convention)
-        messages = request.pop("messages")
-        options = request
-    if task.environment.kind != EnvironmentKind.NULL:
-        if any(function.name == SHELL_TOOL_NAME for function in task.final_tools):
-            raise ValueError("The shell tool name is reserved for executable tasks")
-        options.setdefault("tools", []).append(
-            {
-                "type": "function",
-                "function": {
-                    "name": SHELL_TOOL_NAME,
-                    "description": "Run a shell command in the task workspace. Files persist between commands.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"command": {"type": "string"}},
-                        "required": ["command"],
-                        "additionalProperties": False,
-                    },
-                },
-            }
-        )
+    messages = conversation_messages(task.context)
+    options: dict[str, Any] = {}
+    tools: list[dict[str, Any]] = [
+        {"type": "function", "function": function.model_dump(exclude_none=True)}
+        for function in (*task.final_tools, *task.interaction_tools)
+    ]
+    if task.verifier.kind != "external" and task.answer_type not in {
+        AnswerType.FILE,
+        AnswerType.STATE,
+        AnswerType.WORKSPACE_STATE,
+    }:
+        if not submission_compatible(task, convention):
+            raise ValueError("Submission convention is incompatible with the task")
+        instruction = submission_instruction(convention)
+        if instruction:
+            messages.append({"role": "user", "content": instruction})
+        if convention.answer_format == AnswerFormat.ANSWER_CALL:
+            tools.append(answer_call_tool())
+            if not task.final_tools:
+                options.update(tool_choice="required", parallel_tool_calls=False)
+        if isinstance(convention, FinalAction):
+            if convention.require_call:
+                options["tool_choice"] = "required"
+            if convention.max_calls == 1:
+                options["parallel_tool_calls"] = False
+    if "shell" in task.environment_requirements.capabilities:
+        if any(function.name == SHELL_TOOL_NAME for function in (*task.final_tools, *task.interaction_tools)):
+            raise ValueError("The shell tool name is reserved for the Shellbox session")
+        tools.append(SHELL_TOOL)
+    if tools:
+        options["tools"] = tools
     return SessionStart(tuple(messages), options)
 
 
 class _ShellboxTaskSession:
-    """Execute shell calls and grade the final task state."""
+    """Execute shell calls and grade final task evidence."""
 
     def __init__(
         self,
-        task: TaskSpec,
+        lowered: LoweredTaskSpec,
         machine: Machine | None,
         convention: Submission,
-        command_timeout: float,
-        factories: Mapping[EnvironmentKind, MachineFactory],
+        factories: Mapping[str, MachineFactory],
         cleanup: _Cleanup,
-        execution: StageExecution,
+        resources: AsyncExitStack,
     ):
-        self.task = task
+        self.lowered = lowered
         self.machine = machine
-        self.convention = _task_submission(task, convention)
-        self.command_timeout = command_timeout
+        self.convention = _task_submission(lowered.task, convention)
         self.factories = factories
         self.cleanup = cleanup
-        self.execution = execution
+        self.resources = resources
 
     async def prepare(self) -> SessionStart:
-        available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
-        if not set(self.task.environment_requirements.capabilities) <= available:
-            raise ValueError("The task environment does not supply its required capabilities")
-        if self.execution.workdir_files or self.execution.setup or self.execution.healthcheck is not None:
-            assert self.machine is not None
-            if self.execution.workdir_files:
-                result = await self.machine.run(
-                    Command(("pwd",), user=self.execution.agent_user, timeout=self.command_timeout)
-                )
-                if result.exit_code != 0:
-                    raise RuntimeError("Cannot find the stage working directory")
-                workdir = result.stdout.decode().strip()
-                await _install_files(
-                    self.machine,
-                    tuple(
-                        file.model_copy(update={"path": f"{workdir.rstrip('/')}{file.path}"})
-                        for file in self.execution.workdir_files
-                    ),
-                )
-            await _run_setup_commands(self.machine, self.execution.setup, "Task stage setup")
-            if self.execution.healthcheck is not None:
-                await _wait_for_healthcheck(self.machine, self.execution.healthcheck)
-        return session_start(self.task, self.convention)
+        return session_start(self.lowered.task, self.convention)
 
     async def advance(self, turn: ModelTurn) -> Transition:
         try:
@@ -127,7 +117,7 @@ class _ShellboxTaskSession:
         if self.machine is None or not isinstance(message, AssistantToolCalls) or turn.stop_reason == LENGTH_STOP_REASON:
             return Transition(done=True)
         observations = []
-        final_tools = {function.name for function in self.task.final_tools}
+        final_tools = {function.name for function in self.lowered.task.final_tools}
         for call in message.calls:
             if call.name in final_tools or (
                 self.convention.answer_format == AnswerFormat.ANSWER_CALL and call.name == ANSWER_CALL_NAME
@@ -138,7 +128,7 @@ class _ShellboxTaskSession:
                     {
                         "role": "tool",
                         "tool_call_id": call.call_id,
-                        "content": json.dumps({"error": "Executable tasks require shell(command: string) calls"}),
+                        "content": json.dumps({"error": "This session requires shell(command: string) calls"}),
                     }
                 )
                 continue
@@ -153,7 +143,10 @@ class _ShellboxTaskSession:
                 )
                 continue
             result = await self.machine.run(
-                Command(argv=("sh", "-c", command), timeout=self.command_timeout, user=self.execution.agent_user)
+                Command(
+                    argv=("sh", "-c", command),
+                    timeout=self.lowered.session.tool_turn_timeout,
+                )
             )
             observations.append(
                 {
@@ -173,7 +166,9 @@ class _ShellboxTaskSession:
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult:
-        return await _grade_rollout(self.task, self.convention, messages, self.machine, self.factories, self.cleanup)
+        return await _grade_rollout(
+            self.lowered, self.convention, messages, self.machine, self.factories, self.cleanup, self.resources
+        )
 
     async def close(self) -> None:
         pass

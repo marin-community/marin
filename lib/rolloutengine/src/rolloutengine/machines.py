@@ -1,137 +1,107 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Machine creation, setup, and cleanup for task execution."""
+"""Machine creation, public resource installation, and bounded cleanup."""
 
 import asyncio
 import os
-from collections.abc import Iterable, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import Mapping
+from contextlib import AsyncExitStack
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from harbor_config.env import resolve_env_vars
-from shellbox.image import DockerfileSource
-from shellbox.image import RegistryImage as ShellboxRegistryImage
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, NetworkPolicy, ShellSimBuiltins
-from taskcompendium.environment import (
-    DockerBuild,
-    EnvironmentCommand,
-    EnvironmentFile,
-    EnvironmentKind,
-    EnvironmentSpec,
-    HealthcheckSpec,
-    RegistryImage,
-)
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, ShellSimBuiltins
+from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
+from rolloutengine.spec import MachineRuntimeSpec
 
 
-async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
+@dataclass(frozen=True)
+class _UserMachine:
+    machine: Machine
+    user: str
+
+    async def run(self, command: Command):
+        return await self.machine.run(replace(command, user=self.user) if command.user is None else command)
+
+    async def upload(self, source: Path, target: str) -> None:
+        await self.machine.upload(source, target)
+
+    async def download(self, source: str, target: Path) -> None:
+        await self.machine.download(source, target)
+
+    async def close(self) -> None:
+        await self.machine.close()
+
+
+async def _install_resources(machine: Machine, resources: tuple[TaskResource, ...], *, root: str = "/") -> None:
     with TemporaryDirectory(prefix="rollout-files-") as directory:
-        for index, file in enumerate(files):
+        for index, resource in enumerate(resources):
             source = Path(directory) / str(index)
-            source.write_bytes(file.content)
-            source.chmod(file.mode)
-            if file.mtime_ns is not None:
-                os.utime(source, ns=(file.mtime_ns, file.mtime_ns))
-            await machine.upload(source, file.path)
+            source.write_bytes(resource_bytes(resource))
+            source.chmod(0o644 if resource.mode is None else int(resource.mode, 8))
+            if resource.mtime_ns is not None:
+                os.utime(source, ns=(resource.mtime_ns, resource.mtime_ns))
+            await machine.upload(source, f"{root.rstrip('/')}/{resource.path}")
 
 
-def _machine_command(command: EnvironmentCommand) -> Command:
-    return Command(
-        argv=command.argv,
-        cwd=command.cwd,
-        env=resolve_env_vars(command.env),
-        timeout=command.timeout,
-        user=command.user,
+def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
+    return MachineSpec(
+        source=RegistryImage(requirements.docker_image) if requirements.docker_image else ShellSimBuiltins(),
+        workdir=(
+            requirements.working_directory
+            if requirements.working_directory is not None
+            else "" if requirements.docker_image else "/workspace"
+        ),
+        env=resolve_env_vars(requirements.environment_variables),
+        network=runtime.network,
+        memory_mb=runtime.memory_mb,
+        cpus=runtime.cpus,
+        storage_mb=runtime.storage_mb,
+        gpus=runtime.gpus,
+        startup_timeout=runtime.startup_timeout,
     )
 
 
-async def _run_setup_commands(
-    machine: Machine,
-    commands: Iterable[EnvironmentCommand],
-    failure_prefix: str,
-) -> None:
-    for command in commands:
-        result = await machine.run(_machine_command(command))
-        if result.reason == ExitReason.TIMED_OUT:
-            raise TimeoutError(f"{failure_prefix} timed out")
-        if result.exit_code != 0:
-            raise RuntimeError(f"{failure_prefix} failed: {result.reason}, exit={result.exit_code}")
-
-
-async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec) -> None:
-    loop = asyncio.get_running_loop()
-    grace_end = loop.time() + healthcheck.start_period
-    failures = 0
-    while True:
-        in_grace = loop.time() < grace_end
-        result = await machine.run(_machine_command(healthcheck.command))
-        if result.exit_code == 0:
-            return
-        if not in_grace:
-            failures += 1
-            if failures >= healthcheck.retries:
-                raise RuntimeError(f"Environment healthcheck failed after {failures} attempts")
-        await asyncio.sleep(healthcheck.start_interval if in_grace else healthcheck.interval)
-
-
-async def _create_machine(environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory]) -> Machine:
-    async with AsyncExitStack() as resources:
-        if environment.kind == EnvironmentKind.SHELLSIM:
-            source = ShellSimBuiltins()
-        elif isinstance(environment.image, RegistryImage):
-            source = ShellboxRegistryImage(environment.image.reference)
-        else:
-            assert isinstance(environment.image, DockerBuild)
-            directory = Path(resources.enter_context(TemporaryDirectory(prefix="rollout-build-")))
-            for file in environment.image.files:
-                path = directory / file.path.removeprefix("/")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(file.content)
-                path.chmod(file.mode)
-            source = DockerfileSource(directory, directory / environment.image.dockerfile.removeprefix("/"))
-        return await factories[environment.kind].create(
-            MachineSpec(
-                source=source,
-                workdir=environment.workdir,
-                env=resolve_env_vars(environment.env),
-                network=NetworkPolicy.ALLOW if environment.network else NetworkPolicy.DENY,
-                memory_mb=environment.memory_mb,
-                cpus=environment.cpus,
-                storage_mb=environment.storage_mb,
-                gpus=environment.gpus,
-                startup_timeout=environment.startup_timeout,
-            )
-        )
-
-
-async def _discard_machine(creation: asyncio.Task[Machine], cleanup_timeout: float) -> None:
+async def _discard_machine(creation: asyncio.Task[Machine], cleanup: _Cleanup) -> None:
     machine = await creation
-    cleanup = _Cleanup(cleanup_timeout)
-    await cleanup.run("late_machine_close", machine.close)
+    await _Cleanup(cleanup.timeout).run("late_machine_close", machine.close)
 
 
-@asynccontextmanager
-async def _task_machine(
-    environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory], cleanup: _Cleanup
-):
-    """Prepare a machine. Close a machine created after cancellation in the background."""
-    if environment.kind == EnvironmentKind.NULL:
-        yield None
-        return
-    async with AsyncExitStack() as resources:
-        async with asyncio.timeout(environment.startup_timeout):
-            creation = asyncio.create_task(_create_machine(environment, factories))
-            try:
-                machine = await asyncio.shield(creation)
-            except asyncio.CancelledError:
-                _retain_task(asyncio.create_task(_discard_machine(creation, cleanup.timeout)))
-                raise
-            resources.push_async_callback(cleanup.run, "machine_close", machine.close)
-            await _install_files(machine, environment.files)
-            await _run_setup_commands(machine, environment.setup, "Environment setup command")
-            if environment.healthcheck is not None:
-                await _wait_for_healthcheck(machine, environment.healthcheck)
-        yield machine
+async def _prepare_machine(
+    requirements: EnvironmentRequirements,
+    runtime: MachineRuntimeSpec | None,
+    resources: tuple[TaskResource, ...],
+    factories: Mapping[str, MachineFactory],
+    cleanup: _Cleanup,
+    owned: AsyncExitStack,
+) -> Machine | None:
+    """Prepare a machine and retain ownership if creation outlives cancellation."""
+    if runtime is None:
+        return None
+    machine_cleanup = cleanup
+    if runtime.cleanup_timeout is not None:
+        machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
+    async with asyncio.timeout(runtime.startup_timeout):
+        creation = asyncio.create_task(factories[runtime.backend].create(_machine_spec(requirements, runtime)))
+        try:
+            machine = await asyncio.shield(creation)
+        except asyncio.CancelledError:
+            _retain_task(asyncio.create_task(_discard_machine(creation, machine_cleanup)))
+            raise
+        owned.push_async_callback(machine_cleanup.run, "machine_close", machine.close)
+        if runtime.user is not None:
+            machine = _UserMachine(machine, runtime.user)
+        await _install_resources(machine, resources)
+        for command in requirements.setup_commands:
+            result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
+            if result.reason == ExitReason.TIMED_OUT:
+                raise TimeoutError("Environment setup command timed out")
+            if result.exit_code != 0:
+                raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
+    return machine

@@ -14,7 +14,6 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import DockerImage, MachineSpec, NetworkPolicy
 from verifyit.spec import spec_from_table
 
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ProviderRequirement, RegistryImage
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -22,6 +21,8 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FunctionCall,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -108,12 +109,8 @@ def normalize(row: RawRow, image: str) -> TaskSpec | ImportRejection:
     )
     paths = ("/output/command_capture.txt",) if spec["mode"] == "script" else ("/app/solution.py", "/app/solution.cpp")
     package = grader_package(spec_from_table(spec), tuple(trusted))
-    verifier = package.model_copy(
-        update={
-            "environment": EnvironmentSpec(
-                kind=EnvironmentKind.DOCKER, image=RegistryImage(reference=image), workdir=spec["workspace"]
-            )
-        }
+    verifier = package.verifier.model_copy(
+        update={"environment_requirements": EnvironmentRequirements(docker_image=image)}
     )
     return TaskSpec(
         id=row.id,
@@ -121,14 +118,10 @@ def normalize(row: RawRow, image: str) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
             capabilities=("shell", "filesystem"),
-        ),
-        environment=EnvironmentSpec(
-            kind=EnvironmentKind.SHELLSIM,
-            files=tuple(worker),
             tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
         ),
         interaction_tools=(BASH,),
-        oracle_files=tuple(oracle),
+        resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=tuple(trusted)),
         output_paths=paths,
         answer_type=AnswerType.FILE,
         verifier=verifier,
@@ -174,10 +167,9 @@ async def executable_checks(
     task: TaskSpec, *, timeout: float = GRADING_TIMEOUT, memory_mb: int = GRADING_MEMORY_MB
 ) -> VerificationReport:
     """Check missing, empty, wrong, and oracle submissions in fresh machines."""
-    environment = task.verifier.environment
-    if environment is None or not isinstance(environment.image, RegistryImage):
+    image = task.verifier.environment_requirements.docker_image
+    if image is None:
         raise ValueError("Executable controls require a pinned image")
-    image = environment.image.reference
     checks = []
     path = task.output_paths[0]
     wrong = b"raise RuntimeError('__negative_control__')\n" if path.endswith(".py") else b"unexpected error\n"
@@ -197,7 +189,7 @@ async def executable_checks(
                 check=name, status=status, detail=f"{result.status}: reward={result.reward}; {result.error or ''}"
             )
         )
-    oracle = next((resource for resource in task.oracle_files if resource.path == "/solution/solve.sh"), None)
+    oracle = next((resource for resource in task.resources.oracle if resource.path == "solution/solve.sh"), None)
     if oracle is None:
         checks.append(
             CheckResult(

@@ -30,12 +30,13 @@ def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     """Hash public task semantics, optionally including its private reference."""
     content = task.model_dump(mode="json", exclude={"id", "source"})
     # Oracle scripts are executable witnesses, not task semantics.
-    content["oracle_files"] = []
+    content["resources"]["oracle"] = []
     if include_reference and task.verifier.kind in (Mode.MATH, Mode.MCQ):
         # These graders read only their parameters; derivations and provenance are audit evidence.
-        content["verifier"]["files"] = []
+        content["resources"]["verifier"] = []
     if not include_reference:
         content.pop("verifier")
+        content["resources"]["verifier"] = []
     return canonical_sha256(content)
 
 

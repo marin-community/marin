@@ -20,6 +20,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -67,8 +68,9 @@ def normalize_math(row: RawRow, problem_field: str, reference_field: str) -> Tas
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=problem),)),
         environment_requirements=EnvironmentRequirements(),
+        resources=ResourceGroups(verifier=package.resources),
         answer_type=AnswerType.TEXT,
-        verifier=package,
+        verifier=package.verifier,
     )
 
 
@@ -91,7 +93,7 @@ def math_task(
     return task.model_copy(
         update={
             "context": ConversationInput(events=events),
-            "verifier": package,
+            "resources": ResourceGroups(verifier=package.resources),
         }
     )
 

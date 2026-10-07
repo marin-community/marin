@@ -11,13 +11,11 @@ import subprocess
 
 import pytest
 from shellbox.machine import ExitReason, Result
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, RegistryImage
-from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import EnvironmentRequirements, Source, TaskSpec
 
-from .test_rollout import ReplayModel, engine
+from .test_rollout import ReplayModel, engine, lowered, machine_runtime
 
 
 class LocalGitMachine:
@@ -88,10 +86,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
             eval_script='test "$(cat value.txt)" = fixed',
         ),
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-        environment=EnvironmentSpec(
-            kind=EnvironmentKind.DOCKER, image=RegistryImage(reference="fixture"), workdir="/testbed"
-        ),
-        verifier_timeout=5,
+        environment=EnvironmentRequirements(docker_image="fixture@sha256:" + "0" * 64, working_directory="/testbed"),
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
     machines = []
@@ -123,7 +118,9 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {EnvironmentKind.DOCKER: Factory()}).run(task, execution=TaskExecution())
+    result = await engine(model, {"local": Factory()}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2

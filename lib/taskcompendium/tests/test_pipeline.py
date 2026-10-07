@@ -16,13 +16,13 @@ from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import MathSpec
 
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec
 from taskcompendium.grader import grader_config, grader_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
+    ResourceGroups,
     Source,
     TaskSpec,
     TextMessage,
@@ -822,7 +822,8 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     task = task.model_copy(
         update={
             "context": ConversationInput(events=(TextMessage(role="user", content=question),)),
-            "verifier": package,
+            "verifier": package.verifier,
+            "resources": ResourceGroups(verifier=package.resources),
         }
     )
     original = task.model_dump_json()
@@ -846,17 +847,14 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
     for index, expected in enumerate(references):
         name = chr(97 + index)
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
-        verifier = grader_package(MathSpec(expected=expected)) if kind == "math" else multiple_choice_answer(expected, 4)
-        verifier = verifier.model_copy(
-            update={
-                "files": (
-                    inline_resource("tests/reference/source-evidence.json", json.dumps({"solution": name}).encode()),
-                ),
-            }
+        verifier = (
+            grader_package(MathSpec(expected=expected)).verifier
+            if kind == "math"
+            else multiple_choice_answer(expected, 4)
         )
-        environment = EnvironmentSpec(
-            kind=EnvironmentKind.SHELLSIM,
-            files=(inline_resource("input/context.txt", b"different public input" if index == 4 else b"public input"),),
+        resources = ResourceGroups(
+            verifier=(inline_resource("reference/source-evidence.json", json.dumps({"solution": name}).encode()),),
+            worker=(inline_resource("input/context.txt", b"different public input" if index == 4 else b"public input"),),
         )
         task = TaskSpec(
             id=name,
@@ -866,10 +864,10 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
             context=ConversationInput(
                 events=(TextMessage(role="user", content="conflict" if index in (2, 3) else "duplicate"),)
             ),
-            environment=environment,
+            resources=resources,
             verifier=verifier,
         )
-        original_resources[name] = (task.environment.files, task.verifier.files, task.oracle_files)
+        original_resources[name] = resources
         audit = TaskAudit(
             task_id=name,
             source=source,
@@ -899,9 +897,7 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
         == ["cross_source_conflicting_verifier_contracts"]
     )
     assert {
-        name: (task.environment.files, task.verifier.files, task.oracle_files)
-        for name, row in audited.items()
-        for task in (TaskSpec.model_validate_json(row["task_json"]),)
+        name: TaskSpec.model_validate_json(row["task_json"]).resources for name, row in audited.items()
     } == original_resources
 
 
@@ -926,7 +922,8 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
             environment_requirements=EnvironmentRequirements(),
             answer_type=AnswerType.TEXT,
             context=ConversationInput(events=(TextMessage(role="user", content="Shared public question"),)),
-            verifier=package,
+            verifier=package.verifier,
+            resources=ResourceGroups(verifier=package.resources),
         )
         audit = TaskAudit(
             task_id=name,
@@ -953,11 +950,13 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
     assert audited["c"]["duplicate_of"] == "a"
     assert {
         name: json.loads(
-            next(
-                resource
-                for resource in TaskSpec.model_validate_json(row["task_json"]).verifier.files
-                if resource.path == "/tests/config.json"
-            ).content
+            resource_bytes(
+                next(
+                    resource
+                    for resource in TaskSpec.model_validate_json(row["task_json"]).resources.verifier
+                    if resource.path == "config.json"
+                )
+            )
         )["contract"]
         for name, row in audited.items()
     } == contracts
