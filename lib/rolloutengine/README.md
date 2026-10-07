@@ -6,6 +6,8 @@
 Callers supply a model callable, machine factories, and optional `TaskSession`
 factories for task actions and grading.
 The default session handles shell tools.
+For workspace-state tasks, this session adds shell and final-response instructions to the model request.
+Importers retain the task problem without these interface instructions.
 The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
 
 `ShellboxRolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.

@@ -67,18 +67,7 @@ def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentR
     )
     return TaskSpec(
         id=f"{source.dataset}:{instance.instance_id}",
-        context=ConversationInput(
-            events=(
-                TextMessage(
-                    role="system",
-                    content=(
-                        "Use the shell tool to inspect and change the repository. "
-                        "Submit a final response when the changes are complete."
-                    ),
-                ),
-                TextMessage(role="user", content=instance.problem_statement),
-            )
-        ),
+        context=ConversationInput(events=(TextMessage(role="user", content=instance.problem_statement),)),
         environment_requirements=task_environment,
         answer_type=AnswerType.WORKSPACE_STATE,
         verifier=VerifierSpec(

@@ -445,14 +445,16 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
     assert model.requests[0].options["parallel_tool_calls"] is False
 
 
-async def test_workspace_state_does_not_receive_a_text_submission_instruction():
+async def test_workspace_state_receives_shell_presentation_without_answer_tools():
     task = file_task().model_copy(update={"answer_type": AnswerType.WORKSPACE_STATE})
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": FixtureImageFactory()}).run(
+    record = await engine(model, {"local": FixtureImageFactory()}, convention=AnswerCall(id="answer-call")).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
-    assert model.requests[0].messages == ({"role": "user", "content": "What is six plus six?"},)
+    assert model.requests[0].messages[:-1] == ({"role": "user", "content": "What is six plus six?"},)
+    assert model.requests[0].messages[-1]["role"] == "user"
+    assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
 
 
 async def test_shared_shell_grading_is_rejected_before_task_startup():

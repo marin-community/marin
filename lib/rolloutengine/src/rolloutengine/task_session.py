@@ -30,6 +30,9 @@ from rolloutengine.grading import _grade_rollout
 from rolloutengine.spec import LoweredTaskSpec
 
 SHELL_TOOL_NAME = "shell"
+WORKSPACE_INSTRUCTION = (
+    "Use the shell tool to inspect and change the workspace. Send a final response when the task is completed."
+)
 SHELL_TOOL = {
     "type": "function",
     "function": {
@@ -89,6 +92,8 @@ def session_start(task: TaskSpec, convention: SubmissionConvention) -> SessionSt
         if any(function.name == SHELL_TOOL_NAME for function in (*task.final_tools, *task.interaction_tools)):
             raise ValueError("The shell tool name is reserved for the Shellbox session")
         tools.append(SHELL_TOOL)
+        if task.answer_type == AnswerType.WORKSPACE_STATE:
+            messages.append({"role": "user", "content": WORKSPACE_INSTRUCTION})
     if tools:
         options["tools"] = tools
     return SessionStart(tuple(messages), options)
