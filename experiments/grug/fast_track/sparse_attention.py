@@ -34,6 +34,8 @@ class SparseIndex(StrEnum):
     """The followers of the best tied low-rank matches, scored onto their logits."""
     LIGHTNING = "lightning"
     """DSA's lightning indexer over the keys themselves, trained by KL to the dense attention."""
+    BLOCK = "block"
+    """NSA-style: the ``topk`` key blocks whose compressed (block-mean) keys the heads attend to most."""
 
 
 class Lightning(NamedTuple):
@@ -73,7 +75,23 @@ def _document_starts(segment_ids: Int[Array, "B S"]) -> jax.Array:
     return jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
 
 
-def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, window: int, topk: int, select_match: bool):
+def _sparse_math(
+    q,
+    k,
+    v,
+    rel_bias,
+    segment_ids,
+    index,
+    lam,
+    lightning,
+    *,
+    window: int,
+    topk: int,
+    select_match: bool,
+    block: int,
+    compress: bool,
+    block_select: bool,
+):
     batch, seq, heads, head_dim = q.shape
     chunk = min(_QUERY_CHUNK, seq)
     if seq % chunk:
@@ -83,6 +101,16 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, windo
     keys = jnp.arange(seq)
     rel_extent = None if rel_bias is None else rel_extent_of_band(rel_bias)
     index = index.astype(jnp.float32) / math.sqrt(index.shape[-1])
+    if compress or block_select:
+        if seq % block:
+            raise ValueError(f"sequence length {seq} must be a multiple of the block {block}")
+        blocks = seq // block
+        kc = k.astype(jnp.float32).reshape(batch, blocks, block, heads, -1).mean(axis=2)  # [B, nb, H, D]
+        vc = v.astype(jnp.float32).reshape(batch, blocks, block, heads, -1).mean(axis=2)
+        seg_blocks = segment_ids.reshape(batch, blocks, block)
+        # A block is usable only when it lies inside one document; its last token sets when it is visible.
+        whole = seg_blocks[..., 0] == seg_blocks[..., -1]
+        block_end = jnp.arange(blocks) * block + block - 1
 
     @jax.checkpoint
     def one_chunk(c0):
@@ -113,7 +141,7 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, windo
             index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1e9)
             kth = jax.lax.top_k(index_logits, topk)[0][..., -1:]
             allowed = allowed | (visible & (index_logits >= kth))[:, None]
-        elif topk:
+        elif topk and not block_select:
             idx_q = jax.lax.dynamic_slice_in_dim(index, c0, chunk, axis=1)
             score = jnp.einsum("bqgr,bkgr->bgqk", idx_q, index)  # [B, G, C, S] against candidate m
             # Candidate m's follower m + 1 must be visible (m + 1 <= i) and outside the local window.
@@ -128,11 +156,30 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, windo
             if select_match:  # also the matched token m itself
                 bias = bias + jnp.where(matched & ~follow, score, 0.0)
                 allowed = allowed | matched
+        if compress or block_select:
+            c_logits = jnp.einsum("bqhd,bnhd->bhqn", qc * scale, kc)  # [B, H, C, nb]
+            # Fully past (so never the query's own, partly future block) and in the query's document.
+            c_ok = whole[:, None, :] & (seg_blocks[:, None, :, 0] == seg_q[:, :, None])
+            c_ok = c_ok & (block_end[None, None, :] < qi[None, :, None])  # [B, C, nb]
+            c_logits = jnp.where(c_ok[:, None], c_logits, -1e9)
+            if block_select:
+                importance = jnp.mean(jax.nn.softmax(c_logits, axis=-1), axis=1)  # [B, C, nb]
+                importance = jnp.where(c_ok, importance, -1.0)
+                kth = jax.lax.top_k(importance, topk)[0][..., -1:]
+                picked = c_ok & (importance >= kth)
+                tokens = jnp.repeat(picked, block, axis=-1)  # [B, C, S]
+                allowed = allowed | (tokens & same & (dist >= 0))[:, None]
         logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
         dense = logits
         logits = jnp.where(allowed, logits, -1e9)
-        weights = jax.nn.softmax(logits, axis=-1)
-        out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
+        if compress:
+            joint = jax.nn.softmax(jnp.concatenate([logits, c_logits], axis=-1), axis=-1)
+            weights, c_weights = joint[..., :seq], joint[..., seq:]
+            out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32))
+            out = (out + jnp.einsum("bhqn,bnhd->bqhd", c_weights, vc)).astype(v.dtype)
+        else:
+            weights = jax.nn.softmax(logits, axis=-1)
+            out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
         if index_logits is None:
             return out
         # DSA target: the dense causal attention, summed over heads and renormalised.
@@ -158,11 +205,22 @@ def sparse_index_attention(
     window: int,
     topk: int,
     select_match: bool = False,
+    block: int = 32,
+    compress: bool = False,
+    block_select: bool = False,
 ) -> Float[Array, "B S H E"]:
     """Attention over each query's local ``window``, its document start and its ``topk`` index-matched followers."""
     if segment_ids is None:
         segment_ids = jnp.zeros(q.shape[:2], jnp.int32)
-    math_fn = lambda *a: _sparse_math(*a, window=window, topk=topk, select_match=select_match)  # noqa: E731
+    math_fn = lambda *a: _sparse_math(  # noqa: E731
+        *a,
+        window=window,
+        topk=topk,
+        select_match=select_match,
+        block=block,
+        compress=compress,
+        block_select=block_select,
+    )
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning)

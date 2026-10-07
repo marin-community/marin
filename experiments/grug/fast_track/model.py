@@ -957,14 +957,9 @@ class GrugModelConfig:
     tail_expert_write_blocks: int = 0
     """``expert_write_blocks`` for the ``latent_out_full_layers`` tail layers only (same ``expert_write_keep``)."""
     lm_head_extra_dim: int = 0
-    """W > 0: the lm_head reads a ``hidden_dim + W`` space. The final layer's routed experts (it must be the only
-    layer of the softmax tail stack, ``latent_out_full_layers``) write ``hidden_dim + W``: the first ``hidden_dim``
-    go to the residual stream as usual, the last W skip it and, RMS-normed (``lm_head_extra_norm``), are
-    concatenated to the final-normed stream before the lm_head (``output_proj`` is ``[hidden_dim + W, V]``)."""
+    """W > 0: the lm_head reads ``hidden_dim + W``; the final layer's experts write the extra W, RMS-normed."""
     final_shared_only: bool = False
-    """The final layer (alone in the softmax tail stack, ``latent_out_full_layers``) runs only its shared expert,
-    ``final_shared_intermediate_dim`` wide: no routing, dispatch or routed experts. It still emits zero-valued
-    MoE stats of the usual shapes so per-layer logging lines up; its unused routed weights are frozen."""
+    """The final layer runs only its shared expert (``final_shared_intermediate_dim`` wide); routed weights frozen."""
     final_shared_intermediate_dim: int = 0
     final_intermediate_dim: int = 0
     final_experts_per_token: int = 0
@@ -993,6 +988,9 @@ class GrugModelConfig:
     mla_sparse_index_per_head: bool = False
     mla_sparse_select_match: bool = False
     """Also attend to the matched tokens themselves, not only their followers."""
+    mla_sparse_compress: bool = False
+    """Also attend to every visible block's mean key / value (NSA's compressed branch)."""
+    mla_sparse_block: int = 32
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -2465,7 +2463,7 @@ class CausalSelfAttention(eqx.Module):
                         ),
                         P(None, None),
                     )
-                    if cfg.mla_sparse_topk and not lightning
+                    if cfg.mla_sparse_topk and cfg.mla_sparse_index == SparseIndex.FOLLOW
                     else None
                 ),
                 **{
@@ -2482,7 +2480,11 @@ class CausalSelfAttention(eqx.Module):
                         ]
                     )
                 },
-                sparse_lam=jnp.ones((n,), jnp.float32) if cfg.mla_sparse_topk and not lightning else None,
+                sparse_lam=(
+                    jnp.ones((n,), jnp.float32)
+                    if cfg.mla_sparse_topk and cfg.mla_sparse_index == SparseIndex.FOLLOW
+                    else None
+                ),
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -3013,6 +3015,9 @@ class CausalSelfAttention(eqx.Module):
                 window=self.cfg.mla_sparse_window,
                 topk=topk,
                 select_match=self.cfg.mla_sparse_select_match,
+                block=self.cfg.mla_sparse_block,
+                compress=self.cfg.mla_sparse_compress,
+                block_select=self.cfg.mla_sparse_index == SparseIndex.BLOCK,
             )
         else:
             attn_out = _attend(q, k)[..., :head_dim]
