@@ -34,7 +34,7 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
@@ -373,21 +373,7 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
-    pos = Axis("position", max_seq_len)
-    mix_key, shuffle_key = jax.random.split(key)
-    weights = data_config.train_weights
-    if isinstance(weights, list):
-        weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
-
-    initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-    return MixtureDataset(
-        datasets=datasets,
-        weights=weights,
-        stop_strategy=data_config.stop_strategy,
-        key=mix_key,
-        block_size=data_config.mixture_block_size,
-    )
+    return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")

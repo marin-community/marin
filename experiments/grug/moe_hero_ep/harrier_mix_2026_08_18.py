@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import BlockShuffleConfig, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -41,6 +41,7 @@ HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18-to-996f4891"
 # training-FLOP budget the run is expensive enough that we want maximally-real data over a simulated
 # larger run, so it trains on the raw mixture instead.
 SIMULATED_EPOCHING_MAX_FLOPS = 1e23
+_SHUFFLE_BLOCK_TOKENS = 2**20
 
 HARRIER_MIX_2026_08_18_STORE = ArtifactStep.adopt(
     "datakit/store/harrier-all-sources-k40-q5-fuzzy-dedup-exempt16",
@@ -99,6 +100,13 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
 
 
 _validate_spec(_SPEC)
+
+
+def _shuffle_config(seq_len: int) -> BlockShuffleConfig:
+    """Shuffle fixed-token blocks, so the block permutation is the same at every context length."""
+    if _SHUFFLE_BLOCK_TOKENS % seq_len:
+        raise ValueError(f"Sequence length {seq_len} must divide {_SHUFFLE_BLOCK_TOKENS} shuffle-block tokens")
+    return BlockShuffleConfig(io_block_size=_SHUFFLE_BLOCK_TOKENS // seq_len, window_blocks=512, perm_type="feistel")
 
 
 def harrier_mix_2026_08_18_data_config(
@@ -163,6 +171,7 @@ def harrier_mix_2026_08_18_data_config(
         components={**components, **val_components},
         train_weights=sorted(stages.items()),
         auto_build_caches=False,
+        shuffle=_shuffle_config(max_seq_len),
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         target_budget=target_budget,
         experiment_budget=experiment_budget,
