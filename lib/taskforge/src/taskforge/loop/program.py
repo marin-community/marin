@@ -41,6 +41,7 @@ from pathlib import Path
 from types import ModuleType
 
 from taskforge.build.author import PROGRAM_FILE, Revision, author, load_program
+from taskforge.build.infrastructure import BuildInfrastructureFailure
 from taskforge.build.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
 from taskforge.build.sdk import BuildFailure, BuildServices, record_completions
 from taskforge.build.step import CacheStatus
@@ -493,10 +494,11 @@ async def _build(item: _Item, state: ItemState) -> None:
             draft = await run_build(
                 program, proposal, round_dir, services.root / CACHE_DIR, services.build, state.invalidate, state.round
             )
-        except GlmUnavailable:
+        except (GlmUnavailable, BuildInfrastructureFailure):
             raise
         except Exception as error:
-            # A BuildFailure or any exception the program raised goes back to the author as a revision.
+            # A BuildFailure or any other exception the program raised goes back to the author as a
+            # revision. A host failure is not the program's: it fails the item, which re-enters the build.
             failure = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
             step = (error.step or "") if isinstance(error, BuildFailure) else ""
             _build_failed(item, state, program.digest, step, failure, noop=False)
