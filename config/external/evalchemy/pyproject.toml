@@ -9,4 +9,4 @@ package = false
 
 [tool.uv.sources]
 # The exact campaign revision is retained in uv.lock and advanced deliberately.
-evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "af61e0baaa291071f815f14f567852adece6e14c" }
+evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "2c102ddc321a1f9280c094e5996792eae8b8e413" }
