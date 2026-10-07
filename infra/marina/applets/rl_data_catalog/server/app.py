@@ -25,10 +25,12 @@ from .catalog import (
     annotate_source,
     get_json,
     merge_gym_sources,
+    registered_snapshot,
     skyrl_snapshot,
     tasktrove_snapshot,
 )
 from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
+from .registered_sources import REGISTERED_ORIGIN, REGISTERED_SOURCES
 from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
@@ -191,6 +193,10 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
                 row["review_verifier_revision"] is not None
                 and row["review_verifier_revision"] != row.get("verifier_revision")
             )
+            or (
+                row.get("registration_revision") is not None
+                and record.get("review_registration_revision") != row["registration_revision"]
+            )
         )
     )
     row["review_applicability"] = (
@@ -234,6 +240,7 @@ def migrate(connection: Connection) -> None:
         "review_id TEXT",
         "review_source_revision TEXT",
         "review_verifier_revision TEXT",
+        "review_registration_revision TEXT",
     ):
         connection.execute(text(f"ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS {definition}"))
     connection.execute(
@@ -330,6 +337,8 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
     ).scalar_one()
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
+    # Invalid bundled registrations must fail before any refresh writes.
+    registered = registered_snapshot(REGISTERED_SOURCES)
     results = []
     for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
         previous = connection.execute(
@@ -386,6 +395,19 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                 {"origin": origin},
             )
         results.append({"origin": origin, "revision": revision, "changed": snapshot is not None})
+    previous = connection.execute(
+        text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": REGISTERED_ORIGIN}
+    ).scalar_one_or_none()
+    changed = force or registered.revision != previous
+    if changed:
+        # An empty snapshot retires the final removed source while retaining reviews.
+        save_snapshot(connection, registered)
+    else:
+        connection.execute(
+            text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
+            {"origin": REGISTERED_ORIGIN},
+        )
+    results.append({"origin": REGISTERED_ORIGIN, "revision": registered.revision, "changed": changed})
     return {"busy": False, "results": results}
 
 

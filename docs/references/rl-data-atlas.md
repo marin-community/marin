@@ -1,9 +1,9 @@
 # RL Data Atlas
 
 [Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
+to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources, the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest, and checked-in release registrations without signing in.
 Task Trove packages converted datasets as tasks for the Harbor execution
-environment. The two catalogs are independent and can share original datasets.
+environment. The catalogs are independent and can share original datasets.
 Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
 
 Search and filter the table, including its Environment column, click column
@@ -92,7 +92,7 @@ uv run python -m infra.marina.applets.rl_data_catalog.audit_nemotron \
 ```
 
 The top line shows one data-source count, the filtered task tally, and upstream
-status. The source count counts displayed source/component rows across both
+status. The source count counts displayed source/component rows across all
 catalogs, excluding deprecated/excluded rows; an expanded parent contributes
 one count for each component and has no separate aggregate entry. It stays global when search
 filters change. Gym aliases such as `gym/aime` remain searchable, and source details
@@ -274,7 +274,7 @@ uv run experiments/rl_data_reviews/publish_review.py \
 ```
 
 Set `source.source_id` to the Atlas population named by `--atlas-id` and
-`source.revision` to that dataset's HF commit. `source.tasks_path` points to the
+`source.revision` to that dataset's immutable release revision. `source.tasks_path` points to the
 local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
 MarinSkyRL's `prompt`, `env_class`, and verifier arguments; use `harbor_directory`
 for native Harbor task directories. `task_manifest` accepts JSON or JSONL records
@@ -332,3 +332,40 @@ POST to `api/refresh?force=true`. To verify runtime access, send a Marina-authen
 POST to `api/refresh?force=true&hf_auth=runtime` without a caller-supplied HF token;
 the response reports `hf_authentication: runtime_secret`. The token is used only for HF requests and is
 never stored in the applet tables or sent to the frontend. Normal page loads reuse Task Trove snapshots when its release head is unchanged.
+
+## Register a pinned release
+
+Add a `RegisteredSource` to
+`infra/marina/applets/rl_data_catalog/server/registered_sources.py`. These entries
+appear under **Registered releases** and require no training registration. The
+storage host is separate from the execution environment and interaction type.
+HF and Git references require a full commit SHA; Harbor Hub references require
+a `sha256:` release digest. Register native release identities without copying
+tasks into another repository.
+
+Choose a stable `name` for the source population. Its Atlas ID is
+`Registered releases:<name>`. Record the selected populations and their counts
+in `counts`; use `all` for a release without named splits. Counts must cover the
+complete selected population, including all membership API pages. Link the count
+evidence, verifier, license scope, and execution instructions. Declare the tool
+policy, agent requirement, and scoring contract explicitly. The registration
+describes these requirements; evaluation adapters must enforce them.
+
+Submit registrations and release updates through a Marin PR. After deployment,
+refresh reads the bundled metadata without downloading tasks or following
+moving upstream tags. Unchanged registrations retain their saved snapshot.
+Removing an entry retires its row and preserves historical reviews.
+
+The source's `registration_revision` fingerprints the release reference, counted
+populations, execution contract, and verifier revision. Changes to these fields
+make prior ratings stale; edits to notes and evidence links preserve applicability.
+Before starting a review, copy this value from `api/sources` or the details panel
+into `source.registration_revision` in the review configuration. Keep
+`source.revision` equal to the native dataset commit or package digest. The
+publisher checks both identities and archives the run configuration. A missing
+or mismatched registration revision cannot publish a current assessment.
+
+Registration establishes no quality or difficulty rating. Publish assessments
+separately against the deployed registration. The shared Atlas intake accepts
+Git, Hugging Face, and Harbor Hub references; it does not change the Harbor fork's
+Git/local-path registry schema or add task download and training adapters.

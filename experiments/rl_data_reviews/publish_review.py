@@ -135,6 +135,10 @@ def validated_publication(root: Path, atlas_id: str) -> ReviewPublication:
         raise ValueError("Review subject does not identify the requested Atlas population")
     if subjects[0]["dataset_revision"] != (payload.get("dataset_revision") or payload.get("revision")):
         raise ValueError("Reviewed data revision differs from the current Atlas source")
+    if payload.get("registration_revision") is not None:
+        run = json.loads((root / "run.json").read_text())
+        if run["config"]["source"].get("registration_revision") != payload["registration_revision"]:
+            raise ValueError("Reviewed registration differs from the current Atlas population or execution contract")
     attestation_path = None
     if payload["origin"] == "MarinSkyRL" and payload["revision"] != provenance["marinskyrl_commit"]:
         attestation = revision_attestation(root, payload["revision"], payload["verifier_path"])
@@ -149,6 +153,8 @@ def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
     evidence_paths = {item["snapshot_path"] for review in collection["reviews"] for item in review["evidence"]}
     if attestation_path:
         evidence_paths.add(str(attestation_path.relative_to(root)))
+    if publication.payload.get("registration_revision") is not None:
+        evidence_paths.add("run.json")
     evidence_paths.update(
         str(path.relative_to(root)) for path in root.glob("tasks/*/execution-*/solver/turn-*/response.json")
     )
@@ -194,13 +200,15 @@ def publish_review(root: Path, atlas_id: str) -> dict:
     native = [review for review in collection["reviews"] if review["method"] == "runtime_execution"]
     sql(
         """UPDATE catalog_sources SET quality=:quality,review_id=:review,review_date=:date,
-        review_source_revision=:revision,review_verifier_revision=:verifier,traces=:traces WHERE id=:source""",
+        review_source_revision=:revision,review_verifier_revision=:verifier,
+        review_registration_revision=:registration,traces=:traces WHERE id=:source""",
         {
             "quality": rating,
             "review": review_id,
             "date": updated,
             "revision": publication.subject["dataset_revision"],
             "verifier": payload.get("verifier_revision"),
+            "registration": payload.get("registration_revision"),
             "traces": len(native),
             "source": atlas_id,
         },
