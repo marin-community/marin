@@ -154,7 +154,8 @@ or on a package the order does not name.
   `EntryKind.EVENT` row with `attrs["seq"]` and `attrs["schema"] = EVENT_SCHEMA`.
   `derive_state(entries) -> ItemState` folds a proposal item's events (phase, round, digests,
   counters, `Terminal`); `derive_idea_state` folds an idea's; `item_tokens_out` sums the item's
-  `LLM_CALL` output tokens. A build the machine host failed is a `BUILD_INFRASTRUCTURE` event
+  `LLM_CALL` output tokens outside validation trials (steps `solver/...` and `adversary/...`;
+  `is_trial_step(step)` requires the `/`, so a build step named `solver` still counts). A build the machine host failed is a `BUILD_INFRASTRUCTURE` event
   (`cause`, an `InfrastructureCause`); `build_host_failures(entries) -> Counter[InfrastructureCause]`
   counts an item's over every launch, and an `ABANDONED` terminal carries `causes`
   (`cause:count` pairs) for the retries it spent. `ADVERSARIES_RUN` counts each role's give-ups
@@ -348,10 +349,11 @@ the brief again, so the author cannot spend the repair budget returning the same
 output-token budget sums the item's `LLM_CALL` entries (triage, authoring, build steps) and is
 checked before each authoring. Validation trials record their model calls too, under steps
 `solver/<index>` and `adversary/<role>/<index>`, but the budget leaves them out
-(`loop.events.UNBUDGETED_TRIALS`): `k`, the roles and the deadlines bound them instead. A `Retry`
-waits out the backoff without holding a slot; spent retries end the item `ABANDONED`, never
-rejected, and the next launch re-enters it at the control replay with a fresh retry budget. An
-unhandled exception records `FAILED` and propagates to the queue. A triage verdict is final for its
+(`loop.events.UNBUDGETED_TRIALS`): `k`, the roles and the deadlines bound them instead. The
+exclusion keys on the `<kind>/` prefix, since a build step records its calls under its bare function
+name, which cannot contain `/`. A `Retry` waits out the backoff without holding a slot; spent
+retries end the item `ABANDONED`, never rejected, and the next launch re-enters it at the control
+replay with a fresh retry budget. An unhandled exception records `FAILED` and propagates to the queue. A triage verdict is final for its
 proposal digest within a run.
 
 ## Testing

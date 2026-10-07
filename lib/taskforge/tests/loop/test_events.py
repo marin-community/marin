@@ -194,8 +194,11 @@ def test_the_budget_counts_only_llm_call_output_tokens_outside_validation_trials
         LedgerEntry(ITEM, 0, "solver/0/0", EntryKind.TRIAL, 0.0, 1.0, tokens_out=9000),
         LedgerEntry(ITEM, 0, "solver/0", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=9000),
         LedgerEntry(ITEM, 0, "adversary/shortcut/1", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=9000),
+        # Build steps record calls under the bare step name; one named like a trial kind still counts.
+        LedgerEntry(ITEM, 0, "solver", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=40),
+        LedgerEntry(ITEM, 0, "adversary", EntryKind.LLM_CALL, 0.0, 1.0, tokens_out=2),
     ]
-    assert item_tokens_out([*log.entries(), *spans]) == 700
+    assert item_tokens_out([*log.entries(), *spans]) == 742
     assert derive_state([*log.entries(), *spans]).phase is Phase.CONTROLS
 
 

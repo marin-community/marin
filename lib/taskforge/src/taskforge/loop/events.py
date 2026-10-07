@@ -265,13 +265,18 @@ UNBUDGETED_TRIALS = frozenset({TrialKind.SOLVER, TrialKind.ADVERSARY})
 def item_tokens_out(entries: Iterable[LedgerEntry]) -> int:
     """The output tokens the item's budget counts: ``LLM_CALL`` entries outside validation trials.
 
-    A trial's calls are recorded under step ``<kind>/<trial>`` (``validate.solver.ValidationSite.call_ledger``).
+    A trial's calls are recorded under step ``<kind>/<trial>`` (``validate.solver.ValidationSite.call_ledger``);
+    a build step's calls are recorded under the bare step name, which never contains ``/``, so a builder
+    step named ``solver`` or ``adversary`` still counts.
     """
     return sum(
-        entry.tokens_out or 0
-        for entry in entries
-        if entry.kind is EntryKind.LLM_CALL and entry.step.partition("/")[0] not in UNBUDGETED_TRIALS
+        entry.tokens_out or 0 for entry in entries if entry.kind is EntryKind.LLM_CALL and not is_trial_step(entry.step)
     )
+
+
+def is_trial_step(step: str) -> bool:
+    head, separator, _ = step.partition("/")
+    return bool(separator) and head in UNBUDGETED_TRIALS
 
 
 def split(value: str) -> tuple[str, ...]:
