@@ -3,6 +3,9 @@
 
 import asyncio
 
+from shellbox.machine import Machine, MachineSpec
+from taskcompendium.environment import EnvironmentKind
+
 from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
@@ -125,7 +128,35 @@ async def test_a_run_killed_mid_validation_resumes_without_reproposing_or_rebuil
     assert len(fake_glm.requests) == 1
 
 
+class UnreachableHost:
+    """A machine factory whose host connection always drops."""
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        raise ConnectionError("connection reset by the machine host")
+
+
 async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch_rebuilds(
+    queue_run, author_replies, fake_glm, fakes
+):
+    author_replies(1, fakes.machine_program)
+    unreachable = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={EnvironmentKind.SHELLSIM: UnreachableHost()})
+    policy = fakes.policy(max_build_retries=1)
+
+    first = await unreachable({"a": "a"}, policy, width=2)
+
+    assert first.items == {"a--0": Terminal.ABANDONED}
+    assert first.failed == {}
+    assert first.build_infrastructure == {InfrastructureCause.HOST_UNREACHABLE: 2}
+    assert first.summary_json()["build_infrastructure"] == {"host_unreachable": 2}
+
+    relaunched = await queue_run(rubric=unreachable.rubric)({"a": "a"}, policy, width=2)
+
+    assert relaunched.items == {"a--0": Terminal.ACCEPTED}
+    assert relaunched.build_infrastructure == {InfrastructureCause.HOST_UNREACHABLE: 2}
+    assert len(fake_glm.requests) == 1
+
+
+async def test_a_build_this_host_has_no_factory_for_is_rejected_and_not_reentered(
     queue_run, author_replies, fake_glm, fakes
 ):
     author_replies(1, fakes.machine_program)
@@ -133,16 +164,10 @@ async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch
     policy = fakes.policy(max_build_retries=1)
 
     first = await hostless({"a": "a"}, policy, width=2)
+    relaunched = await hostless({"a": "a"}, policy, width=2)
 
-    assert first.items == {"a--0": Terminal.ABANDONED}
-    assert first.failed == {}
-    assert first.build_infrastructure == {InfrastructureCause.NO_FACTORY: 2}
-    assert first.summary_json()["build_infrastructure"] == {"no_factory": 2}
-
-    relaunched = await queue_run(rubric=hostless.rubric)({"a": "a"}, policy, width=2)
-
-    assert relaunched.items == {"a--0": Terminal.ACCEPTED}
-    assert relaunched.build_infrastructure == {InfrastructureCause.NO_FACTORY: 2}
+    assert first.items == relaunched.items == {"a--0": Terminal.REJECTED}
+    assert first.build_infrastructure == relaunched.build_infrastructure == {}
     assert len(fake_glm.requests) == 1
 
 
