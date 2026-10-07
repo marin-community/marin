@@ -34,7 +34,8 @@ from levanter.data.text.datasets import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleCon
 from levanter.data.text.formats import TextLmDatasetFormat
 from rigging.filesystem.storage_path import prefix_join
 
-from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig
+from marin.datakit.download.huggingface_zephyr import download_hf
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run

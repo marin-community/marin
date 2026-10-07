@@ -18,7 +18,7 @@ two streams share one HF repo, so each is staged under its own
 ``raw/biocollection/<stream>`` path and downloaded via a per-stream glob.
 """
 
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.huggingface_zephyr import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 

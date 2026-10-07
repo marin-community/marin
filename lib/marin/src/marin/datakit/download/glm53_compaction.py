@@ -19,7 +19,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, ChatChannel, normalize_chat_step
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.huggingface_zephyr import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
     REASONING_TOKEN,

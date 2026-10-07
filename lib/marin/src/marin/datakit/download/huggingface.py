@@ -16,17 +16,13 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
-from fray.types import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
-from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
 
-from marin.execution.step_spec import StepSpec
 from marin.utilities.provenance import write_provenance_json
 
 logger = logging.getLogger(__name__)
@@ -92,9 +88,6 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 8
-    """Maximum parallelism of the Zephyr download job"""
-
     read_timeout_seconds: float = 120.0
     """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
 
@@ -107,11 +100,6 @@ class DownloadConfig:
     source_url_override: str | None = None
     """Optional fsspec URL to read from instead of HuggingFace. Bypasses HF-specific
     listing and revision handling; mainly intended for hermetic tests."""
-
-    worker_resources: ResourceConfig | None = None
-    """Per-worker resources for the Zephyr download workers. None falls back to
-    ZephyrContext defaults (1 CPU / 1 GB RAM). Bump for large parquet shards or
-    when HF streaming buffers spike memory."""
 
     expected_source_xet_fingerprint: str | None = None
     """Expected SHA-256 fingerprint of the selected files' paths, sizes, and Xet
@@ -322,7 +310,18 @@ def stream_file_to_fsspec(task: FileDownloadTask) -> dict:
     )
 
 
-def download_hf(cfg: DownloadConfig) -> None:
+@dataclass(frozen=True)
+class DownloadPlan:
+    """Pinned file transfers and provenance to commit after completion."""
+
+    tasks: tuple[FileDownloadTask, ...]
+    output_path: str
+    metrics_path: str
+    provenance: dict
+
+
+def plan_download(cfg: DownloadConfig) -> DownloadPlan:
+    """List pinned source files and prepare their validated transfer tasks."""
 
     configure_logging(level=logging.INFO)
 
@@ -395,24 +394,11 @@ def download_hf(cfg: DownloadConfig) -> None:
     total_size_gb = sum(info["size"] for info in file_info.values() if info.get("size") is not None) / (1024**3)
     logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
-    pipeline = (
-        Dataset.from_list(download_tasks)
-        .map(stream_file_to_fsspec)
-        .write_jsonl(
-            prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
-            skip_existing=True,
-        )
-    )
-    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
-    if cfg.worker_resources is not None:
-        ctx_kwargs["resources"] = cfg.worker_resources
-    ctx = ZephyrContext(**ctx_kwargs)
-    ctx.execute(pipeline)
-
-    # Write Provenance JSON
-    write_provenance_json(
+    return DownloadPlan(
+        tuple(download_tasks),
         output_path,
-        metadata={
+        prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+        {
             "dataset": cfg.hf_dataset_id,
             "version": cfg.revision,
             "links": files,
@@ -420,76 +406,8 @@ def download_hf(cfg: DownloadConfig) -> None:
         },
     )
 
-    logger.info(f"Streamed all files and wrote provenance JSON; check {output_path}.")
 
-
-def download_hf_step(
-    name: str,
-    *,
-    hf_dataset_id: str,
-    revision: str,
-    hf_urls_glob: list[str] | None = None,
-    append_sha_to_path: bool = False,
-    zephyr_max_parallelism: int = 8,
-    deps: list[StepSpec] | None = None,
-    override_output_path: str | None = None,
-    worker_resources: ResourceConfig | None = None,
-    hf_repo_type_prefix: str = HF_DATASET_REPO_TYPE_PREFIX,
-    expected_source_xet_fingerprint: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that downloads a HuggingFace dataset.
-
-    The raw download is preserved as-is in its original format and directory structure.
-
-    Args:
-        name: Step name (e.g. "raw/fineweb").
-        hf_dataset_id: HuggingFace dataset identifier (e.g. "HuggingFaceFW/fineweb").
-        revision: Commit hash from the HF dataset repo.
-        hf_urls_glob: Glob patterns to select specific files. Empty means all files.
-        append_sha_to_path: If True, write outputs under ``output_path/<revision>``.
-        zephyr_max_parallelism: Maximum download parallelism.
-        deps: Optional upstream dependencies.
-        override_output_path: Override the computed output path entirely.
-        hf_repo_type_prefix: Hugging Face source namespace. Use an empty string
-            when ``hf_dataset_id`` is a ``buckets/...`` path.
-        expected_source_xet_fingerprint: Expected fingerprint of the selected
-            files' relative paths, sizes, and Xet hashes.
-
-    Returns:
-        A StepSpec whose output_path contains the raw downloaded files.
-    """
-    resolved_glob = hf_urls_glob or []
-
-    def _run(output_path: str) -> None:
-        download_hf(
-            DownloadConfig(
-                hf_dataset_id=hf_dataset_id,
-                revision=revision,
-                hf_urls_glob=resolved_glob,
-                gcs_output_path=output_path,
-                append_sha_to_path=append_sha_to_path,
-                zephyr_max_parallelism=zephyr_max_parallelism,
-                worker_resources=worker_resources,
-                hf_repo_type_prefix=hf_repo_type_prefix,
-                expected_source_xet_fingerprint=expected_source_xet_fingerprint,
-            )
-        )
-
-    hash_attrs = {
-        "hf_dataset_id": hf_dataset_id,
-        "revision": revision,
-        "hf_urls_glob": resolved_glob,
-        "append_sha_to_path": append_sha_to_path,
-    }
-    if hf_repo_type_prefix != HF_DATASET_REPO_TYPE_PREFIX:
-        hash_attrs["hf_repo_type_prefix"] = hf_repo_type_prefix
-    if expected_source_xet_fingerprint is not None:
-        hash_attrs["expected_source_xet_fingerprint"] = expected_source_xet_fingerprint
-
-    return StepSpec(
-        name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs=hash_attrs,
-        override_output_path=override_output_path,
-    )
+def finish_download(plan: DownloadPlan) -> None:
+    """Persist source provenance after all file transfers have completed."""
+    write_provenance_json(plan.output_path, metadata=plan.provenance)
+    logger.info("Streamed all files and wrote provenance JSON; check %s.", plan.output_path)

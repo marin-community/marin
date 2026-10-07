@@ -39,7 +39,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.huggingface_zephyr import download_hf_step
 from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,

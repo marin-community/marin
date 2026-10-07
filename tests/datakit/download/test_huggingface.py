@@ -6,16 +6,22 @@
 import json
 
 import pytest
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from huggingface_hub.errors import HfHubHTTPError
 from marin.datakit.download import huggingface as hf_download
 from marin.datakit.download.huggingface import (
     DownloadConfig,
     FileDownloadTask,
     _relative_path_in_source,
-    download_hf,
+    finish_download,
+    plan_download,
     stream_file_to_fsspec,
 )
+from marin.datakit.download.huggingface_zephyr import download_hf
 from requests import Response
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 
 def _write(root, relative_path: str, content: bytes) -> None:
@@ -229,3 +235,69 @@ def test_stream_file_to_fsspec_reads_local_source(tmp_path):
 
     assert result["status"] == "success"
     assert destination.read_bytes() == content
+
+
+class RecordingLocalClient(LocalClient):
+    def __init__(self):
+        super().__init__()
+        self.worker_groups = []
+
+    def create_actor_group(self, actor_class, *args, name, **kwargs):
+        self.worker_groups.append(name)
+        return super().create_actor_group(actor_class, *args, name=name, **kwargs)
+
+
+def test_download_hf_reuses_entered_worker_pool_across_sources(tmp_path):
+    source = tmp_path / "source"
+    _write(source, "data/task.json", b'{"instruction":"original"}')
+    client = RecordingLocalClient()
+    try:
+        with (
+            set_current_client(client),
+            ZephyrContext(
+                client=client,
+                max_workers=1,
+                name="shared-download-test",
+                chunk_storage_prefix=str(tmp_path / "chunks"),
+            ) as context,
+        ):
+            for name in ("first", "second"):
+                download_hf(
+                    DownloadConfig(
+                        hf_dataset_id="test/source",
+                        revision="pinned-revision",
+                        gcs_output_path=str(tmp_path / name),
+                        source_url_override=str(source),
+                    ),
+                    context=context,
+                )
+            # Reusing the caller's context must also leave it usable by later stages.
+            assert context.execute(Dataset.from_list([42])).results == [42]
+            assert len(client.worker_groups) == 1
+        assert (tmp_path / "first/data/task.json").read_bytes() == (tmp_path / "second/data/task.json").read_bytes()
+    finally:
+        client.shutdown()
+
+
+def test_scheduler_free_plan_transfers_pinned_files_and_commits_provenance(tmp_path):
+    source = tmp_path / "source"
+    _write(source, "data/task.json", b'{"instruction":"original"}')
+    _write(source, "README.md", b"Unselected metadata")
+    destination = tmp_path / "destination"
+    plan = plan_download(
+        DownloadConfig(
+            hf_dataset_id="fixture/tasks",
+            revision="immutable",
+            hf_urls_glob=["data/*.json"],
+            gcs_output_path=str(destination),
+            source_url_override=str(source),
+        )
+    )
+    receipts = [stream_file_to_fsspec(task) for task in plan.tasks]
+    finish_download(plan)
+    assert (destination / "data/task.json").read_bytes() == b'{"instruction":"original"}'
+    assert not (destination / "README.md").exists()
+    assert len(receipts) == 1
+    provenance = json.loads((destination / ".provenance.json").read_text())
+    assert provenance["dataset"] == "fixture/tasks"
+    assert provenance["version"] == "immutable"

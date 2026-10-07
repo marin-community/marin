@@ -15,7 +15,7 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.huggingface_zephyr import download_hf_step
 from marin.datakit.download.rollout_transforms import checked_openai_chat_document, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec

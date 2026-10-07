@@ -11,7 +11,7 @@ The token-count-viewer advertises the repo as ``bigcode/StarCoder2-Extras``
 (friendlier casing); the actual HF repo is ``bigcode/starcoder2data-extras``.
 """
 
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.huggingface_zephyr import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
