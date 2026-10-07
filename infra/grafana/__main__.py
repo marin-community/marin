@@ -152,6 +152,7 @@ def main() -> None:
             cpu_always_allocated=True,
             startup_cpu_boost=True,
             cpu="1",
+            memory="4Gi",
             env=env,
             secrets=tuple(secrets),
             cloudsql_instances=(connection_name,),
