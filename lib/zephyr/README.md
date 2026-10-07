@@ -137,4 +137,8 @@ Zephyr consolidates ad-hoc distributed and Hugging Face dataset processing patte
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
 
+Shuffle ingestion bounds its input buffer by serialized payload bytes and item
+count before passing frames to the memory-aware writer. This also applies when
+each item is itself a batch. A single item must still fit in task memory.
+
 See `AGENTS.md` for execution internals and source layout.

@@ -89,6 +89,17 @@ uv run iris --config <CONFIG> actor call <ENDPOINT> get_status
 
 Worker IDs follow `zephyr-<hash>-p<N>-workers-<INDEX>`. Compare per-worker counters to spot stragglers.
 
+Iris coordinators also export completed and live counter snapshots to
+`telemetry_v1.zephyr`, with the execution ID in the metric's `run` attribute.
+Counter names replace punctuation with underscores. These are current snapshots,
+so do not sum successive samples. Completing an execution exports its final
+completed-task counters, including executions shorter than the periodic export
+interval. Select the latest snapshot per full series before combining executions;
+do not use the number of telemetry samples as a completed-execution count.
+Local coordinators leave this exporter disabled.
+An explicit `StatsConfig.finelog_url` selects the export destination under Iris;
+otherwise the coordinator discovers the regional Finelog endpoint.
+
 ## Diagnostic Patterns
 
 ### Stage Progress
