@@ -156,11 +156,11 @@ Action and structured-candidate graders do not support a separate verifier machi
 The command receives the conversation as JSON on standard input.
 The session's verifier deadline controls the full grading phase.
 
-| Reward source | Result |
-| --- | --- |
-| `StdoutReward` | Zero exit code and one finite number on standard output |
-| `ExitCodeReward` | Reward 1 for zero exit code, otherwise reward 0 |
-| `FileReward` | The first existing file supplies the scalar grade |
+| Reward source | Result | Origin / reason |
+| --- | --- | --- |
+| `StdoutReward` | Zero exit code and one finite number on standard output | Marin API choice: simple graders without reward files |
+| `ExitCodeReward` | Reward 1 for zero exit code, otherwise reward 0 | Marin API choice: pass/fail shell checks |
+| `FileReward` | The first existing file supplies the scalar grade | Harbor compatibility: existing Harbor task graders |
 
 `FileReward` accepts a number or a JSON object with the configured numeric key.
 A malformed first file is a verifier failure. The engine does not try a lower-priority file.
