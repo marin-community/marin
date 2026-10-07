@@ -8,10 +8,19 @@ from collections.abc import Callable, Mapping
 from pathlib import PurePosixPath
 
 from shellbox.machine import Machine, MachineFactory
-from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import AnswerType, EnvironmentRequirements, TaskSpec
+from taskcompendium.runtime.task_grading import resolve_verifier
 from taskcompendium.shell_verifier import ShellVerifierSpec
-from verifyit.spec import DEFAULT_OUTPUT, GotestSpec, JunitSpec, PredictedActionSpec, PytestSpec, ScriptSpec, StdioSpec
+from verifyit.spec import (
+    DEFAULT_OUTPUT,
+    GotestSpec,
+    JunitSpec,
+    PredictedActionSpec,
+    PytestSpec,
+    ScriptSpec,
+    StdioSpec,
+    StructuredExactSpec,
+)
 
 from rolloutengine.contracts import TaskSession
 from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TaskSessionSpec
@@ -97,6 +106,8 @@ def validate_lowered_task(
         return
     if isinstance(verifier, PredictedActionSpec):
         raise NotImplementedError("Predicted-action grading does not support a separate verifier machine")
+    if isinstance(verifier, StructuredExactSpec) or task.answer_type == AnswerType.JSON:
+        raise NotImplementedError("Structured candidate grading does not support a separate verifier machine")
     paths = task.output_paths
     if task.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}:
         if isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec):

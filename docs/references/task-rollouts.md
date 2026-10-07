@@ -135,6 +135,11 @@ The built-in session accepts shared VerifyIT verifier kinds, private shell grade
 Application sessions use private `ExternalVerifierSpec` parameters from `taskcompendium.importers.skyrl`.
 Group grading belongs to SkyRL.
 
+Text, JSON, and final-action submissions use typed grading contracts.
+A malformed submission receives `Outcome.SUBMISSION_FAILURE` with reward 0.
+File submissions use captured workspace files.
+Action and structured-candidate graders do not support a separate verifier machine.
+
 `ShellVerifierSpec` defines a grader command, collect commands, artifacts, and a reward source.
 The command receives the conversation as JSON on standard input.
 The session's verifier deadline controls the full grading phase.
@@ -199,7 +204,7 @@ from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 
 
 async def run_task(
@@ -208,7 +213,7 @@ async def run_task(
     engine = ShellboxRolloutEngine(
         model,
         {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     return await engine.run(lowered)
 ```

@@ -77,7 +77,10 @@ def grade_task(
     requirements = specification.verifier.environment_requirements
     if requirements != EnvironmentRequirements() and requirements.docker_image is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Private grading environment is unavailable")
-    candidate_mode = supports_candidate_mode(specification.verifier.kind)
+    candidate_mode = supports_candidate_mode(specification.verifier.kind) and specification.answer_type not in {
+        AnswerType.FILE,
+        AnswerType.WORKSPACE_STATE,
+    }
     if candidate_mode and requirements.docker_image:
         return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare an isolated grader")
     attempt = GradingAttempt(conversation)

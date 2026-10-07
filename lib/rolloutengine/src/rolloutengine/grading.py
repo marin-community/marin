@@ -18,11 +18,12 @@ from uuid import uuid4
 from harbor_config.env import resolve_env_vars
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
-from taskcompendium.grading import grade_task, resolve_verifier
+from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType, TaskResource
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.task_grading import grade_task, resolve_verifier
 from taskcompendium.shell_verifier import (
     ArtifactKind,
     ExitCodeReward,
@@ -32,7 +33,7 @@ from taskcompendium.shell_verifier import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.submission import Submission, extract_answer
+from taskcompendium.submission import SubmissionConvention
 from verifyit.spec import DEFAULT_OUTPUT, GotestSpec, JunitSpec, PytestSpec, ScriptSpec, StdioSpec, render_spec
 
 from rolloutengine.cleanup import _Cleanup
@@ -46,7 +47,7 @@ VERDICT_PATH = "/logs/verifier/verdict.json"
 
 async def _grade_rollout(
     lowered: LoweredTaskSpec,
-    convention: Submission,
+    convention: SubmissionConvention,
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[str, MachineFactory],
@@ -136,7 +137,7 @@ async def _capture_outputs(machine: Machine | None, paths: tuple[str, ...], time
 
 async def _verifyit_grade(
     lowered: LoweredTaskSpec,
-    convention: Submission,
+    convention: SubmissionConvention,
     messages: tuple[dict[str, Any], ...],
     evidence: RuntimeEvidence,
     machine: Machine,
@@ -147,10 +148,12 @@ async def _verifyit_grade(
     if task.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}:
         assert not isinstance(spec, StdioSpec | PytestSpec | JunitSpec | GotestSpec)
         try:
-            answer = extract_answer(chat_conversation(list(messages)).events[-1], convention)
-        except (TypeError, ValueError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        files[DEFAULT_OUTPUT if isinstance(spec, ScriptSpec) else spec.output] = answer.encode()
+            submission = convention.extract(GradingAttempt(chat_conversation(list(messages))))
+        except SubmissionFailure as error:
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        if not isinstance(submission, TextSubmission):
+            raise TypeError("Runtime text grading requires a text submission")
+        files[DEFAULT_OUTPUT if isinstance(spec, ScriptSpec) else spec.output] = submission.value.encode()
     await _install_resources(machine, task.resources.verifier, root="/tests")
     await _install_resources(
         machine,

@@ -12,14 +12,16 @@ from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import AnswerType, AssistantToolCalls, TaskSpec
+from taskcompendium.runtime.task_grading import resolve_verifier
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
-    AnswerFormat,
+    AnswerCall,
     FinalAction,
-    Submission,
+    JsonValueAnswer,
+    SubmissionConvention,
     answer_call_tool,
     conversation_messages,
-    submission_compatible,
+    submission_compatibility,
     submission_instruction,
 )
 
@@ -44,13 +46,15 @@ SHELL_TOOL = {
 }
 
 
-def _task_submission(task: TaskSpec, convention: Submission) -> Submission:
+def _task_submission(task: TaskSpec, convention: SubmissionConvention) -> SubmissionConvention:
     if task.answer_type == AnswerType.NATIVE_ACTION and not isinstance(convention, FinalAction):
         return FinalAction(id="final-action")
+    if task.answer_type == AnswerType.JSON and not isinstance(convention, JsonValueAnswer):
+        return JsonValueAnswer(id="json-value")
     return convention
 
 
-def session_start(task: TaskSpec, convention: Submission) -> SessionStart:
+def session_start(task: TaskSpec, convention: SubmissionConvention) -> SessionStart:
     """Render only public task fields, with the selected final-action limits."""
     convention = _task_submission(task, convention)
     messages = conversation_messages(task.context)
@@ -64,12 +68,16 @@ def session_start(task: TaskSpec, convention: Submission) -> SessionStart:
         AnswerType.STATE,
         AnswerType.WORKSPACE_STATE,
     }:
-        if not submission_compatible(task, convention):
+        if task.verifier.kind not in {"shell", "skipped"}:
+            compatibility = submission_compatibility(task, convention, resolved_verifier=resolve_verifier(task.verifier))
+            if not compatibility.compatible:
+                raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
+        elif not convention.supports(task.answer_type):
             raise ValueError("Submission convention is incompatible with the task")
         instruction = submission_instruction(convention)
         if instruction:
             messages.append({"role": "user", "content": instruction})
-        if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        if isinstance(convention, AnswerCall):
             tools.append(answer_call_tool())
             if not task.final_tools:
                 options.update(tool_choice="required", parallel_tool_calls=False)
@@ -94,7 +102,7 @@ class _ShellboxTaskSession:
         self,
         lowered: LoweredTaskSpec,
         machine: Machine | None,
-        convention: Submission,
+        convention: SubmissionConvention,
         factories: Mapping[str, MachineFactory],
         cleanup: _Cleanup,
         resources: AsyncExitStack,
@@ -119,9 +127,7 @@ class _ShellboxTaskSession:
         observations = []
         final_tools = {function.name for function in self.lowered.task.final_tools}
         for call in message.calls:
-            if call.name in final_tools or (
-                self.convention.answer_format == AnswerFormat.ANSWER_CALL and call.name == ANSWER_CALL_NAME
-            ):
+            if call.name in final_tools or (isinstance(self.convention, AnswerCall) and call.name == ANSWER_CALL_NAME):
                 return Transition(done=True)
             if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
                 observations.append(

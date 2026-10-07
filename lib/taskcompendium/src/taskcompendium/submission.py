@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from verifyit.candidate import CandidateSpec
+from verifyit.spec import Spec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.grading_contract import (
@@ -185,11 +187,17 @@ class SubmissionCompatibility:
         return not self.reasons
 
 
-def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
-    """Explain which parts of the task a submission convention cannot carry."""
+def submission_compatibility(
+    specification: TaskSpec, convention: SubmissionConvention, *, resolved_verifier: Spec | None = None
+) -> SubmissionCompatibility:
+    """Explain which parts of the task a submission convention cannot carry.
+
+    Execution runtimes supply their resolved verifier. Other callers use pure grading.
+    """
     if not convention.supports(specification.answer_type):
         return SubmissionCompatibility((f"{type(convention).__name__} cannot carry {specification.answer_type.value}",))
-    accepted = accepted_submission_types(resolve_verifier(specification.verifier))
+    verifier = resolve_verifier(specification.verifier) if resolved_verifier is None else resolved_verifier
+    accepted = accepted_submission_types(verifier) if isinstance(verifier, CandidateSpec) else (TextSubmission,)
     if not any(produced in accepted for produced in convention.submission_types):
         return SubmissionCompatibility(("Submission envelope is not accepted by the selected verifier",))
     if isinstance(convention, FinalAction):

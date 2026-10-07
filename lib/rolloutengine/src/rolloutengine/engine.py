@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.submission import Submission, conversation_messages
+from taskcompendium.submission import SubmissionConvention, conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
@@ -56,7 +56,7 @@ class ShellboxRolloutEngine:
         model: Callable[[ModelRequest], Awaitable[ModelTurn]],
         factories: Mapping[str, MachineFactory],
         *,
-        convention: Submission,
+        convention: SubmissionConvention,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
     ):
         self.model = model

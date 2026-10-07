@@ -12,8 +12,8 @@ from typing import Any, Protocol
 from pydantic import JsonValue
 from zephyr.writers import write_jsonl_file
 
+from taskcompendium.chat import assistant_message
 from taskcompendium.models import AssistantToolCalls
-from taskcompendium.pipeline.chat_messages import assistant_message
 from taskcompendium.pipeline.models import ReviewStatus
 
 

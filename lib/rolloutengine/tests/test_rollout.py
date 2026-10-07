@@ -34,9 +34,9 @@ from taskcompendium.shell_verifier import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.submission import AnswerFormat, FinalAction, SubmissionConvention
+from taskcompendium.submission import AnswerCall, FinalAction, PlainText
 from verifyit.candidate import grade_text_candidate
-from verifyit.spec import NumericSpec, StdioSpec, parse_spec
+from verifyit.spec import NumericSpec, StdioSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
@@ -157,7 +157,7 @@ def engine(model, factories=None, *, sessions=None, convention=None) -> Shellbox
     return ShellboxRolloutEngine(
         model.complete,
         {} if factories is None else factories,
-        convention=convention or SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=convention or PlainText(id="plain"),
         sessions=sessions,
     )
 
@@ -180,6 +180,27 @@ async def test_lowering_preserves_task_and_produces_private_grade_with_training_
     assert result.response_token_ids == (20,)
     assert result.loss_mask == (1,)
     assert result.logprobs == (-0.5,)
+    assert "12" not in json.dumps(model.requests[0].messages)
+
+
+@pytest.mark.parametrize(
+    "answer,status,reward",
+    [
+        ('{"value":12}', Outcome.GRADED, 1.0),
+        ('{"value":13}', Outcome.GRADED, 0.0),
+        ('{"value":12,"value":13}', Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+async def test_json_answer_grades_typed_evidence_and_rejects_duplicate_keys(answer, status, reward):
+    task = arithmetic_task().model_copy(
+        update={
+            "answer_type": AnswerType.JSON,
+            "verifier": grader_package(StructuredExactSpec(expected={"value": 12})).verifier,
+        }
+    )
+    model = ReplayModel([{"role": "assistant", "content": answer}])
+    record = await engine(model).run(lowered(task))
+    assert (record.grade.status, record.grade.reward) == (status, reward)
     assert "12" not in json.dumps(model.requests[0].messages)
 
 
@@ -256,6 +277,24 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
 
 
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_candidate_verifier_grades_captured_file_without_text_submission(answer, reward):
+    task = arithmetic_task().model_copy(
+        update={
+            "answer_type": AnswerType.FILE,
+            "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
+            "output_paths": ("/app/answer.txt",),
+        }
+    )
+    model = ReplayModel(
+        [shell_call(f"mkdir -p /app && echo {answer} > /app/answer.txt"), {"role": "assistant", "content": "Done."}]
+    )
+    record = await engine(model, {"local": ShellSimMachineFactory()}).run(lowered(task, machine=machine_runtime()))
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
+    assert record.loss_mask == (1, 0, 0, 1)
+    assert "12" not in json.dumps(model.requests[0].messages)
+
+
 async def test_answer_call_retains_submission_tool_and_finishes():
     task = arithmetic_task().model_copy(
         update={"environment_requirements": EnvironmentRequirements(capabilities=("shell",))}
@@ -274,7 +313,7 @@ async def test_answer_call_retains_submission_tool_and_finishes():
     result = await engine(
         model,
         {"local": ShellSimMachineFactory()},
-        convention=SubmissionConvention(id="answer", answer_format=AnswerFormat.ANSWER_CALL),
+        convention=AnswerCall(id="answer"),
     ).run(lowered(task, machine=machine_runtime()))
     assert result.grade.reward == 1.0
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["submit_answer", "shell"]
@@ -282,7 +321,7 @@ async def test_answer_call_retains_submission_tool_and_finishes():
 
 @pytest.mark.parametrize(
     "calls,expected",
-    [(["finish"], Outcome.GRADED), (["finish", "finish"], Outcome.EXTRACTION_ERROR), ([], Outcome.EXTRACTION_ERROR)],
+    [(["finish"], Outcome.GRADED), (["finish", "finish"], Outcome.SUBMISSION_FAILURE), ([], Outcome.SUBMISSION_FAILURE)],
 )
 async def test_native_action_preserves_configured_call_limits(calls, expected):
     task = arithmetic_task().model_copy(
@@ -420,7 +459,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
     runner = ShellboxRolloutEngine(
         complete,
         {"local": ShellSimMachineFactory()},
-        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        convention=PlainText(id="plain"),
     )
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime()))
@@ -908,8 +947,21 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
             await machine.run(Command(("true",)))
 
 
-@pytest.mark.parametrize("answer,status", [("12", "scored"), ("13", "scored"), ("12", "unknown")])
-async def test_separate_verifyit_grader_uses_captured_outputs_without_worker_files(answer, status):
+@pytest.mark.parametrize(
+    "answer_type,answer,status,expected_status,expected_reward",
+    [
+        (AnswerType.FILE, "12", "scored", Outcome.GRADED, 1.0),
+        (AnswerType.FILE, "13", "scored", Outcome.GRADED, 0.0),
+        (AnswerType.FILE, "12", "unknown", Outcome.INFRA_ERROR, None),
+        (AnswerType.NUMBER, "12", "scored", Outcome.GRADED, 1.0),
+        (AnswerType.NUMBER, "13", "scored", Outcome.GRADED, 0.0),
+        (AnswerType.NUMBER, "12", "unknown", Outcome.INFRA_ERROR, None),
+        (AnswerType.NUMBER, " ", "scored", Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_files(
+    answer_type, answer, status, expected_status, expected_reward
+):
     factory = RecordingShellSimFactory()
 
     class VerifierMachine:
@@ -921,7 +973,13 @@ async def test_separate_verifyit_grader_uses_captured_outputs_without_worker_fil
             if command.argv[0] != "python3":
                 return await self.machine.run(command)
             visibility = await self.machine.run(
-                Command(("sh", "-c", "test -f /workspace/common && test ! -f /workspace/worker"))
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        "test -f /workspace/common && test ! -f /workspace/worker && test -f /workspace/verifier-only",
+                    )
+                )
             )
             assert visibility.exit_code == 0
             spec = await self.machine.run(Command(("cat", "/tests/verifier.toml")))
@@ -949,9 +1007,18 @@ async def test_separate_verifyit_grader_uses_captured_outputs_without_worker_fil
 
     task = arithmetic_task().model_copy(
         update={
-            "answer_type": AnswerType.FILE,
+            "answer_type": answer_type,
+            "verifier": (
+                arithmetic_task().verifier.model_copy(
+                    update={
+                        "environment_requirements": EnvironmentRequirements(
+                            setup_commands=("echo private > /workspace/verifier-only",)
+                        )
+                    }
+                )
+            ),
             "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
-            "output_paths": ("/app/answer.txt",),
+            "output_paths": ("/app/answer.txt",) if answer_type == AnswerType.FILE else (),
             "resources": ResourceGroups(
                 all=(inline_resource("workspace/common", b"public"),),
                 worker=(inline_resource("workspace/worker", b"task-only"),),
@@ -963,20 +1030,20 @@ async def test_separate_verifyit_grader_uses_captured_outputs_without_worker_fil
             shell_call(f"test ! -f /tests/verifier.toml && mkdir -p /app && echo {answer} > /app/answer.txt"),
             {"role": "assistant", "content": "Done."},
         ]
+        if answer_type == AnswerType.FILE
+        else [{"role": "assistant", "content": answer}]
     )
     record = await engine(model, {"local": Factory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
-    if status == "unknown":
-        assert (record.grade.status, record.grade.reward, record.grade.failure) == (
-            Outcome.INFRA_ERROR,
-            None,
-            GradingFailure.INVALID_REWARD,
-        )
+    assert (record.grade.status, record.grade.reward) == (expected_status, expected_reward)
+    if expected_status == Outcome.INFRA_ERROR:
+        assert record.grade.failure == GradingFailure.INVALID_REWARD
+    if answer_type == AnswerType.FILE:
+        assert record.loss_mask == (1, 0, 0, 1)
+        assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
     else:
-        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, float(answer == "12"))
-    assert record.loss_mask == (1, 0, 0, 1)
-    assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+        assert record.loss_mask == (1,)
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
