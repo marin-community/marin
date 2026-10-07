@@ -82,7 +82,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.fast_track.sparse_attention import sparse_index_attention
+from experiments.grug.fast_track.sparse_attention import Lightning, SparseIndex, sparse_index_attention
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -987,6 +987,9 @@ class GrugModelConfig:
     ``mla_sparse_topk`` best index matches (``sparse_attention.py``; a slow dense emulation)."""
     mla_sparse_topk: int = 0
     mla_sparse_index_dim: int = 32
+    mla_sparse_index: SparseIndex = SparseIndex.FOLLOW
+    mla_sparse_index_heads: int = 4
+    mla_sparse_kl_weight: float = 1.0
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -1258,10 +1261,7 @@ class GrugModelConfig:
     signal heads sharing a value head; output ``H_signal - lambda * H_noise``. 0: off."""
     mla_diff_attn: bool = False
     """Differential attention (DIFF Transformer, arXiv 2410.05258) on the MLA layers:
-    ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection
-    (``w_q2`` / ``w_uk2``, same head_dim and q/k transforms), ``lambda = exp(lq1 . lk1) - exp(lq2 . lk2) +
-    lambda_init``, ``lambda_init = 0.8 - 0.6 exp(-0.3 (layer - 1))`` (1-indexed layer), and each head's output
-    RMS-normalized and scaled by ``1 - lambda_init``."""
+    ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection."""
     attn_res_final_signed: bool = False
     """Backout-style signed correction on the final AttnRes gate: ``final = mix + sum_n c_n * source_n`` with
     learned ``c`` (zero-init), so the lm_head input can subtract a source (softmax weights can't)."""
@@ -1645,11 +1645,7 @@ class GrugModelConfig:
     Needed at d1024+ (the dense path's ~12 GiB of temporaries OOMs there); slower at d512 (+6.5% step)."""
     ngram_stat_rows: int = 0
     """Rows per n-gram order of a fixed-encoder *statistic* table, its own AttnRes source (0: off). Row h holds
-    ``[sum of code(y), count]`` over every occurrence of an n-gram hashing to h followed by next token y, where
-    ``code`` is a fixed random ``[vocab, ngram_stat_dim]`` matrix. The table is never trained: the trainer adds
-    each batch after its step (``write_ngram_stats``), so a row means the same thing at every step. The model
-    reads ``[sum / count, log1p(count)]`` of every order through a learned reader (see
-    .agents/projects/stable-compressor-memory.md)."""
+    ``[sum of code(y), count]`` of the next tokens y after n-grams hashing to h, filled by ``write_ngram_stats``."""
     ngram_stat_dim: int = 64
     """Width of the fixed next-token code of the statistic table (the table stores this plus a count column)."""
     ngram_stat_orders: tuple[int, ...] = (2,)
@@ -2344,6 +2340,9 @@ class CausalSelfAttention(eqx.Module):
     w_qf: Float[Array, "D FC"] | None  # mla_future_heads: each future head's look-ahead query
     w_sidx: Float[Array, "D R"] | None  # mla_sparse_topk: the tied sparse index projection
     sparse_lam: Float[Array, " N"] | None  # per-head weight on the index score of selected keys
+    w_lq: Float[Array, "D GR"] | None  # SparseIndex.LIGHTNING: indexer queries, key and head weights
+    w_lk: Float[Array, "D R"] | None
+    w_lw: Float[Array, "D G"] | None
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2374,6 +2373,7 @@ class CausalSelfAttention(eqx.Module):
             kv_mix = "kv" in cfg.latent_mix_sites
             match_dim = cfg.mla_shared_match_dim
             appended = cfg.mla_match_append != MatchAppend.OFF
+            lightning = cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.LIGHTNING
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             shared_kvl = cfg.kv_shared_latent_dim
             kvl = cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)  # what w_uk / w_uv read
@@ -2462,10 +2462,24 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 w_sidx=(
                     reshard(_init_weight(random.fold_in(k_q, 10), (d, cfg.mla_sparse_index_dim), std), P(None, None))
-                    if cfg.mla_sparse_topk
+                    if cfg.mla_sparse_topk and not lightning
                     else None
                 ),
-                sparse_lam=jnp.ones((n,), jnp.float32) if cfg.mla_sparse_topk else None,
+                **{
+                    name: (
+                        reshard(_init_weight(random.fold_in(k_q, 11 + i), (d, width), std), P(None, None))
+                        if lightning
+                        else None
+                    )
+                    for i, (name, width) in enumerate(
+                        [
+                            ("w_lq", cfg.mla_sparse_index_heads * cfg.mla_sparse_index_dim),
+                            ("w_lk", cfg.mla_sparse_index_dim),
+                            ("w_lw", cfg.mla_sparse_index_heads),
+                        ]
+                    )
+                },
+                sparse_lam=jnp.ones((n,), jnp.float32) if cfg.mla_sparse_topk and not lightning else None,
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2610,6 +2624,9 @@ class CausalSelfAttention(eqx.Module):
             w_qf=None,
             w_sidx=None,
             sparse_lam=None,
+            w_lq=None,
+            w_lk=None,
+            w_lw=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2970,8 +2987,25 @@ class CausalSelfAttention(eqx.Module):
             topk = self.cfg.mla_sparse_topk
             idx = jnp.zeros((*x.shape[:2], 1)) if self.w_sidx is None else rms_norm(_proj(self.cfg, x, self.w_sidx))
             lam = jnp.zeros((q.shape[2],)) if self.sparse_lam is None else self.sparse_lam
+            light = None
+            if self.w_lq is not None and self.w_lk is not None and self.w_lw is not None:
+                xs = jax.lax.stop_gradient(x)
+                g = self.cfg.mla_sparse_index_heads
+                lq = rearrange(_proj(self.cfg, xs, self.w_lq), "... (g r) -> ... g r", g=g)
+                light = Lightning(
+                    lq, _proj(self.cfg, xs, self.w_lk), _proj(self.cfg, xs, self.w_lw), self.cfg.mla_sparse_kl_weight
+                )
             attn_out = sparse_index_attention(
-                q, k, kernel_v, rel_bias, sconv_segment_ids, idx, lam, window=self.cfg.mla_sparse_window, topk=topk
+                q,
+                k,
+                kernel_v,
+                rel_bias,
+                sconv_segment_ids,
+                idx,
+                lam,
+                light,
+                window=self.cfg.mla_sparse_window,
+                topk=topk,
             )
         else:
             attn_out = _attend(q, k)[..., :head_dim]

@@ -6,12 +6,16 @@
 Each query ``i`` attends to its own document's last ``window`` keys, the document's first key (the sink) and the
 followers ``m + 1`` of the ``topk`` earlier positions ``m`` whose index vectors best match its own
 (``score = idx_i . idx_m / sqrt(R)``, a tied low-rank similarity). Selected keys also get ``lam_h * score`` on their
-logit, which is how the index learns. The scores are computed densely in query chunks (rematerialised), so this
-measures quality, not speed.
+logit, which is how the index learns. With a ``Lightning`` indexer (DeepSeek-V3.2's DSA) the selection is instead
+the ``topk`` keys with the best ``I(i, s) = sum_h w_h(x_i) relu(q_h(x_i) . k(x_s))``, trained only by an injected
+``KL(main attention || softmax(I))`` gradient. The scores are computed densely in query chunks (rematerialised), so
+this measures quality, not speed.
 """
 
 import math
 from collections.abc import Callable
+from enum import StrEnum
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -23,6 +27,44 @@ from levanter.kernels.pallas.autotune_utils import named_sharding_of
 _QUERY_CHUNK = 256
 
 
+class SparseIndex(StrEnum):
+    """How ``mla_sparse_topk`` picks the far keys."""
+
+    FOLLOW = "follow"
+    """The followers of the best tied low-rank matches, scored onto their logits."""
+    LIGHTNING = "lightning"
+    """DSA's lightning indexer over the keys themselves, trained by KL to the dense attention."""
+
+
+class Lightning(NamedTuple):
+    """DSA lightning-indexer inputs (computed from a stop-gradient attention input)."""
+
+    q: Float[Array, "B S G R"]
+    k: Float[Array, "B S R"]
+    w: Float[Array, "B S G"]
+    kl_weight: float
+
+
+@jax.custom_vjp
+def _inject_kl(out: jax.Array, index_logits: jax.Array, target: jax.Array, scale: jax.Array) -> jax.Array:
+    """Identity on ``out``; backward gives ``index_logits`` the gradient of ``scale * KL(target || softmax)``."""
+    del index_logits, target, scale
+    return out
+
+
+def _inject_kl_fwd(out, index_logits, target, scale):
+    return out, (index_logits, target, scale)
+
+
+def _inject_kl_bwd(res, g):
+    index_logits, target, scale = res
+    grad = scale * (jax.nn.softmax(index_logits, axis=-1) - target)
+    return g, grad.astype(index_logits.dtype), jnp.zeros_like(target), jnp.zeros_like(scale)
+
+
+_inject_kl.defvjp(_inject_kl_fwd, _inject_kl_bwd)
+
+
 def _document_starts(segment_ids: Int[Array, "B S"]) -> jax.Array:
     """Each token's document start position ``[B, S]``."""
     seq = segment_ids.shape[1]
@@ -31,7 +73,7 @@ def _document_starts(segment_ids: Int[Array, "B S"]) -> jax.Array:
     return jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
 
 
-def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, *, window: int, topk: int):
+def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, lightning, *, window: int, topk: int):
     batch, seq, heads, head_dim = q.shape
     chunk = min(_QUERY_CHUNK, seq)
     if seq % chunk:
@@ -61,7 +103,16 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, *, window: int, top
         dist = qi[None, :, None] - keys[None, None, :]
         allowed = same & (dist >= 0) & ((dist < window) | (keys[None, None, :] == start_q[:, :, None]))
         bias = jnp.zeros(allowed.shape, jnp.float32)
-        if topk:
+        index_logits = None
+        if lightning is not None:
+            lq = jax.lax.dynamic_slice_in_dim(lightning.q, c0, chunk, axis=1).astype(jnp.float32)
+            lw = jax.lax.dynamic_slice_in_dim(lightning.w, c0, chunk, axis=1).astype(jnp.float32)
+            per_head = jax.nn.relu(jnp.einsum("bqgr,bkr->bqgk", lq, lightning.k.astype(jnp.float32)))
+            visible = same & (dist >= 0)
+            index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1e9)
+            kth = jax.lax.top_k(index_logits, topk)[0][..., -1:]
+            allowed = allowed | (visible & (index_logits >= kth))
+        elif topk:
             idx_q = jax.lax.dynamic_slice_in_dim(index, c0, chunk, axis=1)
             score = jnp.einsum("bqr,bkr->bqk", idx_q, index)  # [B, C, S] against candidate m
             # Candidate m's follower m + 1 must be visible (m + 1 <= i) and outside the local window.
@@ -75,9 +126,17 @@ def _sparse_math(q, k, v, rel_bias, segment_ids, index, lam, *, window: int, top
             allowed = allowed | chosen
             bias = jnp.where(chosen, score, 0.0)
         logits = logits + bias[:, None] * lam.astype(jnp.float32)[None, :, None, None]
+        dense = logits
         logits = jnp.where(allowed[:, None], logits, -1e9)
         weights = jax.nn.softmax(logits, axis=-1)
-        return jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
+        out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
+        if index_logits is None:
+            return out
+        # DSA target: the dense causal attention, summed over heads and renormalised.
+        visible = same & (dist >= 0)
+        target = jnp.mean(jax.nn.softmax(jnp.where(visible[:, None], dense, -1e9), axis=-1), axis=1)
+        kl_scale = jnp.asarray(lightning.kl_weight / (batch * seq), jnp.float32)
+        return _inject_kl(out, index_logits, jax.lax.stop_gradient(target), kl_scale)
 
     chunks = jax.lax.map(one_chunk, jnp.arange(0, seq, chunk))  # [n, B, C, H, D]
     return jnp.moveaxis(chunks, 0, 1).reshape(batch, seq, heads, v.shape[-1])
@@ -91,6 +150,7 @@ def sparse_index_attention(
     segment_ids: Int[Array, "B S"] | None,
     index: Float[Array, "B S R"],
     lam: Float[Array, " H"],
+    lightning: Lightning | None = None,
     *,
     window: int,
     topk: int,
@@ -101,7 +161,7 @@ def sparse_index_attention(
     math_fn = lambda *a: _sparse_math(*a, window=window, topk=topk)  # noqa: E731
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return math_fn(q, k, v, rel_bias, segment_ids, index, lam)
+        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
-    return wrapped(q, k, v, rel_bias, segment_ids, index, lam)
+    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning)
