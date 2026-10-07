@@ -69,6 +69,7 @@ POLICY_VALUES = LoopPolicy(
     validation=ValidationPolicy(
         k=8,
         adversary_k=2,
+        adversary_output_tokens=32768,
         roles=tuple(AdversaryRole),
         band=CalibrationBand(0.125, 0.875),
         sampling=SAMPLING,

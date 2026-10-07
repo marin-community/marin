@@ -163,6 +163,24 @@ async def test_a_repair_that_rebuilds_the_same_task_is_a_failed_revision_and_the
     assert terminal_event.attrs["kind"] == RejectKind.BUDGET
 
 
+async def test_a_shortcut_that_reads_the_input_and_solves_is_noted_and_the_item_accepted(loop, programs, fake_glm):
+    proposal = programs.proposal()
+    programs.submit(fake_glm, programs.source())
+    loop.model.roles[AdversaryRole.SHORTCUT] = CORRECT
+    loop.model.reads = frozenset({AdversaryRole.SHORTCUT})
+
+    async with loop.services() as services:
+        terminal = await run_item(proposal, programs.policy(), services)
+    item_id = item_id_for(proposal)
+
+    assert terminal is Terminal.ACCEPTED
+    (adversaries,) = events_of(loop, item_id, EventKind.ADVERSARIES_RUN)
+    assert (adversaries.attrs["shortcut_passes"], adversaries.attrs["leak_sentinel"]) == ("1", "1")
+    (decided,) = events_of(loop, item_id, EventKind.DECIDED)
+    assert decided.attrs["notes"] == "shortcut_passed"
+    assert len(fake_glm.requests) == 1
+
+
 async def test_a_staged_draft_is_repaired_into_a_single_stage_task_without_validation(loop, programs, fake_glm):
     proposal = programs.proposal()
     programs.submit(fake_glm, programs.source(staged=True))

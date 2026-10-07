@@ -157,7 +157,9 @@ or on a package the order does not name.
   `LLM_CALL` output tokens. A build the machine host failed is a `BUILD_INFRASTRUCTURE` event
   (`cause`, an `InfrastructureCause`); `build_host_failures(entries) -> Counter[InfrastructureCause]`
   counts an item's over every launch, and an `ABANDONED` terminal carries `causes`
-  (`cause:count` pairs) for the retries it spent.
+  (`cause:count` pairs) for the retries it spent. `ADVERSARIES_RUN` counts each role's give-ups
+  (`<role>_sentinel`, by `calibration.gave_up`), and `DECIDED` names the kinds of the noted adversary
+  passes in `notes`.
 - `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
   `run_item(proposal, policy, services) -> Terminal`: one idea's proposals, and one proposal carried
   to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `LoopServices[IdeaT]` holds what a run's items

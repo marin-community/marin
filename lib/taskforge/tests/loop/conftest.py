@@ -39,7 +39,7 @@ from taskforge.triage.checks import CheckContext, CheckResult
 from taskforge.triage.program import Repair as TriageRepair
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision, Verdict
-from taskforge.validate.adversary import ROLE_PREAMBLES, SENTINEL_REPLIES, AdversaryRole
+from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
@@ -260,16 +260,31 @@ ROLE_REPLIES = {
 }
 
 
+READ_QUESTION = {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {"name": "shell", "arguments": json.dumps({"command": "cat /workspace/question.txt"})},
+        }
+    ],
+}
+
+
 @dataclass
 class RolloutFake:
     """Replies with one text turn: solver trials cycle through ``solver``; a role's trials reply ``roles[role]``.
 
-    ``error`` makes every call raise it instead; a role request first awaits ``before_role``. Token ids
-    extend each request's served prefix.
+    A role in ``reads`` first runs ``cat`` on the question file, then replies. ``error`` makes every call
+    raise it instead; a role request first awaits ``before_role``. Token ids extend each request's served
+    prefix.
     """
 
     solver: tuple[str, ...] = (CORRECT, WRONG)
     roles: dict[AdversaryRole, str] = field(default_factory=lambda: dict(ROLE_REPLIES))
+    reads: frozenset[AdversaryRole] = frozenset()
     error: Callable[[], BaseException] | None = None
     before_role: Callable[[], Awaitable[None]] | None = None
     calls: int = 0
@@ -278,7 +293,7 @@ class RolloutFake:
         if self.error is not None:
             raise self.error()
         system = next((m["content"] for m in request.messages if m["role"] == "system"), "")
-        role = next((role for role, preamble in ROLE_PREAMBLES.items() if system.startswith(preamble)), None)
+        role = next((role for role in AdversaryRole if SENTINEL_REPLIES[role] in system), None)
         if role is None:
             reply = self.solver[self.calls % len(self.solver)]
             self.calls += 1
@@ -287,6 +302,8 @@ class RolloutFake:
                 await self.before_role()
             reply = self.roles[role]
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
+        if role in self.reads and request.messages[-1]["role"] != "tool":
+            return ModelTurn(READ_QUESTION, prompt, (21,), (-0.5,), "tool_calls")
         return ModelTurn({"role": "assistant", "content": reply}, prompt, (20,), (-0.5,), "stop")
 
 
@@ -324,6 +341,7 @@ def validation_policy() -> ValidationPolicy:
     return ValidationPolicy(
         k=4,
         adversary_k=1,
+        adversary_output_tokens=32768,
         roles=tuple(AdversaryRole),
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),

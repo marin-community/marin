@@ -86,8 +86,8 @@ from taskforge.review.rules import ItemHistory, decide, staged_repair
 from taskforge.triage.checks import Check, CheckContext
 from taskforge.triage.program import RubricProgram, evaluate
 from taskforge.triage.verdict import ModelCall, TriageDecision, Verdict
-from taskforge.validate.adversary import SENTINEL_REPLIES, run_adversaries
-from taskforge.validate.calibration import final_reply, solved, summarize, write_summary
+from taskforge.validate.adversary import run_adversaries
+from taskforge.validate.calibration import Finding, gave_up, solved, summarize, write_summary
 from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
@@ -585,12 +585,9 @@ async def _trials(item: _Item, state: ItemState) -> None:
         attrs: dict[str, str] = {}
         for role, outcomes in by_role.items():
             graded = [outcome for outcome in outcomes if isinstance(outcome, Graded)]
-            sentinel = SENTINEL_REPLIES.get(role)
             attrs[f"{role}_graded"] = str(len(graded))
             attrs[f"{role}_passes"] = str(sum(solved(outcome) for outcome in graded))
-            attrs[f"{role}_sentinel"] = str(
-                sum(sentinel is not None and final_reply(outcome.rollout) == sentinel for outcome in graded)
-            )
+            attrs[f"{role}_sentinel"] = str(sum(gave_up(role, outcome.rollout) for outcome in graded))
         item.log.append(state.round, EventKind.ADVERSARIES_RUN, state.task_digest, **attrs)
 
     async with services.slots, asyncio.TaskGroup() as group:
@@ -616,14 +613,19 @@ def _decide(item: _Item, state: ItemState) -> None:
     evidence_dir.mkdir(parents=True, exist_ok=True)
     history = ItemHistory(state.repairs_used, policy.max_repairs, state.prior_band_findings)
     decision: Decision
+    notes: tuple[Finding, ...] = ()
     if draft.task.stages:
         decision = staged_repair(draft, history)
     else:
         summary = summarize(load_validation(draft, evidence_dir), policy.validation)
         write_summary(evidence_dir / CALIBRATION_FILE, summary)
         decision = decide(draft, summary, history)
+        notes = summary.notes
     write_decision(evidence_dir / DECISION_FILE, decision)
-    item.log.append(state.round, EventKind.DECIDED, state.task_digest, **_decision_attrs(decision, state, policy))
+    attrs = _decision_attrs(decision, state, policy)
+    item.log.append(
+        state.round, EventKind.DECIDED, state.task_digest, **attrs, notes=joined(note.kind for note in notes)
+    )
 
 
 def _decision_attrs(decision: Decision, state: ItemState, policy: LoopPolicy) -> dict[str, str]:
