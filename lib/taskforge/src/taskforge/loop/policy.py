@@ -34,7 +34,10 @@ class LoopPolicy:
         max_build_revisions: Author revisions per item after a build failure or a no-op repair.
         max_repairs: Review ``Repair`` decisions per item, staged repairs included.
         max_validation_retries: Review ``Retry`` decisions per item per launch; then the item is abandoned.
-        retry_backoff: Wait before a ``Retry`` re-enters validation; the k-th retry waits the k-th interval.
+        max_build_retries: Rebuilds of a program after consecutive host failures of its build, per
+            launch; then the item is abandoned. A host failure spends no build revision.
+        retry_backoff: Wait before a ``Retry`` re-enters validation, or a build the host failed is
+            retried; the k-th retry waits the k-th interval.
         output_token_budget: Output tokens of the item's ``LLM_CALL`` ledger entries (triage, author,
             build steps; not validation trials); an item over it is rejected for budget before its
             next authoring.
@@ -47,6 +50,7 @@ class LoopPolicy:
     max_build_revisions: int
     max_repairs: int
     max_validation_retries: int
+    max_build_retries: int
     retry_backoff: RetryBackoff
     output_token_budget: int
     validation: ValidationPolicy
@@ -60,6 +64,7 @@ class LoopPolicy:
             "max_build_revisions": self.max_build_revisions,
             "max_repairs": self.max_repairs,
             "max_validation_retries": self.max_validation_retries,
+            "max_build_retries": self.max_build_retries,
         }
         negative = sorted(name for name, value in bounds.items() if value < 0)
         if negative:

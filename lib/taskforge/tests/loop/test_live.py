@@ -63,6 +63,7 @@ POLICY_VALUES = LoopPolicy(
     max_build_revisions=3,
     max_repairs=1,
     max_validation_retries=2,
+    max_build_retries=2,
     retry_backoff=RetryBackoff(initial=60.0, maximum=900.0, factor=2.0, jitter=0.1),
     output_token_budget=1_000_000,
     validation=ValidationPolicy(
