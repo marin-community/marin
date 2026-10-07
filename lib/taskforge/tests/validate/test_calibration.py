@@ -306,6 +306,8 @@ NO_READ: tuple[str, ...] = ()
         (AMBIGUITY, {"gave_up": True}, FILE_FACTS, (DefectTier.NONE, None, "3")),
         (SHORTCUT, {"gave_up": True}, FILE_FACTS, (*NOTED_SHORTCUT, "7")),
         (SHORTCUT, {"inputs_consumed": NO_READ}, FILE_FACTS, (*REPAIR_SHORTCUT, "4")),
+        # The leak role is forbidden from reading the inputs, so its no-read pass is a leak.
+        (LEAK, {"inputs_consumed": NO_READ}, FILE_FACTS, (DefectTier.REPAIR, FindingKind.LEAK_PASSED, "4")),
         # No input read comes before the comparison.
         (
             AMBIGUITY,
@@ -371,13 +373,46 @@ async def test_a_tampering_pass_is_a_repair(trial, file_task, file_facts, rounds
 async def test_a_pass_that_never_read_the_inputs_is_a_repair(trial, file_task, file_facts, rounds):
     flood = await trial(graded_by(file_task, LENIENT_FILE_CHECK), f"seq 0 100 > {SUM}")
 
-    summary = summarize(evidence(file_facts, adversaries={LEAK: (flood,)}), rounds.policy(adversary_k=1))
+    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (flood,)}), rounds.policy(adversary_k=1))
 
     (finding,) = summary.findings
     assert finding.kind is FindingKind.SHORTCUT_PASSED and len(finding.new_controls) == 1
     assert finding.roles == (StepRole.GRADER, StepRole.CONTROLS)
     (assessment,) = summary.assessments
     assert (assessment.tier, assessment.rule) == (DefectTier.REPAIR, "4")
+
+
+async def test_a_leak_pass_that_never_read_the_inputs_condemns_where_it_leaked(trial, file_task, file_facts, rounds):
+    key = file("/workspace/.cache/expected", "60\n")
+    leaky = file_task.model_copy(
+        update={"environment": file_task.environment.model_copy(update={"files": (*file_task.environment.files, key)})}
+    )
+    leaked = await trial(leaky, f"cp {key.path} {SUM}")
+    assert isinstance(leaked, Graded) and leaked.reward == 1.0
+
+    summary = summarize(evidence(file_facts, adversaries={LEAK: (leaked,)}), rounds.policy(adversary_k=1))
+
+    (finding,) = summary.findings
+    assert finding.kind is FindingKind.LEAK_PASSED and len(finding.new_controls) == 1
+    assert {StepRole.FIXTURES, StepRole.ENVIRONMENT, StepRole.INSTRUCTIONS} <= set(finding.roles)
+    assert {StepRole.GRADER, StepRole.CONTROLS} <= set(finding.roles)
+    (assessment,) = summary.assessments
+    assert (assessment.tier, assessment.rule) == (DefectTier.REPAIR, "4")
+
+
+async def test_a_pass_that_submitted_an_honest_answer_ships_no_control(trial, lenient_text_task, rounds):
+    honest = await trial(lenient_text_task, reply="395")
+    leaked = await trial(lenient_text_task, reply="395")
+    facts = TaskFacts(False, ("/data/q.txt",), ("/data/q.txt",))
+
+    summary = summarize(
+        evidence(facts, solver=(honest,), adversaries={LEAK: (leaked,)}), rounds.policy(k=1, adversary_k=1)
+    )
+
+    (finding,) = [f for f in summary.findings if f.kind in DECISIVE]
+    assert finding.kind is FindingKind.LEAK_PASSED and finding.new_controls == ()
+    assert "not rendered as a control: it submitted an honest answer" in finding.detail
+    assert summary.assessments[0].signals.comparison is Comparison.MATCH
 
 
 async def test_a_shortcut_that_read_the_inputs_is_noted_not_a_finding(trial, file_task, file_facts, rounds):
