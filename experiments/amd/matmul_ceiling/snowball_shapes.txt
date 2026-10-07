@@ -1,14 +1,30 @@
-# Dense GEMMs of the 67B-A2B Snowball (June) model at one 4096-token sequence per GPU, as MxNxK.
+# Projection GEMMs of the 67B-A2B Snowball (June) model at one 4096-token sequence per GPU, as MxNxK.
 # hidden 2560, 20 query heads and 5 KV heads of dim 128, shared expert 2560, vocab 128256.
-# The routed-expert matmuls are ragged_dot and are not covered here.
+# The model runs k and v, and the shared expert's gate and up, as separate einsums; the fused lines time them
+# as one GEMM, which XLA may or may not form. The lm head lines are the unblocked shapes; the fused cross-entropy
+# loss may split the vocab into blocks.
+# Not covered: the routed-expert matmuls (ragged_dot) and the small router (N=256), attention gate (N=20) and
+# GatedNorm (rank 128) GEMMs.
 # Forward
 4096x2560x2560     # q projection
-4096x1280x2560     # k and v projections, combined
+4096x640x2560      # k projection
+4096x640x2560      # v projection
+4096x1280x2560     # k and v projections, fused
 4096x2560x2560     # attention output projection
-4096x5120x2560     # shared expert gate and up projections
+4096x2560x2560     # shared expert gate projection
+4096x2560x2560     # shared expert up projection
+4096x5120x2560     # shared expert gate and up projections, fused
 4096x2560x2560     # shared expert down projection
 4096x128256x2560   # lm head
 # Backward weight gradients, contracting over tokens
-2560x2560x4096     # q, attention output and shared expert down weight gradients
-2560x5120x4096     # shared expert gate and up weight gradients
+2560x2560x4096     # q, attention output and shared expert gate, up and down weight gradients
+2560x640x4096      # k and v weight gradients
+2560x1280x4096     # k and v weight gradients, fused
+2560x5120x4096     # shared expert gate and up weight gradients, fused
 2560x128256x4096   # lm head weight gradient
+# Backward input gradients, contracting over each projection's output
+4096x2560x2560     # q, attention output and shared expert gate, up and down input gradients
+4096x2560x640      # k and v input gradients
+4096x2560x1280     # k and v input gradients, fused
+4096x2560x5120     # shared expert gate and up input gradients, fused
+4096x2560x128256   # lm head input gradient
