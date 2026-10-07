@@ -173,8 +173,10 @@ Score bounds describe the verifier's native range. SkyRL's metric normalization 
 
 Harbor lowering uses package machine settings, agent users, total-turn deadlines, and verifier deadlines.
 Other session limits come from launch configuration.
-The Harbor importer rejects shared verifier mode, including the unset default.
+The Harbor importer accepts only separate verifier environments.
+An unset verifier mode without a separate environment selects shared mode and causes rejection.
 Shell grading requires a prebuilt, digest-pinned verifier image and a separate machine.
+Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so native Harbor execution is unsupported on Iris.
 Disabling Harbor verification removes private grader resources before lowering and selects skipped grading.
 Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.

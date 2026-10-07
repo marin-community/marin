@@ -12,7 +12,8 @@ The engine owns model calls, conversation and token accumulation, deadlines, and
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
 The supported scope is single-stage tasks with prebuilt, digest-pinned images or the built-in ShellSim filesystem.
 Shell verifiers require a prebuilt, digest-pinned image and a separate machine.
-The Harbor importer rejects shared verifier mode, including its unset default.
+The Harbor importer accepts only separate verifier environments.
+An unset verifier mode without a separate environment selects shared mode and causes rejection.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
 for the session lifecycle, exact-token contract, failure handling, and backend configuration.
 
