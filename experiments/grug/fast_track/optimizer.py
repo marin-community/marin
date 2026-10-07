@@ -1694,6 +1694,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """LR multiplier of the Sinkhorn groups: ``sinkhorn`` (embedding, at the Adam LR) and ``sinkhornh`` (lm_head,
     hyperball at the MuonH LR, like AdamH)."""
     """LR group of ``token_embed``: ``adam`` or ``adamh``."""
+    adam_paths: tuple[str, ...] = ()
+    """Parameter-path suffixes (e.g. ``attn.w_lq``) trained in the ``adam`` group instead of MuonH."""
     muon_free_families: tuple[str, ...] = ()
     """Matrix families (keys of ``_OKLS_FAMILIES``, e.g. ``attn_q``, ``attn_k``) that drop the hyperball:
     MuonH's step size with a free norm and ``muon_free_weight_decay`` (``scale_with_grug_muon_free``)."""
@@ -2327,6 +2329,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "norm_gain"
             if ".rel_pos." in path_lower and self.rel_pos_lr_mult != 1.0:
                 return "rel_pos"
+            if any(path_lower.endswith(suffix.lower()) for suffix in self.adam_paths):
+                return "adam"
             if ".rel_pos." in path_lower or re.search(
                 r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|expert_visit_bias|bias_\w+|dyt_alpha|dyt_beta|qk_mult|match_scale|match_gate|v_ahead|v_self|k_null|sparse_lam|diff_lambda|diff_lambda_init|gda_lambda|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up|forget_gate_[wb]|lm_head_bias|router_tok_[ab]|router_tie_alpha|router_hist_w|router_mlp_[ab]|expert_router_alpha)$",
                 path_lower,
