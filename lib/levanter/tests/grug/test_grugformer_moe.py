@@ -1497,61 +1497,6 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * topk
 
 
-def test_moe_mlp_runs_with_ep_axis_when_available():
-    mesh = _make_ep_mesh_or_none()
-    if mesh is None:
-        pytest.skip("requires an even number of >=2 devices")
-
-    tokens = len(jax.devices()) * 8
-    hidden_dim = 32
-    intermediate_dim = 64
-    num_experts = 4
-    topk = 2
-
-    with jax.set_mesh(mesh):
-        x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
-            key=jax.random.key(1),
-            tokens=tokens,
-            hidden_dim=hidden_dim,
-            intermediate_dim=intermediate_dim,
-            num_experts=num_experts,
-            topk=topk,
-        )
-
-        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
-        expert_sharding = NamedSharding(mesh, P("expert", None, None))
-        x = jax.sharding.reshard(x, batch_sharding)
-        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
-        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
-        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
-        w_down = jax.sharding.reshard(w_down, expert_sharding)
-
-        out = moe_mlp(
-            x,
-            selected_experts,
-            combine_weights,
-            w_up_gate,
-            w_down,
-            activation=ActivationFunctionEnum.silu,
-            mesh=None,
-        )
-        assert out.shape == (tokens, hidden_dim)
-        assert jnp.isfinite(out).all()
-
-        out_ragged = moe_mlp(
-            x,
-            selected_experts,
-            combine_weights,
-            w_up_gate,
-            w_down,
-            activation=ActivationFunctionEnum.silu,
-            implementation="ragged_all_to_all",
-            mesh=None,
-        )
-        assert out_ragged.shape == (tokens, hidden_dim)
-        assert jnp.isfinite(out_ragged).all()
-
-
 def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     tokens = 16
     hidden_dim = 16

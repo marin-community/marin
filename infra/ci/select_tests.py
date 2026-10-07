@@ -191,16 +191,19 @@ PACKAGE_IDENTITY_FIELDS = ("name", "version", "source")
 LEVANTER_TORCH_SUITE = "levanter-torch"
 LEVANTER_TPU_SUITE = "levanter-tpu"
 
-# These files are intentionally absent from the TPU command today. Keep the selection
-# rule next to the selector so an affected-file TPU run does not start only to collect
-# zero runnable tests.
+# These files are intentionally absent from the TPU command today. CPU-only tests
+# remain in the Levanter unit lane. Keep the selection rule next to the selector so
+# an affected-file TPU run does not start only to collect zero runnable tests.
 TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
     {
+        "lib/levanter/tests/recovery/test_supervisor.py",
         "lib/levanter/tests/test_audio.py",
+        "lib/levanter/tests/test_distributed.py",
         "lib/levanter/tests/test_new_cache.py",
         "lib/levanter/tests/test_hf_checkpoints.py",
         "lib/levanter/tests/test_hf_gpt2_serialize.py",
         "lib/levanter/tests/test_gdn_layer.py",
+        "lib/levanter/tests/test_sharded_dataset.py",
     }
 )
 
