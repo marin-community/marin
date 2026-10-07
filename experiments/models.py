@@ -14,8 +14,7 @@ To register a new model, add a ``ModelConfig`` entry and call
 
 from dataclasses import dataclass
 
-from marin.datakit.download.huggingface import DownloadConfig
-from marin.datakit.download.huggingface_zephyr import download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import LevanterCheckpoint
 from marin.utils import get_directory_friendly_name

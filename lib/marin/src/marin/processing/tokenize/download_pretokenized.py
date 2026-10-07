@@ -16,7 +16,9 @@ from levanter.store.cache import CacheOptions
 from marin.datakit.download.huggingface import (
     DownloadConfig as HfDownloadConfig,
 )
-from marin.datakit.download.huggingface_zephyr import download_hf as hf_download_logic
+from marin.datakit.download.huggingface import (
+    download_hf as hf_download_logic,
+)
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)

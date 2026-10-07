@@ -13,7 +13,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
-from marin.datakit.download.huggingface_zephyr import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 

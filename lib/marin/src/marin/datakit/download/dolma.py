@@ -3,7 +3,7 @@
 
 """Dolma 1.7 dataset download definition and split metadata."""
 
-from marin.datakit.download.huggingface_zephyr import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_spec import StepSpec
 
 DOLMA_DATASETS = {

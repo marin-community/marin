@@ -19,7 +19,7 @@ DAG with one-day TTL outputs; see :mod:`experiments.ferries.datakit_reference_fe
 import os
 
 from fray.types import ResourceConfig
-from marin.datakit.download.huggingface_zephyr import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_text import ClusterTextParams

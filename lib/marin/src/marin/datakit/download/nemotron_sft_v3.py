@@ -24,7 +24,7 @@ from marin.datakit.chat_normalize import (
     validate_chat_messages,
     validate_tool_definitions,
 )
-from marin.datakit.download.huggingface_zephyr import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS, restore_chat_prompts
 from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
 from marin.execution.step_spec import StepSpec

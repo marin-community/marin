@@ -19,7 +19,7 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from marin.datakit.download.huggingface_zephyr import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
