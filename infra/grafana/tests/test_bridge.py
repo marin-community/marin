@@ -4,6 +4,7 @@
 """Tests for the grafana bridge: its HTTP surface over a fake finelog, and the
 cache's coalescing and eviction contract."""
 
+import json as json_module
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -1161,9 +1162,11 @@ def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, fai
             )
 
     requested_runs = []
+    requested_metrics = []
 
     def post(client, url, *, json):
         requested_runs.append(json["variables"]["run"])
+        requested_metrics.append(json_module.loads(json["variables"]["specs"][0])["keys"])
         if failure == "timeout":
             raise httpx.ReadTimeout("W&B timed out")
         return httpx.Response(200, json={"errors": [{"message": "run inaccessible"}]})
@@ -1177,6 +1180,9 @@ def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, fai
         ("hero-d-training", "router_entropy"),
     }
     assert requested_runs == (["hero-c-training", "hero-d-training"] if failure == "run-error" else ["hero-c-training"])
+    assert all(
+        keys == ["_step", "_timestamp", "eval_dropless/uncheatable_eval/macro_loss"] for keys in requested_metrics
+    )
 
 
 @pytest.mark.parametrize(

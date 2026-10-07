@@ -118,6 +118,7 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
     EVAL_HISTORY_LENGTH,
+    EVAL_LOSS_METRIC,
     EvalHistory,
     Signals,
     WatchedRun,
@@ -176,7 +177,7 @@ from vllm_observability import (
     vllm_run_summary_samples_query,
     vllm_run_summary_table,
 )
-from wandb_source import EVAL_LOSS_METRIC, WandbSource
+from wandb_source import WandbSource
 from zephyr_observability import zephyr_overview_dataset
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
