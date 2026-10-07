@@ -98,6 +98,9 @@ or on a package the order does not name.
 - `proposal.source.ProposalSource[IdeaT]`: `async propose(idea, n) -> ProposalBatch`. A batch holds
   the planning request and completions and one `SlotProposal` or `SlotFailure` per slot, in slot
   order. A failed slot does not drop its siblings.
+- `proposal.sources.capability.CapabilitySource(client, policy)` is the `ProposalSource` for
+  catalog capabilities (`load_capability_ideas(path)` reads the catalog). `proposal_prefix(id, idea)`
+  is the front matter's fixed opening, which the prompt dictates and the document repair prefills.
 - `proposal.model.TaskProposal`: YAML front matter (`ProposalHeader`) plus a markdown body with
   required section headings. `parse` and `render` round-trip it; `digest` is the sha256 of the
   canonical form.
@@ -319,6 +322,14 @@ think block before prefilled assistant text, and vLLM's reasoning parser then fi
 continuation under `reasoning`; the call therefore sends `enable_thinking: false`, which keeps the
 same prompt tokens and returns the continuation as `content` (measured live). The template strips
 prefilled text, so a prefix with surrounding whitespace is rejected rather than silently changed.
+
+Capability proposals think first and prefill only the repair. A proposal document opens with its
+fixed lines (`proposal.sources.capability.proposal_prefix`: the `---` line, id, source, grounding and
+the `null_reason` key, ahead of the keys the model fills in). The first request is an ordinary
+thinking call. A reply that fails the parser gets one repair request prefilled with that prefix, so
+the repair cannot drop or mistype those lines. Prefilling the first request too fixed the format but
+turned thinking off: on two capabilities at n=10 the triage rubric (3 samples) accepted 4 of 20 such
+proposals against 7 of 20 written with thinking, and every rubric axis except realism scored lower.
 
 A build tells host failures from program failures by where the error was raised, not by its
 message. `Build` wraps its machine factories (`builder.infrastructure.host_checked_factories`): a

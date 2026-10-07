@@ -5,9 +5,14 @@
 
 For one catalog capability, one structured call plans ``n`` differentiated slots across
 environment x verification. Then, concurrently, GLM writes one proposal document per non-null slot
-directly in the TaskProposal markdown format. A document that fails the strict parser gets one
-repair request that keeps the prior reply as the assistant turn and quotes the parse error.
-Slots the plan marks null become proposals with ``null_reason`` set and no model call.
+directly in the TaskProposal markdown format, with thinking on. The document opens with the front
+matter's fixed lines (``proposal_prefix``: the ``---`` line, id, source, grounding and the
+``null_reason`` key). A document that fails the strict parser gets one repair request that keeps
+the prior reply as the assistant turn, quotes the parse error, and prefills ``proposal_prefix`` as
+the start of the new reply, so the repair cannot drop or mistype those lines. Only the repair is
+prefilled because a prefilled turn does not think, and live proposals written without thinking
+scored lower in triage. Slots the plan marks null become proposals with ``null_reason`` set and no
+model call.
 """
 
 import asyncio
@@ -22,7 +27,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from taskforge.canonical import digest, pretty_json
-from taskforge.llm.client import Completion, GlmClient
+from taskforge.llm.client import Completion, GlmClient, complete_prefilled
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, StructuredTool, complete_structured
 from taskforge.proposal.model import (
@@ -238,25 +243,38 @@ CAPABILITY RECORD:
 {pretty_json(capability_prompt_record(idea))}"""
 
 
-DOCUMENT_TEMPLATE = """---
+PREFIX_TEMPLATE = """---
 id: "{id}"
 source: {{kind: capability, ref: "{ref}", hash: "{hash}"}}
+grounding: unverified
+null_reason:"""
+
+DOCUMENT_REST = """ null
 environment: <reasoning | shellsim | container>
 verification: <simple | code | judge | composite>
-grounding: unverified
 research:
   - {{kind: <web | github>, purpose: "<what to find and why; desired properties and a fallback>"}}
 build:
   - "<short-artifact-name>": "<one line: what this build artifact is and how it is checked>"
 resources: ["<relative/path/of/a/file/the/build/produces>", "<another>"]
-null_reason: null
 ---
 {headings}"""
 
 
+def proposal_prefix(proposal_id: str, idea: CapabilityIdea) -> str:
+    """The front matter's fixed lines, ending at ``null_reason:``; the prefilled start of a repair reply.
+
+    ``parse`` accepts the header keys in any order and ``render`` restores the canonical order, so
+    the fixed keys come first and ``null_reason``, which the model used to drop as the last key,
+    comes before the keys it fills in.
+    """
+    return PREFIX_TEMPLATE.format(id=proposal_id, ref=idea.capability_id, hash=idea.capability_hash)
+
+
 def document_template(proposal_id: str, idea: CapabilityIdea) -> str:
+    """The whole document as the prompt shows it: ``proposal_prefix`` followed by placeholders."""
     headings = "\n".join(f"## {h}\n<...>\n" for h in REQUIRED_HEADINGS)
-    return DOCUMENT_TEMPLATE.format(id=proposal_id, ref=idea.capability_id, hash=idea.capability_hash, headings=headings)
+    return proposal_prefix(proposal_id, idea) + DOCUMENT_REST.format(headings=headings)
 
 
 SECTION_GUIDE = """- Task: the realistic user request as the solver sees it; the concrete visible inputs and
@@ -287,10 +305,12 @@ written as one markdown document with YAML front matter in exactly this format:
 {document_template(proposal_id, idea)}
 Format rules:
 - Reply with the document only. The first line is `---`. No code fences around it.
-- Copy the id, source, and grounding lines exactly as shown.
-- The front matter has exactly these nine keys, all required, in this order. Double-quote every
-  string value. The last line before the closing `---` is always `null_reason: null` for a
-  proposed task; never omit it.
+- Copy the id, source, and grounding lines exactly as shown. null_reason comes next and is
+  `null` for a proposed task.
+- The front matter has exactly these nine keys, all required, in this order. Write every key,
+  including research, build, and resources when a list is empty (`[]`).
+- Double-quote every string value. Inside a quoted value use single quotes, never a double
+  quote, and keep the value on one line.
 - research: one entry per thing a builder must look up; kind is web or github only.
 - build: one entry per build artifact, as a one-entry mapping from a short name to a one-line
   description. The Build plan section explains each one.
@@ -308,9 +328,10 @@ claim to have browsed or run code. Existing benchmarks are inspiration, never si
 evaluation tasks. Solver and grader execute separately: code verification does not require a
 container for the solver.
 
-If the slot cannot be made credible, set null_reason to a substantive reason instead, keep the other
-front-matter keys (research, build, and resources may be empty lists), and write a short body
-explaining why. A null proposal is better than a contrived or ungradable one.
+If the slot cannot be made credible, write a substantive, double-quoted reason as the value of
+null_reason instead of `null`, keep the other front-matter keys (research, build, and resources may
+be empty lists), and write a short body explaining why. A null proposal is better than a contrived
+or ungradable one.
 
 CAPABILITY RECORD:
 {pretty_json(capability_prompt_record(idea))}
@@ -324,8 +345,9 @@ SLOT TO DEVELOP:
 
 DOCUMENT_REPAIR_PROMPT = """Your previous reply, shown above, is not a valid proposal document:
 {error}
-Reply with the complete corrected document, starting with the `---` line and keeping all valid
-content. Change only what the error requires."""
+Write the corrected document, keeping all valid content and changing only what the error requires.
+Your reply is already started with the document's first five lines, up to `null_reason:`. Continue
+from there: the value of null_reason, the other keys, the closing `---` line, and the full body."""
 
 
 @dataclass(frozen=True)
@@ -395,10 +417,12 @@ async def plan_slots(client: GlmClient, policy: LLMPolicy, idea: CapabilityIdea,
 async def author_proposal(
     client: GlmClient, policy: LLMPolicy, idea: CapabilityIdea, plan: SlotPlan, slot: PlannedSlot
 ) -> SlotOutcome:
-    """Have GLM write the slot's proposal document; spend one repair request if it fails to parse."""
+    """Have GLM write the slot's proposal document; if it fails to parse, repair once after ``proposal_prefix``."""
+    slot_id = proposal_id(idea, slot.slot)
+    prefix = proposal_prefix(slot_id, idea)
     messages: list[Message] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": proposal_prompt(idea, plan, slot, proposal_id(idea, slot.slot))},
+        {"role": "user", "content": proposal_prompt(idea, plan, slot, slot_id)},
     ]
     request = tuple(messages)
     first = await client.complete(messages, policy)
@@ -410,7 +434,7 @@ async def author_proposal(
             {"role": "assistant", "content": first.content},
             {"role": "user", "content": DOCUMENT_REPAIR_PROMPT.format(error=str(error)[:ERROR_TEXT_LIMIT])},
         ]
-        repair = await client.complete(repair_messages, policy)
+        repair = await complete_prefilled(client, repair_messages, policy, prefix)
         try:
             proposal = checked_proposal(repair.content, idea, slot.slot)
         except ValueError as repair_error:
