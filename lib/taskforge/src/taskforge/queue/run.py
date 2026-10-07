@@ -64,7 +64,8 @@ class RunSummary:
         build_infrastructure: Build host failures by cause over the ``BUILD_INFRASTRUCTURE`` events of every
             item that reached a terminal. ``run_item`` retries such a build up to
             ``LoopPolicy.max_build_retries`` times, then ends the item ``ABANDONED``, and the next launch
-            re-enters its build.
+            re-enters its build. A cause in ``HOST_REJECTIONS`` records no such event: it ends the item
+            ``REJECTED`` as ``HOST``.
     """
 
     items: Mapping[str, Terminal]
