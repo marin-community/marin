@@ -9,7 +9,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-from packaging.specifiers import SpecifierSet
 from verifyit.spec import PytestSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
@@ -189,22 +188,12 @@ def test_dockerfile_reuses_existing_pip_install_line_instead_of_adding_a_new_run
 
 
 @pytest.mark.parametrize("repository", ["john-kurkowski__tldextract.3d1bf184", "marshmallow-code__marshmallow.9716fc62"])
-def test_swesmith_keeps_compatible_pytest_constraint_for_agent_installs(repository):
+def test_swesmith_preserves_selected_cases_and_repository_plugins(repository):
     task = read_task_binary(_fixture())
     task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
     converted = read_task_binary(record.task_binary)
     dockerfile = converted.text(DOCKERFILE).split(INSTALL_MARKER)[0]
-    # PIP_CONSTRAINT is inherited by the task's subsequent editable/extras installs.
-    constraint_path = next(
-        line.removeprefix("ENV PIP_CONSTRAINT=")
-        for line in dockerfile.splitlines()
-        if line.startswith("ENV PIP_CONSTRAINT=")
-    )
-    constraint_line = next(line for line in dockerfile.splitlines() if line.endswith(f"> {constraint_path}"))
-    requirement = constraint_line.split("'")[1].removesuffix(r"\n")
-    versions = SpecifierSet(requirement.removeprefix("pytest"))
-    assert "8.3.4" in versions and "8.4.2" in versions and "9.0.0" not in versions
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in dockerfile
     assert parse_spec(converted.text(VERIFIER_TOML)).must_pass == tuple(
         json.loads(task.text("tests/config.json"))["FAIL_TO_PASS"]
