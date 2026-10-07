@@ -22,15 +22,23 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
     async def docker(*args, **_kwargs):
         if args[0] == "exec":
             assert args[1:3] == ("--user", "0")
-            assert args[4:6] == ("mkdir", "-p")
-            (container / args[6].lstrip("/")).mkdir(parents=True, exist_ok=True)
+            if args[4] == "chmod":
+                (container / args[6].lstrip("/")).chmod(int(args[5], 8))
+            else:
+                assert args[4:6] == ("mkdir", "-p")
+                (container / args[6].lstrip("/")).mkdir(parents=True, exist_ok=True)
         else:
             assert args[0] == "cp"
             source, destination = path(args[1]), path(args[2])
             if source.is_dir():
                 if destination.is_dir() and not args[1].endswith("/."):
                     destination /= source.name
-                shutil.copytree(source, destination, dirs_exist_ok=True)
+                destination.mkdir(parents=True, exist_ok=True)
+                for member in source.iterdir():
+                    if member.is_dir():
+                        shutil.copytree(member, destination / member.name, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(member, destination / member.name)
             else:
                 shutil.copy2(source, destination)
         return DockerCommandResult(0, b"", b"")
@@ -38,6 +46,8 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker)
     source = tmp_path / "host-artifacts"
     (source / "nested").mkdir(parents=True)
+    source.chmod(0o700)
+    (source / "nested").chmod(0o710)
     (source / "nested/answer").write_bytes(b"\x00\xff")
     (source / "nested/answer").chmod(0o755)
     machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
@@ -50,6 +60,8 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
 
     asyncio.run(transfer())
     assert (container / "logs/artifacts/nested/answer").read_bytes() == b"\x00\xff"
+    assert (container / "logs/artifacts").stat().st_mode & 0o777 == 0o700
+    assert (container / "logs/artifacts/nested").stat().st_mode & 0o777 == 0o710
     assert (downloaded / "nested/answer").read_bytes() == b"\x00\xff"
     assert (downloaded / "nested/answer").stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in downloaded.iterdir()) == ["nested"]

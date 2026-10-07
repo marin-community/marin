@@ -38,8 +38,12 @@ def test_file_transfer_and_bounded_output(tmp_path: Path) -> None:
         try:
             source = tmp_path / "source"
             source.mkdir()
+            source.chmod(0o700)
             (source / "data.txt").write_text("payload")
+            (source / "data.txt").chmod(0o751)
             await machine.upload(source, "/workspace/imported")
+            permissions = await machine.run(Command(("stat", "-c", "%a", "/workspace/imported")))
+            assert permissions.stdout.strip() == b"700"
             shell = await machine.open_shell()
             result = await shell.execute("cat /workspace/imported/data.txt; printf 'x'", output_limit_bytes=4)
             assert result.output == b"payl"
@@ -49,6 +53,7 @@ def test_file_transfer_and_bounded_output(tmp_path: Path) -> None:
             target.mkdir()
             await machine.download("/workspace/imported", target)
             assert (target / "data.txt").read_text() == "payload"
+            assert (target / "data.txt").stat().st_mode & 0o777 == 0o751
         finally:
             await machine.close()
 
