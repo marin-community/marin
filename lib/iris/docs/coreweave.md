@@ -559,14 +559,12 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 - [`infra/pulumi/src/iac/coreweave/cluster.py`](../../../infra/pulumi/src/iac/coreweave/cluster.py)
   — Pulumi ownership of CoreWeave prerequisites.
 
-### Node storage health
+### Node health
 
-Configure a dedicated scratch prefix in the same S3 bucket and endpoint used by
-tasks. The three production `cw-*` clusters use separate prefixes under
-`s3://marin-us-east-02a/tmp/ttl=1d/iris-node-health/`, which the bucket's
-one-day lifecycle rule expires. The `cw-us-west-04a` CI cluster does not enable
-the check. Other deployments need a lifecycle expiry on their chosen prefix so
-a node that never returns cannot leave its small probe object forever.
+The production `cw-rno2a`, `cw-us-east-02a`, and `cw-us-east-08a` clusters
+probe the shared `marin-us-east-02a` bucket. Each uses a separate scratch
+prefix under the bucket's one-day lifecycle rule. The `cw-us-west-04a` CI
+cluster does not enable the check.
 
 ```yaml
 kubernetes_provider:
@@ -580,53 +578,39 @@ kubernetes_provider:
     max_cordoned_nodes: 1
 ```
 
-Durations are seconds. Each node-agent writes, reads, compares, and deletes a
-23-byte object at `<scratch>/<node UID>/<boot ID>`. The next probe reuses
-that key after a timeout. The deadline covers the entire subprocess, including
-DNS, credentials, SDK retries, and cleanup. Successful and configuration-error
-probes reset the consecutive-failure count. Read/write/delete permissions are
-required. Agents receive the same task environment Secret and cluster literals
-as tasks; individual job environment overrides are outside this check. Deployment
-injects an `environment_revision` derived from the Secret UID/resource version
-and task literals. Credential or endpoint changes roll the agents, and old
-reports cannot corroborate probes from the new environment. Do not set this
-revision by hand; it contains no Secret values.
+The node agent uses the cluster task credentials and endpoint to write, read,
+and delete a 23-byte object at `<scratch>/<node UID>/<boot ID>`. It needs all
+three permissions. Job-specific environment overrides are outside this check.
+Use a dedicated prefix with lifecycle expiry; a node that never recovers can
+leave its object behind. The 15-second subprocess deadline bounds DNS and SDK
+retries. Configuration errors reset the failure streak. Deployment derives
+`environment_revision` from the task Secret revision and task literals, rolls
+agents when they change, and fences reports from older credentials. Do not set
+that field by hand.
 
-Agents report on `iris.marin.community/storage-health`, independently of
-Finelog. Failures also appear in node-agent logs, without SDK exception bodies
-or credentials. The controller cordons an outlier only after the configured
-failure threshold, while a majority of Kubernetes nodes (at least
-`minimum_healthy_nodes`) have fresh successful probes of the same configured
-target that began after the failure started. Missing reports, changed node UID
-or boot ID, and old reports cannot corroborate a cordon. Broad storage or
-credential failures leave failed health reports for investigation without
-cordoning the fleet. Set `max_cordoned_nodes: 0` for observation only.
+The controller cordons after three failed probes only when a fresh majority of
+nodes, at least `minimum_healthy_nodes`, succeeded on the same target after the
+failure began. Missing or stale reports count against the majority. Set
+`max_cordoned_nodes: 0` for observation only. Results and cordon evidence stay
+in the `iris.marin.community/storage-health` and
+`iris.marin.community/storage-health-cordon` node annotations even if Finelog
+is unavailable. The shared service account needs `patch` on Nodes. Cordoning
+does not evict running tasks, and the node-agent
+DaemonSet continues probing cordoned nodes.
 
-The controller writes `spec.unschedulable=true` and records the supporting
-report in `iris.marin.community/storage-health-cordon`. It does not evict tasks
-or restart gangs. The node-agent DaemonSet tolerates all taints, so probes
-continue while a node is cordoned. After a fresh successful probe for the
-current node and configured target that started after the cordon report, the
-controller uncordons the node and removes its budget annotation. Reboots and
-credential or endpoint changes do not prevent recovery. Existing operator
-cordons without the Iris annotation stay untouched. The shared
-controller/node-agent service account needs `patch` on Nodes in addition to its
-existing read permissions. Cordons can reduce topology-constrained gang
-capacity; inspect rack capacity before restarting a job.
-
-The cluster-wide budget counts cordon annotations even after a manual uncordon
-and survives controller restarts. Automatic recovery releases the budget. If
-automatic recovery cannot observe a fresh successful probe, investigate and
-release the cordon manually after confirming the node is healthy:
+A fresh successful probe for the current node and target, started after its
+Iris cordon, uncordons the node and releases its budget annotation. Reboots and
+credential rotation do not prevent recovery. Operator cordons without that
+annotation remain. A manual uncordon alone keeps the budget reserved. If the
+probe cannot confirm recovery, first verify the node is healthy, then release
+it manually:
 
 ```bash
 kubectl uncordon NODE
 kubectl annotate node NODE iris.marin.community/storage-health-cordon-
 ```
 
-To keep a recovered node cordoned for maintenance, remove the Iris cordon
-annotation while it is still unschedulable. The controller will then leave that
-operator cordon in place.
-
-Do not release the budget during an unresolved shared storage outage. Current
-health and provenance remain inspectable with `kubectl get node NODE -o json`.
+To keep a repaired node cordoned for maintenance, remove the Iris annotation
+while the node is still unschedulable. Inspect reports with
+`kubectl get node NODE -o json`. Do not release the budget during an unresolved
+shared storage outage.
