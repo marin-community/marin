@@ -415,7 +415,8 @@ and the Parallel key is a file or a variable name in the same way. Under Iris,
 `queue.job.host_secrets` removes those variables and the submitter keys Iris forwards from the
 process environment and from `IRIS_JOB_ENV` before any sandbox exists, because Iris copies
 `IRIS_JOB_ENV` into every child job. First-run policy values (`k=8`, band `[0.125, 0.875]`,
-`adversary_k=2`, all three adversary roles, width 256) live in the policy example, not in code.
+`adversary_k=2`, `adversary_output_tokens=32768`, all three adversary roles,
+`max_build_retries=2`, width 256) live in the policy example, not in code.
 
 ## Testing
 
