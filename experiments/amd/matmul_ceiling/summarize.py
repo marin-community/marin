@@ -12,7 +12,7 @@ from pathlib import Path
 from experiments.amd.matmul_ceiling.jax_matmul import ShapeResult, read_results
 
 SNOWBALL_SHAPES = Path(__file__).with_name("snowball_shapes.txt")
-KERNEL_NAME_CHARS = 48
+KERNEL_NAME_CHARS = 72
 
 
 def snowball_shape_labels() -> dict[str, str]:
