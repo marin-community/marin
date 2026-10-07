@@ -98,13 +98,21 @@ def value_lookahead(
     v: Float[Array, "B S N E"],
     ahead: Float[Array, "N E"],
     segment_ids: Int[Array, "B S"] | None,
+    k_null: Float[Array, "N D"] | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     """Each key token's value also reads the next token's, ``v'_t = v_t + ahead * v_{t+1}``; keys and values then
     move one slot later (zero at document starts), so under the causal mask query ``i`` sees tokens ``t <= i - 1``
-    (never itself, so ``v_{t+1}`` never leaks the future) and every document's first slot is an all-zero sink."""
+    (never itself, so ``v_{t+1}`` never leaks the future) and every document's first slot is an empty sink: zero
+    value, and key ``k_null`` (zero if None)."""
     spec_k, spec_v = jax.typeof(k).sharding.spec, jax.typeof(v).sharding.spec
     mixed = v + ahead.astype(v.dtype) * next_token(v, segment_ids)
+    shifted_k = previous_token(k, segment_ids)
+    if k_null is not None:
+        first = jnp.zeros(k.shape[:2], bool).at[:, 0].set(True)
+        if segment_ids is not None:
+            first = first | jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)))
+        shifted_k = jnp.where(first[..., None, None], k_null.astype(k.dtype), shifted_k)
     return (
-        reshard(previous_token(k, segment_ids), spec_k),
+        reshard(shifted_k, spec_k),
         reshard(previous_token(mixed, segment_ids).astype(v.dtype), spec_v),
     )

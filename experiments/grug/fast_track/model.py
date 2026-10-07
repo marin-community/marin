@@ -982,6 +982,8 @@ class GrugModelConfig:
     mla_match_append: MatchAppend = MatchAppend.OFF
     mla_value_lookahead: bool = False
     """MLA values also read the next token (``key_offset.value_lookahead``); attention then skips the query itself."""
+    mla_lookahead_sink: bool = False
+    """With ``mla_value_lookahead``: each document's first (empty) slot gets a learned per-head key ``k_null``."""
     mla_tie_prev_qk: bool = False
     """With ``mla_key_offset``: the query's shifted half is the token's own un-shifted key half (a symmetric match)."""
     final_num_experts: int = 0
@@ -1120,9 +1122,8 @@ class GrugModelConfig:
     Selective RoPE, arXiv 2511.17388) via the RoPE trick. Channel pairs ``(j, j + h/2)`` of q and k are rotated
     by ``theta_t = cumsum_{s<=t} gamma_j * omega_j * softplus(x_s W_rot_down W_rot_up)`` (reset at document
     starts); ``omega_j`` is log-spaced in ``[1/128, 1]`` rad/token and the per-pair amplitude ``gamma`` is
-    zero-init, so the layer is exact KDA at init. The decay is tied across each pair (``W_a↑`` / ``dt_bias``
-    shrink to ``h/2`` columns per head), which makes each pair's transition ``exp(g) R(delta theta)`` a complex
-    eigenvalue that commutes with the rotation; otherwise the trick is not the rotated recurrence."""
+    zero-init (exact KDA at init). The decay is tied across each pair so the transition commutes with the
+    rotation."""
     kda_dd_rope_rank: int = 16
     """Hidden width of the low-rank angle projection ``W_rot_down W_rot_up`` (``kda_dd_rope``)."""
     kda_out_correction: bool = False
@@ -2359,6 +2360,7 @@ class CausalSelfAttention(eqx.Module):
     match_head: Float[Array, "M NC"] | None  # per-head map of the shared match to the shifted half (M > half)
     match_gate: Float[Array, "D N"] | None  # MatchAppend.TOKEN
     v_ahead: Float[Array, "N D"] | None  # mla_value_lookahead
+    k_null: Float[Array, "N D"] | None  # mla_lookahead_sink
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2468,6 +2470,7 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 match_gate=jnp.zeros((d, n), jnp.float32) if cfg.mla_match_append == MatchAppend.TOKEN else None,
                 v_ahead=jnp.zeros((n, h), jnp.float32) if cfg.mla_value_lookahead else None,
+                k_null=jnp.zeros((n, h), jnp.float32) if cfg.mla_lookahead_sink else None,
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2607,6 +2610,7 @@ class CausalSelfAttention(eqx.Module):
             match_head=None,
             match_gate=None,
             v_ahead=None,
+            k_null=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2956,7 +2960,7 @@ class CausalSelfAttention(eqx.Module):
             head_spec = P(*_padded_spec(q)[:3], None)
             q, k, kernel_v = append_shared_match(q, k, kernel_v, match, gate, sconv_segment_ids, head_spec)
         if self.v_ahead is not None:
-            k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids)
+            k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids, self.k_null)
         attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
             assert self.gda_lambda is not None
