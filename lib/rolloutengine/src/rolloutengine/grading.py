@@ -84,26 +84,22 @@ async def _grade_rollout(
             return GradeResult(
                 Outcome.INFRA_ERROR, None, "Cannot collect grading inputs", failure=GradingFailure.EXECUTION
             )
-    grading_machine = machine
-    if selection is not None:
-        grading_machine = await _prepare_machine(
-            task.verifier.environment_requirements, selection, task.resources.all, factories, cleanup, resources
-        )
-        assert grading_machine is not None
-        with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
-            for index, artifact in enumerate(verifier.artifacts):
-                assert machine is not None
-                path = Path(directory) / str(index)
-                if await _download_artifact(machine, artifact, path, timeout, cleanup, resources):
-                    await grading_machine.upload(path, artifact.target)
+    grading_machine = await _prepare_machine(
+        task.verifier.environment_requirements, selection, task.resources.all, factories, cleanup, resources
+    )
     assert grading_machine is not None
+    with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
+        for index, artifact in enumerate(verifier.artifacts):
+            assert machine is not None
+            path = Path(directory) / str(index)
+            if await _download_artifact(machine, artifact, path, timeout, cleanup, resources):
+                await grading_machine.upload(path, artifact.target)
     return await _shell_grade(
         verifier,
         messages,
         grading_machine,
         task.resources.verifier,
         timeout,
-        "0" if selection is None else None,
     )
 
 
@@ -279,13 +275,12 @@ async def _shell_grade(
     machine: Machine,
     resources: tuple[TaskResource, ...],
     timeout: float | None,
-    user: str | None,
 ) -> GradeResult:
     if isinstance(verifier.reward, FileReward):
         paths = tuple(file.path for file in verifier.reward.files)
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
         for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            prepared = await machine.run(Command(argv=argv, timeout=timeout, user=user))
+            prepared = await machine.run(Command(argv=argv, timeout=timeout))
             if prepared.exit_code != 0:
                 return GradeResult(
                     Outcome.INFRA_ERROR, None, "Cannot prepare private reward files", failure=GradingFailure.EXECUTION
@@ -296,7 +291,6 @@ async def _shell_grade(
             argv=verifier.argv,
             stdin=json.dumps(messages).encode(),
             timeout=timeout,
-            user=user,
         )
     )
     diagnostics = {
@@ -318,7 +312,7 @@ async def _shell_grade(
         passed = result.exit_code == 0
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if isinstance(verifier.reward, FileReward):
-        return await _file_grade(machine, verifier.reward, timeout, diagnostics, user)
+        return await _file_grade(machine, verifier.reward, timeout, diagnostics)
     if result.exit_code != 0 or result.stdout_truncated:
         return GradeResult(
             Outcome.INFRA_ERROR,
@@ -349,7 +343,7 @@ async def _shell_grade(
 
 
 async def _file_grade(
-    machine: Machine, specification: FileReward, timeout: float | None, diagnostics: dict[str, Any], user: str | None
+    machine: Machine, specification: FileReward, timeout: float | None, diagnostics: dict[str, Any]
 ) -> GradeResult:
     for file in specification.files:
         result = await machine.run(
@@ -362,7 +356,6 @@ async def _file_grade(
                     file.path,
                 ),
                 timeout=timeout,
-                user=user,
             )
         )
         if result.exit_code == MISSING_FILE_EXIT:
@@ -408,16 +401,6 @@ async def _file_grade(
             reward,
             passed=None if specification.pass_above is None else reward > specification.pass_above,
             diagnostics=diagnostics,
-            rewards=(
-                {
-                    key: float(value)
-                    for key, value in values.items()
-                    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-                }
-                | {file.key: reward}
-                if isinstance(values, dict)
-                else {"reward": reward}
-            ),
         )
     return GradeResult(
         Outcome.INFRA_ERROR,

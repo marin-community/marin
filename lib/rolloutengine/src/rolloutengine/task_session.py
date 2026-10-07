@@ -150,7 +150,7 @@ class _ShellboxTaskSession:
             result = await self.machine.run(
                 Command(
                     argv=("sh", "-c", command),
-                    timeout=self.lowered.session.tool_turn_timeout,
+                    timeout=self.lowered.session.command_timeout,
                 )
             )
             observations.append(

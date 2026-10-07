@@ -41,6 +41,7 @@ class TaskSessionSpec(BaseModel):
     task_session: str = Field(min_length=1)
     max_turns: int = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
+    command_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)
     total_turn_timeout: float | None = Field(gt=0)
     attempt_timeout: float | None = Field(gt=0)

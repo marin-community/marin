@@ -38,10 +38,9 @@ def harbor_package(tmp_path, *, task_options="", environment_options="", verifie
     return directory
 
 
-@pytest.mark.parametrize("separate", [False, True])
 @pytest.mark.parametrize("answer,reward", [("answer", 0.75), ("wrong", 0.0)])
-async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_file(tmp_path, separate, answer, reward):
-    directory = harbor_package(tmp_path, verifier_options='environment_mode = "separate"' if separate else "")
+async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_file(tmp_path, answer, reward):
+    directory = harbor_package(tmp_path, verifier_options='environment_mode = "separate"')
     (directory / "setup_files/input").write_text(answer)
     task = harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
     task = TaskSpec.model_validate_json(task.model_dump_json())
@@ -63,7 +62,7 @@ async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_
         lowered(
             task,
             machine=machine_runtime(),
-            verifier_machine=machine_runtime() if separate else None,
+            verifier_machine=machine_runtime(),
         )
     )
     assert (record.grade.status, record.grade.reward, record.grade.passed) == (Outcome.GRADED, reward, reward > 0)
@@ -81,7 +80,11 @@ def test_unsupported_harbor_package_is_rejected(tmp_path, unsupported):
         tmp_path,
         task_options='steps = [{name = "first"}]' if unsupported == "stages" else "",
         environment_options='healthcheck = {command = "true"}' if unsupported == "healthcheck" else "",
-        verifier_options='env = {PRIVATE_TOKEN = "secret"}' if unsupported == "shared_verifier_env" else "",
+        verifier_options=(
+            'env = {PRIVATE_TOKEN = "secret"}'
+            if unsupported == "shared_verifier_env"
+            else 'environment_mode = "separate"'
+        ),
     )
     if unsupported == "build":
         (directory / "task.toml").write_text("[environment]\n[verifier]\ntimeout_sec = 5\n")

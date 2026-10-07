@@ -50,9 +50,9 @@ def validate_lowered_task(
 ) -> None:
     """Reject unknown providers and unsupported task requirements before startup."""
     task = lowered.task
-    task_resources = task.resources.all + task.resources.worker
     if task.verifier.kind == "shell" and lowered.runtime.verifier_machine is None:
-        task_resources += task.resources.verifier
+        raise ValueError("Shell grading requires a separate verifier machine")
+    task_resources = task.resources.all + task.resources.worker
     for selection, requirements, resources in (
         (lowered.runtime.task_machine, task.environment_requirements, task_resources),
         (
@@ -73,6 +73,13 @@ def validate_lowered_task(
         if lowered.session.task_session not in sessions:
             raise ValueError(f"Unknown task session: {lowered.session.task_session!r}")
         return
+    limits = lowered.session
+    if (
+        limits.command_timeout is not None
+        and limits.tool_turn_timeout is not None
+        and limits.command_timeout >= limits.tool_turn_timeout
+    ):
+        raise ValueError("The command timeout must be less than the tool-turn timeout")
     if task.verifier.kind == "external":
         raise ValueError("External grading requires a registered task session")
     if task.interaction_tools or task.environment_requirements.tool_providers:
@@ -91,12 +98,8 @@ def validate_lowered_task(
         return
     if task.verifier.kind == "shell":
         verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
-        if lowered.runtime.verifier_machine is None and lowered.runtime.task_machine is None:
-            raise ValueError("Shell grading requires a task or verifier machine")
         if (verifier.collect or verifier.artifacts) and lowered.runtime.task_machine is None:
             raise ValueError("Artifact grading requires a task machine")
-        if verifier.artifacts and lowered.runtime.verifier_machine is None:
-            raise ValueError("Artifact transfer requires a separate verifier machine")
         return
     verifier = resolve_verifier(task.verifier)
     executable = isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec)

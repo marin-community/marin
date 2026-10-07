@@ -93,7 +93,13 @@ def file_task(script: bytes = b'if [ "$(cat /workspace/answer)" = 12 ]; then ech
             "answer_type": AnswerType.FILE,
             "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
             "verifier": VerifierSpec(
-                kind="shell", parameters_json=ShellVerifierSpec(argv=("sh", "/tests/grade.sh")).model_dump_json()
+                kind="shell",
+                parameters_json=ShellVerifierSpec(
+                    argv=("sh", "/tests/grade.sh"),
+                    artifacts=(
+                        VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE),
+                    ),
+                ).model_dump_json(),
             ),
             "resources": ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
         }
@@ -142,6 +148,7 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
                 "task_session": "shellbox",
                 "max_turns": 3,
                 "model_turn_timeout": None,
+                "command_timeout": None,
                 "tool_turn_timeout": None,
                 "total_turn_timeout": None,
                 "attempt_timeout": None,
@@ -266,7 +273,7 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
         ]
     )
     result = await engine(model, {"local": ShellSimMachineFactory()}).run(
-        lowered(file_task(), machine=machine_runtime())
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -275,6 +282,79 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
     assert result.logprobs == (-0.5, 0.0, 0.0, -0.5)
     assert model.requests[1].messages[-1]["tool_call_id"] == "write"
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+
+
+async def test_command_timeouts_return_observations_and_allow_the_model_to_finish():
+    class TimeoutMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv == ("sh", "-c", "hang"):
+                try:
+                    async with asyncio.timeout(command.timeout):
+                        await asyncio.Future()
+                except TimeoutError:
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            return await self.machine.run(command)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            return TimeoutMachine(await ShellSimMachineFactory().create(spec))
+
+    message = shell_call("hang", call_id="first")
+    message["tool_calls"].extend(
+        [
+            *shell_call("hang", call_id="second")["tool_calls"],
+            *shell_call("echo 12 > /workspace/answer", call_id="repair")["tool_calls"],
+        ]
+    )
+    model = ReplayModel([message, {"role": "assistant", "content": "Done."}])
+    record = await engine(model, {"local": Factory()}).run(
+        lowered(
+            file_task(),
+            machine=machine_runtime(),
+            verifier_machine=machine_runtime(),
+            command_timeout=0.05,
+            tool_turn_timeout=5,
+        )
+    )
+    observations = model.requests[1].messages[-3:]
+    assert [item["tool_call_id"] for item in observations] == ["first", "second", "repair"]
+    assert [json.loads(item["content"])["reason"] for item in observations] == ["timed_out", "timed_out", "exited"]
+    assert json.loads(observations[-1]["content"])["exit_code"] == 0
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.failure is None
+    assert record.response_token_ids == (20, 90, 91, 21)
+    assert record.loss_mask == (1, 0, 0, 1)
+    assert record.logprobs == (-0.5, 0.0, 0.0, -0.5)
+
+
+@pytest.mark.parametrize("tool_turn_timeout", [0.05, 0.01])
+async def test_tool_turn_cannot_preempt_command_timeout_feedback(tool_turn_timeout):
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(ValueError):
+        await engine(model, {"local": factory}).run(
+            lowered(
+                file_task(),
+                machine=machine_runtime(),
+                verifier_machine=machine_runtime(),
+                command_timeout=0.05,
+                tool_turn_timeout=tool_turn_timeout,
+            )
+        )
+    assert factory.machines == []
+    assert model.requests == []
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
@@ -354,9 +434,20 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
 async def test_workspace_state_does_not_receive_a_text_submission_instruction():
     task = file_task().model_copy(update={"answer_type": AnswerType.WORKSPACE_STATE})
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": ShellSimMachineFactory()}).run(lowered(task, machine=machine_runtime()))
+    record = await engine(model, {"local": ShellSimMachineFactory()}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
     assert record.grade.reward == 1.0
     assert model.requests[0].messages == ({"role": "user", "content": "What is six plus six?"},)
+
+
+async def test_shared_shell_grading_is_rejected_before_task_startup():
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(ValueError):
+        await engine(model, {"local": factory}).run(lowered(file_task(), machine=machine_runtime()))
+    assert factory.machines == []
+    assert model.requests == []
 
 
 async def test_private_shell_verifier_can_run_without_a_task_machine():
@@ -434,7 +525,7 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
 
     record = await engine(
         LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": ShellSimMachineFactory()}
-    ).run(lowered(file_task(), machine=machine_runtime()))
+    ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert record.stop_reason == "length"
     assert (record.grade.status, record.grade.reward) == (
         (Outcome.GRADED, 1.0) if completed_turns else (Outcome.UNAVAILABLE, None)
@@ -462,7 +553,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
         convention=PlainText(id="plain"),
     )
     with pytest.raises(RolloutContractError):
-        await runner.run(lowered(file_task(), machine=machine_runtime()))
+        await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
 
 
 @pytest.mark.parametrize(
@@ -506,10 +597,9 @@ async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, st
     )
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": ShellSimMachineFactory()}
-    ).run(lowered(task, machine=machine_runtime()))
+    ).run(lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward, record.grade.failure) == (status, reward, failure)
     if reward == 0:
-        assert record.grade.rewards == {"reward": 0.0, "extra": 0.5}
         assert record.grade.passed is False
 
 
