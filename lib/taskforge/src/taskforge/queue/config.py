@@ -8,7 +8,9 @@ or ``RelayGlm`` (an Iris relay job and the name of the environment variable that
 The builders' Parallel key is a file or an environment variable name in the same way. No config
 object holds a secret, so a config file can be committed and shown; ``queue.job`` reads secrets at
 the boundary. The GLM pool is always named, because the token binds which router pool serves a
-request.
+request. Local paths (a laptop root, the image cache, a token or key file) are absolute: the reader
+does not expand ``~`` or resolve against the working directory, so a config means the same thing
+wherever it is launched from.
 
 A config file looks like ``docs/policy.example.json``::
 
@@ -46,6 +48,11 @@ RUN_FIELDS = frozenset(
 )
 
 
+def _require_absolute(path: Path, name: str) -> None:
+    if not path.is_absolute():
+        raise ValueError(f"{name} is an absolute path (no ~, no working-directory-relative path), got {path}")
+
+
 class GlmKind(StrEnum):
     """The ``kind`` tag of a config's ``glm`` object."""
 
@@ -60,6 +67,9 @@ class LaptopGlm:
     base_url: str
     token_file: Path
     pool: Pool
+
+    def __post_init__(self) -> None:
+        _require_absolute(self.token_file, "LaptopGlm.token_file")
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,9 @@ class ParallelKeyFile:
     """The Parallel API key for the builders' web tools, on a ``PARALLEL_KEY=`` line of ``path``."""
 
     path: Path
+
+    def __post_init__(self) -> None:
+        _require_absolute(self.path, "ParallelKeyFile.path")
 
 
 @dataclass(frozen=True)
@@ -144,10 +157,11 @@ class RunConfig:
     Attributes:
         run_id: Names the run in the Finelog ledger mirror and in ``summary.json``.
         root: The run root (``items/``, ``cache/``, ``ledger/``, ``policy.json``, ``summary.json``).
-            On Iris it is relative and placed under ``$IRIS_OUTPUT_DIR``, which Iris archives per attempt.
+            Absolute on a laptop; on Iris it is relative and placed under ``$IRIS_OUTPUT_DIR``, which
+            Iris archives per attempt.
         host: Where machine factories come from.
-        image_cache: Where the laptop Docker factory keeps the images it prepares; required on a
-            laptop, None on Iris (``sandbox.factories.machine_factories``).
+        image_cache: Where the laptop Docker factory keeps the images it prepares; an absolute
+            directory on a laptop, None on Iris (``sandbox.factories.machine_factories``).
         glm: The GLM endpoint, resolved once by ``queue.job``.
         web: Where the builders' Parallel key comes from, or None for builders without web tools.
         policy: Every bound of the run.
@@ -176,6 +190,10 @@ class RunConfig:
             )
         if self.host is MachineHost.IRIS and self.root.is_absolute():
             raise ValueError(f"an Iris run root is relative to $IRIS_OUTPUT_DIR, got {self.root}")
+        if self.host is MachineHost.LAPTOP:
+            _require_absolute(self.root, "a laptop run root")
+            assert self.image_cache is not None
+            _require_absolute(self.image_cache, "image_cache")
 
 
 def _fields(obj: Mapping[str, Any], names: frozenset[str], where: str) -> None:
@@ -193,7 +211,7 @@ def _kind(obj: Mapping[str, Any], where: str) -> str:
 def glm_config(obj: Mapping[str, Any]) -> GlmConfig:
     if GlmKind(_kind(obj, "glm")) is GlmKind.LAPTOP:
         _fields(obj, frozenset({"kind", "base_url", "token_file", "pool"}), "glm")
-        return LaptopGlm(obj["base_url"], Path(obj["token_file"]).expanduser(), Pool(obj["pool"]))
+        return LaptopGlm(obj["base_url"], Path(obj["token_file"]), Pool(obj["pool"]))
     _fields(obj, frozenset({"kind", "relay_job", "token_env", "pool"}), "glm")
     return RelayGlm(obj["relay_job"], obj["token_env"], Pool(obj["pool"]))
 
@@ -203,7 +221,7 @@ def web_config(obj: Mapping[str, Any] | None) -> WebConfig | None:
         return None
     if WebKind(_kind(obj, "web")) is WebKind.KEY_FILE:
         _fields(obj, frozenset({"kind", "path"}), "web")
-        return ParallelKeyFile(Path(obj["path"]).expanduser())
+        return ParallelKeyFile(Path(obj["path"]))
     _fields(obj, frozenset({"kind", "env"}), "web")
     return ParallelKeyEnv(obj["env"])
 
@@ -230,9 +248,9 @@ def run_config(obj: Mapping[str, Any]) -> RunConfig:
     _fields(obj, RUN_FIELDS, "run config")
     return RunConfig(
         run_id=obj["run_id"],
-        root=Path(obj["root"]).expanduser(),
+        root=Path(obj["root"]),
         host=MachineHost(obj["host"]),
-        image_cache=None if obj["image_cache"] is None else Path(obj["image_cache"]).expanduser(),
+        image_cache=None if obj["image_cache"] is None else Path(obj["image_cache"]),
         glm=glm_config(obj["glm"]),
         web=web_config(obj["web"]),
         policy=POLICY.validate_python(obj["policy"]),

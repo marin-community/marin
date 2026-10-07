@@ -196,7 +196,9 @@ or on a package the order does not name.
   (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
   laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or
   `RelayGlm` with an explicit `Pool`, the builders' Parallel key source, the `LoopPolicy`, the
-  `EngineConfig`, the width and `restore_from`. `inputs` is an `InputsFactory`: a function of the
+  `EngineConfig`, the width and `restore_from`. Local paths (a laptop root, `image_cache`, a token
+  or key file) are absolute; the config reader expands no `~` and resolves nothing against the
+  working directory. `inputs` is an `InputsFactory`: a function of the
   run's `GlmClient` and run root that returns `RunInputs(ideas, source, checks, rubric,
   check_context)`. `scripts/run_queue.py` runs it from a config file.
 
