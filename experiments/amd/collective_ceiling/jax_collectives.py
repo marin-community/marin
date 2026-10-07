@@ -96,13 +96,13 @@ def _input_rows_per_rank(op: str, size_bytes: int, row_bytes: int, n: int) -> in
 def _time(fn: Callable[[], object], timing: Timing) -> tuple[float, int]:
     jax.block_until_ready(fn())  # Compile.
     start = time.perf_counter()
-    out = jax.block_until_ready(fn())  # Mandatory warm-up call; always defines the per-call time.
+    jax.block_until_ready(fn())  # Mandatory warm-up call; always defines the per-call time.
     extra_start = time.perf_counter()
     calls = 1
+    # Block on each extra call so the deadline counts finished device work, not queued dispatches.
     while time.perf_counter() - extra_start < timing.extra_warmup_seconds:
-        out = fn()
+        jax.block_until_ready(fn())
         calls += 1
-    jax.block_until_ready(out)
     seconds_per_call = (time.perf_counter() - start) / calls
     iterations = max(5, math.ceil(timing.window_seconds / seconds_per_call))
     windows = []
