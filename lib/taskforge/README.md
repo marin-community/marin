@@ -18,6 +18,7 @@ src/taskforge/
   ledger/     timed spans to per-item JSONL and, on Iris, Finelog
   spec/       TaskSpec assembly and fixed controls
   sandbox/    MachineFactory selection per host, up-front task refusals, image builds
+  proposal/   the TaskProposal document (model.py), the ProposalSource protocol (source.py), sources/
 scripts/      Iris image builder, shellbox Iris probe, ledger summary
 docker/       grader-base image build context
 ```
@@ -26,8 +27,14 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal
 ```
+
+The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
+only each other and external packages. A later stage reaches an earlier one through its seam
+modules, each of which keeps its types beside the code that checks their invariants:
+`proposal.model` (`TaskProposal`) and `proposal.source` (`ProposalBatch`, `SlotFailure`,
+`ProposalSource`).
 
 ## Seams
 
@@ -72,6 +79,12 @@ content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
   the Docker factory keeps Skopeo-prepared images and no controller URL. The caller names that
   directory. `task_refusals(lowered, factory_capabilities(where))` lists every typed reason a
   lowered task cannot run on them.
+- `proposal.source.ProposalSource[IdeaT]`: `async propose(idea, n) -> ProposalBatch`. A batch holds
+  the planning request and completions and one `SlotProposal` or `SlotFailure` per slot, in slot
+  order. A failed slot does not drop its siblings.
+- `proposal.model.TaskProposal`: YAML front matter (`ProposalHeader`) plus a markdown body with
+  required section headings. `parse` and `render` round-trip it; `digest` is the sha256 of the
+  canonical form.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
