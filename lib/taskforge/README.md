@@ -42,11 +42,15 @@ modules, each of which keeps its types beside the code that checks their invaria
 
 ## Seams
 
-- `llm.recording.recorded_complete(client, messages, policy, request_fields, record, attrs)` is the
-  one path that records a GLM call: an `LLM_CALL` span under `record` (a `CallLedger`: ledger,
+- `llm.recording.recorded_complete(client, messages, policy, request_fields, record, attrs)` records
+  one GLM call as an `LLM_CALL` span under `record` (a `CallLedger`: ledger,
   item, round, step) with tokens, finish reason, and the call's attempt record (`attempts`,
-  `attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `run_agent` and
-  `GlmRolloutModel` both use it, so a rollout's 429s, retries and holds reach the ledger.
+  `attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `run_agent`,
+  `GlmRolloutModel` and `BuildLLM.complete` use it, so a rollout's 429s, retries and holds reach
+  the ledger. `llm.recording.recorded_structured(client, messages, policy, tool, record, attrs)` is
+  its structured-output counterpart: one span over the request and its repair, with summed tokens
+  and attempts and a `requests` count. `BuildLLM.structured` and the build author use it, so every
+  model call a build makes records its attempts.
   `GlmRolloutModel(client, policy, record)` takes its `CallLedger`; derive one model per item,
   round and step with `dataclasses.replace`.
 - `llm.client.complete_prefilled(client, messages, policy, prefix, request_fields=None)` sends
