@@ -197,13 +197,21 @@ def _components_error(components: Sequence[Component], verdicts: Mapping[str, Re
         if not isinstance(component.role, ComponentRole):
             return f"component {component.name!r} has an unknown role"
         weight = component.weight
+        # The chained comparison rejects NaN, infinities, and integers beyond float range without converting.
         if component.role != ComponentRole.GATE and (
-            isinstance(weight, bool) or not isinstance(weight, int | float) or not math.isfinite(weight) or weight <= 0
+            isinstance(weight, bool) or not isinstance(weight, int | float) or not 0 < weight <= sys.float_info.max
         ):
             return f"component {component.name!r} weight must be a finite positive number"
     if not any(component.role == ComponentRole.CRITERION for component in components):
         return "weighted aggregation needs at least one criterion"
+    for role in (ComponentRole.CRITERION, ComponentRole.PENALTY):
+        if not math.isfinite(_weight_total(components, role)):
+            return f"{role} weights must sum to a finite number"
     return None
+
+
+def _weight_total(components: Sequence[Component], role: ComponentRole) -> float:
+    return sum(float(component.weight) for component in components if component.role == role)
 
 
 def gate_state(components: Sequence[Component], verdicts: Mapping[str, Reward]) -> GateState:
@@ -251,12 +259,12 @@ def aggregate_weighted(
     rewards = {c.name: validated[c.name].reward if c.name in validated else 0.0 for c in components}
     missing = [c.name for c in components if c.name not in validated]
     failed_gates = [c.name for c in components if c.role == ComponentRole.GATE and rewards[c.name] < 1.0]
-    if failed_gates:
-        return scored(0.0, rewards=rewards, missing=missing, failed_gates=failed_gates)
+    # Each sum is bounded by its role's weight total, which _components_error requires to be finite.
     positive_sum = sum(c.weight * rewards[c.name] for c in components if c.role == ComponentRole.CRITERION)
     penalty_sum = sum(c.weight * rewards[c.name] for c in components if c.role == ComponentRole.PENALTY)
-    denominator = sum(c.weight for c in components if c.role == ComponentRole.CRITERION)
-    reward = _rounded(min(1.0, max(0.0, positive_sum - penalty_sum) / denominator), round_digits)
+    denominator = _weight_total(components, ComponentRole.CRITERION)
+    reward = 0.0 if failed_gates else min(1.0, max(0.0, positive_sum - penalty_sum) / denominator)
+    reward = _rounded(reward, round_digits)
     return scored(
         reward,
         rewards=rewards,

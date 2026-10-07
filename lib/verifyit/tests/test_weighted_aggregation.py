@@ -48,6 +48,8 @@ def test_failed_gate_zeroes_full_credit_and_skips_ungraded_components():
     skipped = aggregate_weighted(RUBRIC, {"compiles": scored(0)})
     assert (skipped.reward, skipped.status) == (0.0, Status.SCORED)
     assert skipped.detail["missing"] == ["correct", "style", "verbose"]
+    assert (skipped.detail["positive_sum"], skipped.detail["penalty_sum"]) == (0.0, 0.0)
+    assert skipped.detail["denominator"] == pytest.approx(4.0)
 
 
 def test_missing_components_score_zero():
@@ -92,12 +94,20 @@ def test_malformed_component_grade_is_an_infrastructure_error(value):
     assert (result.reward, result.status) == (0.0, Status.INFRA_ERROR)
 
 
-@pytest.mark.parametrize("weight", [0, -1.0, float("inf"), float("nan"), True])
+@pytest.mark.parametrize("weight", [0, -1.0, float("inf"), float("nan"), True, 10**400])
 @pytest.mark.parametrize("role", [ComponentRole.CRITERION, ComponentRole.PENALTY])
 def test_invalid_weight_is_an_invalid_task(weight, role):
     rubric = [STYLE, Component("x", role, weight=weight)]
     result = aggregate_weighted(rubric, {"style": scored(1), "x": scored(0)})
     assert (result.reward, result.status) == (0.0, Status.INVALID_TASK)
+
+
+@pytest.mark.parametrize("role", [ComponentRole.CRITERION, ComponentRole.PENALTY])
+def test_weights_whose_total_overflows_are_an_invalid_task(role):
+    rubric = [STYLE, Component("x", role, weight=1e308), Component("y", role, weight=1e308)]
+    result = aggregate_weighted(rubric, {"style": scored(1), "x": scored(1), "y": scored(1)})
+    assert (result.reward, result.status) == (0.0, Status.INVALID_TASK)
+    assert gate_state(rubric, {}) == GateState.INVALID_RUBRIC
 
 
 @pytest.mark.parametrize(
