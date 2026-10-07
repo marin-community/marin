@@ -36,7 +36,8 @@ class LoopPolicy:
         max_validation_retries: Review ``Retry`` decisions per item per launch; then the item is abandoned.
         retry_backoff: Wait before a ``Retry`` re-enters validation; the k-th retry waits the k-th interval.
         output_token_budget: Output tokens of the item's ``LLM_CALL`` ledger entries (triage, author,
-            build steps); an item over it is rejected for budget before its next authoring.
+            build steps; not validation trials); an item over it is rejected for budget before its
+            next authoring.
         validation: The policy of every validation round.
     """
 

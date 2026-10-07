@@ -186,7 +186,8 @@ or on a package the order does not name.
 - `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
   `run_item(proposal, policy, services) -> Terminal`: one idea's proposals, and one proposal carried
   to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `LoopServices[IdeaT]` holds what a run's items
-  share, including the `slots` semaphore that bounds model- and sandbox-bound phases across items.
+  share, including the `slots` semaphore that bounds model- and sandbox-bound phases across items,
+  and `rollout_models`, the `validate.solver.ModelFactory` each validation trial's model comes from.
   Both resume from the run root's event logs.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
@@ -362,8 +363,9 @@ program raises, goes back to the author as a revision; `GlmUnavailable` is the e
 not the program's, and propagates. A repair whose rebuild produces the same task digest counts as a
 failed revision whose failure text is the brief again, so the author cannot spend the repair budget
 returning the same program. The output-token budget sums the item's `LLM_CALL` entries (triage,
-authoring, build steps) and is checked before each authoring; validation trials are bounded by `k`,
-the roles and the deadlines instead. A `Retry` waits out the backoff without holding a slot; spent
+authoring, build steps) and is checked before each authoring. Validation trials record their model
+calls too, under steps `solver/<index>` and `adversary/<role>/<index>`, but the budget leaves them
+out (`loop.events.UNBUDGETED_TRIALS`): `k`, the roles and the deadlines bound them instead. A `Retry` waits out the backoff without holding a slot; spent
 retries end the item `ABANDONED`, never rejected, and the next launch re-enters it at the control
 replay with a fresh retry budget. An unhandled exception records `FAILED` and propagates to the queue.
 A triage verdict is final for its proposal digest within a run.
