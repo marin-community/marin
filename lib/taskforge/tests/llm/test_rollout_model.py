@@ -25,8 +25,10 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskcompendium.submission import PlainText
 
+from taskforge.ledger.records import EntryKind, LedgerEntry
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_tokens
 from taskforge.spec.draft import assemble, environment, file, shell_verifier, task_execution
 
@@ -48,6 +50,18 @@ PUZZLE_1_CHECK = (
 @pytest.fixture
 def evidence_dir(evidence_root: Path) -> Path:
     return evidence_root / "validate" / "rollout_model"
+
+
+class ListLedger:
+    def __init__(self) -> None:
+        self.entries: list[LedgerEntry] = []
+
+    def record(self, entry: LedgerEntry) -> None:
+        self.entries.append(entry)
+
+
+def call_ledger(ledger: ListLedger | None = None) -> CallLedger:
+    return CallLedger(ledger=ledger or ListLedger(), item_id="rollout-model", round=0, step="solver")
 
 
 @dataclass
@@ -142,7 +156,9 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
     )
     fake_glm.responses.append(token_stream([1, 2, 3, 4, 5, 6, 7], [8, 9], content="Done."))
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task(), execution=EXECUTION)
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(
+        shell_task(), execution=EXECUTION
+    )
 
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
     assert rollout.prompt_token_ids == (1, 2, 3)
@@ -159,7 +175,9 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
 async def test_length_cut_turn_is_graded_with_length_stop(fake_glm, fake_client):
     fake_glm.responses.append(token_stream([1, 2], [3, 4], content="I will", finish="length"))
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task(), execution=EXECUTION)
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(
+        shell_task(), execution=EXECUTION
+    )
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -172,7 +190,9 @@ async def test_tool_call_cut_at_the_budget_ends_the_rollout_with_length_unexecut
     fake_glm.responses.append(token_stream([1, 2], [3, 4, 5], tool_call=("shell", command), finish="tool_calls"))
     policy = LLMPolicy(max_tokens=3, max_continuations=0)
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy)).run(shell_task(), execution=EXECUTION)
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy, call_ledger())).run(
+        shell_task(), execution=EXECUTION
+    )
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -185,7 +205,7 @@ async def test_prompt_filling_the_context_raises_generation_limit(fake_glm, fake
     request = ModelRequest(({"role": "user", "content": "x"},), {}, (1, 2), 1)
 
     with pytest.raises(GenerationLimitReached) as raised:
-        await GlmRolloutModel(fake_client, POLICY)(request)
+        await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
     assert raised.value.prompt_token_ids == (1, 2)
 
@@ -197,7 +217,7 @@ async def test_ids_that_disagree_with_usage_break_the_contract(fake_glm, fake_cl
     request = ModelRequest(({"role": "user", "content": "x"},), {}, (), None)
 
     with pytest.raises(RolloutContractError, match="disagree with usage"):
-        await GlmRolloutModel(fake_client, POLICY)(request)
+        await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
 
 async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake_client):
@@ -218,7 +238,7 @@ async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake
     fake_glm.responses.append(token_stream([1, 2, 3, *canonical, observation, 9], [10], content="Done."))
 
     with pytest.raises(RolloutContractError, match=r"index 5 of the 11-token prefix it served \[23482, 16"):
-        await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task(), execution=EXECUTION)
+        await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shell_task(), execution=EXECUTION)
 
 
 async def test_a_continued_completion_has_no_exact_tokens(fake_glm, fake_client):
@@ -239,7 +259,7 @@ async def test_stream_without_prompt_ids_breaks_the_contract(fake_glm, fake_clie
     request = ModelRequest(({"role": "user", "content": "x"},), {}, (), None)
 
     with pytest.raises(RolloutContractError, match="prompt_token_ids"):
-        await GlmRolloutModel(fake_client, POLICY)(request)
+        await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
 
 def live_task():
@@ -302,11 +322,16 @@ def write_live_evidence(
 
 
 async def live_rollouts(glm_settings, task: TaskSpec, count: int, max_turns: int) -> tuple[list[RolloutData], float]:
+    """``count`` rollouts of ``task``; also asserts that the ledger holds one ``LLM_CALL`` per turn."""
     endpoint = GlmEndpoint(base_url=glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
+    ledger = ListLedger()
     started = time.monotonic()
     async with GlmClient(endpoint) as client:
-        engine = rollout_engine(GlmRolloutModel(client, POLICY), max_turns=max_turns)
+        engine = rollout_engine(GlmRolloutModel(client, POLICY, call_ledger(ledger)), max_turns=max_turns)
         rollouts = await asyncio.gather(*(engine.run(task, execution=EXECUTION) for _ in range(count)))
+    calls = [entry for entry in ledger.entries if entry.kind == EntryKind.LLM_CALL]
+    assert len(calls) == sum(len(rollout.steps) for rollout in rollouts)
+    assert all(entry.cause is None and entry.tokens_out for entry in calls)
     return list(rollouts), time.monotonic() - started
 
 
