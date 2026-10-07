@@ -28,11 +28,11 @@ from taskforge.build.sdk import BuildServices
 from taskforge.build.template import standard
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import LedgerEntry
-from taskforge.llm.client import FinishReason, GlmClient, GlmEndpoint, GlmUnavailable, Pool, Usage
+from taskforge.llm.client import Completion, FinishReason, GlmClient, GlmEndpoint, GlmUnavailable, Pool, Usage
 from taskforge.llm.policy import LLMPolicy
 from taskforge.loop.policy import LoopPolicy
 from taskforge.loop.program import LEDGER_DIR, LoopServices
-from taskforge.proposal.model import TaskProposal, parse
+from taskforge.proposal.model import TaskProposal, parse, render
 from taskforge.proposal.source import ProposalBatch, SlotFailure, SlotProposal
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.triage.checks import CheckContext, CheckResult
@@ -233,24 +233,43 @@ class FakeRubric:
         return TriageRepair(replace(p, body=p.body + f"\nRepair {len(self.repaired)}.\n"), model_call())
 
 
+def completion(content: str) -> Completion:
+    return Completion(content, "", (), FinishReason.STOP, Usage(10, 5, 0, 0), 0.1, 0.01, 0.05, 0, ())
+
+
+def slot_request(idea: str, slot: int) -> tuple[dict[str, str], ...]:
+    return ({"role": "user", "content": f"write slot {slot} of {idea}"},)
+
+
 @dataclass
 class FakeSource:
-    """Serves ``batches`` in order; each is a tuple of slot outcomes (a proposal, or an error string)."""
+    """Serves ``batches`` in order; each is a tuple of slot outcomes (a proposal, or an error string).
+
+    Every batch carries a planning request and completion; a proposal slot one completion, or two
+    with a ``repair_error`` when its slot is in ``repaired``; a failed slot two completions.
+    """
 
     batches: list[tuple[TaskProposal | str, ...]]
+    repaired: frozenset[int] = frozenset()
     calls: int = 0
 
     async def propose(self, idea: str, n: int) -> ProposalBatch:
         self.calls += 1
-        slots = tuple(
-            (
-                SlotProposal(slot, outcome, (), (), None)
-                if isinstance(outcome, TaskProposal)
-                else SlotFailure(slot, outcome, (), ())
-            )
-            for slot, outcome in enumerate(self.batches.pop(0))
-        )
-        return ProposalBatch((), (), slots)
+        slots = tuple(self.outcome(idea, slot, outcome) for slot, outcome in enumerate(self.batches.pop(0)))
+        return ProposalBatch(({"role": "user", "content": f"plan {n} slots for {idea}"},), (completion("plan"),), slots)
+
+    def outcome(self, idea: str, slot: int, outcome: TaskProposal | str) -> SlotProposal | SlotFailure:
+        request = slot_request(idea, slot)
+        if isinstance(outcome, str):
+            return SlotFailure(slot, outcome, request, (completion("not a proposal"), completion("still not one")))
+        if slot in self.repaired:
+            first = completion("not a proposal")
+            return SlotProposal(slot, outcome, request, (first, completion(render(outcome))), "front matter missing")
+        return SlotProposal(slot, outcome, request, (completion(render(outcome)),), None)
+
+
+def describe_idea(idea: str) -> dict[str, object]:
+    return {"idea": idea, "kind": "test"}
 
 
 ROLE_REPLIES = {
@@ -387,6 +406,7 @@ class Loop:
             yield LoopServices(
                 client=client,
                 source=self.source,
+                describe_idea=describe_idea,
                 checks=(),
                 rubric=self.rubric,
                 check_context=CheckContext(allowed_combinations=frozenset()),
