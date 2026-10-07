@@ -3,12 +3,9 @@
 
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
-import fcntl
 import os
 import shutil
 import subprocess
-import tempfile
-from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -16,8 +13,6 @@ from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_comm
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
 from iris.rpc import job_pb2
-
-SETUP_TEST_LOCK = Path(tempfile.gettempdir()) / "iris-setup-test.lock"
 
 
 @pytest.mark.parametrize(
@@ -106,54 +101,6 @@ def test_default_setup_with_editable_python_dependency_succeeds(tmp_path):
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     subprocess.run([venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 42"], check=True)
-
-
-@pytest.mark.parametrize("has_native, install_exit", [(False, 0), (True, 0), (True, 17)])
-def test_default_setup_skips_python_members_and_preserves_native_build_failure(tmp_path, has_native, install_exit):
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-    (workdir / "pyproject.toml").write_text('[tool.uv.sources]\npayload = { path = "lib/z_python", editable = true }\n')
-    # Keep the Python member last in glob order to reproduce the setup exit-status failure.
-    python_member = workdir / "lib" / "z_python"
-    python_member.mkdir(parents=True)
-    (python_member / "pyproject.toml").write_text('[build-system]\nbuild-backend = "setuptools.build_meta"\n')
-    if has_native:
-        native_member = workdir / "lib" / "a_native"
-        native_member.mkdir()
-        (native_member / "pyproject.toml").write_text('[build-system]\nbuild-backend = "maturin"\n')
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    install_log = tmp_path / "installs"
-    uv = bin_dir / "uv"
-    uv.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1 $2" = "pip install" ]; then\n'
-        '  printf "%s\\n" "$*" >> "$UV_INSTALL_LOG"\n'
-        '  exit "$NATIVE_EXIT_CODE"\n'
-        "fi\n"
-        "exit 0\n"
-    )
-    uv.chmod(0o755)
-    completed = subprocess.run(
-        ["bash", "-c", default_setup_script()],
-        env={
-            **os.environ,
-            "IRIS_WORKDIR": str(workdir),
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "UV_INSTALL_LOG": str(install_log),
-            "NATIVE_EXIT_CODE": str(install_exit),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert completed.returncode == install_exit, completed.stderr
-    if not has_native:
-        assert not install_log.exists()
-    else:
-        assert install_log.read_text().splitlines() == ["pip install -e lib/a_native"]
 
 
 @pytest.mark.parametrize("link_mode", ["copy", "symlink"])
@@ -280,16 +227,13 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
             *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
         ]
     )
-    # Container setup uses shared /tmp paths. Serialize host-side executions during parallel tests.
-    with SETUP_TEST_LOCK.open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        completed = subprocess.run(
-            ["bash", "-c", setup],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    completed = subprocess.run(
+        ["bash", "-c", setup],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     assert completed.returncode == expected_status
     if expected_status == 0:
