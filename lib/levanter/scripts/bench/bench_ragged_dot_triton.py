@@ -140,6 +140,7 @@ def case_inputs(case: Case, dtype) -> tuple[jax.Array, jax.Array, jax.Array]:
 
 
 def time_call(fn: Callable, args, *, warmup_seconds: float, window_seconds: float, repeats: int):
+    jax.block_until_ready(args)
     start = time.perf_counter()
     jax.block_until_ready(fn(*args))
     compile_time = time.perf_counter() - start
@@ -190,11 +191,12 @@ def implementations(case: Case, args) -> list[Timed]:
 
 
 def sweep_implementations(case: Case, configs: list) -> list[Timed]:
-    """The tile-map kernel once per block config."""
+    """The tile-map kernel once per distinct block config after fitting the configs to this case."""
     layout = ragged_dot_module.RaggedLayout(case.layout)
     inputs = case_inputs(case, jnp.bfloat16)
+    fitted = dict.fromkeys(config.fit(*triton_problem_dims(case)) for config in configs)
     timed = []
-    for config in configs:
+    for config in fitted:
         fn = jax.jit(
             lambda lhs, rhs, gs, config=config: ragged_dot_module._tile_map_pallas_call(lhs, rhs, gs, layout, config)
         )
