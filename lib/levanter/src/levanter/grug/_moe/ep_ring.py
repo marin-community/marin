@@ -21,6 +21,77 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.routing_top_k import is_rocm_backend
+
+
+def _assignment_slots(
+    slot_assignment: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    *,
+    tokens: int,
+    topk: int,
+) -> Int[Array, "T K"]:
+    """Invert the dispatch: the slot holding each (token, k) assignment, or ``P`` where no valid slot does."""
+    capacity = slot_assignment.shape[0]
+    target = jnp.where(slot_valid, slot_assignment, tokens * topk)
+    slots = jnp.full((tokens * topk,), capacity, dtype=jnp.int32)
+    slots = slots.at[target].set(jnp.arange(capacity, dtype=jnp.int32), mode="drop")
+    return slots.reshape(tokens, topk)
+
+
+def _gather_sum_slots(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
+    """``out[t] = sum_k rows[slots[t, k]]`` with out-of-range slots read as zero, summed in float32."""
+    out = jnp.zeros((slots.shape[0], rows.shape[1]), dtype=jnp.float32)
+    for k in range(slots.shape[1]):
+        out += jnp.take(rows, slots[:, k], axis=0, mode="fill", fill_value=0).astype(jnp.float32)
+    return out.astype(rows.dtype)
+
+
+def _take_valid_rows(
+    x: Float[Array, "T H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"]
+) -> Float[Array, "P H"]:
+    rows = jnp.take(x, slot_token, axis=0)
+    return jnp.where(slot_valid[:, None], rows, jnp.zeros_like(rows))
+
+
+# The dispatch gather and the combine are transposes of each other. Autodiff would turn the gather's transpose,
+# and the combine itself, into scatter-adds over the token buffer, which ROCm runs at about 1.2 TB/s. With the
+# inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows.
+@jax.custom_vjp
+def _dispatch_rows(
+    x: Float[Array, "T H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+) -> Float[Array, "P H"]:
+    return _take_valid_rows(x, slot_token, slot_valid)
+
+
+def _dispatch_rows_fwd(x, slot_token, slot_valid, slots):
+    return _take_valid_rows(x, slot_token, slot_valid), slots
+
+
+def _dispatch_rows_bwd(slots, g):
+    return _gather_sum_slots(g, slots), None, None, None
+
+
+_dispatch_rows.defvjp(_dispatch_rows_fwd, _dispatch_rows_bwd)
+
+
+@jax.custom_vjp
+def _combine_rows(
+    rows: Float[Array, "P H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+) -> Float[Array, "T H"]:
+    return _gather_sum_slots(rows, slots)
+
+
+def _combine_rows_fwd(rows, slot_token, slot_valid, slots):
+    return _gather_sum_slots(rows, slots), (slot_token, slot_valid)
+
+
+def _combine_rows_bwd(residuals, g):
+    slot_token, slot_valid = residuals
+    return _take_valid_rows(g, slot_token, slot_valid), None, None, None
+
+
+_combine_rows.defvjp(_combine_rows_fwd, _combine_rows_bwd)
 
 
 def _moe_mlp_ep_ring_local(
@@ -103,8 +174,13 @@ def _moe_mlp_ep_ring_local(
         token_local = jnp.floor_divide(local_idx, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        x_take = jnp.take(x_global, token_local, axis=0)
-        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        # ROCm only: TPU and NVIDIA keep the scatter-add combine until the gather form is measured there.
+        gather_combine = is_rocm_backend()
+        if gather_combine:
+            slots = _assignment_slots(local_idx, valid, tokens=tokens, topk=topk)
+            x_dispatch = _dispatch_rows(x_global, token_local, valid, slots)
+        else:
+            x_dispatch = _take_valid_rows(x_global, token_local, valid)
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
@@ -122,7 +198,11 @@ def _moe_mlp_ep_ring_local(
         )
 
     with jax.named_scope("scatter"):
-        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+        weighted = out_dispatch * weight_dispatch[:, None]
+        if gather_combine:
+            out_global = _combine_rows(weighted, token_local, valid, slots)
+        else:
+            out_global = jnp.zeros_like(x_global).at[token_local].add(weighted, mode="drop")
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
