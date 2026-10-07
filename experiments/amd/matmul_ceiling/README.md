@@ -1,4 +1,4 @@
-# amd-matmul-ceiling
+# AMD matmul ceiling
 
 Measures the dense matmul throughput one AMD Instinct GPU reaches, as a ceiling for the MFU numbers in [#9812](https://github.com/marin-community/marin/issues/9812). Two measurements:
 
@@ -16,7 +16,7 @@ cluster-sync
 cluster "cd agents/<name> && bash experiments/amd/matmul_ceiling/setup_envs.sh"
 ```
 
-Submit from the synced checkout root, and pin both jobs to one node with `-w <node>`: separate jobs otherwise land on different nodes. On MAMF-finder's 28 bf16 shapes, JAX ran a median of 3% faster on k007-002 than on k007-004, ranging from 8% slower to 5% faster per shape (jobs 453412 and 453338). Both scripts use `--no-requeue`, because this cluster requeues failed batch jobs by default and a job that wedges a GPU would otherwise move on to the next node:
+Submit from the synced checkout root, and pin both jobs to one node with `-w <node>`: separate jobs otherwise land on different nodes. On the 28 bf16 shapes MAMF-finder shortlisted on MI350X ([`mamf_mi350x_bf16_shapes.txt`](./mamf_mi350x_bf16_shapes.txt)), JAX ran a median of 3% faster on k007-002 than on k007-004, ranging from 8% slower to 5% faster per shape (jobs 453412 and 453338). Both scripts use `--no-requeue`, because this cluster requeues failed batch jobs by default and a job that wedges a GPU would otherwise move on to the next node:
 
 ```bash
 sha=$(git rev-parse HEAD)
@@ -25,6 +25,14 @@ cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -w
 cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -w <node> -t 60 -J <name> \
   -o \$WORK/agents/<name>/logs/%x-%j.out experiments/amd/matmul_ceiling/jax_matmul.sbatch \
   --dtype bfloat16 --shapes-file experiments/amd/matmul_ceiling/snowball_shapes.txt"
+```
+
+The JAX headline in [#9812](https://github.com/marin-community/marin/issues/9812), 1,192 TFLOP/s in bf16 on MI350X, is the best shape of a 125-shape grid with M, N and K each running from 4096 to 20480 in steps of 4096. `--m-range`, `--n-range` and `--k-range` take START STOP STEP with STOP inclusive; `--m`, `--n` and `--k` take explicit values instead:
+
+```bash
+cluster "cd agents/<name> && sbatch --export=ALL,MARIN_COMMIT=$sha -p mi3508x -w <node> -t 60 -J <name> \
+  -o \$WORK/agents/<name>/logs/%x-%j.out experiments/amd/matmul_ceiling/jax_matmul.sbatch \
+  --dtype bfloat16 --m-range 4096 20480 4096 --n-range 4096 20480 4096 --k-range 4096 20480 4096"
 ```
 
 Keep XLA's GEMM autotuning on. With `--xla_gpu_autotune_level=0`, bf16 matmuls on MI350X ran at 15-17 TFLOP/s, about 1% of the autotuned rate (job 453316), so level 0 does not isolate hipBLASLt's default kernel choice from XLA's tuning.

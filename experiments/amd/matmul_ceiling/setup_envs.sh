@@ -8,7 +8,7 @@ set -euo pipefail
 ROCM_INDEX=https://stable.repo.amd.com/rocm/whl-next/
 ROCM_VERSION=10.0.0
 JAX_VERSION=0.11.0
-# PyTorch build against the same ROCm release as the JAX plugin, so both use the same hipBLASLt.
+# PyTorch built against the same ROCm release as the JAX plugin, so both use the same hipBLASLt.
 TORCH_VERSION=2.13.0
 MAMF_SHA=0359db89793c313e90e4f8a8bc8a2b1514ba00ae
 MAMF_URL=https://raw.githubusercontent.com/stas00/ml-engineering/$MAMF_SHA/compute/accelerator/benchmarks/mamf-finder.py
