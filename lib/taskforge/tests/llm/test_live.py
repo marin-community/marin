@@ -30,9 +30,10 @@ from taskforge.llm.client import (
     GlmEndpoint,
     Pool,
     complete_prefilled,
+    prefill_request_fields,
     request_body,
 )
-from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, ReasoningEffort
+from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, ReasoningEffort, prefilled_messages
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import StructuredTool, complete_structured
@@ -286,7 +287,11 @@ def test_prefilled_answer_continues_the_prefix_without_thinking(glm_settings):
         "g_prefilled",
         "front matter prefilled as the start of the assistant turn; the model continues it as content, no reasoning",
         request_body(
-            glm_settings.model, [*messages, {"role": "assistant", "content": prefix}], policy.max_tokens, policy, {}
+            glm_settings.model,
+            prefilled_messages(messages, prefix),
+            policy.max_tokens,
+            policy,
+            prefill_request_fields(policy, None),
         ),
         [completion],
     )
