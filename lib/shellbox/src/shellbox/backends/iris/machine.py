@@ -52,7 +52,7 @@ IDLE_ENTRYPOINT = "trap 'exit 0' TERM INT; sleep infinity & wait"
 """Keeps the sandbox alive for exec while exiting promptly when Iris stops it."""
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
-# How long ``close`` waits for admitted execs to end after it terminates the sandbox job.
+# How long ``close`` waits for admitted execs to end after it cancels the sandbox job.
 CLOSE_DRAIN_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
 
