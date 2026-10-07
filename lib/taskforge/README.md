@@ -131,7 +131,12 @@ modules, each of which keeps its types beside the code that checks their invaria
   (`k` trials) and `run_adversaries` (`adversary_k` trials per `AdversaryRole`) run concurrently.
   Every trial runs under the draft's own convention. The evidence directory holds
   `control/<id>/`, `solver/<index>/` and `adversary/<role>/<index>/` attempt files;
-  `load_validation(draft, evidence_dir)` reads a round back as `ValidationEvidence`.
+  `load_validation(draft, evidence_dir)` reads a round back as `ValidationEvidence`. `run_solver`
+  and `run_adversaries` take a `solver.ModelFactory` (`Callable[[CallLedger], RolloutModel]`, for
+  GLM `partial(GlmRolloutModel, client, sampling)`) and build each trial's model with
+  `site.call_ledger(kind, trial)`, so its `LLM_CALL` spans carry step `solver/<index>` or
+  `adversary/<role>/<index>`. `replay_controls` resumes unsettled controls through
+  `ControlPlan.first_attempts`.
 - `validate.calibration.summarize(evidence, policy) -> CalibrationSummary`: pure. It records the
   policy digest and band, the solver's `RewardStats`, the control verdicts, `RoleStats` per role
   and a closed set of `Finding`s (`FindingKind`; `DECISIVE` ones cannot improve by retrying).
@@ -239,8 +244,9 @@ solver's engine path, task, grader, machine and convention. The preamble is the 
 turn, so the served token prefix holds. Adversary rollouts are evidence, never training data. The
 engine installs verifier files only after the final response, so the leak role looks for answer
 keys in the instruction, the environment files and the build context rather than reading the
-grader. A shortcut or leak pass becomes a negative control (`reward_max = REJECTION_CEILING`) that
-the revised program must ship, so the next round's control replay proves the fix. Every role has
+grader. A shortcut or leak pass becomes a negative control with concern `shortcut`
+(`reward_max = REJECTION_CEILING`) that the revised program must ship, so the next round's control
+replay proves the fix. Every role has
 a sentinel reply for finding nothing. A shortcut or leak pass is a finding whatever the adversary
 replied last: the grade is the evidence, and the adversary's own conclusion is not trusted over it.
 Only an ambiguity pass that ends on its sentinel is no finding, because no reading changed the
