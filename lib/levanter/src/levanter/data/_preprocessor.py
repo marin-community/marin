@@ -2,15 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Generic, Iterable, Mapping, Sequence, TypeVar, Union
+from typing import Any, Dict, Generic, Mapping, Sequence, TypeVar, Union
 
 import numpy as np
 import pyarrow as pa
 
-T = TypeVar("T")
-T_co = TypeVar("T_co", covariant=True)
 T_contra = TypeVar("T_contra", contravariant=True)
-U = TypeVar("U")
 U_co = TypeVar("U_co", covariant=True)
 
 
@@ -67,44 +64,6 @@ class BatchProcessor(Generic[T_contra, U_co], ABC):
         raise NotImplementedError
 
 
-class _DatasetTransform(ABC):
-    pass
-
-
-class _MapTransform(_DatasetTransform):
-    fn: Callable[[T_co], T]
-
-    def __init__(self, fn):
-        self.fn = fn
-
-
-class _BatchMapTransform(_DatasetTransform):
-    fn: Callable[[list[T_co]], Iterable[U]]
-    batch_size: int
-    num_cpus: int
-    num_gpus: int
-    resources: dict
-    output_exemplar: Any
-
-    def __init__(self, fn, batch_size, num_cpus, num_gpus, resources, output_exemplar=None):
-        self.fn = fn
-        self.batch_size = batch_size
-        self.num_cpus = num_cpus
-        self.num_gpus = num_gpus
-        self.resources = resources
-        self.output_exemplar = output_exemplar
-
-
-class _TransformedDataset:
-    """Marker mixin for datasets carrying a lazy ``_DatasetTransform``.
-
-    ``source`` is a ``ShardedDataSource`` at runtime but left untyped here.
-    """
-
-    source: Any
-    _transform: _DatasetTransform
-
-
 def dict_from_record_batch(b) -> dict:
     # we follow the convention from hf batchencoding where homogeneous-lengthed arrays are turned into nd arrays
     # while heterogeneous lists are left as lists of arrays
@@ -139,23 +98,3 @@ def canonicalize_batch(batch: Union[dict, list[dict], pa.RecordBatch]) -> list[d
         return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
 
     return list(batch)
-
-
-class IdentityProcessor(BatchProcessor[T, T]):
-    def __init__(self, exemplar):
-        self.exemplar = exemplar
-
-    def __call__(self, batch: Sequence[T]) -> Sequence[T]:
-        return batch
-
-    @property
-    def output_exemplar(self):
-        return self.exemplar
-
-    @property
-    def num_cpus(self) -> float:
-        return 0.1
-
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        return {}

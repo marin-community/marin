@@ -5,7 +5,10 @@
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 from iac.github.credentials import (
     AuditReport,
@@ -28,27 +31,82 @@ BUILTIN_ACTIONS_SECRETS = frozenset({"GITHUB_TOKEN"})
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
 
 
+@dataclass(frozen=True)
+class WorkflowJobEnvironment:
+    """A one-based, half-open workflow job line range and its environment."""
+
+    start_line: int
+    end_line: int
+    name: str
+
+
+def _workflow_job_environments(path: Path) -> tuple[WorkflowJobEnvironment, ...]:
+    document = yaml.compose(path.read_text())
+    if not isinstance(document, yaml.MappingNode):
+        return ()
+    jobs = next(
+        (
+            value
+            for key, value in document.value
+            if isinstance(key, yaml.ScalarNode) and key.value == "jobs" and isinstance(value, yaml.MappingNode)
+        ),
+        None,
+    )
+    if jobs is None:
+        return ()
+    ranges: list[WorkflowJobEnvironment] = []
+    for _, job in jobs.value:
+        if not isinstance(job, yaml.MappingNode):
+            continue
+        environment = next(
+            (
+                value
+                for key, value in job.value
+                if isinstance(key, yaml.ScalarNode) and key.value == "environment" and isinstance(value, yaml.ScalarNode)
+            ),
+            None,
+        )
+        if environment is not None:
+            ranges.append(
+                WorkflowJobEnvironment(
+                    start_line=job.start_mark.line + 1,
+                    end_line=job.end_mark.line + 1,
+                    name=environment.value,
+                )
+            )
+    return tuple(ranges)
+
+
 def discover_secret_references(repo_root: Path) -> dict[str, tuple[SecretReference, ...]]:
     """Return Actions secret references in workflow and composite-action YAML."""
     references: dict[str, list[SecretReference]] = defaultdict(list)
     roots = (repo_root / ".github" / "workflows", repo_root / ".github" / "actions")
     paths = sorted(path for root in roots for suffix in ("*.yaml", "*.yml") for path in root.rglob(suffix))
     for path in paths:
+        job_environments = _workflow_job_environments(path)
         for line_number, line in enumerate(path.read_text().splitlines(), start=1):
             if line.lstrip().startswith("#"):
                 continue
             for match in SECRET_REFERENCE.finditer(line):
+                environment = next(
+                    (job.name for job in job_environments if job.start_line <= line_number < job.end_line),
+                    None,
+                )
                 references[match.group(1)].append(
-                    SecretReference(path=str(path.relative_to(repo_root)), line=line_number)
+                    SecretReference(
+                        path=str(path.relative_to(repo_root)),
+                        line=line_number,
+                        environment=environment,
+                    )
                 )
     return {name: tuple(found) for name, found in sorted(references.items())}
 
 
-def _accessible_to_repository(credential: Credential, repository: str) -> bool:
+def _accessible_to_repository(credential: Credential, repository: str, environment: str | None = None) -> bool:
     if isinstance(credential, RepositoryCredential):
         return credential.repository == repository
     if isinstance(credential, EnvironmentCredential):
-        return False
+        return credential.repository == repository and credential.environment == environment
     assert isinstance(credential, OrganizationCredential)
     if credential.visibility is OrganizationVisibility.ALL:
         return True
@@ -61,11 +119,12 @@ def _resolved_credential(
     manifest: CredentialManifest,
     name: str,
     repository: str,
+    environment: str | None,
 ) -> Credential | None:
     candidates = [
         credential
         for credential in manifest.credentials
-        if credential.name == name and _accessible_to_repository(credential, repository)
+        if credential.name == name and _accessible_to_repository(credential, repository, environment)
     ]
     scope_order = {
         CredentialScope.ENVIRONMENT: 0,
@@ -130,13 +189,17 @@ def audit_credentials(
     for name, found in references.items():
         if name in BUILTIN_ACTIONS_SECRETS:
             continue
-        for repository in manifest.repositories:
-            credential = _resolved_credential(manifest, name, repository)
-            if credential is not None:
-                consumers[credential.key].update(reference.path for reference in found)
-                break
-        else:
-            locations = ", ".join(f"{reference.path}:{reference.line}" for reference in found)
+        unresolved: list[SecretReference] = []
+        for reference in found:
+            for repository in manifest.repositories:
+                credential = _resolved_credential(manifest, name, repository, reference.environment)
+                if credential is not None:
+                    consumers[credential.key].add(reference.path)
+                    break
+            else:
+                unresolved.append(reference)
+        if unresolved:
+            locations = ", ".join(f"{reference.path}:{reference.line}" for reference in unresolved)
             errors.append(Finding("undeclared-reference", f"{name} is referenced at {locations}", name))
 
     for credential in manifest.credentials:

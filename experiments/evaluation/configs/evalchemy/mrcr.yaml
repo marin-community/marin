@@ -1,0 +1,12 @@
+tasks: [MRCR]
+task_options:
+  MRCR:
+    num_fewshot: 0
+    task_alias: mrcr
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 4096
+max_length: 73728
+runtime_extras: [mrcr]

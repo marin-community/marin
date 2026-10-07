@@ -7,11 +7,51 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from rigging.secrets import is_secret_reference
 
-RESERVED_ENDPOINT_MODEL_ARGS = frozenset({"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests"})
+RESERVED_ENDPOINT_MODEL_ARGS = frozenset(
+    {"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests", "chat_template_kwargs"}
+)
+
+
+class EvalchemyJudgeConfig(BaseModel):
+    """External judge endpoint and credential references for a supported task."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    base_url: str
+    model: str
+    api_key: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("judge.base_url must be an http(s) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("judge.base_url must not contain credentials, a query, or a fragment")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def nonempty_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("judge.model must not be empty")
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key_references(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not is_secret_reference(value) for value in values):
+            raise ValueError("judge.api_key accepts only env:, file:, or gcp-secret:// references")
+        if any(value in {"env:", "file:", "gcp-secret://"} for value in values):
+            raise ValueError("judge.api_key references must name a secret")
+        return values
 
 
 class EvalchemyTaskOptions(BaseModel):
@@ -34,15 +74,27 @@ class EvalchemyConfig(BaseModel):
     tasks: tuple[str, ...] = Field(min_length=1)
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
     apply_chat_template: bool | None = None
+    debug: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None
     seed: int | None = None
     gen_kwargs: Mapping[str, str] = Field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, bool] = Field(default_factory=dict)
     extra_model_args: Mapping[str, str | int | float | bool] = Field(default_factory=dict)
     max_length: int | None = None
     max_tokens: int | None = None
     runtime_extras: tuple[str, ...] = ()
+    judge: EvalchemyJudgeConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_judge_task(self) -> EvalchemyConfig:
+        financebench = self.tasks == ("FinanceBench",)
+        if self.judge is not None and not financebench:
+            raise ValueError("judge is supported only for a single FinanceBench task")
+        if financebench and self.judge is None:
+            raise ValueError("FinanceBench requires an explicit judge configuration")
+        return self
 
     @field_validator("tasks", "runtime_extras")
     @classmethod

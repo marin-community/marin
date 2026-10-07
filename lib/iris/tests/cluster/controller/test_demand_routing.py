@@ -29,22 +29,22 @@ from iris.cluster.controller.autoscaler.routing import (
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
+from iris.testing.backends import (
     make_mock_platform,
     make_mock_slice_handle,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     DEFAULT_RESOURCES,
     make_demand_entries,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
+from rigging.timing import Duration, Timestamp
 
 # ---------------------------------------------------------------------------
 # group_required_slices via route_demand
@@ -394,7 +394,7 @@ class TestWaterfallRouting:
 
         ts = Timestamp.from_ms(1_000_000)
         group_a.begin_scale_up(timestamp=ts)
-        handle = group_a.scale_up(timestamp=ts)
+        handle = group_a.scale_up()
         group_a.complete_scale_up(handle, ts)
 
         eval_ts = Timestamp.from_ms(1_030_000)
@@ -1465,7 +1465,7 @@ class TestAllocationTierBlocking:
 
         # Put tier 1 into quota exceeded
         try:
-            groups[0].scale_up(timestamp=ts)
+            groups[0].scale_up()
         except Exception:
             pass
         groups[0].cancel_scale_up()
@@ -1486,7 +1486,7 @@ class TestAllocationTierBlocking:
 
         # Put tier 2 into quota exceeded
         try:
-            groups[1].scale_up(timestamp=ts)
+            groups[1].scale_up()
         except Exception:
             pass
         groups[1].cancel_scale_up()
@@ -1506,7 +1506,7 @@ class TestAllocationTierBlocking:
 
         # Fail pool A
         try:
-            pool_a[0].scale_up(timestamp=ts)
+            pool_a[0].scale_up()
         except Exception:
             pass
         pool_a[0].cancel_scale_up()
@@ -1526,7 +1526,7 @@ class TestAllocationTierBlocking:
 
         # Fail the pooled group
         try:
-            pooled[0].scale_up(timestamp=ts)
+            pooled[0].scale_up()
         except Exception:
             pass
         pooled[0].cancel_scale_up()
@@ -1559,7 +1559,7 @@ class TestAllocationTierBlocking:
 
         # Fail g1 only
         try:
-            g1.scale_up(timestamp=ts)
+            g1.scale_up()
         except Exception:
             pass
         g1.cancel_scale_up()
@@ -1578,7 +1578,7 @@ class TestAllocationTierBlocking:
 
         # Fail tier 1 → blocks tier 1 and tier 2
         try:
-            groups[0].scale_up(timestamp=ts)
+            groups[0].scale_up()
         except Exception:
             pass
         groups[0].cancel_scale_up()

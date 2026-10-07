@@ -13,7 +13,6 @@ import time
 import traceback
 import warnings
 from dataclasses import asdict
-from pathlib import Path
 
 import pytest
 from finelog.client import LogClient
@@ -21,23 +20,12 @@ from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.local_client import make_local_client
-from iris.cluster.config import (
-    IrisClusterConfig,
-    LocalSliceConfig,
-    ScaleGroupConfig,
-    ScaleGroupResources,
-    SliceConfig,
-    load_config,
-    make_local_config,
-)
 from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
-from iris.cluster.types import AcceleratorType, CapacityType, JobName
+from iris.cluster.types import JobName
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
+from iris.testing.config import make_controller_only_config
 from rigging.timing import Duration, ExponentialBackoff
-
-IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
 @pytest.fixture
@@ -119,32 +107,10 @@ def log_service(embedded_log_server) -> LogServiceClientSync:
     return LogServiceClientSync(address=embedded_log_server.address)
 
 
-def _make_controller_only_config() -> IrisClusterConfig:
-    """Build a null-auth local config with no auto-scaled workers.
-
-    A local cluster boots with no persistent signing key, so it can only run in
-    null-auth mode (an authed provider requires ``auth.signing_key``). Auth tests
-    exercise loopback trust and identity attribution against this permissive
-    controller; the token-verification logic itself is unit-tested directly.
-    """
-    config = load_config(DEFAULT_CONFIG)
-    config.scale_groups = {
-        "placeholder": ScaleGroupConfig(
-            name="placeholder",
-            num_vms=1,
-            buffer_slices=0,
-            max_slices=0,
-            resources=ScaleGroupResources(
-                cpu_millicores=1000,
-                memory_bytes=1 * 1024**3,
-                disk_bytes=10 * 1024**3,
-                device_type=AcceleratorType.CPU,
-                capacity_type=CapacityType.ON_DEMAND,
-            ),
-            slice_template=SliceConfig(local=LocalSliceConfig()),
-        )
-    }
-    return make_local_config(config)
+@pytest.fixture
+def controller_only_config():
+    """Null-auth local config with no auto-scaled workers."""
+    return make_controller_only_config()
 
 
 def _docker_image_exists(tag: str) -> bool:

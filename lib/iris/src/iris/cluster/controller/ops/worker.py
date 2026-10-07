@@ -14,13 +14,12 @@ from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
+from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.cluster.types import WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
 FAIL_WORKERS_CHUNK_SIZE = 10
@@ -30,10 +29,9 @@ FAIL_WORKERS_CHUNK_SIZE = 10
 class WorkerFailureBatchResult:
     """Narrow result for :func:`fail`: just the worker rows removed.
 
-    A worker-daemon backend's teardown forwards these IDs to ``backend.autoscale``
-    for slice-sibling teardown. Per-task kill targets and log events are already
-    applied by ``commit_effects`` inside the batch, so they don't need to surface
-    in the return value.
+    The controller forwards these IDs to ``backend.remove_capacity`` after the
+    logical failure commits. Per-task kill targets and log events are already
+    applied by ``commit_effects`` inside the batch, so they do not surface here.
     """
 
     removed_workers: list[tuple[WorkerId, str | None]]
@@ -203,52 +201,3 @@ def _apply_worker_failures_chunk(
     commit_effects(cur, effects)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health)
-
-
-def apply_reconcile(
-    source: TransitionReader,
-    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
-    *,
-    now: Timestamp,
-) -> ControllerEffects:
-    """Author reconcile effects from the backend's read snapshot (no commit).
-
-    Loads ONE snapshot covering every (plan, result) pair through the backend's
-    own read surface, then runs the reconcile kernel once: the pure
-    :meth:`ReconcileState.reconcile` shares one ``Overlay`` across all pairs so
-    cascade kills triggered by earlier workers are visible to later ones. The
-    caller (the backend) folds the returned ``effects.health`` and the controller
-    commits the ``effects`` via ``commit_effects``.
-    """
-    all_task_ids: list[JobName] = []
-    all_attempt_keys: list[tuple[JobName, int]] = []
-    all_attempt_uids: list[AttemptUid] = []
-    all_worker_ids: list[WorkerId] = []
-
-    for plan, result in plan_results:
-        all_worker_ids.append(plan.worker_id)
-
-        if result.error is not None:
-            for desired in plan.request.desired:
-                if not desired.HasField("run") or not desired.run.HasField("request"):
-                    continue
-                req_proto = desired.run.request
-                tid = JobName.from_wire(req_proto.task_id)
-                all_task_ids.append(tid)
-                all_attempt_keys.append((tid, req_proto.attempt_id))
-        else:
-            # Extract only plan-scoped UIDs for snapshot preloading (no logging here;
-            # worker.filter_observations_to_plan logs dropped observations inline).
-            plan_uids = {d.attempt_uid for d in plan.request.desired if d.attempt_uid}
-            for obs in result.observations:
-                if obs.attempt_uid and obs.attempt_uid in plan_uids:
-                    all_attempt_uids.append(AttemptUid(obs.attempt_uid))
-
-    snapshot = source.transition_snapshot(
-        now=now,
-        seed_worker_ids=all_worker_ids,
-        observation_uids=all_attempt_uids,
-        seed_task_ids=all_task_ids,
-        extra_attempt_keys=all_attempt_keys,
-    )
-    return ReconcileState.open(snapshot).reconcile(plan_results, now)

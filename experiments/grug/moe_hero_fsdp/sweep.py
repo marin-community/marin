@@ -515,9 +515,9 @@ def cli():
 @click.option(
     "--priority",
     type=click.Choice(PRIORITY_BAND_NAMES),
-    default="production",
+    default="system",
     show_default=True,
-    help="Iris band for the training gangs. 'production' is admin-only and never preempted.",
+    help="Iris band for the training gangs. 'system' is admin-only and reserved for hero and infrastructure work.",
 )
 @build_options
 def launch_cmd(arms, priority):

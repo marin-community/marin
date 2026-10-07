@@ -1,6 +1,6 @@
 ---
 name: archive-experiments
-description: Retire legacy experiment scripts behind a dated archive tag.
+description: Archive explicitly named legacy experiment files by publishing a dated tag and canonical issue breadcrumbs.
 ---
 
 # Skill: Archive Legacy Experiments

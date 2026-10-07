@@ -39,18 +39,25 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
-from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
+from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer, _long_layer_schedule
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+_NUMERIC_DIAGNOSTIC_KEYS = (
+    "train/grads_finite",
+    "train/updates_finite",
+    "train/params_finite",
+    "train/qb_betas_finite",
+)
 
 
 @dataclass(frozen=True)
@@ -62,9 +69,10 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    diagnose_numerics: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -73,6 +81,8 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+    save_checkpoints: bool = True
+    """False skips the checkpointer entirely, including the forced final save; for benchmarks."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -143,7 +153,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -173,7 +183,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -205,59 +215,6 @@ def build_tagged_evaluator(
     )
 
 
-def _lm_flops_per_token(
-    hidden_dim: int,
-    intermediate_dim: int,
-    num_layers: int,
-    num_kv_heads: int,
-    num_heads: int,
-    seq_len: int,
-    vocab_size: int,
-    glu: bool,
-    num_experts: int = 1,
-    num_shared_experts: int = 0,
-    num_experts_per_tok: int = 1,
-    shared_intermediate_dim: int | None = None,
-    sliding_window: int | None = None,
-    num_full_attention_layers: int | None = None,
-) -> float:
-    """Analytic forward FLOPs per token, including the run's hybrid attention pattern."""
-    head_dim = hidden_dim / num_heads
-    shared_intermediate_dim = intermediate_dim if shared_intermediate_dim is None else shared_intermediate_dim
-    routed_mlp = 2 * (3 if glu else 2) * hidden_dim * intermediate_dim * num_experts_per_tok
-    shared_mlp = 2 * (3 if glu else 2) * hidden_dim * shared_intermediate_dim * num_shared_experts
-    mlp = routed_mlp + shared_mlp
-    if num_experts > 1:
-        mlp += 2 * hidden_dim * num_experts
-    qkv_proj = 2 * hidden_dim * (num_heads * head_dim + 2 * num_kv_heads * head_dim)
-    dense_proj = 2 * hidden_dim * hidden_dim
-
-    def _attn_per_token(effective_seq: int) -> float:
-        key_query_logits = 2 * effective_seq**2 * num_heads * head_dim
-        mask = 3 * effective_seq * effective_seq * num_heads
-        mask_value = 2 * effective_seq * effective_seq * head_dim * num_heads
-        return (key_query_logits + mask + mask_value) / effective_seq
-
-    if sliding_window is None:
-        n_full = num_layers
-        n_window = 0
-    else:
-        n_full = num_full_attention_layers if num_full_attention_layers is not None else 0
-        if n_full < 0 or n_full > num_layers:
-            raise ValueError(f"num_full_attention_layers ({n_full}) must be in [0, {num_layers}]")
-        n_window = num_layers - n_full
-
-    attn_full = _attn_per_token(seq_len) if n_full else 0.0
-    if n_window:
-        assert sliding_window is not None
-        attn_window = _attn_per_token(min(seq_len, sliding_window))
-    else:
-        attn_window = 0.0
-    per_layer_dense = mlp + qkv_proj + dense_proj
-    lm_head = 2 * hidden_dim * vocab_size
-    return num_layers * per_layer_dense + n_full * attn_full + n_window * attn_window + lm_head
-
-
 def _compute_flops(
     *,
     model_config: GrugModelConfig,
@@ -268,9 +225,9 @@ def _compute_flops(
     # smaller than a naive ``all-layers-full-attention`` estimate, because
     # each sliding-window layer's attention span is capped at the window.
     n = model_config.num_layers
-    num_full_attention_layers = n // 4 + (0 if (n - 1) % 4 == 3 else 1)
+    num_full_attention_layers = int(_long_layer_schedule(n).sum())
 
-    flops_per_token = _lm_flops_per_token(
+    flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
@@ -407,6 +364,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    diagnose_numerics: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -443,6 +401,16 @@ def _make_train_step(
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
+        if diagnose_numerics:
+            metrics.update(
+                {
+                    "train/supervised_tokens": jnp.sum(batch.loss_weight),
+                    "train/grads_finite": _tree_all_finite(grads),
+                    "train/updates_finite": _tree_all_finite(updates),
+                    "train/params_finite": _tree_all_finite(params),
+                    "train/qb_betas_finite": jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"])),
+                }
+            )
 
         if ema_beta is None:
             ema_params = None
@@ -484,6 +452,26 @@ def _make_train_step(
     return train_step
 
 
+def _tree_all_finite(tree: object) -> jax.Array:
+    finite = jnp.array(True)
+    for leaf in jax.tree.leaves(tree):
+        if eqx.is_inexact_array(leaf):
+            finite = finite & jnp.all(jnp.isfinite(leaf))
+    return finite
+
+
+def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> None:
+    diagnostics = (
+        {key: float(metrics[key]) for key in (*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens")}
+        if diagnose_numerics
+        else {}
+    )
+    if not bool(jnp.isfinite(metrics["train/loss"])):
+        raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
+    if diagnose_numerics and not all(bool(metrics[key]) for key in _NUMERIC_DIAGNOSTIC_KEYS):
+        raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -502,6 +490,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        diagnose_numerics=config.trainer.diagnose_numerics,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -544,7 +533,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         if config.trainer.sft_weights_only_init:
             # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
             # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
@@ -651,9 +640,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
+                _check_step_numerics(metrics, int(state.step), config.trainer.diagnose_numerics)
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

@@ -6,7 +6,7 @@
 Downloading a large model repo from HuggingFace on every job is slow and wastes
 bandwidth. :func:`cache_to_prefix` mirrors a snapshot once to a shared cache
 prefix (typically a region-local TTL bucket from
-:func:`rigging.filesystem.marin_temp_bucket`) under a distributed lock, so
+:func:`rigging.filesystem.cluster_config.marin_temp_bucket`) under a distributed lock, so
 concurrent workers do not all hammer HuggingFace at the same time: the first
 worker populates the cache while the rest **block** until it is complete, then
 read the snapshot from the nearby cache.
@@ -20,27 +20,37 @@ takes an arbitrary populate callback for callers that need a custom source.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
 import tempfile
-import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 
 import fsspec
-from huggingface_hub import hf_hub_download, list_repo_files
-from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
-from rigging.filesystem import marin_temp_bucket, url_to_fs
+from huggingface_hub import hf_hub_download, list_repo_files, model_info
+from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPLETE_MARKER = ".cache_complete"
-"""Marker written last after a full upload; its presence is the cache-hit signal."""
+DEFAULT_COMPLETE_MARKER = ".cache_metadata.json"
+"""Metadata written last after a full upload; its presence is the cache-hit signal."""
+
+
+@dataclass(frozen=True)
+class CacheMetadata:
+    """Metadata persisted with a completed cache snapshot."""
+
+    source_revision: str | None = None
+
 
 _LOCK_SUFFIX = ".lock"
+_HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 # How often losers re-check the completion marker while the winner populates.
 _DEFAULT_POLL_INTERVAL = 10.0
 
@@ -54,6 +64,7 @@ def cache_to_prefix(
     cache_path: str,
     populate: Populate,
     *,
+    metadata: CacheMetadata = CacheMetadata(),
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
 ) -> str:
@@ -76,8 +87,9 @@ def cache_to_prefix(
         populate: Callback ``(fs, cache_path) -> None`` that streams the snapshot
             into ``cache_path`` on filesystem ``fs``. Use :func:`cache_hf_model`
             for the common HF-repo case instead of writing one by hand.
-        complete_marker: Filename (relative to ``cache_path``) written last to
-            mark the cache complete.
+        metadata: Metadata written into the completion marker.
+        complete_marker: JSON filename (relative to ``cache_path``) written last to mark
+            the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
 
     Returns:
@@ -105,8 +117,17 @@ def cache_to_prefix(
         if fs.exists(marker):
             logger.info("model cache populated while acquiring lock: %s", cache_path)
             return cache_path
-        with _heartbeat(lock):
-            _populate(fs, cache_path, marker, populate)
+        with lease_refresh(lock):
+            logger.info("model cache miss; populating %s", cache_path)
+            # Object stores have no real directories, but local/posix-backed fsspec
+            # filesystems need the prefix to exist before files are written into it.
+            fs.makedirs(cache_path, exist_ok=True)
+            populate(fs, cache_path)
+            # Marker last: its presence is the cache-hit signal, so a crashed
+            # populate never reads as complete. Keep its write under the heartbeat
+            # because object-store operations can stall past the lease timeout.
+            with fs.open(marker, "w") as handle:
+                json.dump(asdict(metadata), handle, sort_keys=True)
         return cache_path
     finally:
         lock.release()
@@ -124,18 +145,22 @@ def cache_hf_model(
 
     The easy path over :func:`cache_to_prefix`: streams the repo into the cache
     one file at a time (see :func:`_stream_hf_snapshot`), so the snapshot never
-    has to fit on local disk. Returns ``cache_path``.
+    has to fit on local disk. The caller chooses ``cache_path``; use
+    :func:`resolve_cached_model_path` when a branch or tag must be resolved and
+    included in the cache identity. Returns ``cache_path``.
 
     Args:
         cache_path: Destination prefix for the mirrored snapshot.
         model_id: HuggingFace repo id, e.g. ``Qwen/Qwen3-0.6B``.
-        revision: Optional git revision (branch, tag, or commit) to mirror.
+        revision: Optional git revision (branch, tag, or commit) to mirror and record in
+            the cache metadata.
         complete_marker: Filename written last to mark the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
     """
     return cache_to_prefix(
         cache_path,
         lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision),
+        metadata=CacheMetadata(source_revision=revision),
         complete_marker=complete_marker,
         poll_interval=poll_interval,
     )
@@ -150,12 +175,12 @@ def resolve_cached_model_path(
 ) -> str:
     """Resolve *model* to a path to load it from, mirroring a HuggingFace repo to a TTL cache.
 
-    A bare HuggingFace repo id (optionally ``org/model@revision``) is mirrored once to a
-    region-local TTL bucket under a distributed lock and the cache path is returned, so later
-    loads of the same model read the snapshot from nearby storage instead of re-downloading
-    from HuggingFace. Object-store and local paths already name a loadable snapshot and are
-    returned unchanged, as is *model* when ``cache_ttl_days`` is non-positive (mirroring
-    disabled).
+    A bare HuggingFace repo id (optionally ``org/model@revision``) is resolved to an immutable
+    commit, then mirrored once to a region-local TTL bucket under a distributed lock. The commit
+    is part of the cache identity, so a branch or tag update produces a new snapshot. Object-store
+    and local paths already name a loadable snapshot and are returned unchanged, as is *model*
+    when ``cache_ttl_days`` is non-positive (mirroring disabled). An explicit 40-character commit
+    is used directly, so an existing cache remains loadable without contacting Hugging Face.
 
     Args:
         model: HuggingFace repo id (``org/model`` or ``org/model@revision``), or an
@@ -175,8 +200,17 @@ def resolve_cached_model_path(
     if cache_ttl_days <= 0 or not _is_hf_model_id(repo):
         return model
 
-    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(model)}")
-    return cache_hf_model(cache_path, repo, revision=revision or None, complete_marker=complete_marker)
+    requested_revision = revision or None
+    if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):
+        resolved_revision = requested_revision.lower()
+    else:
+        resolved_revision = model_info(repo, revision=requested_revision).sha
+        if resolved_revision is None:
+            raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
+
+    resolved_model = f"{repo}@{resolved_revision}"
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")
+    return cache_hf_model(cache_path, repo, revision=resolved_revision, complete_marker=complete_marker)
 
 
 def _cache_slug(model: str) -> str:
@@ -211,43 +245,3 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
             os.remove(local_path)
-
-
-def _populate(fs: fsspec.AbstractFileSystem, cache_path: str, marker: str, populate: Populate) -> None:
-    """Stream the snapshot into *cache_path* via *populate*, then write *marker*."""
-    logger.info("model cache miss; populating %s", cache_path)
-    # Object stores have no real directories, but local/posix-backed fsspec
-    # filesystems need the prefix to exist before files are written into it.
-    fs.makedirs(cache_path, exist_ok=True)
-    populate(fs, cache_path)
-    # Marker last: its presence is the cache-hit signal, so a crashed populate won't read as complete.
-    with fs.open(marker, "w") as handle:
-        handle.write("ok")
-
-
-@contextlib.contextmanager
-def _heartbeat(lock: DistributedLease) -> Generator[None, None, None]:
-    """Refresh *lock*'s lease on a daemon thread for the duration of the block.
-
-    A large download can take far longer than ``HEARTBEAT_TIMEOUT``; without
-    refreshing, blocked workers would treat the lease as stale and start their
-    own downloads. ``LeaseLostError`` is logged but not raised: a duplicate
-    download is wasteful but not incorrect (the marker-last write stays atomic).
-    """
-    stop = threading.Event()
-
-    def _beat() -> None:
-        while not stop.wait(HEARTBEAT_INTERVAL):
-            try:
-                lock.refresh()
-            except LeaseLostError:
-                logger.error("Lease lost for %s while populating cache", lock.lock_path, exc_info=True)
-                return
-
-    thread = threading.Thread(target=_beat, daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join(timeout=5)

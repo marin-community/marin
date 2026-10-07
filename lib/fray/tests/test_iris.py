@@ -7,6 +7,7 @@ Tests type conversions and handle serialization without requiring an Iris cluste
 Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
+import logging
 import pickle
 from types import SimpleNamespace
 from typing import cast
@@ -14,6 +15,8 @@ from unittest.mock import MagicMock
 
 import fray.iris_backend as iris_backend
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
@@ -27,13 +30,16 @@ from fray.types import (
     Entrypoint,
     GpuConfig,
     JobRequest,
+    JobStatus,
     ResourceConfig,
     TpuConfig,
 )
 from iris.client.client import IrisClient
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.cluster.types import ResourceSpec, gpu_device
+from iris.cluster.types import JobName, ResourceSpec, gpu_device
+from iris.resources.state import JobState as IrisJobState
+from rigging.timing import Duration
 
 
 class TestConvertConstraints:
@@ -187,6 +193,39 @@ def test_iris_job_handle_returns_a_globally_bounded_tail():
     job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
+def test_iris_job_handle_reports_killed_job_as_stopped():
+    job = MagicMock()
+    job.state_only.return_value = IrisJobState.KILLED
+
+    assert IrisJobHandle(job).status() is JobStatus.STOPPED
+
+
+def test_actor_startup_after_task_termination_stops_server_without_error(monkeypatch, caplog):
+    def reject_registration(_name, _address):
+        raise ConnectError(
+            Code.FAILED_PRECONDITION,
+            "Task /user/job/0 is already terminal; endpoint not registered",
+        )
+
+    stopped = []
+    server = SimpleNamespace(
+        register=lambda _name, _instance: None,
+        serve_background=lambda: 1234,
+        stop=lambda: stopped.append(True),
+    )
+    registry = SimpleNamespace(register=reject_registration)
+    ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
+    job_info = SimpleNamespace(task_index=0, advertise_host="worker")
+    monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
+    monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
+    monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
+
+    iris_backend._host_actor(object, (), {}, "actor")
+
+    assert stopped
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
 class TestResourceConfigScale:
     def test_scale_with_uniform_factor_scales_all_dimensions(self):
         scaled = ResourceConfig(cpu=1, ram="4g", disk="2g").scale(2)
@@ -267,8 +306,8 @@ class TestImagePlumbing:
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] is None
 
-    def test_submit_job_passes_task_image_to_iris(self):
-        """resources.image on a top-level job request reaches iris.submit()."""
+    def test_submit_job_passes_request_options_to_iris(self):
+        """Top-level job options reach iris.submit()."""
         fake_iris = MagicMock()
         fake_iris.submit.return_value = MagicMock(job_id="job-456")
         client = FrayIrisClient.from_iris_client(fake_iris)
@@ -280,11 +319,13 @@ class TestImagePlumbing:
             name="test-job",
             entrypoint=Entrypoint.from_callable(_noop),
             resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
+            timeout=Duration.from_minutes(30),
         )
         client.submit(request)
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+        assert kwargs["timeout"] == Duration.from_minutes(30)
 
 
 def test_submit_job_forwards_named_ports_to_iris():
@@ -494,7 +535,7 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
     assert wrapped.command == [
         "python",
         "-m",
-        "iris.hooks.multigpu_main",
+        "iris.jax.multigpu_main",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -514,7 +555,7 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     assert wrapped.command[:8] == [
         "python",
         "-m",
-        "iris.hooks.multigpu_main",
+        "iris.jax.multigpu_main",
         "--nproc",
         "4",
         "--devices-per-proc",

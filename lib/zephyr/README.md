@@ -5,7 +5,9 @@ Simple data processing library for Marin pipelines. Build lazy dataset pipelines
 ## Quick Start
 
 ```python
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
 # Read, transform, write
 ctx = ZephyrContext(max_workers=100)
@@ -28,6 +30,8 @@ ctx.execute(pipeline)
 **Loading Files**
 - `.load_{file,parquet,jsonl,vortex}` - load rows from a file
 
+Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_path_column` to use another name). Selecting only that column returns the source path for each matching row. Parquet path-only reads skip source data columns unless a filter needs them.
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)
@@ -38,7 +42,7 @@ ctx.execute(pipeline)
 
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)
-- `.write_parquet(pattern, schema)` - write to a Parquet file
+- `.write_parquet(pattern, schema)` - write zstd Parquet with page indexes and at most 256 rows per data page
 - `.write_vortex(pattern)` - write to a Vortex file
 
 **Execution (`ZephyrContext`):**
@@ -46,67 +50,13 @@ ctx.execute(pipeline)
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
-### Read-only memory stores
-
-`ZephyrContext.load_memory_store()` loads an existing partitioned dataset into
-the workers of an entered context. Every worker starts an empty multi-table
-service; pipelines that do not load a table perform no source reads. The table
-handle is picklable, so later pipelines and child jobs can use `get()` or
-order-preserving `get_many()` lookups without copying the table into every task.
-
-```python
-from fray.types import ResourceConfig
-
-
-def document_partition(key: tuple[int, str]) -> int:
-    file_index, _ = key
-    return file_index
-
-
-documents = Dataset.from_files("s3://bucket/documents/*.parquet").load_parquet().map(
-    lambda row: ((row["file_index"], row["id"]), row["text"])
-)
-
-with ZephyrContext(
-    max_workers=16,
-    resources=ResourceConfig(cpu=2, ram="8g"),
-) as ctx:
-    document_store = ctx.load_memory_store(
-        documents,
-        name="documents",
-        hash_key=document_partition,
-        recovery_timeout=900,
-    )
-    result = ctx.execute(Dataset.from_list(document_keys).map(document_store.get))
-    document_store.destroy()
-```
-
-For `P` source shards, every key must already satisfy
-`hash_key(key) % P == source_shard_index`. Construction checks every row and
-does not insert a shuffle. Readers and shard-local maps can load directly.
-Persist and reload the output of a shuffle, join, reshard, reduce, or write
-before constructing a store.
-
-Keys must be hashable and unique. Keys, values, and the hash function must be
-picklable for remote calls; Python's salted `hash()` is not stable enough to
-serve as the partition function for string or byte keys. Actors retain the
-loaded Python objects directly, and `store.stats()` reports item counts and
-load time. Invalid input fails the load call without consuming actor restart
-retries. Multiple tables can share the worker process. Zephyr does not reserve,
-limit, or evict table memory; size the context's worker RAM for the combined
-tables and pipeline workload.
-
-Iris reconstructs a preempted worker at the same endpoint. The first table
-lookup on that replacement reloads its immutable source shards, and all worker
-responses and reconstruction share one `recovery_timeout` deadline. Destroying
-one table leaves other tables active. Exiting the creating context stops the
-worker pool and invalidates its table handles.
-
 ## Real Usage
 
 **Wikipedia Processing:**
 ```python
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
 ctx = ZephyrContext(max_workers=100)
 pipeline = (
@@ -121,7 +71,8 @@ ctx.execute(pipeline)
 
 **Dataset Sampling:**
 ```python
-from zephyr import Dataset, ZephyrContext
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 ctx = ZephyrContext(max_workers=1000)
 pipeline = (
@@ -134,7 +85,8 @@ ctx.execute(pipeline)
 
 **Parallel Downloads:**
 ```python
-from zephyr import Dataset, ZephyrContext
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 tasks = [(config, fs, src, dst) for src, dst in file_pairs]
 ctx = ZephyrContext(max_workers=32)

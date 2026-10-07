@@ -1,0 +1,26 @@
+schema_version: 1
+code: ml-type-checking-guard
+lane: interfaces
+title: '`TYPE_CHECKING` guard block'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** `TYPE_CHECKING` guards are forbidden outright. They hide
+  real cycles instead of fixing them and split the import graph across runtime
+  vs. type-check time, which confuses readers and tools.
+
+  **When allowed:** Never in new code. Fix the cycle structurally — define a
+  `Protocol` in the layer that owns the type, and have both sides depend on the
+  protocol.
+
+  **Bad example:**
+  ```python
+  from typing import TYPE_CHECKING
+
+  if TYPE_CHECKING:
+      from marin.experiments import ExperimentConfig  # fix with a Protocol instead
+
+
+  def run(cfg: "ExperimentConfig") -> None: ...
+  ```
+
+  ## Layering

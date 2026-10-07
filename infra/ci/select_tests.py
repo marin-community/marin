@@ -17,17 +17,17 @@ Test helper modules under a test tree participate in the graph too, so a test th
 reaches source code only through a shared helper is still selected.
 
 Usage:
-    python infra/ci/select_tests.py --base-ref <SHA>                   # pull request
-    python infra/ci/select_tests.py --base-ref <SHA> --run-all-tests   # push to main
-    python infra/ci/select_tests.py --run-all-tests                    # manual run
+    python infra/ci/select_tests.py --base-ref <SHA>  # pull request or push
+    python infra/ci/select_tests.py --run-all-tests   # scheduled or manual run
 """
 
 import argparse
 import ast
 import json
 import subprocess
+import tomllib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 # Ordered list of workspace member short names.
@@ -42,6 +42,10 @@ SCOPES: tuple[str, ...] = (
     "dupekit",
     "finelog",
     "finestore",
+    "ducky",
+    "verifyit",
+    "deploy",
+    "iac",
 )
 
 
@@ -56,22 +60,24 @@ class SourceRoot:
 
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
+    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
+    SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
+    SourceRoot("infra/ci", "."),
+    SourceRoot("infra/marina/src/marina", "infra/marina/src"),
+    SourceRoot("infra/marina/apps", "infra/marina/apps"),
 )
 
-# Files whose change triggers running every package's full test suite. The Rust
-# source-build machinery is included so a change to it re-runs the full matrix
-# and exercises a source build somewhere.
-BROAD_TRIGGERS: frozenset[str] = frozenset(
-    {
-        "uv.lock",
-        "pyproject.toml",
-        "infra/ci/select_tests.py",
-        "scripts/rust_mode.py",
-        ".github/workflows/unified-unit.yaml",
-    }
-)
+# Dependency and native-build changes can affect every local test environment.
+LOCAL_BROAD_TRIGGERS: frozenset[str] = frozenset({"uv.lock", "pyproject.toml", "scripts/rust_mode.py"})
+
+# Selector and workflow changes run the complete CI matrix to validate the
+# orchestration itself. Locally, their import-dependent tests are sufficient;
+# the exhaustive matrix still runs after the branch is pushed.
+CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"})
+
+BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
@@ -85,15 +91,36 @@ UV_PACKAGE: dict[str, str] = {
     "dupekit": "marin-dupekit",
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
+    "ducky": "marin-ducky",
+    "verifyit": "verifyit",
+    "deploy": "marin-deploy",
+    "iac": "marin-iac",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
+    "iac": ["deploy"],
+    "verifyit": ["all"],
 }
 
-TEST_DIR: dict[str, str] = {
-    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope != "marin"},
-    "marin": "tests",
+PYTHON_VERSION = "3.12"
+PYTEST_ARGS: tuple[str, ...] = (
+    "--durations=5",
+    "-n",
+    "auto",
+    "--dist=worksteal",
+    "--tb=short",
+)
+
+RUN_ALL_REASON = "run-all-tests"
+BROAD_TRIGGER_REASON = "broad-trigger"
+DIFF_DRIVEN_REASON = "diff-driven"
+
+TEST_DIRS: dict[str, tuple[str, ...]] = {
+    **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
+    "deploy": ("infra/deploy/tests",),
+    "iac": ("infra/pulumi/tests",),
+    "marin": ("tests", "experiments"),
 }
 
 # Levanter's suite is the only unit leg that runs long enough to be worth spreading over
@@ -124,16 +151,58 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites that cannot be import-selected: each drives a whole subsystem (accelerator
-# kernels, a browser-driven smoke test) rather than a set of importable modules, so
-# path prefixes gate them. A locked dependency change moves the accelerator runtime
-# out from under all of them.
+# Suites outside the import-selected Python matrix.
+# TaskCompendium tests its optional pinned Harbor dependency; Iris smoke
+# drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
-    "levanter-torch": ("lib/levanter/", "lib/haliax/", *DEPENDENCY_MANIFESTS),
-    "levanter-tpu": ("lib/levanter/", "lib/haliax/", *DEPENDENCY_MANIFESTS),
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "taskcompendium-unit": (
+        "lib/taskcompendium/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
 }
+
+LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
+    "lib/levanter/",
+    "lib/haliax/",
+    "infra/ci/select_tests.py",
+    ".github/workflows/unified-unit.yaml",
+)
+LEVANTER_TORCH_TRIGGERS = (*LEVANTER_ACCELERATOR_TRIGGERS, *DEPENDENCY_MANIFESTS)
+
+TPU_MARKER_ENVIRONMENT = {
+    "python_version": "3.12",
+    "python_full_version": "3.12.0",
+    "sys_platform": "linux",
+    "platform_machine": "x86_64",
+    "platform_system": "Linux",
+    "os_name": "posix",
+    "implementation_name": "cpython",
+    "implementation_version": "3.12.0",
+    "platform_python_implementation": "CPython",
+}
+TPU_CONFLICT_EXTRA = "extra-14-marin-levanter-tpu"
+UV_LOCK_VERSION = 1
+UV_LOCK_REVISION = 3
+PACKAGE_IDENTITY_FIELDS = ("name", "version", "source")
+LEVANTER_TORCH_SUITE = "levanter-torch"
+LEVANTER_TPU_SUITE = "levanter-tpu"
+
+# These files are intentionally absent from the TPU command today. Keep the selection
+# rule next to the selector so an affected-file TPU run does not start only to collect
+# zero runnable tests.
+TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
+    {
+        "lib/levanter/tests/test_audio.py",
+        "lib/levanter/tests/test_new_cache.py",
+        "lib/levanter/tests/test_hf_checkpoints.py",
+        "lib/levanter/tests/test_hf_gpt2_serialize.py",
+        "lib/levanter/tests/test_gdn_layer.py",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -270,22 +339,33 @@ def is_test_module(filename: str) -> bool:
     return (filename.startswith("test_") or filename.endswith("_test.py")) and filename.endswith(".py")
 
 
-def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
-    """Every .py under a scope's test directory, keyed by the name it imports itself as.
+def has_static_test_items(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            return True
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            if any(
+                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_")
+                for method in node.body
+            ):
+                return True
+    return False
 
-    Test trees are imported as the ``tests`` package rooted at the test directory's parent,
-    which is what both relative (``from .conftest import x``) and absolute
-    (``from tests.cluster.conftest import x``) intra-tree imports resolve against.
+
+def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
+    """Python files in a scope's test directories, keyed by repository-root module name.
+
+    Package test trees need distinct internal names so dependency analysis does
+    not conflate same-named helpers in different packages. Relative imports
+    resolve against the same canonical name.
     """
-    test_dir = repo_root / TEST_DIR[scope]
-    if not test_dir.exists():
-        return {}
-    import_root = repo_root / PurePosixPath(TEST_DIR[scope]).parent
     tree: dict[str, Path] = {}
-    for py in test_dir.rglob("*.py"):
-        module = path_to_module(py, import_root)
-        if module:
-            tree[module] = py
+    for directory in TEST_DIRS[scope]:
+        for py in (repo_root / directory).rglob("*.py"):
+            module = path_to_module(py, repo_root)
+            if module:
+                tree[module] = py
     return tree
 
 
@@ -346,6 +426,229 @@ def git_changed_files(base_ref: str, repo_root: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def _marker_value(node: ast.expr) -> str:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in TPU_MARKER_ENVIRONMENT:
+        return TPU_MARKER_ENVIRONMENT[node.id]
+    if isinstance(node, ast.Name) and node.id == "extra":
+        raise ValueError("extra markers need a comparison")
+    raise ValueError("unsupported lockfile marker value")
+
+
+def _marker_matches(expression: str, active_extras: set[str]) -> bool:
+    """Evaluate uv lock markers for the Python 3.12 Linux TPU image."""
+
+    def evaluate(node: ast.expr) -> bool:
+        if isinstance(node, ast.BoolOp):
+            values = [evaluate(value) for value in node.values]
+            if isinstance(node.op, ast.And):
+                return all(values)
+            if isinstance(node.op, ast.Or):
+                return any(values)
+        if isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1:
+            left, right = node.left, node.comparators[0]
+            operation = node.ops[0]
+            if (
+                isinstance(left, ast.Name)
+                and left.id == "extra"
+                and isinstance(right, ast.Constant)
+                and isinstance(right.value, str)
+            ):
+                if not right.value.startswith(("extra-", "group-")):
+                    raise ValueError("unsupported package extra marker")
+                if isinstance(operation, ast.Eq):
+                    return right.value in active_extras
+                if isinstance(operation, ast.NotEq):
+                    return right.value not in active_extras
+            left_value = _marker_value(left)
+            right_value = _marker_value(right)
+            if isinstance(left, ast.Name) and left.id in {
+                "python_version",
+                "python_full_version",
+                "implementation_version",
+            }:
+                left_release = tuple(int(part) for part in left_value.split("."))
+                right_release = tuple(int(part) for part in right_value.split("."))
+                if left.id != "python_version" and right_release[:2] == (3, 12) and len(right_release) > 2:
+                    raise ValueError("TPU image Python patch version is not pinned")
+                length = max(len(left_release), len(right_release))
+                left_value = left_release + (0,) * (length - len(left_release))
+                right_value = right_release + (0,) * (length - len(right_release))
+            if isinstance(operation, ast.Eq):
+                return left_value == right_value
+            if isinstance(operation, ast.NotEq):
+                return left_value != right_value
+            if isinstance(operation, ast.Lt):
+                return left_value < right_value
+            if isinstance(operation, ast.LtE):
+                return left_value <= right_value
+            if isinstance(operation, ast.Gt):
+                return left_value > right_value
+            if isinstance(operation, ast.GtE):
+                return left_value >= right_value
+            if isinstance(operation, ast.In):
+                return left_value in right_value
+            if isinstance(operation, ast.NotIn):
+                return left_value not in right_value
+        raise ValueError("unsupported lockfile marker expression")
+
+    return evaluate(ast.parse(expression, mode="eval").body)
+
+
+def _matching_resolution_markers(package: dict, active_extras: set[str]) -> tuple[str, ...] | None:
+    markers = package.get("resolution-markers", [])
+    if not isinstance(markers, list):
+        raise ValueError("invalid package resolution markers")
+    if not markers:
+        return ()
+    matching = tuple(marker for marker in markers if _marker_matches(marker, active_extras))
+    return matching or None
+
+
+def _package_identity(package: dict) -> str:
+    return json.dumps({key: package.get(key) for key in PACKAGE_IDENTITY_FIELDS}, sort_keys=True)
+
+
+def _lock_graph(lock: dict) -> tuple[set[str], set[str]]:
+    """Resolved package records and dependency edges installed by the TPU command."""
+    if (
+        lock.get("version") != UV_LOCK_VERSION
+        or lock.get("revision", UV_LOCK_REVISION) != UV_LOCK_REVISION
+        or not isinstance(lock.get("package"), list)
+    ):
+        raise ValueError("unsupported uv lockfile")
+    packages = lock["package"]
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    for package in packages:
+        by_name[package["name"]].append(package)
+    if len(by_name["marin-levanter"]) != 1:
+        raise ValueError("ambiguous Levanter package")
+
+    active_extras = {TPU_CONFLICT_EXTRA}
+    nodes: set[str] = set()
+    edges: set[str] = set()
+    visited: set[tuple[str, tuple[str, ...]]] = set()
+    pending = [(by_name["marin-levanter"][0], ("tpu",), True)]
+    while pending:
+        package, requested_extras, is_root = pending.pop()
+        identity = _package_identity(package)
+        visit_key = identity, requested_extras
+        if visit_key in visited:
+            continue
+        visited.add(visit_key)
+
+        matching_markers = _matching_resolution_markers(package, active_extras)
+        if matching_markers is None:
+            raise ValueError("reachable package excludes the TPU environment")
+        nodes.add(
+            json.dumps(
+                {key: package.get(key) for key in ("name", "version", "source", "sdist", "wheels")}
+                | {"markers": matching_markers},
+                sort_keys=True,
+            )
+        )
+
+        dependency_lists = [package.get("dependencies", [])]
+        optional = package.get("optional-dependencies", {})
+        for extra in requested_extras:
+            if extra not in optional:
+                raise ValueError("requested extra absent from lockfile")
+            dependency_lists.append(optional[extra])
+        if is_root:
+            groups = package.get("dev-dependencies", {})
+            if "test" not in groups:
+                raise ValueError("Levanter test group absent from lockfile")
+            dependency_lists.append(groups["test"])
+
+        for dependencies in dependency_lists:
+            if not isinstance(dependencies, list):
+                raise ValueError("invalid lockfile dependencies")
+            for dependency in dependencies:
+                marker = dependency.get("marker")
+                if marker is not None and not _marker_matches(marker, active_extras):
+                    continue
+                candidates = [
+                    candidate
+                    for candidate in by_name[dependency["name"]]
+                    if all(candidate.get(key) == dependency[key] for key in ("version", "source") if key in dependency)
+                    and _matching_resolution_markers(candidate, active_extras) is not None
+                ]
+                if len(candidates) != 1:
+                    raise ValueError("ambiguous or missing dependency variant")
+                target = candidates[0]
+                target_extras = (
+                    tuple(sorted(dependency.get("extra", [])))
+                    if isinstance(dependency.get("extra"), list)
+                    else ((dependency["extra"],) if "extra" in dependency else ())
+                )
+                target_identity = _package_identity(target)
+                edges.add(json.dumps((identity, dependency, target_identity), sort_keys=True))
+                pending.append((target, target_extras, False))
+    return nodes, edges
+
+
+def _root_install_settings(manifest: dict, reachable_names: set[str], editable_paths: set[str]) -> dict:
+    """Root settings that can affect a frozen Levanter package install."""
+    uv = manifest.get("tool", {}).get("uv", {}).copy()
+    sources = uv.pop("sources", {})
+    workspace = uv.pop("workspace", {})
+    members = workspace.get("members", [])
+    return {
+        "requires-python": manifest.get("project", {}).get("requires-python"),
+        "build-system": manifest.get("build-system"),
+        "uv": uv,
+        "reachable-members": sorted(editable_paths & set(members)),
+        "sources": {name: source for name, source in sources.items() if name in reachable_names},
+    }
+
+
+def levanter_tpu_dependencies_changed(base_ref: str | None, repo_root: Path) -> bool:
+    """Conservatively detect whether a manifest diff changes the TPU install."""
+    if base_ref is None:
+        return True
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base_ref, "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        def base_file(path: str) -> bytes:
+            return subprocess.run(
+                ["git", "show", f"{merge_base}:{path}"], cwd=repo_root, capture_output=True, check=True
+            ).stdout
+
+        base_lock = tomllib.loads(base_file("uv.lock").decode())
+        head_lock = tomllib.loads((repo_root / "uv.lock").read_text())
+        base_manifest = tomllib.loads(base_file("pyproject.toml").decode())
+        head_manifest = tomllib.loads((repo_root / "pyproject.toml").read_text())
+        if any(
+            base_lock.get(key) != head_lock.get(key)
+            for key in base_lock.keys() | head_lock.keys()
+            if key not in {"package", "manifest"}
+        ):
+            return True
+        if {key: value for key, value in base_lock.get("manifest", {}).items() if key != "members"} != {
+            key: value for key, value in head_lock.get("manifest", {}).items() if key != "members"
+        }:
+            return True
+        base_graph = _lock_graph(base_lock)
+        head_graph = _lock_graph(head_lock)
+        if base_graph != head_graph:
+            return True
+        records = [json.loads(node) for node in base_graph[0]]
+        names = {record["name"] for record in records}
+        editable_paths = {record["source"]["editable"] for record in records if "editable" in record["source"]}
+        if (editable_paths & set(base_lock["manifest"]["members"])) != (
+            editable_paths & set(head_lock["manifest"]["members"])
+        ):
+            return True
+        return _root_install_settings(base_manifest, names, editable_paths) != _root_install_settings(
+            head_manifest, names, editable_paths
+        )
+    except (OSError, ValueError, KeyError, TypeError, SyntaxError, subprocess.CalledProcessError):
+        return True
+
+
 @dataclass(frozen=True)
 class ClassifyResult:
     """Classification of repo-root-relative changed file paths."""
@@ -362,7 +665,11 @@ class ClassifyResult:
     """Scopes whose native crate (lib/<scope>/rust) changed — need a source build."""
 
 
-def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
+def classify(
+    changed_files: list[str],
+    repo_root: Path,
+    broad_triggers: frozenset[str] = BROAD_TRIGGERS,
+) -> ClassifyResult:
     """Classify repo-root-relative changed file paths."""
     broad = False
     src_modules: set[str] = set()
@@ -371,7 +678,7 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
     native_changed: set[str] = set()
 
     for filepath in changed_files:
-        if filepath in BROAD_TRIGGERS:
+        if filepath in broad_triggers:
             broad = True
             continue
 
@@ -397,23 +704,39 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
                 module = path_to_module(repo_root / filepath, repo_root / source_root.import_root)
                 if module:
                     src_modules.add(module)
-            continue
 
         for scope in SCOPES:
-            if filepath.startswith(f"{TEST_DIR[scope]}/"):
+            if any(filepath.startswith(f"{directory}/") for directory in TEST_DIRS[scope]):
+                # Experiments contain source and tests. Ordinary source changes select
+                # dependent tests through the import graph.
+                filename = PurePosixPath(filepath).name
+                if (
+                    source_root is not None
+                    and filepath.endswith(".py")
+                    and filename != "conftest.py"
+                    and not is_test_module(filename)
+                ):
+                    # Deleted modules have no edges in the current import graph.
+                    if not (repo_root / filepath).exists():
+                        forced.add(scope)
+                    break
                 # conftest.py, helper modules (stubs, workload scripts, generators), and
                 # non-Python assets (snapshots, fixtures, data files) can all change test
                 # behavior without being directly collectable: run the full scope so the
                 # tests that own this file are not missed.
-                if not is_test_module(PurePosixPath(filepath).name):
+                if not is_test_module(filename):
                     forced.add(scope)
-                elif (repo_root / filepath).exists():
-                    # A test deleted by this diff still shows up in git's output; passing
-                    # it to pytest would abort the run before a single test executes.
+                elif (repo_root / filepath).exists() and has_static_test_items(repo_root / filepath):
                     direct_tests[scope].append(filepath)
+                elif (repo_root / filepath).exists():
+                    # Helpers named test_*.py satisfy pytest's file convention but do not
+                    # own test items. Their importers are not recoverable from a direct
+                    # file selection, so run the scope that consumes the helper.
+                    forced.add(scope)
                 break
 
-            if filepath in (f"lib/{scope}/conftest.py", f"lib/{scope}/pyproject.toml"):
+            package_root = {"deploy": "infra/deploy", "iac": "infra/pulumi"}.get(scope, f"lib/{scope}")
+            if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break
 
@@ -435,9 +758,76 @@ def extra_suites(changed_files: list[str]) -> list[str]:
     )
 
 
+def _node_has_torch_marker(node: ast.AST) -> bool:
+    return any(
+        (isinstance(child, ast.Name) and child.id == "skip_if_no_torch")
+        or (isinstance(child, ast.Attribute) and child.attr == "torch")
+        for child in ast.walk(node)
+    )
+
+
+def torch_membership_for_test_file(path: Path) -> tuple[bool, bool]:
+    """Return whether a test file contains torch and non-torch tests.
+
+    The Levanter helper ``skip_if_no_torch`` applies ``pytest.mark.torch``. The
+    selector cannot import test modules because its job intentionally installs no test
+    dependencies, so inspect decorators and module-level ``pytestmark`` assignments.
+    Unknown/dynamically generated test shapes conservatively enter both lanes.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    module_is_torch = any(
+        isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets)
+        and _node_has_torch_marker(node.value)
+        for node in tree.body
+    )
+
+    has_torch = module_is_torch
+    has_non_torch = False
+    found_test = False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            found_test = True
+            is_torch = module_is_torch or any(_node_has_torch_marker(decorator) for decorator in node.decorator_list)
+            has_torch |= is_torch
+            has_non_torch |= not is_torch
+            continue
+
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            class_is_torch = module_is_torch or any(
+                _node_has_torch_marker(decorator) for decorator in node.decorator_list
+            )
+            for method in node.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_"):
+                    found_test = True
+                    is_torch = class_is_torch or any(
+                        _node_has_torch_marker(decorator) for decorator in method.decorator_list
+                    )
+                    has_torch |= is_torch
+                    has_non_torch |= not is_torch
+
+    if not found_test:
+        return True, True
+    return has_torch, has_non_torch
+
+
 # ---------------------------------------------------------------------------
 # Test selection
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MatrixLeg:
+    """Configuration for one unified-unit pytest job."""
+
+    label: str
+    package: str
+    python: str
+    extras: str
+    pytest_args: str
+    test_paths: str
+    setup: str
+    timeout: int
 
 
 def matrix_leg(
@@ -446,7 +836,7 @@ def matrix_leg(
     shard: tuple[int, int] | None = None,
     *,
     source_build: bool = False,
-) -> dict[str, str | int]:
+) -> MatrixLeg:
     """Build one unified-unit matrix leg with uv/pytest arguments.
 
     ``shard`` is a ``(index, total)`` pair when the scope's suite is split across several
@@ -455,14 +845,16 @@ def matrix_leg(
     workflow reads the ``setup`` tag).
     """
     label = scope if shard is None else f"{scope} {shard[0]}/{shard[1]}"
-    return {
-        "label": label,
-        "package": UV_PACKAGE[scope],
-        "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
-        "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
-        "setup": RUST_SETUP_TAG if source_build else "",
-        "timeout": SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
-    }
+    return MatrixLeg(
+        label=label,
+        package=UV_PACKAGE[scope],
+        python=PYTHON_VERSION,
+        extras=" ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
+        pytest_args=" ".join(PYTEST_ARGS),
+        test_paths=" ".join(tests or TEST_DIRS[scope]),
+        setup=RUST_SETUP_TAG if source_build else "",
+        timeout=SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
+    )
 
 
 def all_test_files(scope: str, repo_root: Path) -> list[str]:
@@ -490,7 +882,7 @@ def scope_legs(
     repo_root: Path,
     *,
     source_build: bool = False,
-) -> list[dict[str, str | int]]:
+) -> list[MatrixLeg]:
     """Matrix legs for one scope: one leg, or several when the scope is sharded.
 
     ``tests is None`` runs the full suite. A sharded scope expands that to its file list so
@@ -522,12 +914,13 @@ def compute_matrix(
     forced_scopes: set[str],
     source_build_scopes: set[str],
     repo_root: Path,
-) -> list[dict[str, str | int]]:
+) -> list[MatrixLeg]:
     """Compute the test matrix.
 
-    Returns a list of matrix legs. Each leg has a label, package (uv name), extras,
-    test_paths, and a source-build ``setup``/``timeout``. An empty tests list means run the
-    full suite directory; a scope may fan out into several sharded legs.
+    Returns a list of matrix legs. Each leg has a label, package (uv name), Python
+    version, uv extras, pytest arguments, test paths, and a source-build
+    ``setup``/``timeout``. An empty tests list means run the full suite directory;
+    a scope may fan out into several sharded legs.
     ``source_build_scopes`` are the scopes whose legs must build the native extension from
     source.
     """
@@ -538,7 +931,7 @@ def compute_matrix(
     known = set(modules)
     affected = affected_modules(src_modules, build_importers(modules)) if src_modules else set()
 
-    matrix: list[dict[str, str | int]] = []
+    matrix: list[MatrixLeg] = []
     for scope in SCOPES:
         source_build = scope in source_build_scopes
         if scope in forced_scopes:
@@ -557,12 +950,165 @@ def compute_matrix(
     return matrix
 
 
-def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[dict[str, str | int]]:
+def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[MatrixLeg]:
     """Every scope, each running its full suite (sharded where configured)."""
-    legs: list[dict[str, str | int]] = []
+    legs: list[MatrixLeg] = []
     for scope in SCOPES:
         legs.extend(scope_legs(scope, None, repo_root, source_build=scope in source_build_scopes))
     return legs
+
+
+def selected_scope_test_paths(matrix: list[MatrixLeg], scope: str) -> list[str]:
+    """Return the unique pytest paths selected for one scope across all matrix shards."""
+    package = UV_PACKAGE[scope]
+    return sorted({path for leg in matrix if leg.package == package for path in leg.test_paths.split()})
+
+
+def accelerator_suite_test_paths(
+    matrix: list[MatrixLeg],
+    repo_root: Path,
+    selected_lanes: set[str],
+) -> dict[str, list[str]]:
+    """Return affected Levanter tests split by accelerator lane."""
+    if not selected_lanes:
+        return {}
+
+    selected = selected_scope_test_paths(matrix, "levanter")
+    if not selected:
+        return {}
+
+    torch_paths: list[str] = []
+    tpu_paths: list[str] = []
+    for test_path in selected:
+        if test_path in TEST_DIRS["levanter"]:
+            torch_paths.append(test_path)
+            tpu_paths.append(test_path)
+            continue
+
+        path = repo_root / test_path
+        has_torch, has_non_torch = torch_membership_for_test_file(path)
+        if has_torch:
+            torch_paths.append(test_path)
+        if has_non_torch and test_path not in TPU_IGNORED_TEST_PATHS:
+            tpu_paths.append(test_path)
+
+    suites: dict[str, list[str]] = {}
+    if LEVANTER_TORCH_SUITE in selected_lanes and torch_paths:
+        suites[LEVANTER_TORCH_SUITE] = torch_paths
+    if LEVANTER_TPU_SUITE in selected_lanes and tpu_paths:
+        suites[LEVANTER_TPU_SUITE] = tpu_paths
+    return suites
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    """Selected CI matrix legs and out-of-band suites for a set of changed files."""
+
+    reason: str
+    matrix: list[MatrixLeg]
+    suites: list[str]
+    suite_test_paths: dict[str, list[str]]
+
+
+def _select_changed_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    broad_triggers: frozenset[str],
+    *,
+    run_all_tests: bool = False,
+    base_ref: str | None = None,
+) -> SelectionResult:
+    classification = classify(changed_files, repo_root, broad_triggers)
+    source_build_scopes = set(classification.native_changed)
+
+    if run_all_tests:
+        reason, matrix = RUN_ALL_REASON, full_matrix(repo_root, source_build_scopes)
+    elif classification.broad:
+        reason, matrix = BROAD_TRIGGER_REASON, full_matrix(repo_root, source_build_scopes)
+    else:
+        reason = DIFF_DRIVEN_REASON
+        matrix = compute_matrix(
+            classification.src_modules,
+            classification.direct_tests,
+            classification.forced,
+            source_build_scopes,
+            repo_root,
+        )
+
+    selected_lanes: set[str] = set()
+    if any(path.startswith(prefix) for prefix in LEVANTER_TORCH_TRIGGERS for path in changed_files):
+        selected_lanes.add(LEVANTER_TORCH_SUITE)
+    source_or_ci_changed = any(
+        path.startswith(prefix) for prefix in LEVANTER_ACCELERATOR_TRIGGERS for path in changed_files
+    )
+    manifest_changed = any(path in DEPENDENCY_MANIFESTS for path in changed_files)
+    if source_or_ci_changed or (manifest_changed and levanter_tpu_dependencies_changed(base_ref, repo_root)):
+        selected_lanes.add(LEVANTER_TPU_SUITE)
+    suite_test_paths = accelerator_suite_test_paths(matrix, repo_root, selected_lanes)
+    selected_extra_suites = EXTRA_SUITE_TRIGGERS if run_all_tests else extra_suites(changed_files)
+    suites = sorted((*selected_extra_suites, *suite_test_paths))
+    return SelectionResult(
+        reason=reason,
+        matrix=matrix,
+        suites=suites,
+        suite_test_paths=suite_test_paths,
+    )
+
+
+def select_changed_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+    base_ref: str | None = None,
+) -> SelectionResult:
+    """Return the CI test plan for repo-relative changed paths."""
+    return _select_changed_tests(
+        changed_files,
+        repo_root,
+        BROAD_TRIGGERS,
+        run_all_tests=run_all_tests,
+        base_ref=base_ref,
+    )
+
+
+def select_local_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+    base_ref: str | None = None,
+) -> SelectionResult:
+    """Return affected local tests without expanding CI-only orchestration changes."""
+    return _select_changed_tests(
+        changed_files,
+        repo_root,
+        LOCAL_BROAD_TRIGGERS,
+        run_all_tests=run_all_tests,
+        base_ref=base_ref,
+    )
+
+
+def select_all_tests(repo_root: Path) -> SelectionResult:
+    """Return the scheduled/manual plan when no diff base is available."""
+    matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
+    suite_test_paths = accelerator_suite_test_paths(matrix, repo_root, {LEVANTER_TORCH_SUITE, LEVANTER_TPU_SUITE})
+    return SelectionResult(
+        reason=RUN_ALL_REASON,
+        matrix=matrix,
+        suites=sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
+        suite_test_paths=suite_test_paths,
+    )
+
+
+def selection_payload(selection: SelectionResult) -> dict[str, object]:
+    """Return a JSON-serializable GitHub Actions matrix payload."""
+    return {
+        "reason": selection.reason,
+        "matrix": [asdict(leg) for leg in selection.matrix],
+        "suites": selection.suites,
+        "suite_test_paths": selection.suite_test_paths,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -587,39 +1133,12 @@ def main() -> None:
     # Without a base ref there is no diff to inspect, so conservatively build every native
     # extension from source and run the out-of-band suites too.
     if args.base_ref is None:
-        result = {
-            "reason": "run-all-tests",
-            "matrix": full_matrix(repo_root, set(NATIVE_CRATE_DIR)),
-            "suites": sorted(EXTRA_SUITE_TRIGGERS),
-        }
-        print(json.dumps(result, indent=2))
+        print(json.dumps(selection_payload(select_all_tests(repo_root)), indent=2))
         return
 
     changed = git_changed_files(args.base_ref, repo_root)
-    classification = classify(changed, repo_root)
-    suites = extra_suites(changed)
-
-    # The scopes whose native extension's Rust changed build it from source; every other
-    # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
-    # broad trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the
-    # fast prebuilt-wheel path.
-    source_build_scopes = set(classification.native_changed)
-
-    if args.run_all_tests:
-        reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)
-    elif classification.broad:
-        reason, matrix = "broad-trigger", full_matrix(repo_root, source_build_scopes)
-    else:
-        reason = "diff-driven"
-        matrix = compute_matrix(
-            classification.src_modules,
-            classification.direct_tests,
-            classification.forced,
-            source_build_scopes,
-            repo_root,
-        )
-
-    print(json.dumps({"reason": reason, "matrix": matrix, "suites": suites}, indent=2))
+    selection = select_changed_tests(changed, repo_root, run_all_tests=args.run_all_tests, base_ref=args.base_ref)
+    print(json.dumps(selection_payload(selection), indent=2))
 
 
 if __name__ == "__main__":

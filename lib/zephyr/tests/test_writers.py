@@ -4,6 +4,7 @@
 """Tests for writers module."""
 
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import pytest
 import vortex
 from pyarrow import fs as pa_fs
 from zephyr.writers import (
+    ThreadedBatchWriter,
     _pyarrow_filesystem,
     _s3_filesystem_kwargs,
     infer_arrow_schema,
@@ -199,17 +201,15 @@ def test_write_parquet_file_widens_null_to_concrete_type():
         assert xs[8] == "hello"
 
 
-def test_write_parquet_file_captures_fields_appearing_in_later_batches():
-    """A field absent from the first batch but present later must not be silently dropped."""
-    records = [{"x": "a"}] * 8 + [{"x": "b", "z": 42}]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "test.parquet")
-        result = write_parquet_file(records, output_path)
-        assert result["count"] == 9
+@pytest.mark.parametrize("intro_index", [1, 8, 9])
+def test_write_parquet_file_captures_fields_appearing_after_first_row(tmp_path, intro_index):
+    records = [{"x": "a"}] * intro_index + [{"x": "b", "z": 42}]
+    output_path = str(tmp_path / "test.parquet")
+    result = write_parquet_file(records, output_path)
+    assert result["count"] == len(records)
 
-        table = pq.read_table(output_path)
-        assert "z" in table.schema.names, "field `z` must survive to disk, not be dropped"
-        assert table.column("z").to_pylist() == [None] * 8 + [42]
+    table = pq.read_table(output_path)
+    assert table.to_pylist() == [{"x": "a", "z": None}] * intro_index + [{"x": "b", "z": 42}]
 
 
 def test_write_parquet_file_raises_on_incompatible_type_conflict():
@@ -265,6 +265,31 @@ def test_pyarrow_filesystem_selection():
     assert path == "/tmp/out.parquet"
 
     assert _pyarrow_filesystem("memory://bucket/out.parquet") is None
+
+
+def test_pyarrow_filesystem_cached_per_config(monkeypatch):
+    """One S3 filesystem per process, not one per file (#8402).
+
+    Each filesystem owns a connection pool that dies with the object, so a
+    per-file client parks a local port in TIME_WAIT for every file a task
+    writes. A changed endpoint must still build a new filesystem.
+    """
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://object.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    first, path = _pyarrow_filesystem("s3://bucket/a.parquet")
+    second, _ = _pyarrow_filesystem("s3://bucket/b.parquet")
+    assert path == "bucket/a.parquet"
+    assert first is second
+
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://other.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    assert _pyarrow_filesystem("s3://bucket/a.parquet")[0] is not first
 
 
 def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):
@@ -347,3 +372,23 @@ def test_infer_arrow_schema_mixed_types_fails():
     ]
     with pytest.raises(pa.lib.ArrowInvalid):
         infer_arrow_schema(records)
+
+
+def test_threaded_batch_writer_close_raises_when_writer_fails_with_full_queue():
+    got_first = threading.Event()
+    may_fail = threading.Event()
+
+    def write_fn(items):
+        for _ in items:
+            got_first.set()
+            may_fail.wait()
+            raise ValueError("writer failed")
+
+    writer = ThreadedBatchWriter(write_fn, maxsize=1)
+    writer.submit(1)
+    got_first.wait()
+    writer.submit(2)  # fills the queue while the writer thread is still alive
+    may_fail.set()
+
+    with pytest.raises(ValueError, match="writer failed"):
+        writer.close()

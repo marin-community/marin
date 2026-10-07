@@ -1,14 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end tests for the finestore eval archive: contract round-trip, evaldash read, migration."""
+"""End-to-end tests for the finestore eval archive: contract round-trip and migration."""
 
 from __future__ import annotations
 
 import json
+import tracemalloc
+from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.admin import set_table_metadata
 from finestore.eval import (
     Choice,
     EvalSample,
@@ -19,17 +24,30 @@ from finestore.eval import (
     sample_to_archive_row,
     write_sample_parquet,
 )
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from fsspec.core import url_to_fs
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
     run_artifacts,
+    sample_from_lm_eval,
+    samples_from_lm_eval,
+    summarize_native_eval_samples,
 )
-from rigging.filesystem import StoragePath
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
+from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.cli import (
+    ArchiveSweep,
+    SweepOutcome,
+    _resolve_prefixes,
+    _sweep_archives,
+    selected_archives,
+)
+from experiments.evaluation.migrations.cli import cli as migrations_cli
+from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
 from experiments.evaluation.migrations.migrate_archive import (
     MigrationCounts,
     archive_sample_count,
@@ -39,7 +57,6 @@ from experiments.evaluation.migrations.migrate_archive import (
 from experiments.evaluation.migrations.migrate_archive import (
     main as migrate_archive_cli,
 )
-from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks
 
 
 def _mcq(doc_id: str, *, correct: bool) -> EvalSample:
@@ -57,64 +74,150 @@ def _mcq(doc_id: str, *, correct: bool) -> EvalSample:
     )
 
 
-def test_archive_row_round_trips_each_kind():
-    mcq = _mcq("1", correct=True)
-    generation = EvalSample(
-        task="gsm8k", doc_id="2", kind=SampleKind.GENERATION, prompt_text="2+2?", output="4", extracted="4"
+def test_archive_row_round_trips_each_sample_kind():
+    samples = (
+        _mcq("1", correct=True),
+        EvalSample(task="gsm8k", doc_id="2", kind=SampleKind.GENERATION, output="4", extracted="4"),
+        EvalSample(
+            task="aime",
+            doc_id="3",
+            kind=SampleKind.AGENTIC,
+            trajectory_uri="finestore://blobs/t3/trajectory.json",
+            grading=Grading(method="harbor:verifier", metric="reward", score=1.0, passed=True),
+        ),
     )
-    agentic = EvalSample(
-        task="aime",
-        doc_id="3",
-        kind=SampleKind.AGENTIC,
-        trajectory_uri="finestore://blobs/t3/trajectory.json",
-        grading=Grading(method="harbor:verifier", metric="reward", score=1.0, passed=True),
-        metrics={"reward": 1.0},
-        correct=True,
-    )
-    for sample in (mcq, generation, agentic):
+
+    for sample in samples:
         row = sample_to_archive_row(sample, trial_id="t")
         assert row["trial_id"] == "t"
         assert sample_from_archive_row(row) == sample
 
 
-def test_evaldash_reads_the_archive(tmp_path):
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
     root = str(tmp_path / "run" / "results")
     store = EvaluationStore.open(root, writer_id="evalchemy")
-    store.add_sample(_mcq("1", correct=True))
-    store.add_sample(_mcq("2", correct=False))
-    store.seal()
-    store.close()
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
+            b'{"doc_id": 999}\n',
+            content_type="application/x-ndjson",
+        )
+        store.add_source_artifact(
+            "evalchemy/gsm8k_5shot/native/results_gsm8k.json",
+            json.dumps(
+                {
+                    "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
+                    **_result_contract(
+                        "gsm8k",
+                        "exact_match",
+                        "accuracy",
+                        1.0,
+                        n_benchmark=1,
+                        n_attempted=1,
+                    ),
+                }
+            ).encode(),
+            content_type="application/json",
+        )
+        store.add_sample(
+            EvalSample(
+                task="gsm8k_5shot",
+                doc_id="0",
+                kind=SampleKind.GENERATION,
+                output="4",
+                extracted="4",
+                grading=Grading(method="lm-eval:exact_match", metric="exact_match", score=1.0, passed=True),
+                metrics={"exact_match": 1.0},
+                correct=True,
+            )
+        )
+        store.seal()
+    finally:
+        store.close()
 
-    tasks = list_sample_tasks(root)
-    assert tasks.available
-    assert [task.task for task in tasks.tasks] == ["arc"]
+    summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 5),))
 
-    page = fetch_samples(root, "arc", offset=0, limit=10, correct="all")
-    assert page.available
-    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
-    assert {row.doc_id for row in page.rows} == {"1", "2"}
-    assert page.primary_metric == "acc"
+    assert summary.samples == 1
+    assert summary.coverage == {
+        "gsm8k_5shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=1,
+            n_unanswered=0,
+        )
+    }
+    assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
+    assert summary.tasks[0].benchmark is not None
+    assert summary.tasks[0].benchmark.primary_metric == "accuracy"
 
-    incorrect = fetch_samples(root, "arc", offset=0, limit=10, correct="incorrect")
-    assert [row.doc_id for row in incorrect.rows] == ["2"]
 
-
-def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
-    # metrics is a pinned map<string,double>. A batch that writes no metrics leaves that column null on
-    # disk (the write path drops an all-empty dict column); the reader must normalize the null back to
-    # an empty dict, not fail validation nor invent a zero.
+def test_native_summary_partitions_repeated_task_configurations(tmp_path):
     root = str(tmp_path / "run" / "results")
     store = EvaluationStore.open(root, writer_id="evalchemy")
-    store.add_sample(EvalSample(task="gsm8k", doc_id="1", kind=SampleKind.GENERATION, output="4"))
-    store.seal()
-    store.close()
+    try:
+        for task, score in (("hellaswag_0shot", 0.0), ("hellaswag_10shot", 1.0)):
+            store.add_source_artifact(
+                f"evalchemy/{task}/native/samples_hellaswag_native.jsonl",
+                b'{"doc_id": 0}\n',
+                content_type="application/x-ndjson",
+            )
+            store.add_source_artifact(
+                f"evalchemy/{task}/native/results_hellaswag.json",
+                json.dumps(
+                    {
+                        "results": {"hellaswag": {"acc,none": score}},
+                        **_result_contract(
+                            "hellaswag",
+                            "acc",
+                            "accuracy",
+                            score,
+                            n_benchmark=1,
+                            n_attempted=1,
+                        ),
+                    }
+                ).encode(),
+                content_type="application/json",
+            )
+            store.add_sample(
+                EvalSample(
+                    task=task,
+                    doc_id="0",
+                    kind=SampleKind.MULTIPLE_CHOICE,
+                    grading=Grading(method="lm-eval:acc", metric="acc", score=score, passed=bool(score)),
+                    metrics={"acc": score},
+                    correct=bool(score),
+                )
+            )
+        store.seal()
+    finally:
+        store.close()
 
-    page = fetch_samples(root, "gsm8k", offset=0, limit=10, correct="all")
-    assert page.available
-    assert page.counts.ungraded == 1
-    assert page.primary_metric is None
-    assert page.rows[0].metrics == {}
-    assert page.rows[0].correct is None
+    summary = summarize_native_eval_samples(
+        root,
+        tasks=(EvalTaskConfig("hellaswag", 0), EvalTaskConfig("hellaswag", 10)),
+    )
+
+    assert summary.coverage == {
+        "hellaswag_0shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=0,
+            n_unanswered=0,
+        ),
+        "hellaswag_10shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=1,
+            n_unanswered=0,
+        ),
+    }
+    assert summary.canonical_metrics == {
+        "hellaswag_0shot": {"accuracy": 0.0},
+        "hellaswag_10shot": {"accuracy": 1.0},
+    }
 
 
 def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
@@ -134,14 +237,68 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     }
     sample_path.write_text(json.dumps(raw, ensure_ascii=False) + "\n")
 
-    assert export_lm_eval_samples(str(results)) == 1
+    assert export_lm_eval_samples(str(results)).samples == 1
 
-    table = CompositeReader(str(results)).scan("samples")
+    table = ReadView(str(results)).scan("samples")
     assert table is not None
     [row] = table.to_pylist(maps_as_pydicts="strict")
     sample = sample_from_archive_row(row)
     assert sample.prompt_messages is not None
     assert sample.prompt_messages[0].content == content
+
+
+def test_export_lm_eval_samples_bounds_peak_python_memory(tmp_path):
+    results = tmp_path / "run" / "results"
+    sample_path = results / "mmlu_pro" / "model" / "samples_mmlu_pro_20260807.jsonl"
+    sample_path.parent.mkdir(parents=True)
+    prompt = "Read the question and choose one answer. " + ("context " * 1_024)
+    rows = []
+    for doc_id in range(2_048):
+        rows.append(
+            json.dumps(
+                {
+                    "doc_id": doc_id,
+                    "doc": {"question": "Which answer is correct?", "choices": ["A", "B"]},
+                    "target": 0,
+                    "arguments": [[prompt, "A"], [prompt, "B"]],
+                    "resps": [[-1.0, True], [-2.0, True]],
+                    "filtered_resps": [0],
+                    "acc": 1.0,
+                }
+            )
+        )
+    sample_path.write_text("\n".join(rows) + "\n")
+    del rows
+
+    source_size = sample_path.stat().st_size
+    tracemalloc.start()
+    try:
+        exported = export_lm_eval_samples(str(results))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert exported.samples == 2_048
+    assert peak < source_size * 5 / 2
+
+
+def test_native_evalchemy_generation_preserves_prompt():
+    prompt = json.dumps([{"role": "user", "content": "How many eggs?"}])
+
+    sample = sample_from_lm_eval(
+        "gsm8k_5shot",
+        {
+            "doc_id": 0,
+            "doc": {"question": "How many eggs?"},
+            "target": "18",
+            "arguments": [[[prompt], {"temperature": 1.0}]],
+            "resps": [["18"]],
+            "filtered_resps": ["18"],
+        },
+    )
+
+    assert sample.prompt_messages is not None
+    assert [(message.role, message.content) for message in sample.prompt_messages] == [("user", "How many eggs?")]
 
 
 def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
@@ -158,6 +315,39 @@ def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: st
         "exact_match": score,
         "schema_version": 1,
         "task_name": "gsm8k",
+    }
+
+
+def _result_contract(
+    task: str,
+    source_metric: str,
+    canonical_metric: str,
+    value: float,
+    *,
+    n_benchmark: int,
+    n_attempted: int,
+    kind: str = "binary",
+) -> dict:
+    return {
+        "benchmark_metadata": {
+            task: {
+                "schema_version": 1,
+                "task": task,
+                "primary_metric": canonical_metric,
+                "metric_kind": kind,
+                "metrics": [
+                    {
+                        "name": canonical_metric,
+                        "source_name": source_metric,
+                        "kind": kind,
+                        "higher_is_better": True,
+                    }
+                ],
+                "n_benchmark": n_benchmark,
+                "n_attempted": n_attempted,
+            }
+        },
+        "canonical_results": {task: {canonical_metric: value}},
     }
 
 
@@ -180,9 +370,9 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
         ],
     )
 
-    assert export_lm_eval_samples(str(results)) == 2
+    assert export_lm_eval_samples(str(results)).samples == 2
 
-    rows = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    rows = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert len(rows) == 2
     by_filter = {row["filter"]: sample_from_archive_row(row) for row in rows}
     assert set(by_filter) == {"strict-match", "flexible-extract"}
@@ -192,14 +382,109 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_ungraded_extraction_filters_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = [
+        {
+            key: value
+            for key, value in _lm_eval_row(0, name, 0.0, response).items()
+            if key not in {"metrics", "exact_match"}
+        }
+        for name, response in (("strict-match", "[invalid]"), ("flexible-extract", "4"))
+    ]
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).output for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_ungraded_filter_variants_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    raw = _lm_eval_row(0, "none", 0.0, "4")
+    del raw["filter"], raw["metrics"], raw["exact_match"]
+    raw["filter_variants"] = [
+        {"filter": "strict-match", "filtered_resps": ["[invalid]"], "metrics": {}},
+        {"filter": "flexible-extract", "filtered_resps": ["4"], "metrics": {}},
+    ]
+    _write_jsonl(results, [raw])
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).extracted for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = []
+    for repeat, score in enumerate((1.0, 0.0, 1.0)):
+        row = _lm_eval_row(0, "none", score, str(repeat))
+        row["sample_repeat"] = repeat
+        row["source_id"] = 2
+        row["sample_ordinal"] = 0
+        rows.append(row)
+    source = _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 3
+    source.unlink()
+    assert rebuild_lm_eval_samples(str(results)) == 3
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["trial_id"]: sample_from_archive_row(row).metrics for row in stored} == {
+        "0": {"exact_match": 1.0},
+        "1": {"exact_match": 0.0},
+        "2": {"exact_match": 1.0},
+    }
+
+
 def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     # lm-eval stamps each row with its own numeric schema_version; it is not a score.
     results = tmp_path / "run" / "results"
     _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
     export_lm_eval_samples(str(results))
 
-    [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
+
+
+def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
+    # Custom Evalchemy tasks can omit per-sample metrics while adding numeric provenance fields.
+    # Treating those row indices as scores makes every item after the first look correct.
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("metrics")
+    row.pop("exact_match")
+    row.update(
+        {
+            "sample_id": "MMLUPro:0:0:0",
+            "sample_namespace": "MMLUPro",
+            "sample_ordinal": 17,
+            "sample_repeat": 0,
+            "sample_shard": 0,
+            "source_id": 17,
+        }
+    )
+    _write_jsonl(results, [row])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    [archived] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(archived)
+    assert archived["filter"] == "none"
+    assert sample.metrics == {}
+    assert sample.grading is None
+    assert sample.correct is None
+    assert coverage == {
+        "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
+    }
 
 
 def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
@@ -208,15 +493,15 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     results = tmp_path / "run" / "results"
     source = _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4"), _lm_eval_row(1, "none", 0.0, "5")])
     (results / "gsm8k_5shot" / "model" / "results_20260807.json").write_text(json.dumps({"results": {}}))
-    assert export_lm_eval_samples(str(results)) == 2
+    assert export_lm_eval_samples(str(results)).samples == 2
 
-    reader = CompositeReader(str(results))
+    reader = ReadView(str(results))
     blob = reader.read_blob(f"sources/{source.relative_to(results)}")
     assert blob == source.read_bytes()
 
     source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 2
-    assert CompositeReader(str(results)).scan("samples").num_rows == 2
+    assert ReadView(str(results)).scan("samples").num_rows == 2
 
 
 def test_export_preserves_every_artifact_the_harness_left(tmp_path):
@@ -232,7 +517,7 @@ def test_export_preserves_every_artifact_the_harness_left(tmp_path):
 
     export_lm_eval_samples(str(results))
 
-    preserved = {name for name in CompositeReader(str(results)).keys("blobs") for name in [name[0]]}
+    preserved = {name for name in ReadView(str(results)).keys("blobs") for name in [name[0]]}
     for relative in run_artifacts(str(results)):
         assert f"sources/{relative}" in preserved, relative
     assert any(".resume" in name for name in preserved)
@@ -244,6 +529,10 @@ def test_preserving_artifacts_never_includes_the_archive_itself(tmp_path):
     results = tmp_path / "run" / "results"
     _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
     export_lm_eval_samples(str(results))
+    legacy_shard = results / "samples" / "w=old" / "g=0" / "old.parquet"
+    legacy_shard.parent.mkdir(parents=True)
+    legacy_shard.write_bytes(b"unreachable format-v1 object")
+    (results / "SEALED").write_text("{}")
 
     before = len(run_artifacts(str(results)))
     export_lm_eval_samples(str(results))
@@ -251,6 +540,73 @@ def test_preserving_artifacts_never_includes_the_archive_itself(tmp_path):
     assert run_artifacts(str(results)) == sorted(run_artifacts(str(results)))
     assert len(run_artifacts(str(results))) == before
     assert not any(name.startswith(("samples/", "steps/", "blobs/")) for name in run_artifacts(str(results)))
+
+
+def test_aggregate_scored_task_counts_every_enumerated_document_as_scored(tmp_path):
+    """AIME24 writes only ``accuracy_avg``; its rows carry no per-item score. They are still graded."""
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    metadata = {
+        "schema_version": 1,
+        "task": "aime24",
+        "primary_metric": "accuracy",
+        "metric_kind": "continuous",
+        "metrics": [{"name": "accuracy", "source_name": "accuracy_avg", "kind": "continuous", "higher_is_better": True}],
+        "n_benchmark": 4,
+        "n_attempted": 4,
+    }
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"aime24": {"accuracy_avg": 0.5, "accuracy_std_err": 0.05, "num_total": 4}},
+                "benchmark_metadata": {"aime24": metadata},
+                "canonical_results": {"aime24": {"accuracy": 0.5, "accuracy_stderr": 0.05}},
+            }
+        )
+    )
+    rows = []
+    for doc_id in range(4):
+        row = _lm_eval_row(doc_id, "none", 1.0, "7")
+        del row["metrics"], row["exact_match"]
+        row["task_name"] = "aime24"
+        rows.append(row)
+    (directory / "samples_aime24_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    export = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("AIME24", 0, task_alias="aime24"),))
+
+    assert export.coverage["aime24"] == TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4, n_correct=None)
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert all(sample_from_archive_row(row).correct is None for row in stored)
+
+
+def test_missing_sample_metrics_do_not_imply_aggregate_scoring(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match": 0.5}},
+                **_result_contract("gsm8k", "exact_match", "exact_match", 0.5, n_benchmark=2, n_attempted=2),
+            }
+        )
+    )
+    rows = []
+    for doc_id in range(2):
+        row = _lm_eval_row(doc_id, "none", 1.0, "7")
+        del row["metrics"], row["exact_match"]
+        rows.append(row)
+    (directory / "samples_gsm8k_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    export = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 0),))
+
+    assert export.coverage["gsm8k"] == TaskCoverage(
+        n_benchmark=2,
+        n_attempted=2,
+        n_scored=0,
+        errors={"ungraded": 2},
+    )
 
 
 def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
@@ -269,7 +625,7 @@ def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
 
 def test_export_refuses_an_archive_written_under_an_older_contract(tmp_path):
     # A v3 archive folded both filters onto one key, and those rows cannot collapse against v4 rows.
-    # finestore does not delete, so the export stops rather than leaving the folded row beside them.
+    # An ordinary export stops so only the explicit, preserved migration can replace the table.
     results = tmp_path / "run" / "results"
     _write_jsonl(
         results,
@@ -283,14 +639,13 @@ def test_export_refuses_an_archive_written_under_an_older_contract(tmp_path):
 
     with pytest.raises(ValueError, match="schema v3"):
         export_lm_eval_samples(str(results))
-    assert CompositeReader(str(results)).scan("samples").num_rows == 2
+    assert ReadView(str(results)).scan("samples").num_rows == 2
 
 
 def _stamp_schema_version(results, version: int) -> None:
-    schema_path = StoragePath(str(results) + "/samples/_schema.json")
-    meta = json.loads(schema_path.read_text())
-    meta["schema_version"] = version
-    schema_path.write_text(json.dumps(meta))
+    reader = ReadView(str(results))
+    metadata = reader.table_metadata("samples").model_copy(update={"schema_version": version})
+    set_table_metadata(str(results), "samples", metadata)
 
 
 def _harbor_archive(results, version: int) -> None:
@@ -317,8 +672,8 @@ def test_export_leaves_an_archive_it_has_no_source_for(tmp_path):
     results = tmp_path / "run" / "results"
     _harbor_archive(results, version=3)
 
-    assert export_lm_eval_samples(str(results)) == 0
-    assert CompositeReader(str(results)).scan("samples").num_rows == 1
+    assert export_lm_eval_samples(str(results)).samples == 0
+    assert ReadView(str(results)).scan("samples").num_rows == 1
 
 
 def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
@@ -331,12 +686,353 @@ def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
     scratch.parent.mkdir(parents=True)
     scratch.write_text(json.dumps(_lm_eval_row(0, "none", 0.0, "5")) + "\n")
 
-    assert export_lm_eval_samples(str(results)) == 1
+    assert export_lm_eval_samples(str(results)).samples == 1
 
-    [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).output == "4"
     # The retry is still recoverable: it is preserved even though it produced no row.
     assert any("tmpp90h6r1d" in name for name in preserved_sample_sources(str(results)))
+
+
+def test_export_establishes_what_a_task_set_out_to_grade(tmp_path):
+    # lm-eval publishes no attempted-item count in its aggregate results, so a run's own sample rows
+    # are the only evidence that it graded everything it enumerated. Without this the dashboard can
+    # only report sampling error and has to treat the benchmark's completeness as unknown.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(doc_id, "none", float(doc_id % 2), "4") for doc_id in range(6)])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    assert coverage == {"gsm8k_5shot": TaskCoverage(n_attempted=6, n_scored=6, n_correct=3, n_unanswered=0)}
+
+
+def test_a_document_that_produced_no_row_is_counted_as_attempted(tmp_path):
+    # lm-eval indexes documents 0..N-1, so a gap in the indices is a document that was enumerated and
+    # never graded. Scoring the survivors as if they were the whole benchmark is the complete-case
+    # bias the interval exists to bound.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [_lm_eval_row(0, "none", 1.0, "4"), _lm_eval_row(1, "none", 1.0, "4"), _lm_eval_row(3, "none", 1.0, "4")],
+    )
+
+    [entry] = export_lm_eval_samples(str(results)).coverage.values()
+
+    assert entry.n_attempted == 4
+    assert entry.n_scored == 3
+
+
+def test_a_document_scored_under_two_filters_counts_once(tmp_path):
+    # gsm8k grades each document under strict-match and flexible-extract, so the archive holds two
+    # rows per document. Counting rows would report twice the items the benchmark actually has, which
+    # halves the interval it deserves.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
+            _lm_eval_row(1, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(1, "flexible-extract", 0.0, "nope"),
+        ],
+    )
+
+    [entry] = export_lm_eval_samples(str(results)).coverage.values()
+
+    assert entry.n_scored == 2
+    # flexible-extract leads for exact_match, and the tally comes from the same filter the run's
+    # headline metric is reported under rather than mixing the two verdicts.
+    assert entry.n_correct == 1
+
+
+def test_answers_the_grader_could_not_extract_are_counted_apart_from_wrong_ones(tmp_path):
+    # A zero because the model answered wrongly and a zero because nothing parseable came back are
+    # the same number and different facts; only the second is grounds for doubting the run.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "none", 0.0, ""), _lm_eval_row(1, "none", 0.0, "5")])
+
+    [entry] = export_lm_eval_samples(str(results)).coverage.values()
+
+    assert entry.n_scored == 2
+    assert entry.n_correct == 0
+    assert entry.n_unanswered == 1
+
+
+def test_a_group_task_reports_coverage_per_subtask(tmp_path):
+    # One task config evaluating several tasks keys its metrics <task_dir>/<task>; coverage keys the
+    # same way or a reader cannot line the two up.
+    results = tmp_path / "run" / "results"
+    directory = results / "mmlu_5shot" / "model"
+    directory.mkdir(parents=True)
+    for subject in ("anatomy", "astronomy"):
+        rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(3)]
+        (directory / f"samples_mmlu_{subject}_20260807.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n"
+        )
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    assert sorted(coverage) == ["mmlu_5shot/mmlu_anatomy", "mmlu_5shot/mmlu_astronomy"]
+    assert all(entry.n_attempted == 3 for entry in coverage.values())
+
+
+def test_export_records_full_benchmark_and_intended_cap_for_every_group_leaf(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "mmlu_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"mmlu_anatomy": {"acc,none": 1.0}, "mmlu_astronomy": {"acc,none": 0.0}},
+                "benchmark_metadata": {
+                    task: _result_contract(task, "acc", "accuracy", value, n_benchmark=size, n_attempted=2)[
+                        "benchmark_metadata"
+                    ][task]
+                    for task, value, size in (("mmlu_anatomy", 1.0, 3), ("mmlu_astronomy", 0.0, 4))
+                },
+                "canonical_results": {
+                    "mmlu_anatomy": {"accuracy": 1.0},
+                    "mmlu_astronomy": {"accuracy": 0.0},
+                },
+            }
+        )
+    )
+    rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(2)]
+    for row in rows:
+        row["acc"] = row.pop("exact_match")
+    (directory / "samples_mmlu_anatomy_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    coverage = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),),
+    ).coverage
+
+    assert coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(n_benchmark=3, n_attempted=2, n_scored=2, n_correct=2),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_benchmark=4, n_attempted=2, n_scored=0),
+    }
+
+
+def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "math500" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"MATH500": {"accuracy": 1.0}},
+                **_result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row["accuracy"] = row.pop("exact_match")
+    (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(row) + "\n")
+
+    [coverage] = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500"),),
+    ).coverage.values()
+
+    assert coverage.n_benchmark == 500
+    assert coverage.n_attempted == 10
+    assert coverage.n_scored == 1
+
+
+def test_export_records_aggregate_only_benchmark_metadata(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"AIME24": {"accuracy_avg": 0.4}},
+                **_result_contract(
+                    "AIME24",
+                    "accuracy_avg",
+                    "accuracy",
+                    0.4,
+                    n_benchmark=30,
+                    n_attempted=30,
+                    kind="continuous",
+                ),
+            }
+        )
+    )
+
+    exported = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("AIME24", 0, task_alias="aime24"),),
+    )
+
+    assert exported.canonical_metrics == {"aime24": {"accuracy": 0.4}}
+    assert exported.coverage == {"aime24": TaskCoverage(n_benchmark=30, n_attempted=30, n_scored=0)}
+    assert exported.tasks[0].benchmark is not None
+    assert exported.tasks[0].benchmark.primary_metric == "accuracy"
+
+
+def test_declared_aggregate_metric_uses_its_per_sample_base_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"aime24": {"accuracy_avg": 1.0}},
+                **_result_contract("aime24", "accuracy", "accuracy", 1.0, n_benchmark=1, n_attempted=1),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("exact_match")
+    row["accuracy"] = 1.0
+    (directory / "samples_aime24_20260807.jsonl").write_text(json.dumps(row) + "\n")
+    task = EvalTaskConfig("aime24", 0, task_alias="aime24")
+
+    export_lm_eval_samples(str(results), tasks=(task,))
+
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 0.0, "4")
+    row["f1"] = 1.0
+    source = _write_jsonl(results, [row])
+    (source.parent / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"f1": 1.0}},
+                **_result_contract("gsm8k", "f1", "f1", 1.0, n_benchmark=1, n_attempted=1, kind="continuous"),
+            }
+        )
+    )
+    task = EvalTaskConfig("gsm8k", 5)
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 1
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(stored)
+    assert sample.grading.metric == "f1"
+    assert sample.correct
+
+
+def test_rebuild_preserves_native_evalchemy_repeat_keys(tmp_path):
+    results = str(tmp_path / "results")
+    rows = [_lm_eval_row(0, "none", score, output) for score, output in ((1.0, "4"), (0.0, "5"), (1.0, "4"))]
+    for repeat, row in enumerate(rows):
+        row["sample_repeat"] = repeat
+
+    store = EvaluationStore.open(results, writer_id="native-evalchemy-test")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k/native/samples_gsm8k_native.jsonl",
+            ("\n".join(json.dumps(row) for row in rows) + "\n").encode(),
+            content_type="application/x-ndjson",
+        )
+        for row in rows:
+            for sample in samples_from_lm_eval("gsm8k", row):
+                store.add_sample(sample, trial_id=str(row["sample_repeat"]))
+        store.seal()
+    finally:
+        store.close()
+
+    assert rebuild_lm_eval_samples(results) == 3
+    archived = ReadView(results).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {(row["doc_id"], row["trial_id"]) for row in archived} == {("0", "0"), ("0", "1"), ("0", "2")}
+
+
+def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    result_path = directory / "results_20260807.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "results": {"AIME24": {"accuracy_avg": 1.0}},
+                **_result_contract("AIME24", "accuracy", "accuracy", 1.0, n_benchmark=30, n_attempted=30),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("exact_match")
+    row["accuracy"] = 1.0
+    source = directory / "samples_AIME24_20260807.jsonl"
+    source.write_text(json.dumps(row) + "\n")
+    task = EvalTaskRef(
+        name="AIME24",
+        num_fewshot=0,
+        task_alias="aime24",
+    )
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 1
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+def test_two_sample_files_for_one_leaf_use_one_grouped_coverage_key(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match": 1.0}}, "n-samples": {"gsm8k": {"original": 2}}})
+    )
+    for timestamp in ("20260807", "20260808"):
+        (directory / f"samples_gsm8k_{timestamp}.jsonl").write_text(json.dumps(_lm_eval_row(0, "none", 1.0, "4")) + "\n")
+
+    coverage = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 5),)).coverage
+
+    assert set(coverage) == {"gsm8k_5shot/gsm8k"}
+
+
+def test_export_reads_each_result_payload_once(tmp_path, monkeypatch):
+    results = tmp_path / "run" / "results"
+    source = _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    result_path = source.parent / "results_20260807.json"
+    result_path.write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match": 1.0}}, "n-samples": {"gsm8k": {"original": 1}}})
+    )
+    original = StoragePath.read_bytes
+    reads = 0
+
+    def counted_read(path: StoragePath) -> bytes:
+        nonlocal reads
+        if str(path).endswith("results_20260807.json"):
+            reads += 1
+        return original(path)
+
+    monkeypatch.setattr(StoragePath, "read_bytes", counted_read)
+
+    export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 5),))
+
+    assert reads == 1
+
+
+def test_export_rejects_samples_beyond_the_intended_cap(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match,none": 1.0}},
+                **_result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=10, n_attempted=2),
+            }
+        )
+    )
+    rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in (0, 2)]
+    (directory / "samples_gsm8k_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(ValueError, match="sample document extent 3 exceeds intended count 2"):
+        export_lm_eval_samples(
+            str(results),
+            tasks=(EvalTaskConfig("gsm8k", 5),),
+        )
 
 
 def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
@@ -347,11 +1043,11 @@ def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
     store.add_sample(_mcq("1", correct=True))
     store.seal()
     store.close()
-    assert CompositeReader(root).is_sealed()
+    assert ReadView(root).is_sealed()
 
     reopened = EvaluationStore.open(root, writer_id="evalchemy")
     try:
-        assert not CompositeReader(root).is_sealed()
+        assert not ReadView(root).is_sealed()
     finally:
         reopened.close()
 
@@ -363,45 +1059,58 @@ def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
     own = str(tmp_path / "own" / "results")
     visited: list[str] = []
 
-    def work(path: str) -> SweepOutcome:
+    def work(path: str, _records) -> SweepOutcome:
         visited.append(path)
         return SweepOutcome("exported", "0 sample(s)")
 
-    _sweep_archives({shared: ["run-a", "run-b"], own: ["run-c"]}, 4, work)
+    _sweep_archives(
+        {shared: ArchiveSweep(run_ids=("run-a", "run-b")), own: ArchiveSweep(run_ids=("run-c",))},
+        4,
+        work,
+    )
 
     assert sorted(visited) == sorted([shared, own])
 
 
-def test_naming_an_archive_directly_does_not_pull_in_the_fleet(tmp_path):
+def test_naming_an_archive_directly_recovers_only_its_records(tmp_path, monkeypatch):
     # Targeting a handful of damaged archives must not re-sweep every recorded run beside them.
     named = str(tmp_path / "one" / "results")
-    assert selected_archives((), (named + "/",)) == {named: []}
-
-
-def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
-    # Two rows per document would list every question twice and make the correctness counts
-    # disagree with the headline score, so the browser picks one filter and names the alternatives.
-    results = tmp_path / "run" / "results"
-    _write_jsonl(
-        results,
-        [
-            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
-            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
-        ],
+    matching = SimpleNamespace(results_path=named, run_id="run-a")
+    other = SimpleNamespace(results_path=str(tmp_path / "other" / "results"), run_id="run-b")
+    monkeypatch.setattr(
+        "experiments.evaluation.migrations.cli.list_records",
+        lambda prefix: (matching, other) if prefix == DEFAULT_SCAN_PREFIXES[0] else (),
     )
-    export_lm_eval_samples(str(results))
 
-    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all")
-    assert page.extraction_filters == ("flexible-extract", "strict-match")
-    # FILTER_PRIORITY ranks flexible-extract first, matching the headline metric's filter.
-    assert page.extraction_filter == "flexible-extract"
-    assert page.counts.all == 1
-    assert page.rows[0].correct is True
+    prefixes = _resolve_prefixes((), (named + "/",))
 
-    strict = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all", extraction_filter="strict-match")
-    assert strict.extraction_filter == "strict-match"
-    assert strict.counts.all == 1
-    assert strict.rows[0].correct is False
+    assert prefixes == tuple(DEFAULT_SCAN_PREFIXES)
+    assert selected_archives(prefixes, (named + "/",)) == {named: ArchiveSweep(records=(matching,), run_ids=("run-a",))}
+
+
+def test_upgrade_format_prefix_migrates_only_sealed_archives(tmp_path, monkeypatch):
+    sealed = tmp_path / "evals" / "sealed" / "results"
+    unsealed = tmp_path / "evals" / "unsealed" / "results"
+    missing = tmp_path / "evals" / "missing" / "results"
+    _write_v1_smoke_archive(sealed)
+    _write_v1_smoke_archive(unsealed)
+    (unsealed / "SEALED").unlink()
+    records = [SimpleNamespace(results_path=str(path)) for path in (sealed, unsealed, missing)]
+    monkeypatch.setattr("experiments.evaluation.migrations.cli.list_records", lambda _: records)
+    monkeypatch.setattr("experiments.evaluation.migrations.format_smoke.read_records", lambda _: (records, ()))
+
+    result = CliRunner().invoke(
+        migrations_cli,
+        ["upgrade-format", "--prefix", str(tmp_path / "evals"), "--workers", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads((sealed / "_archive.json").read_text())["format_version"] == 2
+    assert json.loads((unsealed / "_archive.json").read_text())["format_version"] == 1
+    selection = json.loads(result.output.splitlines()[0])
+    assert selection["sealed_v1"] == 1
+    assert selection["unsealed_v1"] == [str(unsealed)]
+    assert selection["missing_archive"] == 1
 
 
 def test_migrate_legacy_run_into_archive(tmp_path):
@@ -438,18 +1147,12 @@ def test_migrate_legacy_run_into_archive(tmp_path):
     assert archive_sample_count(results) == 2
 
     # The migrated agentic sample points at a finestore:// trajectory the archive resolves.
-    reader = CompositeReader(results)
+    reader = ReadView(results)
     agentic_row = reader.point("samples", task="aime", doc_id="prob-1", trial_id="trial-7")
     assert agentic_row is not None
     uri = agentic_row["trajectory_uri"]
     assert uri.startswith("finestore://blobs/")
-
-    artifact = fetch_artifact(results, uri)
-    assert artifact.available
-    assert json.loads(artifact.text)["steps"][0]["step_id"] == 1
-
-    # evaldash surfaces both migrated tasks.
-    assert {task.task for task in list_sample_tasks(results).tasks} == {"arc", "aime"}
+    assert json.loads(reader.read_blob(uri.removeprefix("finestore://blobs/")))["steps"][0]["step_id"] == 1
 
 
 def test_migration_cli_reads_archived_legacy_shards(tmp_path):
@@ -471,21 +1174,94 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     assert summary["skipped_runs"] == 1
 
 
-def test_fetch_artifact_keys_cache_by_run(tmp_path):
-    # A finestore:// URI is archive-relative, so two runs can share one. Resolving it for run A then
-    # run B must return each run's own bytes, not A's cached response for both.
-    uri = "finestore://blobs/trial-1/trajectory.json"
-    run_a = str(tmp_path / "a" / "results")
-    run_b = str(tmp_path / "b" / "results")
-    for root, tag in ((run_a, "a"), (run_b, "b")):
-        store = EvaluationStore.open(root, writer_id="w")
-        stored = store.add_trajectory(json.dumps({"run": tag}).encode(), task="t", doc_id="d", trial_id="trial-1")
-        assert stored.uri == uri
-        store.seal()
-        store.close()
+def _write_v1_smoke_archive(source) -> None:
+    (source / "samples" / "w=legacy" / "g=0").mkdir(parents=True)
+    (source / "samples" / "w=compact" / "g=1").mkdir(parents=True)
+    (source / "blobs" / "w=legacy" / "g=0").mkdir(parents=True)
+    (source / "_archive.json").write_text('{"format_version": 1}')
+    (source / "SEALED").write_text('{"writer": "legacy", "superseded": {"samples": 1}}')
+    (source / "samples" / "_schema.json").write_text(
+        '{"primary_key": ["doc_id"], "schema_version": 4, "on_conflict": "supersede"}'
+    )
+    (source / "blobs" / "_schema.json").write_text(
+        '{"primary_key": ["name"], "schema_version": 1, "on_conflict": "error"}'
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"doc_id": "a", "score": 0.5, "_seq": 1, "_writer": "legacy"},
+                {"doc_id": "b", "score": 0.8, "_seq": 2, "_writer": "legacy"},
+            ]
+        ),
+        source / "samples" / "w=legacy" / "g=0" / "0000000000000001-old.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"doc_id": "a", "score": 0.7, "_seq": 1, "_writer": "compact"}]),
+        source / "samples" / "w=compact" / "g=1" / "0000000000000001-compact.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"name": "trajectory.json", "data": b"payload", "_seq": 0, "_writer": "legacy"}]),
+        source / "blobs" / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
+    )
 
-    first = fetch_artifact(run_a, uri)
-    second = fetch_artifact(run_b, uri)
-    assert first.available and second.available
-    assert json.loads(first.text)["run"] == "a"
-    assert json.loads(second.text)["run"] == "b"
+
+def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
+    source = tmp_path / "evals" / "run-1" / "results"
+    destination = tmp_path / "tmp" / "migration-smoke"
+    _write_v1_smoke_archive(source)
+
+    result = smoke_upgrade(str(source), str(destination))
+
+    assert result.source == str(source)
+    assert result.destination == str(destination)
+    assert result.rows == 3
+    assert {table.name: table.rows for table in result.tables} == {"blobs": 1, "samples": 2}
+    assert json.loads((source / "_archive.json").read_text())["format_version"] == 1
+    assert not (source / "HEAD").exists()
+    migrated = ReadView(str(destination))
+    assert migrated.point("samples", doc_id="a")["score"] == 0.7
+    assert migrated.read_blob("trajectory.json") == b"payload"
+
+
+def test_fleet_smoke_cleans_up_only_after_every_archive_validates(tmp_path):
+    sources = tuple(tmp_path / "evals" / run / "results" for run in ("run-1", "run-2"))
+    for source in sources:
+        _write_v1_smoke_archive(source)
+    (sources[1] / "SEALED").unlink()
+    destination = tmp_path / "tmp" / "ttl=1d" / "finestore-migration-fleet" / ("a" * 32)
+
+    result = smoke_upgrade_fleet(
+        tuple(str(source) for source in sources),
+        str(destination),
+        workers=2,
+        cleanup=True,
+    )
+
+    assert len(result.results) == 2
+    assert result.rows == 6
+    assert result.cleaned_up
+    assert not destination.exists()
+    for source in sources:
+        assert json.loads((source / "_archive.json").read_text())["format_version"] == 1
+        assert not (source / "HEAD").exists()
+    assert not (sources[1] / "SEALED").exists()
+
+
+def test_fleet_smoke_preserves_partial_results_when_validation_fails(tmp_path):
+    valid = tmp_path / "evals" / "run-1" / "results"
+    invalid = tmp_path / "evals" / "run-2" / "results"
+    _write_v1_smoke_archive(valid)
+    invalid.mkdir(parents=True)
+    (invalid / "_archive.json").write_text('{"format_version": 2}')
+    destination = tmp_path / "tmp" / "ttl=1d" / "finestore-migration-fleet" / ("b" * 32)
+
+    with pytest.raises(ValueError):
+        smoke_upgrade_fleet(
+            (str(valid), str(invalid)),
+            str(destination),
+            workers=1,
+            cleanup=True,
+        )
+
+    assert destination.exists()
+    assert (destination / "_fleet.json").exists()

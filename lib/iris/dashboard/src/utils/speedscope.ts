@@ -30,6 +30,46 @@ const LOADING_HTML =
   '<body style="margin:0;font:14px system-ui,sans-serif;color:#888;display:flex;' +
   'height:100vh;align-items:center;justify-content:center">Capturing profile…</body>'
 
+function hasSpeedscopeTopLevelFields(bytes: Uint8Array): boolean {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+    return Array.isArray(value.profiles) && typeof value.shared === 'object' && value.shared !== null
+  } catch {
+    return false
+  }
+}
+
+function profileFilename(title: string): string {
+  const label = title.replace(/^\/+/, '').replace(/[^a-zA-Z0-9_.-]+/g, '_') || 'profile'
+  return `${label}.speedscope.json`
+}
+
+function offerRawDownload(win: Window | null, url: string, title: string): void {
+  const doc = win?.document ?? document
+  const link = doc.createElement('a')
+  link.href = url
+  link.download = profileFilename(title)
+  link.textContent = 'Download raw profile'
+  link.addEventListener('click', () => setTimeout(() => URL.revokeObjectURL(url), 0), { once: true })
+
+  if (!win) {
+    link.click()
+    return
+  }
+  win.addEventListener('beforeunload', () => URL.revokeObjectURL(url), { once: true })
+
+  doc.title = 'Invalid CPU profile'
+  const main = doc.createElement('main')
+  main.style.cssText = 'max-width:42rem;margin:4rem auto;padding:0 1.5rem;font:16px system-ui,sans-serif;line-height:1.5'
+  const heading = doc.createElement('h1')
+  heading.textContent = 'This CPU profile is not valid speedscope JSON'
+  const explanation = doc.createElement('p')
+  explanation.textContent = 'The capture failed or returned malformed data. Download the raw response for inspection.'
+  link.style.cssText = 'display:inline-block;margin-top:1rem'
+  main.append(heading, explanation, link)
+  doc.body.replaceChildren(main)
+}
+
 export interface PendingSpeedscope {
   /** Load `bytes` (a speedscope-format profile) into the opened viewer window. */
   show(bytes: Uint8Array, title: string): void
@@ -51,6 +91,10 @@ export function openSpeedscopeWindow(): PendingSpeedscope {
   return {
     show(bytes: Uint8Array, title: string) {
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/json' }))
+      if (!hasSpeedscopeTopLevelFields(bytes)) {
+        offerRawDownload(win, url, title)
+        return
+      }
       const target = `${SPEEDSCOPE_URL}#profileURL=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`
       // Navigate the already-open window (path changes from about:blank, so
       // speedscope loads fresh and reads the hash param on mount). Fall back to

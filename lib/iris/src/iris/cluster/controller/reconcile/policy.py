@@ -65,9 +65,12 @@ ERROR_STATES: frozenset[int] = frozenset(
     ]
 )
 
-TERMINAL_STATE_REASONS: dict[int, str] = {
-    job_pb2.JOB_STATE_FAILED: "Job exceeded max_task_failures",
+TERMINAL_STATE_FALLBACK_REASONS: dict[int, str] = {
+    job_pb2.JOB_STATE_SUCCEEDED: "Job completed successfully",
+    job_pb2.JOB_STATE_FAILED: "Job failed",
     job_pb2.JOB_STATE_KILLED: "Job was terminated.",
     job_pb2.JOB_STATE_UNSCHEDULABLE: "Job could not be scheduled.",
-    job_pb2.JOB_STATE_WORKER_FAILED: "Worker failed",
+    job_pb2.JOB_STATE_WORKER_FAILED: "Preemption budget exhausted",
 }
+
+PARENT_JOB_TERMINATED_REASON = "Parent job terminated"

@@ -16,7 +16,8 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
-from jaxtyping import Array, Float, Int
+from jax.typing import DTypeLike
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -24,6 +25,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_MOE_OUTPUT,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _zero_dropped_assignments,
+    _zero_inactive_grouped_rows,
     split_moe_w13_output,
 )
 
@@ -153,6 +155,19 @@ def _require_sonic_deps() -> None:
         os.environ["TRITON_CACHE_DIR"] = _DEFAULT_TRITON_CACHE_DIR
 
 
+def sonic_gather_sum_available() -> bool:
+    """Whether the fused gather-and-weighted-sum kernel can run in this process.
+
+    The kernel is Triton, so a non-GPU backend rules it out however the imports went.
+    """
+    return (
+        jt is not None
+        and _sonic_token_gather_sum_kernel is not None
+        and _sonic_token_gather_sum_bwd_kernel is not None
+        and jax.default_backend() == "gpu"
+    )
+
+
 def _next_power_of_2(value: int) -> int:
     if value < 1:
         raise ValueError(f"value must be positive, got {value}")
@@ -178,11 +193,15 @@ def _sonic_gather_sum_impl(
     *,
     tokens: int,
     topk: int,
+    output_dtype: DTypeLike | None = None,
 ) -> Float[Array, "T H"]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
     block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
-    out_shape = jax.ShapeDtypeStruct((tokens, hidden_dim), dispatch_output.dtype)
+    out_shape = jax.ShapeDtypeStruct(
+        (tokens, hidden_dim),
+        dispatch_output.dtype if output_dtype is None else output_dtype,
+    )
     return jt.triton_call(
         dispatch_output,
         weights_flat,
@@ -204,6 +223,30 @@ def _sonic_gather_sum_impl(
         block_k=block_k,
         w_is_none=False,
         is_varlen_k=False,
+    )
+
+
+def sonic_gather_sum_masked(
+    dispatch_output: Float[Array, "M H"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    *,
+    output_dtype: DTypeLike | None = None,
+) -> Float[Array, "T H"]:
+    """Gather weighted rows and ignore positions outside ``dispatch_output``."""
+    tokens, topk = combine_weights.shape
+    valid = (dispatch_positions >= 0) & (dispatch_positions < dispatch_output.shape[0])
+    positions_flat = jnp.clip(dispatch_positions, 0, dispatch_output.shape[0] - 1).reshape(tokens * topk)
+    weights_flat = jnp.where(valid, combine_weights, 0).reshape(tokens * topk).astype(jnp.float32)
+    offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
+    return _sonic_gather_sum_impl(
+        dispatch_output,
+        weights_flat,
+        positions_flat,
+        offsets,
+        tokens=tokens,
+        topk=topk,
+        output_dtype=output_dtype,
     )
 
 
@@ -313,6 +356,7 @@ def _moe_mlp_local_sonic(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -323,19 +367,24 @@ def _moe_mlp_local_sonic(
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
+            token_valid,
             num_experts=num_experts,
         )
     )
-    x_dispatch = tree_checkpoint_name(x[token_ids_sort], _CHECKPOINT_DISPATCH_INPUT)
+    cumulative_group_sizes = jnp.cumsum(group_sizes).astype(jnp.int32)
+    x_dispatch = _zero_inactive_grouped_rows(x[token_ids_sort], cumulative_group_sizes)
+    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
+        # Rows past the last group are unspecified kernel output; every consumer before the
+        # gather-sum is row-local or group-bounded, so only `out_dispatch` needs zeroing.
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         hidden = activation_fn(gate) * up
-        out_dispatch = ragged_dot(hidden, moe_w2, group_sizes)
+        out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
         out = tree_checkpoint_name(
-            sonic_gather_sum(out_dispatch, dispatch_positions, combine_weights),
+            sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,
         )
 

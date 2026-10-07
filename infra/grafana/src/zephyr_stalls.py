@@ -25,10 +25,10 @@ def zephyr_progress_query(now: datetime) -> str:
     return (
         "WITH filtered AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "json_get(resource_attributes_json, 'job_id') AS job, "
+        "COALESCE(job_id, json_get(resource_attributes_json, 'job_id')) AS job, "
         "json_get(attributes_json, 'run') AS execution, value AS progress_time, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS producer_at "
-        'FROM "telemetry_v1" '
+        'FROM "telemetry_v1.zephyr" '
         f"WHERE service = 'zephyr' AND name = '{_PROGRESS_TIME_METRIC}' "
         f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
         f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"

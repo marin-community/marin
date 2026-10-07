@@ -26,7 +26,8 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -195,10 +196,8 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        Steps are pulled from the iterable one at a time, so unbounded
-        generators are supported: the runner never consumes more than it
-        needs to make progress. For each pulled step, its unseen transitive
-        deps are scheduled in post-order before the step itself (deduped by
+        For each step pulled from the iterable, its unseen transitive deps are
+        scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
         Concurrency is bounded by the thread pool (``max_concurrent``
@@ -483,6 +482,7 @@ def _submit_iris_job(
     *,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
 ) -> None:
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
@@ -504,6 +504,7 @@ def _submit_iris_job(
         resources=resources,
         environment=create_environment(
             extras=dependency_groups,
+            pip_packages=pip_packages,
             env_vars=env_vars,
         ),
     )
@@ -527,8 +528,8 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
 def _run_remote_step(step: StepSpec, output_path: str) -> None:
     """Submit the step's ``RemoteCallable`` to Fray.
 
-    Carries the wrapper's ``env_vars`` and ``pip_dependency_groups`` through
-    to the submitted job's environment.
+    Carries the wrapper's ``env_vars``, ``pip_dependency_groups``, and
+    ``pip_packages`` through to the submitted job's environment.
     """
     assert isinstance(step.fn, RemoteCallable)
     _submit_iris_job(
@@ -538,4 +539,5 @@ def _run_remote_step(step: StepSpec, output_path: str) -> None:
         step.fn.resources,
         env_vars=step.fn.env_vars,
         pip_dependency_groups=step.fn.pip_dependency_groups,
+        pip_packages=step.fn.pip_packages,
     )

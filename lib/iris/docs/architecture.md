@@ -17,6 +17,7 @@ it.** Reading top to bottom answers a chain of questions:
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ CONTROLLER  (cluster/controller/) — the brain ──▼────────────────────┐
 │  transport/loops  controller.py · service.py · dashboard.py · main.py │
+│  request operations  jobs · tasks · attempts · workers · endpoints    │
 │  imperative shell  ops/{job,task,worker} · reconcile/dispatch · pruner│
 │  decision kernels  reconcile/ · scheduling/ · autoscaler/             │
 │  state predicates  task_state.py · worker_health.py · audit.py        │
@@ -94,73 +95,77 @@ sub-layered:
 
 | Sub-layer | Modules | Role |
 |---|---|---|
-| Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
+| Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` hold shared queries and mutations; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
 | Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. `reconcile/` and `scheduling/` are parameterized with no live I/O; `autoscaler/` also actuates its plan through `WorkerInfraProvider` (live cloud create/describe calls and worker health probes). |
 | Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
-| Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
+| Request operations | `jobs` · `tasks` · `attempts` · `workers` · `endpoints` · `accounts` · `backend_status` · `federation_service` · `diagnostics` · `checkpoint` | Authorize one request, call the data and runtime boundaries, and build its response. |
+| Transport / loops | `controller.py` (loops) · `service.py` (thin Connect adapter) · `dashboard.py` · `main.py` | Drive the controller and expose its APIs. |
 
 The `reconcile/` package is the lifecycle kernel: leaves
 (`snapshot`/`policy`/`effects`) → `working_state` → aggregate primitives
 (`task`/`job`/`worker`, no cross-imports) → `peers` (the lone cross-aggregate
 edge) → `batches` (orchestrator) → `loader` (I/O) → `ops/` shell. `reads`/`writes`
-are the canonical data layer; **one-off queries may stay in `service.py`** —
-`reads.py` is reserved for load-bearing, multiply-used queries.
+are the canonical data layer. A query used by one request may stay in its
+operation module. `reads.py` is reserved for load-bearing, multiply-used
+queries.
+
+`service.py` and `endpoint_service.py` wire each generated Connect method to one
+operation function. Operation modules use frozen dependency records and small
+runtime Protocols where live collaborators are needed. This keeps
+authorization, exact target resolution, database work, and response
+construction together under the owning controller concern. The operation
+modules use the existing protobuf request and response messages; Iris does not
+maintain parallel native copies solely to isolate the wire type.
 
 ### The TaskBackend contract
 
-`controller/backend.py` defines `TaskBackend`: the single uniform Protocol that
-drives task execution and capacity for one cluster. The controller owns the
-database and the loop cadences; a backend takes a plain-data snapshot in and
-returns a plain-data, method-specific result out. A backend **authors a
-projection** — task-state `effects` plus a `status` snapshot — that the
-controller commits/stores; the controller never learns which worker ran a task.
-Every backend implements the same phase methods (plus on-demand
+`controller/backend.py` defines `TaskBackend`: the Protocol that drives task
+execution and capacity for one cluster. Composition registers exactly one
+self-described backend with `Controller.register_backend` before `start()`.
+`BackendDescriptor` declares its ID, kind, advertised attributes, and scale
+groups. Federation connects controllers when work can execute on another
+cluster.
+
+The controller owns the database and loop cadences. It builds a complete,
+single-use request for every phase. These include scheduling facts, exact
+desired attempts and worker addresses, status/capacity facts, residual demand,
+and recovery checkpoints. The controller also owns worker liveness and all Iris
+persistence. A backend receives no database, transaction, transition reader, or
+liveness tracker. It owns provider-specific decisions, observation, and
+actuation; the controller folds returned observations into Iris state.
+Both backend implementations expose the same phase methods (plus on-demand
 `get_process_status`/`profile_task`/`exec_in_container`):
 
+- `initialize(BackendRecoveryRequest) -> BackendRecoveryResult` — reconcile a
+  persisted checkpoint with the provider before loops start.
 - `schedule(ScheduleRequest) -> ScheduleResult` — a placement decision.
-- `reconcile(ReconcileRequest) -> ReconcileResult` — converge the substrate and
-  author task-state `effects` for the controller to commit. A worker-daemon
-  backend also folds the liveness it observed into its **own**
-  `WorkerHealthTracker` and stashes the workers its fold reaped.
-- `run_teardown()` — fail the reaped workers, tear down their slices and healthy
-  siblings, and forget them from the backend's own tracker. Called once per
-  backend after the tick's effects are committed; no worker identity is passed in.
+- `reconcile(ReconcileRequest) -> ReconcileObservation` — converge the external
+  substrate and return exact task updates plus optional worker reachability.
+- `observe(BackendObservationRequest) -> BackendObservation` — publish provider
+  status, capacity, and pending hints from controller-owned facts.
 - `autoscale(AutoscaleRequest) -> AutoscaleResult` — provision capacity.
-- `status() -> BackendStatus` — author this backend's dashboard status.
+- `remove_capacity(RemoveCapacityRequest) -> RemoveCapacityResult` — remove
+  controller-fenced capacity and report affected siblings.
 
-Each method returns its own frozen result type (`ScheduleResult` /
-`ReconcileResult` / `AutoscaleResult`). `reconcile` returns `effects` only —
-uniform across backend kinds — so the controller commits the projection without
-branching on the concrete backend type; there are no `isinstance` branches. How
-authority is split between the controller and its backends (and how a remote
-backend becomes a controller of its own) is described in
-[`multi_backend.md`](multi_backend.md).
+Each phase returns a frozen result record. Every reconcile result has the same
+shape: exact task-attempt updates plus optional worker-health events. The
+controller loads a fresh post-I/O snapshot, validates Attempt UIDs, applies one
+state-machine path, accounts for worker health, commits effects, and only then
+requests physical capacity removal. It never asks a backend to mutate Iris state.
 
-A backend declares `capabilities: frozenset[BackendCapability]`, metadata the
-dashboard and on-demand RPC routing key on. The controller calls every phase
-uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes the
-controller drain the dispatch queue (a DB write it owns) into that backend's
-reconcile snapshot.
+`BackendDescriptor.kind` is presentation metadata. Its capabilities declare one
+reconciliation mechanism: `WORKER_FLEET` or `DIRECT_DISPATCH`; `AUTOSCALER` is
+optional for worker fleets. Kubernetes reconcile receives the controller-owned
+dispatch drain. Worker reconcile receives a complete list pairing every desired
+worker plan with its address. Dashboard capability strings are derived from the
+descriptor.
 
-| Capability | Meaning |
-|---|---|
-| `WORKER_DAEMON` (`"workers"`) | Iris tracks worker daemons; the backend fans the per-worker Reconcile RPC out (`RpcTaskBackend`, `backends/rpc/backend.py` — GCP/TPU, CoreWeave bare-metal, manual, local). |
-| `IRIS_AUTOSCALER` (`"autoscaler"`) | the Iris `Autoscaler` provisions capacity for this backend. |
-| `CLUSTER_VIEW` (`"cluster"`) | the backend places tasks on its own cluster (`K8sTaskProvider`, `backends/k8s/tasks.py` — Kueue schedules and provisions; `schedule`/`autoscale` are effectively no-ops). |
-
-Worker health is **authored by each worker-daemon backend**, not the controller.
-A `WORKER_DAEMON` backend constructs and owns its own `WorkerHealthTracker`,
-folds the liveness it observed during `reconcile` (REACHED / UNREACHABLE, plus
-BUILD_FAILED synthesized from its effects), and reaps over-threshold workers in
-its own `run_teardown`. There is no ping loop and no separate liveness channel —
-the reconcile RPC outcome is the only liveness signal. The controller reaches
-per-worker liveness only through the backends (`liveness_for_worker`,
-`all_liveness`), and worker registration routes to the owning backend's tracker
-by scale group. Cluster-view (e.g. Kubernetes) backends have **no Iris workers**:
-they hold no tracker, and pod status flows back as task `effects`. A new backend
-(e.g. Slurm) slots in by implementing the phase methods and declaring its
-capabilities.
+The controller owns `WorkerHealthTracker`, applies REACHED / UNREACHABLE plus
+kernel-derived BUILD_FAILED events, and collects workers that cross the reap
+threshold. There is no ping loop: reconcile RPC outcomes are the only liveness
+signal. Kubernetes reports no worker events; exact Pod observations are resolved
+entirely in the controller.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,
@@ -186,7 +191,4 @@ Honest exceptions to the layering, as of this writing:
   `constraints.py` (type/variant). Consolidation is blocked because the type
   reader returns `constraints.DeviceType`, which is pinned to `constraints.py`
   by `PlacementRequirements`; moving it would only invert the coupling.
-- **`service.py` is large** (~2.5k lines) but deliberately wide-and-flat
-  (RPC dispatch + one-off queries). Only proto *encoding* belongs in `codec.py`.
-
 Layering is a convention maintained by review, not a machine-checked invariant.

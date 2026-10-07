@@ -14,6 +14,7 @@ use regex::Regex;
 use crate::errors::StatsError;
 
 const NAMESPACE_NAME_PATTERN: &str = r"^[a-z][a-z0-9_.-]{0,63}$";
+pub(crate) const MAX_NAMESPACE_NAME_BYTES: usize = 64;
 
 fn namespace_name_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();

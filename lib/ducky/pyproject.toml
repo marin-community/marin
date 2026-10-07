@@ -24,6 +24,7 @@ ducky = "ducky.cli:cli"
 test = [
     "pytest>=8.4",
     "pytest-timeout",
+    "pytest-xdist",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -23,10 +23,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
@@ -286,7 +286,7 @@ def compute_minhash_attrs_step(
             max_workers=max_workers,
         ),
         hash_attrs={
-            "artifact_version": MINHASH_ATTR_DATA_VERSION,
+            "v": MINHASH_ATTR_DATA_VERSION,
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,

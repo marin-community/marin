@@ -228,7 +228,7 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
 
         m_curr = jnp.max(logits_f32, axis=-1)[:, None]
         m_next = jnp.maximum(m_prev, m_curr)
-        s_curr = jnp.exp(logits_f32 - pltpu.repeat(m_next, repeats, axis=1))
+        s_curr = jnp.exp(logits_f32 - jnp.tile(m_next, (1, repeats)))
         l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
         alpha = jnp.exp(m_prev - m_next)
         l_next = l_curr + alpha * l_prev

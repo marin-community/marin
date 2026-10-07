@@ -1,6 +1,6 @@
 ---
 name: organize-experiments
-description: Curate the experiment report index at docs/reports/index.md.
+description: Harvest experiment issue reports and curate docs/reports/index.md only when explicitly requested.
 ---
 
 # Skill: Organize Experiment Reports
@@ -20,7 +20,7 @@ Curate `docs/reports/index.md` after new experiment issues are harvested: fold f
 2. Open the diff for `docs/reports/index.md` and identify the additions in `## Uncategorized`.
 3. For each experiment:
    - Match it to an existing section (e.g., `Training and Performance`, `Data Experiments`).
-   - Merge any new resources (WandB links, Data Browser URLs) into the canonical entry in that section.
+   - Merge new WandB links into the canonical entry in that section.
    - Remove the placeholder entry from `## Uncategorized`.
 4. If an experiment truly does not fit, leave it under `## Uncategorized` and add a note explaining why.
 5. Proofread for duplicate bullets, broken Markdown, and consistent title casing.
@@ -28,7 +28,7 @@ Curate `docs/reports/index.md` after new experiment issues are harvested: fold f
 
 ### Link Hygiene
 - Prefer direct `https://wandb.ai/...` links when available; keep legacy `api.wandb.ai` links only if the direct share link does not exist.
-- Use `https://marin.community` Data Browser URLs when the script surfaces them.
+- Do not add Data Browser links. The service was retired in [#8624](https://github.com/marin-community/marin/pull/8624); the script collects only WandB URLs.
 - Preserve access tokens embedded in links.
 
 ## Rules for Agents

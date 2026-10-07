@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import ChatView from './components/ChatView.vue'
+import CompareView from './components/CompareView.vue'
 import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
-import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
+import { createChatShare, fetchChatShare } from './lib/api'
+import { ThinkingMode } from './lib/chat_template'
+import { loadComparison } from './lib/comparison_storage'
+import {
+  conversationFromSharedChat,
+  isSharedChatHash,
+  sharedChatIdFromHash,
+  sharedChatSnapshot,
+  sharedChatUrl,
+} from './lib/shared_chat'
+import { loadConversations, loadParams, newConversation as createConversation, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
 const { info, status, model } = useServing()
@@ -15,49 +26,93 @@ const params = reactive(loadParams())
 watch(params, () => saveParams(params))
 
 const conversations = ref<Conversation[]>(loadConversations())
-const active = ref<Conversation>(freshConversation())
+const initialHash = window.location.hash
+const sharedHashPresent = isSharedChatHash(initialHash)
+const sharedChatId = sharedChatIdFromHash(initialHash)
+const active = ref<Conversation>(createConversation(model.value))
+if (sharedHashPresent) {
+  const cleanUrl = new URL(window.location.href)
+  cleanUrl.hash = ''
+  window.history.replaceState(null, '', cleanUrl.toString())
+}
 
 const sorted = computed(() => [...conversations.value].sort((a, b) => b.updatedAt - a.updatedAt))
 
-const mode = ref<'chat' | 'completion'>('chat')
+const mode = ref<'chat' | 'compare' | 'completion'>('chat')
 const userPickedMode = ref(false)
+const savedCompareSettings = loadComparison()?.left
+const compareSettings = reactive({
+  system: savedCompareSettings?.system ?? '',
+  thinkingMode: savedCompareSettings?.thinkingMode ?? ThinkingMode.TemplateDefault,
+  customInstructions: savedCompareSettings?.customInstructions ?? '',
+})
+const settingsTarget = computed(() => mode.value === 'compare' ? compareSettings : active.value)
 const showParams = ref(false)
 // Below the md breakpoint the history panel is an overlay drawer.
 const showHistory = ref(false)
+const shareState = ref<'idle' | 'copied' | 'failed'>('idle')
+const shareImportFailed = ref(false)
+const shareLabel = computed(() => {
+  if (shareState.value === 'copied') return 'Link copied'
+  if (shareState.value === 'failed') return 'Copy failed'
+  return 'Share chat'
+})
+watch(
+  () => [active.value.id, active.value.updatedAt],
+  () => {
+    shareState.value = 'idle'
+    shareImportFailed.value = false
+  },
+)
+onMounted(async () => {
+  if (!sharedHashPresent) return
+  if (!sharedChatId) {
+    shareImportFailed.value = true
+    return
+  }
+  try {
+    const snapshot = await fetchChatShare(sharedChatId)
+    const imported = conversationFromSharedChat(snapshot, newId(), Date.now(), ThinkingMode.TemplateDefault)
+    if (!imported) throw new Error('Invalid shared chat snapshot')
+    active.value = imported
+    persist()
+  } catch {
+    shareImportFailed.value = true
+  }
+})
 
 // Base checkpoints without a chat template start in completion mode.
 watch(info, (loaded) => {
   if (loaded && !userPickedMode.value) mode.value = loaded.has_chat_template ? 'chat' : 'completion'
 })
 
-function pickMode(picked: 'chat' | 'completion') {
+function pickMode(picked: 'chat' | 'compare' | 'completion') {
   mode.value = picked
   userPickedMode.value = true
 }
 
-function freshConversation(): Conversation {
-  return {
-    id: newId(),
-    title: '',
-    model: model.value,
-    system: '',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    messages: [],
+async function shareConversation() {
+  try {
+    const shareId = await createChatShare(sharedChatSnapshot(active.value))
+    await navigator.clipboard.writeText(sharedChatUrl(window.location.href, shareId))
+    shareState.value = 'copied'
+  } catch {
+    shareState.value = 'failed'
   }
 }
 
 function persist() {
   const current = active.value
-  if (!current.messages.length) return
+  const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
+  if (!current.messages.length && !current.pythonTools.trim() && !current.shellWorkspace && !alreadySaved) return
   if (!current.model) current.model = model.value
-  if (!conversations.value.some((c) => c.id === current.id)) conversations.value.push(current)
+  if (!alreadySaved) conversations.value.push(current)
   saveConversations(conversations.value)
 }
 
 function newConversation() {
   if (active.value.messages.length) persist()
-  active.value = freshConversation()
+  active.value = createConversation(model.value)
   showHistory.value = false
 }
 
@@ -70,13 +125,13 @@ function selectConversation(id: string) {
 function removeConversation(id: string) {
   conversations.value = conversations.value.filter((c) => c.id !== id)
   saveConversations(conversations.value)
-  if (active.value.id === id) active.value = freshConversation()
+  if (active.value.id === id) active.value = createConversation(model.value)
 }
 
 function clearHistory() {
   conversations.value = []
   saveConversations([])
-  active.value = freshConversation()
+  active.value = createConversation(model.value)
   showHistory.value = false
 }
 </script>
@@ -86,6 +141,7 @@ function clearHistory() {
     <AppHeader :info="info" :status="status" :model="model" />
     <div class="relative flex min-h-0 flex-1">
       <HistoryPanel
+        v-if="mode !== 'compare'"
         :conversations="sorted"
         :active-id="active.id"
         :mobile-open="showHistory"
@@ -97,6 +153,7 @@ function clearHistory() {
       <main class="flex min-w-0 flex-1 flex-col">
         <div class="flex shrink-0 items-center gap-1 border-b border-surface-border px-4">
           <button
+            v-if="mode !== 'compare'"
             class="mr-1 rounded-lg px-2 py-1 text-text-muted transition-colors hover:text-text md:hidden"
             :class="{ 'bg-surface-sunken text-text': showHistory }"
             title="Conversation history"
@@ -107,7 +164,7 @@ function clearHistory() {
             </svg>
           </button>
           <button
-            v-for="tab in ['chat', 'completion'] as const"
+            v-for="tab in ['chat', 'compare', 'completion'] as const"
             :key="tab"
             class="border-b-2 px-3 py-2 text-sm capitalize transition-colors"
             :class="
@@ -119,7 +176,24 @@ function clearHistory() {
           >
             {{ tab }}
           </button>
-          <label class="ml-auto flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
+          <div class="ml-auto"></div>
+          <button
+            v-if="mode === 'chat'"
+            class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            :class="{ 'text-accent': shareState === 'copied', 'text-status-danger': shareState === 'failed' }"
+            :disabled="!active.messages.length"
+            title="Copy a short link containing user and assistant messages; hidden prompts and tool details are excluded"
+            @click="shareConversation"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4" />
+            </svg>
+            <span class="hidden sm:inline">{{ shareLabel }}</span>
+          </button>
+          <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
             Max tokens
             <input
               v-model.number="params.maxTokens"
@@ -134,7 +208,7 @@ function clearHistory() {
           <button
             class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
-            title="More sampling parameters"
+            title="More options"
             @click="showParams = !showParams"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -143,17 +217,41 @@ function clearHistory() {
             <span class="hidden sm:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
-        <SamplingControls v-if="showParams" :params="params" v-model:system="active.system" :show-system="mode === 'chat'" />
+        <SamplingControls
+          v-if="showParams"
+          :params="params"
+          v-model:system="settingsTarget.system"
+          v-model:thinking-mode="settingsTarget.thinkingMode"
+          v-model:custom-instructions="settingsTarget.customInstructions"
+          :show-chat-controls="mode !== 'completion'"
+        />
+        <div
+          v-if="shareImportFailed && mode === 'chat'"
+          role="alert"
+          class="border-b border-status-danger/40 bg-status-danger/10 px-4 py-2 text-center text-xs text-status-danger"
+        >
+          Could not import the shared chat. The link is invalid or was truncated.
+        </div>
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"
           :params="params"
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
+          :chat-template-protocol="info?.chat_template_protocol ?? null"
           :streaming="info ? info.streaming : true"
           @persist="persist"
         />
-        <CompletionView v-else :params="params" :model="model" :streaming="info ? info.streaming : true" />
+        <CompareView
+          v-show="mode === 'compare'"
+          :model="model"
+          :info="info"
+          :params="params"
+          :system="compareSettings.system"
+          :thinking-mode="compareSettings.thinkingMode"
+          :custom-instructions="compareSettings.customInstructions"
+        />
+        <CompletionView v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>
   </div>

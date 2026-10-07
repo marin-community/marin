@@ -8,7 +8,7 @@ import os
 import socket
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
@@ -19,6 +19,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
+from marin.inference.model_preparation import read_tool_chat_template
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -75,10 +76,17 @@ def _chat_template_argument(content: str | None) -> Iterator[tuple[str, ...]]:
             os.unlink(path)
 
 
+def _resolved_chat_template(spec: ModelSpec) -> str | None:
+    if spec.chat_template_content is not None:
+        return spec.chat_template_content
+    return read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
+
+
 @dataclass(frozen=True)
 class VllmServedModel:
     base_url: str
     model_id: str
+    chat_template_content: str | None
     environment: VllmEnvironment
 
     def check_alive(self) -> None:
@@ -94,11 +102,14 @@ class VllmBackend:
 
     @contextlib.contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
-        with self.start(spec) as environment:
+        chat_template_content = _resolved_chat_template(spec)
+        resolved_spec = replace(spec, chat_template_content=chat_template_content)
+        with self.start(resolved_spec) as environment:
             environment.wait_until_ready()
             yield VllmServedModel(
                 base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
                 model_id=spec.api_model,
+                chat_template_content=chat_template_content,
                 environment=environment,
             )
 
@@ -111,10 +122,11 @@ class VllmBackend:
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
         """Start vLLM without imposing HTTP readiness on the caller."""
+        chat_template_content = _resolved_chat_template(spec)
         resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
         model = self._model_config(spec)
         launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
-        with _chat_template_argument(spec.chat_template_content) as chat_template_args:
+        with _chat_template_argument(chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
                 host=self.host,
@@ -124,6 +136,7 @@ class VllmBackend:
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 expected_model_id=spec.api_model,
+                extra_metric_families=self.config.extra_metric_families,
                 wait_for_ready=False,
             ) as environment:
                 yield environment
@@ -143,7 +156,14 @@ class VllmBackend:
             "--served-model-name",
             spec.api_model,
             *(("--revision", spec.revision) if spec.revision is not None else ()),
+            *(("--tokenizer", spec.tokenizer) if spec.tokenizer is not None else ()),
+            *(("--tokenizer-revision", spec.tokenizer_revision) if spec.tokenizer_revision is not None else ()),
             *chat_template_args,
+            *(
+                ("--speculative-config", self.config.speculative.vllm_argument())
+                if self.config.speculative is not None
+                else ()
+            ),
             *self.config.extra_args,
             *extra_args,
         ]

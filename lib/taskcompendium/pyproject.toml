@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "taskcompendium"
+version = "0.1.0"
+description = "Semantic answer tasks and Harbor direct-chat lowerings"
+requires-python = ">=3.12,<3.14"
+dependencies = ["marin-rigging", "pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
+
+[project.optional-dependencies]
+harbor = ["harbor"]
+pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore", "numpy>=1.26"]
+
+[dependency-groups]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+
+[tool.uv.sources]
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
+marin-shellbox = { path = "../shellbox", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taskcompendium"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 60
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = [
+    "slow: long-running test",
+    "integration: external service",
+    "data_integration: external data",
+    "cluster: live cluster",
+    "requires_cluster: live cluster",
+    "docker: Docker daemon",
+    "manual: explicit validation",
+]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["taskcompendium"]
+
+[tool.pyrefly]
+disable-project-excludes-heuristics = true
+use-ignore-files = false
+project-includes = ["src/**/*.py"]
+search-path = ["src", "../verifyit/src", "../rigging/src"]
+python-interpreter = "../../.venv/bin/python"

@@ -8,7 +8,7 @@ import os
 import draccus
 import pytest
 from jax.sharding import PartitionSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 import levanter.config
 from levanter.data.text.datasets import LmDataConfig, UrlDatasetSourceConfig

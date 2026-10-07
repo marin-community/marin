@@ -9,9 +9,6 @@ from typing import Iterable, Iterator, TypeVar, Union
 
 import jax
 import rigging.log_setup as iris_logging
-import wandb
-
-from levanter.tracker.wandb import is_wandb_available
 
 pylogger = pylogging.getLogger(__name__)
 
@@ -51,32 +48,6 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
     pylogging.getLogger("tqdm_loggable").setLevel(level)
 
     silence_transformer_nag()
-
-
-def save_xla_dumps_to_wandb(initial_time: float):
-    if not is_wandb_available():
-        pylogger.warning("Wandb is not available, so we can't save XLA dumps")
-        return
-
-    # attempt to parse xla_flags to see if we're dumping assembly files
-    flags = os.getenv("XLA_FLAGS", None)
-    if flags is not None and "xla_dump_to" in flags:
-        # parse the path
-        # this isn't robust to quotes
-        path = flags.split("xla_dump_to=")[1].split(" ")[0]
-        pylogger.info(f"Found xla_dump_to={path}, logging to wandb")
-        if wandb.run:
-            # only want to save the files that were generated during this run
-            # XLA_FLAGS has to be set before the first jax call, so we can't just set it in the middle of the run
-            # which means it's a pain to control where the files are saved
-            # so we just save all the files that were generated during this run
-            # this is a bit hacky, but it works
-            def include_file(path: str):
-                return os.path.getmtime(path) > initial_time
-
-            wandb.run.log_code(root=path, name="xla_dumps", include_fn=include_file)
-    else:
-        pylogger.warning("XLA_FLAGS is not set to dump to a path, so we can't save the dumps to wandb")
 
 
 class LoadingTimeTrackerIterator(Iterator[T]):

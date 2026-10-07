@@ -179,15 +179,17 @@ pub fn build_log_predicates(
     }
 }
 
-/// Append the common filters (since_ms / substring / min_level) to `where_parts`.
+/// Append the common filters (since_ms / substring / regex / min_level) to `where_parts`.
 ///
 /// - `since_ms > 0` -> `epoch_ms > since_ms`.
 /// - non-empty `substring` -> `contains(data, <literal>)` (literal, not LIKE).
+/// - non-empty `regex` -> `regexp_matches(data, <pattern>)`.
 /// - `min_level > 0` -> `(level = 0 OR level >= min_level)` (UNKNOWN passthrough).
 pub fn add_common_filters(
     where_parts: &mut Vec<String>,
     since_ms: i64,
     substring: &str,
+    regex: &str,
     min_level: LogLevel,
 ) {
     if since_ms > 0 {
@@ -195,6 +197,9 @@ pub fn add_common_filters(
     }
     if !substring.is_empty() {
         where_parts.push(format!("contains(data, {})", sql_literal(substring)));
+    }
+    if !regex.is_empty() {
+        where_parts.push(format!("regexp_matches(data, {})", sql_literal(regex)));
     }
     let min_level_int = min_level.to_i32();
     if min_level_int > 0 {
@@ -435,15 +440,22 @@ mod tests {
     }
 
     #[test]
-    fn common_filters_since_substring_minlevel() {
+    fn common_filters_since_substring_regex_minlevel() {
         let mut wp = vec!["seq > 0".to_string()];
-        add_common_filters(&mut wp, 1000, "100%", LogLevel::LOG_LEVEL_WARNING);
+        add_common_filters(
+            &mut wp,
+            1000,
+            "100%",
+            "rank0.*train/loss",
+            LogLevel::LOG_LEVEL_WARNING,
+        );
         assert_eq!(
             wp,
             vec![
                 "seq > 0".to_string(),
                 "epoch_ms > 1000".to_string(),
                 "contains(data, '100%')".to_string(),
+                "regexp_matches(data, 'rank0.*train/loss')".to_string(),
                 "(level = 0 OR level >= 3)".to_string(),
             ]
         );
@@ -496,7 +508,7 @@ mod tests {
     fn common_filters_min_level_unknown_passthrough() {
         // min_level UNKNOWN (0) adds no level filter (UNKNOWN means "no minimum").
         let mut wp = vec!["seq > 0".to_string()];
-        add_common_filters(&mut wp, 0, "", LogLevel::LOG_LEVEL_UNKNOWN);
+        add_common_filters(&mut wp, 0, "", "", LogLevel::LOG_LEVEL_UNKNOWN);
         assert_eq!(wp, vec!["seq > 0".to_string()]);
     }
 

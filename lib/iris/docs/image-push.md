@@ -29,8 +29,8 @@ Developer → docker push → ghcr.io/marin-community/iris-worker:v1
    the AR remote repo transparently fetches from `ghcr.io` on first access and caches it.
 3. **Rewrite**: The autoscaler, controller bootstrap, and worker task image resolver
    rewrite image tags per the cluster's `platform.gcp.registry_mirrors` map
-   (upstream registry → zone prefix → mirror repo prefix). On `marin`,
-   `marin-dev`, and `ci-gcp-smoke`:
+   (upstream registry → zone prefix → mirror repo prefix). On `marin` and
+   `marin-dev`:
    - `ghcr.io/...` in `us-*` zones → `us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/...`
    - `ghcr.io/...` in `europe-*` zones → `europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/...`
    - Zone prefixes absent from the map (`asia-*`, `me-*`, …) → pull directly from upstream
@@ -105,8 +105,7 @@ gcloud artifacts repositories create docker-mirror \
 ```
 
 Then route the cluster's pulls through it by adding the repo to
-`platform.gcp.registry_mirrors` (already set on `marin`, `marin-dev`, and
-`ci-gcp-smoke`).
+`platform.gcp.registry_mirrors` (already set on `marin` and `marin-dev`).
 
 ### Verify
 
