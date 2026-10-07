@@ -134,7 +134,7 @@ def run_storage_health(k8s: K8sService, node_name: str, config: NodeStorageHealt
                 failure_since = 0.0
                 incarnation = f"{uid}/{boot_id}"
             started_at = Timestamp.now().epoch_seconds()
-            result = bounded_probe(str(StoragePath.parse(config.scratch_prefix) / uid / boot_id), config.timeout)
+            result = bounded_probe(str(StoragePath.parse(config.scratch) / uid / boot_id), config.timeout)
             if result == ProbeResult.FAILED:
                 failure_since = failure_since if failures else started_at
                 failures += 1
@@ -184,23 +184,46 @@ def current_report(node: dict, config: NodeStorageHealthConfig, now: float) -> S
     return report
 
 
-def reconcile_storage_health(k8s: K8sService, config: NodeStorageHealthConfig) -> None:
-    """Cordon persistent outliers under a cluster-wide budget, without eviction.
-
-    Cordon annotations consume the budget until an operator clears them, even
-    after a manual uncordon.
-    """
-    if config.max_cordoned_nodes == 0:
-        return
+def reconcile_storage_health(k8s: K8sService, config: NodeStorageHealthConfig, max_cordoned_nodes: int) -> None:
+    """Cordon persistent outliers and release Iris cordons after recovery."""
     try:
         nodes = k8s.list_json(K8sResource.NODES)
-        remaining = config.max_cordoned_nodes - sum(
-            CORDON_ANNOTATION in n.get("metadata", {}).get("annotations", {}) for n in nodes
-        )
-        if remaining <= 0:
-            return
         now = Timestamp.now().epoch_seconds()
         reports = [(node, current_report(node, config, now)) for node in nodes]
+        cordoned_count = sum(CORDON_ANNOTATION in n.get("metadata", {}).get("annotations", {}) for n in nodes)
+        released = 0
+        for node, report in reports:
+            metadata = node["metadata"]
+            raw_cordon = metadata.get("annotations", {}).get(CORDON_ANNOTATION)
+            if raw_cordon is None or report is None or report.result != ProbeResult.HEALTHY:
+                continue
+            try:
+                cordon = StorageHealthReport.model_validate_json(raw_cordon)
+            except ValidationError:
+                continue
+            if (
+                cordon.result != ProbeResult.FAILED
+                or report.node_uid != cordon.node_uid
+                or report.boot_id != cordon.boot_id
+                or report.target != cordon.target
+                or report.started_at <= cordon.checked_at
+            ):
+                continue
+            k8s.patch_node(
+                metadata["name"],
+                {
+                    "metadata": {
+                        "resourceVersion": metadata["resourceVersion"],
+                        "annotations": {CORDON_ANNOTATION: None},
+                    },
+                    "spec": {"unschedulable": False},
+                },
+            )
+            logger.info("uncordoned node=%s after successful storage probe", metadata["name"])
+            released += 1
+        remaining = max_cordoned_nodes - cordoned_count + released
+        if remaining <= 0:
+            return
         for node, report in reports:
             if (
                 report is None
@@ -216,7 +239,7 @@ def reconcile_storage_health(k8s: K8sService, config: NodeStorageHealthConfig) -
                 peer is not None and peer.result == ProbeResult.HEALTHY and peer.started_at > report.failure_since
                 for _, peer in reports
             )
-            if healthy_peers < max(config.minimum_healthy_peers, len(nodes) // 2 + 1):
+            if healthy_peers < max(config.minimum_healthy_nodes, len(nodes) // 2 + 1):
                 continue
             metadata = node["metadata"]
             k8s.patch_node(

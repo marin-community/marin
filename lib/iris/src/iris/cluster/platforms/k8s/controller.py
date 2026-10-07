@@ -578,11 +578,12 @@ class K8sControllerProvider:
         if self._s3_enabled:
             default_env.update(self._s3_task_env())
         default_env.update(collect_inject_env(config.defaults.inject_env))
-        if default_env or config.kubernetes_provider.storage_health is not None:
+        storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
+        if default_env or storage_health is not None:
             self.ensure_task_env_secret(default_env)
         self.ensure_egress_network_policies(config)
 
-        if config.kubernetes_provider.storage_health is not None:
+        if storage_health is not None:
             # envFrom is captured at pod startup. A Secret revision rolls agents
             # and fences old reports without copying credential values into config.
             secret = self._kubectl.get_json(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
@@ -593,11 +594,12 @@ class K8sControllerProvider:
                     sort_keys=True,
                 ).encode()
             ).hexdigest()
-            health = config.kubernetes_provider.storage_health.model_copy(
-                update={"environment_revision": environment_revision}
-            )
+            storage_health = storage_health.model_copy(update={"environment_revision": environment_revision})
+            node_health = config.kubernetes_provider.node_health.model_copy(update={"storage": storage_health})
             config = config.model_copy(
-                update={"kubernetes_provider": config.kubernetes_provider.model_copy(update={"storage_health": health})}
+                update={
+                    "kubernetes_provider": config.kubernetes_provider.model_copy(update={"node_health": node_health})
+                }
             )
 
         signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
@@ -626,14 +628,8 @@ class K8sControllerProvider:
                 image=config.controller.image,
                 cache_dir=cache_dir,
                 cache_max_age=config.kubernetes_provider.cache_max_age,
-                storage_health_env=(
-                    dict(config.defaults.task_env) if config.kubernetes_provider.storage_health is not None else None
-                ),
-                storage_health_config=(
-                    config.kubernetes_provider.storage_health.model_dump_json()
-                    if config.kubernetes_provider.storage_health is not None
-                    else "disabled"
-                ),
+                storage_health_env=(dict(config.defaults.task_env) if storage_health is not None else None),
+                storage_health_config=(storage_health.model_dump_json() if storage_health is not None else "disabled"),
             )
         )
         logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)

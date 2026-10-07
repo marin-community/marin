@@ -916,10 +916,10 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
         else None
     )
     storage_health: threading.Thread | None = None
-    if config.kubernetes_provider.storage_health is not None:
+    if config.kubernetes_provider.node_health is not None and config.kubernetes_provider.node_health.storage is not None:
         storage_health = threading.Thread(
             target=run_storage_health,
-            args=(k8s, node_name, config.kubernetes_provider.storage_health, stop),
+            args=(k8s, node_name, config.kubernetes_provider.node_health.storage, stop),
             name="storage-health",
             daemon=True,
         )

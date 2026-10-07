@@ -560,8 +560,14 @@ class InMemoryK8sService:
         expected = metadata.get("resourceVersion")
         if expected is not None and expected != node["metadata"].get("resourceVersion"):
             raise KubectlError("node resourceVersion conflict")
-        node["metadata"].setdefault("annotations", {}).update(metadata.get("annotations", {}))
+        annotations = node["metadata"].setdefault("annotations", {})
+        for key, value in metadata.get("annotations", {}).items():
+            if value is None:
+                annotations.pop(key, None)
+            else:
+                annotations[key] = value
         node.setdefault("spec", {}).update(patch.get("spec", {}))
+        node["metadata"]["resourceVersion"] = str(int(node["metadata"].get("resourceVersion", "0")) + 1)
 
     # -- Protocol methods --
 

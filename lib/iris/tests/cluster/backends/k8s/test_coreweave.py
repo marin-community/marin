@@ -24,6 +24,7 @@ from iris.cluster.config import (
     IrisClusterConfig,
     KubernetesProviderConfig,
     KueueConfig,
+    NodeHealthConfig,
     NodeStorageHealthConfig,
     PlatformConfig,
     ScaleGroupConfig,
@@ -1138,7 +1139,9 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
 def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(monkeypatch, change):
     provider, k8s = _make_provider()
     config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
-    config.kubernetes_provider.storage_health = NodeStorageHealthConfig(scratch_prefix="s3://test-bucket/health")
+    config.kubernetes_provider.node_health = NodeHealthConfig(
+        storage=NodeStorageHealthConfig(scratch="s3://test-bucket/health")
+    )
     config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://regional.example"
     config.defaults.inject_env = ["AWS_SESSION_TOKEN"]
     monkeypatch.setenv("AWS_SESSION_TOKEN", "first-test-token")
@@ -1146,6 +1149,7 @@ def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(mon
     provider.start_controller(config)
     agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
     container = agent["spec"]["containers"][0]
+    assert {"operator": "Exists"} in agent["spec"]["tolerations"]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env"}}]
     assert {"name": "AWS_ENDPOINT_URL", "value": "https://regional.example"} in container["env"]
     secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
@@ -1153,7 +1157,7 @@ def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(mon
     assert not any(item["name"] == "AWS_ACCESS_KEY_ID" for item in container["env"])
     original_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
     if change == "health_config":
-        config.kubernetes_provider.storage_health.failure_threshold = 4
+        config.kubernetes_provider.node_health.storage.failure_threshold = 4
     elif change == "literal_endpoint":
         config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://other-regional.example"
     else:
