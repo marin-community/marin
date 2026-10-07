@@ -665,7 +665,8 @@ enum ContainerProfile {
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
   // Temporary compatibility for running clients: gVisor with the legacy
   // cluster environment, workspace bundles, caches and CLUSTER egress default.
-  // New clients must use SANDBOX. Remove once legacy submitters are upgraded.
+  // New clients must use SANDBOX. The controller rollout owner removes this
+  // once legacy submitters are upgraded and their profile-5 jobs finish.
   CONTAINER_PROFILE_GVISOR = 5 [deprecated = true];
   // For model-controlled workloads. Runs the whole container under the gVisor
   // runtime (docker --runtime=runsc / k8s runtimeClassName=gvisor), so

@@ -27,8 +27,8 @@ from cluster services or credentials.
 
 New clients must use `SANDBOX`. The controller logs each legacy submission with
 `uses deprecated CONTAINER_PROFILE_GVISOR` and its job ID; use those records
-to find remaining callers. Remove the deprecated profile and its runtime
-branches in a follow-up deployment after those submitters have upgraded and
+to find remaining callers. The controller rollout owner removes the deprecated
+profile and its runtime branches after those submitters have upgraded and
 all their profile-5 jobs have finished. Migration 0052 already converted
 stored GVISOR jobs to SANDBOX; this compatibility path does not reverse that
 migration or change the behavior of profile 6.

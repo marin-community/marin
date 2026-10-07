@@ -237,7 +237,6 @@ def test_security_flags_docker_access_mounts_socket():
 
 @pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX])
 def test_security_flags_gvisor_profiles_use_runsc_runtime_and_default_caps(profile):
-    """Both gVisor profiles select runsc and keep docker's default caps."""
     flags = _security_flags(profile, is_tpu_run=False)
     assert flags == ["--runtime", "runsc"]
     # in-guest root needs the default cap set, so the container is NOT cap-dropped
