@@ -85,6 +85,8 @@ modules, each of which keeps its types beside the code that checks their invaria
   `build.infrastructure.BuildInfrastructureFailure` with a `cause` of `no_factory`,
   `scheduling_timeout` or `host_unreachable`, even when the program wrapped it; it is never a
   `BuildFailure`, and the caller does not charge it to the program.
+  `build.infrastructure.HOST_REJECTIONS` names the causes that hold for as long as the host is
+  unchanged (`no_factory`).
 - `validate.trials.run_trials(task, execution, plan, settings, model)`: runs k trials through
   `ShellboxRolloutEngine`. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
   `validate.classify.classify` is the only failure classifier. `TrialPlan.first_attempt` numbers
