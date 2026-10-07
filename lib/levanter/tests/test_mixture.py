@@ -62,6 +62,24 @@ async def test_mixture_dataset_get_batch():
 
 
 @pytest.mark.asyncio
+async def test_mixture_dataset_large_stage_offset_preserves_child_indices():
+    stage_start = 2**31 + 2  # First multiple of 10 above the int32 limit.
+    mixture_ds = MixtureDataset(
+        {"first": InfiniteCounterDataset(), "second": InfiniteCounterDataset()},
+        [(0, {"first": 1.0}), (stage_start, {"first": 0.5, "second": 0.5})],
+        block_size=10,
+        key=key(),
+        randomize_blocks=False,
+    )
+
+    assert await mixture_ds.get_batch([stage_start - 1, stage_start, stage_start + 5]) == [
+        1000 + stage_start - 1,
+        1000 + stage_start,
+        1000,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mixture_dataset_block_assignments():
     mixture_ds = MixtureDataset(datasets(), weights(), 10, key=key())
 

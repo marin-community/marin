@@ -124,7 +124,7 @@ class MixtureDataset(AsyncDataset[T]):
         counts_after_stage = []
         unpermuted_ids_per_stage = []
 
-        cumulative_counts = np.zeros(len(self.datasets), dtype=np.int32)
+        cumulative_counts = np.zeros(len(self.datasets), dtype=np.int64)
 
         for stage_idx, (start_seq_index, stage_weights) in enumerate(self.weight_stages):
             counts_this_stage = self._compute_expected_counts_per_block(stage_weights, self.block_size)
@@ -134,8 +134,7 @@ class MixtureDataset(AsyncDataset[T]):
             if stage_idx < len(self.weight_stages) - 1:
                 next_start = self.weight_stages[stage_idx + 1][0]
                 num_blocks_in_stage = (next_start - start_seq_index) // self.block_size
-                stage_total_counts = counts_this_stage * num_blocks_in_stage
-                cumulative_counts += stage_total_counts
+                cumulative_counts += counts_this_stage.astype(np.int64) * num_blocks_in_stage
                 counts_after_stage.append(cumulative_counts.copy())
 
         return counts_per_block_per_stage, counts_after_stage, unpermuted_ids_per_stage
