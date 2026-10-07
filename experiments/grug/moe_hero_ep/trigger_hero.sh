@@ -27,13 +27,9 @@ CONTEXT_SWITCH_STEP=0
 shape=$(uv run python - "$SEQ_LEN" <<'PYTHON'
 import sys
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
-    HERO_REFERENCE_SEQ_LEN, HERO_TOKENS_PER_RACK, LADDER_RACKS,
+    HERO_REFERENCE_SEQ_LEN, LADDER_RACKS, ladder_batch_size,
 )
-seq_len = int(sys.argv[1])
-tokens_per_step = HERO_TOKENS_PER_RACK * LADDER_RACKS["d6144"]
-if seq_len <= 0 or tokens_per_step % seq_len:
-    raise ValueError("Context length must divide the hero token batch")
-print(tokens_per_step // seq_len, HERO_REFERENCE_SEQ_LEN)
+print(ladder_batch_size(int(sys.argv[1]), LADDER_RACKS["d6144"]), HERO_REFERENCE_SEQ_LEN)
 PYTHON
 )
 read -r GLOBAL_BATCH_SIZE EVAL_SEQ_LEN <<< "$shape"
