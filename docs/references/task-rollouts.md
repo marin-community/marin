@@ -215,7 +215,7 @@ It does not add an oversized observation to retained response evidence.
 The submission convention controls final-answer extraction and model-visible submission instructions.
 The Shellbox session selects native-action or JSON extraction when the task's answer type requires it.
 
-Construct the record with `lower_task(...)`. The [rollout tests](../../lib/rolloutengine/tests/test_rollout.py) contain executable examples.
+Construct the record with `lower_task(...)`. The [rollout tests](https://github.com/marin-community/marin/blob/d48cede857c532815086a08e7eba02593336ba1b/lib/rolloutengine/tests/test_rollout.py) contain executable examples.
 This function accepts a fully lowered record and a model callable:
 
 ```python
