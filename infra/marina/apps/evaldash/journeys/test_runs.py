@@ -7,6 +7,7 @@ import re
 from typing import Any, cast
 from urllib.parse import unquote
 
+import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
@@ -93,3 +94,47 @@ def test_compare_picker_excludes_zero_scores_and_other_cohorts(journey: Journey)
     expect(journey.page.get_by_role("button", name="zero-only", exact=True)).to_have_count(0)
     expect(journey.page.get_by_role("button", name="qwen3-8b", exact=True)).to_have_count(0)
     journey.sees("Pick at least two models to compare.")
+
+
+@pytest.mark.parametrize("view", ["launches", "runs"])
+def test_run_model_search_finds_older_runs_and_survives_reload(journey: Journey, view: str) -> None:
+    journey.visit(f"/runs?view={view}&limit=1")
+    table = journey.page.get_by_role("table").first
+    expect(table).to_contain_text("qwen3-8b")
+    model = journey.page.get_by_role("combobox", name="Model", exact=True)
+    model.click()
+    # The dropdown searches the catalog, even though only the newest result is on screen.
+    options = journey.page.get_by_role("listbox", name="Model", exact=True)
+    expect(options.get_by_role("option", name="snowball", exact=True)).to_be_visible()
+    model.fill("SNOW")
+    expect(options.get_by_role("option")).to_have_count(1)
+    model.press("ArrowDown")
+    model.press("Enter")
+    expect(table).to_contain_text("snowball")
+    journey.page.wait_for_url(re.compile(r"[?&]model=snowball"))
+    journey.page.reload(wait_until="domcontentloaded")
+    expect(model).to_have_value("snowball")
+    expect(table).to_contain_text("snowball")
+    active_view = "By launch" if view == "launches" else "All runs"
+    expect(journey.page.get_by_role("button", name=active_view, exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(journey.page.get_by_label("Result limit", exact=True)).to_have_value("1")
+
+
+def test_run_model_dropdown_click_escape_and_clear(journey: Journey) -> None:
+    journey.visit("/runs?limit=1")
+    model = journey.page.get_by_role("combobox", name="Model", exact=True)
+    journey.page.get_by_role("button", name="Browse model options", exact=True).click()
+    options = journey.page.get_by_role("listbox", name="Model", exact=True)
+    options.get_by_role("option", name="snowball", exact=True).click()
+    expect(journey.page.get_by_role("table").first).to_contain_text("snowball")
+    model.click()
+    model.fill("no-such-model")
+    expect(options.get_by_role("option")).to_have_count(0)
+    model.press("Enter")
+    expect(journey.page.get_by_role("table").first).to_contain_text("snowball")
+    model.press("Escape")
+    expect(model).to_have_value("snowball")
+    expect(options).to_have_count(0)
+    journey.page.get_by_role("button", name="Clear model filter", exact=True).click()
+    expect(journey.page.get_by_role("table").first).to_contain_text("qwen3-8b")
+    assert "model=" not in journey.page.url

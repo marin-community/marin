@@ -197,6 +197,7 @@ export interface EvalFamily {
 }
 
 export interface Meta {
+  run_facets: Record<string, string[]>
   models: string[]
   default_cohort: string
   verified_cohorts: string[]

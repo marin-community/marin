@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
-import type { LaunchGroup, RunRow } from '@/types/api'
+import type { LaunchGroup, Meta, RunRow } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import FilterBar, { type Facet } from '@/components/shared/FilterBar.vue'
@@ -12,106 +12,97 @@ import FilterBar, { type Facet } from '@/components/shared/FilterBar.vue'
 const route = useRoute()
 const router = useRouter()
 
-// How many recent runs/launches to load; the facet bar then filters this set client-side, so
-// scrubbing filters never re-hits the server. Raise it to widen the window.
-const limit = ref(200)
+const FACETS = [
+  { key: 'model', label: 'Model', searchable: true },
+  { key: 'eval', label: 'Eval', searchable: true },
+  { key: 'version', label: 'Version' },
+  { key: 'status', label: 'Status' },
+  { key: 'user', label: 'User' },
+  { key: 'accelerator', label: 'Accelerator' },
+]
 
-// Selected facet values, keyed by facet id ('' / absent means "all"). Client-side only.
-const selected = ref<Record<string, string>>({})
+function queryValue(key: string): string {
+  const value = route.query[key]
+  return typeof value === 'string' ? value : ''
+}
 
-// The group filter is URL-driven (a chip set from a run's group links); it fetches exactly that
-// launch's runs server-side, since group ids are opaque and not a facet.
-const group = computed(() => (typeof route.query.group === 'string' ? route.query.group : ''))
+function updateQuery(values: Record<string, string>) {
+  const query = { ...route.query }
+  for (const [key, value] of Object.entries(values)) {
+    if (value) query[key] = value
+    else delete query[key]
+  }
+  router.push({ path: '/runs', query })
+}
 
-// "By launch" collapses runs into one row per serve group; "All runs" is the flat table. A group
-// chip is a flat-mode concept, so arriving with one forces that view.
+const selected = computed<Record<string, string>>({
+  get: () => Object.fromEntries(FACETS.map(({ key }) => [key, queryValue(key)])),
+  set: (values) => updateQuery(Object.fromEntries(FACETS.map(({ key }) => [key, values[key] ?? '']))),
+})
+
+const limit = computed({
+  get: () => {
+    const value = Number(queryValue('limit'))
+    return Number.isInteger(value) && value >= 1 && value <= 1000 ? value : 200
+  },
+  set: (value: number) => {
+    if (Number.isInteger(value) && value >= 1 && value <= 1000) updateQuery({ limit: String(value) })
+  },
+})
+const group = computed(() => queryValue('group'))
 type View = 'launches' | 'runs'
-const view = ref<View>(group.value ? 'runs' : 'launches')
+const view = computed<View>({
+  get: () => queryValue('view') === 'runs' || group.value ? 'runs' : 'launches',
+  set: (value) => updateQuery({ view: value, ...(value === 'launches' ? { group: '' } : {}) }),
+})
+
+// Search the complete catalog before limiting results; options must include older and smoke runs.
+function requestParams(): URLSearchParams {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(selected.value)) {
+    if (value) params.set(key, value)
+  }
+  params.set('limit', String(limit.value))
+  return params
+}
 
 function runsPath(): string {
-  const params = new URLSearchParams()
+  const params = requestParams()
   if (group.value) params.set('group', group.value)
-  params.set('limit', String(limit.value))
-  return `api/runs?${params.toString()}`
+  return `api/runs?${params}`
 }
 
 function groupsPath(): string {
-  return `api/groups?limit=${limit.value}`
+  return `api/groups?${requestParams()}`
 }
 
+const { data: meta, error: metaError, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
 const { data: runs, loading: runsLoading, error: runsError, refresh: refreshRuns } = useApi<RunRow[]>(runsPath)
 const { data: groups, loading: groupsLoading, error: groupsError, refresh: refreshGroups } =
   useApi<LaunchGroup[]>(groupsPath)
-
-const loading = computed(() => (view.value === 'launches' ? groupsLoading.value : runsLoading.value))
-const error = computed(() => (view.value === 'launches' ? groupsError.value : runsError.value))
+const loading = computed(() => view.value === 'launches' ? groupsLoading.value : runsLoading.value)
+const error = computed(() => metaError.value || (view.value === 'launches' ? groupsError.value : runsError.value))
 
 function refreshActive() {
   if (view.value === 'launches') refreshGroups()
   else refreshRuns()
 }
 
-function distinct(values: (string | null | undefined)[]): string[] {
-  return [...new Set(values.filter((v): v is string => !!v))].sort()
-}
-
-// Facet options are derived from the loaded set, so they reflect exactly what is present. The same
-// six facets apply to both views; in launch mode "Eval" matches launches that contain that eval.
-const runFacets = computed<Facet[]>(() => {
-  const rows = runs.value ?? []
-  return [
-    { key: 'model', label: 'Model', options: distinct(rows.map((r) => r.model_name)) },
-    { key: 'version', label: 'Version', options: distinct(rows.map((r) => r.version)) },
-    { key: 'eval', label: 'Eval', options: distinct(rows.map((r) => r.eval_name)) },
-    { key: 'status', label: 'Status', options: distinct(rows.map((r) => r.status)) },
-    { key: 'user', label: 'User', options: distinct(rows.map((r) => r.user_name)) },
-    { key: 'accelerator', label: 'Accelerator', options: distinct(rows.map((r) => r.accelerator)) },
-  ]
-})
-
-const groupFacets = computed<Facet[]>(() => {
-  const gs = groups.value ?? []
-  return [
-    { key: 'model', label: 'Model', options: distinct(gs.map((g) => g.model_name)) },
-    { key: 'version', label: 'Version', options: distinct(gs.map((g) => g.version)) },
-    { key: 'eval', label: 'Eval', options: distinct(gs.flatMap((g) => g.evals.map((e) => e.eval_name))) },
-    { key: 'status', label: 'Status', options: distinct(gs.map((g) => g.status)) },
-    { key: 'user', label: 'User', options: distinct(gs.map((g) => g.user_name)) },
-    { key: 'accelerator', label: 'Accelerator', options: distinct(gs.map((g) => g.accelerator)) },
-  ]
-})
-
-const filteredRuns = computed(() => {
-  const s = selected.value
-  return (runs.value ?? []).filter(
-    (r) =>
-      (!s.model || r.model_name === s.model) &&
-      (!s.version || r.version === s.version) &&
-      (!s.eval || r.eval_name === s.eval) &&
-      (!s.status || r.status === s.status) &&
-      (!s.user || r.user_name === s.user) &&
-      (!s.accelerator || r.accelerator === s.accelerator),
-  )
-})
-
-const filteredGroups = computed(() => {
-  const s = selected.value
-  return (groups.value ?? []).filter(
-    (g) =>
-      (!s.model || g.model_name === s.model) &&
-      (!s.version || g.version === s.version) &&
-      (!s.eval || g.evals.some((e) => e.eval_name === s.eval)) &&
-      (!s.status || g.status === s.status) &&
-      (!s.user || g.user_name === s.user) &&
-      (!s.accelerator || g.accelerator === s.accelerator),
-  )
-})
-
-const facets = computed(() => (view.value === 'launches' ? groupFacets.value : runFacets.value))
-const totalCount = computed(() => (view.value === 'launches' ? groups.value?.length ?? 0 : runs.value?.length ?? 0))
-const resultCount = computed(() =>
-  view.value === 'launches' ? filteredGroups.value.length : filteredRuns.value.length,
-)
+const facets = computed<Facet[]>(() => FACETS.map((facet) => {
+  const options = meta.value?.run_facets[facet.key] ?? []
+  return {
+    ...facet,
+    options: facet.key === 'status' && view.value === 'launches'
+      ? [...new Set([...options, 'mixed'])].sort()
+      : options,
+  }
+}))
+const runRows = computed(() => runs.value ?? [])
+const launchRows = computed(() => groups.value ?? [])
+const resultCount = computed(() => view.value === 'launches' ? launchRows.value.length : runRows.value.length)
+const resultLabel = computed(() => loading.value
+  ? 'Loading…'
+  : `${resultCount.value} ${view.value === 'launches' ? 'launches' : 'runs'} shown`)
 
 // Expanded launches, keyed by group id.
 const expanded = reactive(new Set<string>())
@@ -120,17 +111,15 @@ function toggleGroup(groupId: string) {
   else expanded.add(groupId)
 }
 
-onMounted(refreshActive)
-
-// The server round-trips only depend on limit, view, and the group chip; facet changes are local.
-watch(limit, refreshActive)
-watch(view, refreshActive)
-watch(group, (g) => {
-  if (g) view.value = 'runs'
-  refreshRuns()
+onMounted(() => {
+  refreshMeta()
+  refreshActive()
 })
-
-onViewRefresh(refreshActive)
+watch(() => `${view.value}:${view.value === 'launches' ? groupsPath() : runsPath()}`, refreshActive)
+onViewRefresh(() => {
+  refreshMeta()
+  refreshActive()
+})
 
 function tasksSummary(row: RunRow): string {
   if (!row.tasks || row.tasks.length === 0) return '—'
@@ -145,7 +134,7 @@ function clearGroup() {
 }
 
 function filterByGroup(groupId: string) {
-  router.push({ path: '/runs', query: { group: groupId } })
+  router.push({ path: '/runs', query: { ...route.query, group: groupId, view: 'runs' } })
 }
 
 function irisJobUrl(path: string): string {
@@ -172,6 +161,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
             ? 'border-accent-border bg-accent-subtle text-accent'
             : 'border-surface-border text-text-muted hover:bg-surface-raised'"
           @click="view = 'launches'"
+          :aria-pressed="view === 'launches'"
         >By launch</button>
         <button
           class="px-3 py-1 rounded border"
@@ -179,6 +169,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
             ? 'border-accent-border bg-accent-subtle text-accent'
             : 'border-surface-border text-text-muted hover:bg-surface-raised'"
           @click="view = 'runs'"
+          :aria-pressed="view === 'runs'"
         >All runs</button>
       </div>
     </div>
@@ -186,15 +177,15 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
     <FilterBar
       v-model="selected"
       :facets="facets"
-      :result-count="resultCount"
-      :total-count="totalCount"
+      :result-label="resultLabel"
       class="mb-4"
     >
       <template #trailing>
         <label class="flex flex-col text-xs text-text-secondary gap-1">
-          Limit
+          Result limit
           <input
-            v-model.number="limit"
+            :value="limit"
+            @change="limit = Number(($event.target as HTMLInputElement).value)"
             type="number"
             min="1"
             max="1000"
@@ -203,6 +194,10 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
         </label>
       </template>
     </FilterBar>
+
+    <p class="mb-4 text-xs text-text-muted" role="status">
+      Searches all recorded runs across cohorts. Showing up to {{ limit }} newest matches.
+    </p>
 
     <!-- Active group chip (flat mode only) -->
     <div v-if="group && view === 'runs'" class="mb-4">
@@ -227,7 +222,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
     <!-- By launch: one row per serve group, expandable to its evals -->
     <template v-else-if="view === 'launches'">
       <EmptyState
-        v-if="filteredGroups.length === 0"
+        v-if="launchRows.length === 0"
         icon="🔍"
         message="No launches match these filters."
       />
@@ -245,12 +240,19 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
             </tr>
           </thead>
           <tbody>
-            <template v-for="g in filteredGroups" :key="g.group_id">
+            <template v-for="g in launchRows" :key="g.group_id">
               <tr
                 class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
                 @click="toggleGroup(g.group_id)"
               >
-                <td class="px-3 py-2 text-text-muted select-none">{{ expanded.has(g.group_id) ? '▾' : '▸' }}</td>
+                <td class="px-3 py-2 text-text-muted">
+                  <button
+                    :aria-label="`Show evals for ${g.model_name}, ${formatTimestamp(g.created_at)}`"
+                    :aria-expanded="expanded.has(g.group_id)"
+                    class="px-1 py-1 hover:text-text"
+                    @click.stop="toggleGroup(g.group_id)"
+                  >{{ expanded.has(g.group_id) ? '▾' : '▸' }}</button>
+                </td>
                 <td class="px-3 py-2 font-mono text-[13px] whitespace-nowrap">{{ g.model_name }}</td>
                 <td class="px-3 py-2 whitespace-nowrap">
                   <span
@@ -305,7 +307,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
     </template>
 
     <EmptyState
-      v-else-if="filteredRuns.length === 0"
+      v-else-if="runRows.length === 0"
       icon="🔍"
       message="No runs match these filters."
     />
@@ -328,7 +330,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
         </thead>
         <tbody>
           <tr
-            v-for="row in filteredRuns"
+            v-for="row in runRows"
             :key="row.run_id"
             class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
           >

@@ -332,3 +332,45 @@ def test_api_jobs_degrade_without_a_cluster(client):
     jobs = client.get("/runs/snowball-2026.07.20-mmlu/jobs").json()
     assert jobs["roles"]
     assert all(role["reachable"] is False for role in jobs["roles"])
+
+
+@pytest.mark.parametrize("endpoint", ["/runs", "/groups"])
+def test_run_filters_find_older_models_before_limiting(client, endpoint):
+    newest = client.get(endpoint, params={"limit": 1}).json()
+    assert newest[0]["model_name"] != "snowball"
+    rows = client.get(
+        endpoint,
+        params={
+            "model": "snowball",
+            "eval": "mmlu",
+            "version": "2026.07.20",
+            "status": "succeeded",
+            "accelerator": "v6e-8",
+            "limit": 1,
+        },
+    ).json()
+    assert len(rows) == 1
+    assert rows[0]["model_name"] == "snowball"
+    assert rows[0]["version"] == "2026.07.20"
+    assert client.get(endpoint, params={"accelerator": "not-present"}).json() == []
+    assert client.get(endpoint, params={"version": "not-present"}).json() == []
+    assert client.get(endpoint, params={"eval": "not-present"}).json() == []
+
+
+def test_launch_eval_filter_preserves_siblings_and_rollup(client):
+    rows = client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "mixed"}).json()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "mixed"
+    assert rows[0]["n_evals"] == 7
+    assert {member["status"] for member in rows[0]["evals"]} == {"succeeded", "failed", "infra_failed"}
+    assert client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "succeeded"}).json() == []
+
+
+def test_run_filter_options_include_catalog_outside_recent_window(client):
+    recent = client.get("/runs", params={"limit": 1}).json()
+    facets = client.get("/meta").json()["run_facets"]
+    assert "snowball" in facets["model"]
+    assert "snowball" != recent[0]["model_name"]
+    all_runs = client.get("/runs", params={"limit": 1000}).json()
+    assert set(facets["eval"]) == {row["eval_name"] for row in all_runs}
+    assert set(facets["version"]) == {row["version"] for row in all_runs if row["version"]}
