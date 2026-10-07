@@ -828,7 +828,9 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     if jax.default_backend() == "gpu" and _has_pallas_triton:
         if _gpu_family() == _GpuFamily.AMD_INSTINCT_GFX942:
             # XLA's bf16 grouped GEMM beats the Triton kernels on MI300X. MI350X keeps Triton: XLA rejects
-            # bf16 ragged_dot on gfx950.
+            # bf16 ragged_dot on gfx950. XLA's hipBLASLt grouped GEMM crashes with ROCM_ERROR_ILLEGAL_ADDRESS
+            # under HIP command buffers, so ROCm runs must pass --xla_gpu_enable_command_buffer=. The Grug
+            # entry points and the HPC Fund Slurm wrapper already set it.
             return ("xla", "triton")
         return ("triton", "xla")
 
