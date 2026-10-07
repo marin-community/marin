@@ -144,8 +144,9 @@ def time_call(fn: Callable, args, *, warmup_seconds: float, window_seconds: floa
     jax.block_until_ready(fn(*args))
     compile_time = time.perf_counter() - start
 
-    calls = 0
     start = time.perf_counter()
+    out = fn(*args)
+    calls = 1
     while time.perf_counter() - start < warmup_seconds:
         out = fn(*args)
         calls += 1
