@@ -968,6 +968,10 @@ class GrugModelConfig:
     final_intermediate_dim: int = 0
     final_experts_per_token: int = 0
     """> 0: the final layer's routed top-k (it must be the only layer of the softmax tail stack)."""
+    mla_tie_prev_qk: bool = False
+    """With ``mla_key_offset``: the MLA query's first half (the channels scored against the previous token's key)
+    is the current token's own un-shifted key half, so those channels score ``k_prev(x_i) · k_prev(x_{j-1})``
+    (a symmetric similarity). ``w_q``'s first-half columns go unused."""
     final_num_experts: int = 0
     """> 0: the final layer's routed expert count (same top-k and width; it must be the only layer of the softmax tail
     stack). Per-expert router stats and the QB biases are padded to the widest layer (``stats_num_experts``)."""
@@ -1905,6 +1909,8 @@ class GrugModelConfig:
                 "final_intermediate_dim / final_experts_per_token need attn_res and the final layer alone in the "
                 "softmax tail stack"
             )
+        if self.mla_tie_prev_qk and not (self.mla and self.mla_key_offset):
+            raise ValueError("mla_tie_prev_qk needs mla and mla_key_offset")
         if self.final_shared_only and (
             not self.attn_res
             or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
@@ -2752,6 +2758,10 @@ class CausalSelfAttention(eqx.Module):
         second_qk = None
         if self.cfg.mla:
             q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
+            if self.cfg.mla_tie_prev_qk:
+                half = q.shape[-1] // 2
+                tied = reshard(k[..., :half].astype(q.dtype), _partition_spec_of(q))
+                q = jnp.concatenate([tied, q[..., half:]], axis=-1)
             if self.kv_mix_gate is not None:
                 kv_stats = _mixture_load_stats(self._kv_mix_weights(x if kv_input is None else kv_input))
             if self.vres_lambda is not None:

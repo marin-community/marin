@@ -48,3 +48,18 @@ def test_traced_rows_match_the_static_probe_with_inkling_and_documents():
         np.testing.assert_allclose(full[i][:, max(0, lo) : position + 1], expected, rtol=1e-4, atol=1e-6)
         np.testing.assert_allclose(full[i].sum(-1), 1.0, rtol=1e-5)
     assert np.all(full[1][:, :50] == 0)  # query (1, 70) is in document 1
+
+
+def test_tied_previous_token_half_reuses_the_unshifted_key():
+    mesh, model = t._model(ngram_stat_rows=0, mla=True, mla_key_offset=True, mla_tie_prev_qk=True)
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    with jax.set_mesh(mesh):
+        loss, grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape)))
+        )(model)
+    assert np.isfinite(float(loss))
+    head_dim = model.config.inferred_head_dim
+    g = np.asarray(grads.stacked_blocks.stacked.attn.w_q).reshape(
+        *grads.stacked_blocks.stacked.attn.w_q.shape[:-1], -1, head_dim
+    )
+    assert np.all(g[..., : head_dim // 2] == 0) and np.abs(g[..., head_dim // 2 :]).max() > 0
