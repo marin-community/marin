@@ -1,0 +1,29 @@
+# GrugMoE with 262,144 native context; use the reviewed Grug serving topology
+# and the campaign's 73,728-token suite cap.
+name: weight-merge-selective-experts100-step20
+location: s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/selective-experts100-step20
+# Object-store checkpoint revision identifies the committed producer recipe.
+revision: bfb18592e22b8d8ded41e5b1dbb8040a5fe463d6
+identity: weight-merge-selective-experts100-step20-bfb18592e22b8d8ded41e5b1dbb8040a5fe463d6
+tokenizer: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
+tokenizer_revision: 50fe2f488aee7730bbccc721024b35229075602e
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
