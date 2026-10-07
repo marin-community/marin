@@ -67,6 +67,7 @@ from taskforge.loop.events import (
     EventKind,
     ItemState,
     Phase,
+    ProposalOrigin,
     RevisionKind,
     Terminal,
     cause_counts,
@@ -344,21 +345,25 @@ class _Item:
         return ValidationSite(self.item_id, state.round, evidence, self.services.ledger)
 
 
-async def run_item(proposal: TaskProposal, policy: LoopPolicy, services: LoopServices) -> Terminal:
+async def run_item(
+    proposal: TaskProposal, origin: ProposalOrigin, policy: LoopPolicy, services: LoopServices
+) -> Terminal:
     """Carry ``proposal`` to a terminal, resuming from its event log.
 
-    An item already ``ACCEPTED`` or ``REJECTED`` returns at once; an ``ABANDONED`` or ``FAILED`` one
-    re-enters where it stopped. An unhandled exception records ``TERMINAL(FAILED)`` and propagates.
+    ``origin`` says whether ``proposal`` came from a ``run_idea`` batch or was handed to the loop
+    directly; ``OPENED`` records it. An item already ``ACCEPTED`` or ``REJECTED`` returns at once; an
+    ``ABANDONED`` or ``FAILED`` one re-enters where it stopped. An unhandled exception records
+    ``TERMINAL(FAILED)`` and propagates.
 
     Raises:
-        ValueError: the log was opened for a different proposal or under a different policy, or the
-            log is inconsistent (``loop.events.derive_state``).
+        ValueError: the log was opened for a different proposal, origin or policy, or the log is
+            inconsistent (``loop.events.derive_state``).
     """
     item_id = item_id_for(proposal)
     item = _Item(
         item_id, services.root / ITEMS_DIR / item_id, EventLog(services.root, services.ledger, item_id), policy, services
     )
-    _open(item, proposal)
+    _open(item, proposal, origin)
     state = derive_state(item.log.entries())
     if state.terminal in FINAL:
         assert state.terminal is not None
@@ -379,7 +384,7 @@ async def run_item(proposal: TaskProposal, policy: LoopPolicy, services: LoopSer
         raise
 
 
-def _open(item: _Item, proposal: TaskProposal) -> None:
+def _open(item: _Item, proposal: TaskProposal, origin: ProposalOrigin) -> None:
     entries = events(item.log.entries())
     if not entries:
         item.keep_proposal(proposal)
@@ -389,12 +394,15 @@ def _open(item: _Item, proposal: TaskProposal) -> None:
             proposal.digest,
             proposal=proposal.header.id,
             idea=proposal.header.source.ref,
+            origin=origin,
             policy_digest=item.policy.digest,
         )
         return
     opened = entries[0]
     if opened.input_hash != proposal.digest:
         raise ValueError(f"{item.item_id} was opened for proposal {opened.input_hash}, not {proposal.digest}")
+    if opened.attrs["origin"] != origin:
+        raise ValueError(f"{item.item_id} was opened as a {opened.attrs['origin']} proposal, not {origin}")
     if opened.attrs["policy_digest"] != item.policy.digest:
         raise ValueError(
             f"{item.item_id} was opened under policy {opened.attrs['policy_digest']}, not {item.policy.digest}; "

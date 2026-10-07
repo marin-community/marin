@@ -3,13 +3,14 @@
 
 """Live: one proposal through the whole loop against GLM-5.3 on the interactive (``high``) pool.
 
-The proposal is a stored d43 culinary-scaling proposal that triage accepted in earlier live runs. The
-GLM rubric triages it, GLM authors and builds the program (with web research through Parallel), the
-controls replay through the server tokenizer, and GLM solves and attacks the task on ShellSim under
-the first-run validation values (k=8, adversary_k=2, every role, band [0.125, 0.875]). Review decides
-and the loop follows its decision to a terminal. The item must end ``ACCEPTED`` or ``REJECTED`` with a
-``decision.json`` for every ``DECIDED`` event, and a relaunch must return the same terminal without a
-model call. The run root goes to ``.evidence/loop/live-test/<utc>/`` with a ``summary.json``.
+The proposal is a stored d43 culinary-scaling proposal that triage accepted in earlier live runs,
+handed to ``run_item`` as a supplied proposal. The GLM rubric triages it, GLM authors and builds the
+program (with web research through Parallel), the controls replay through the server tokenizer, and
+GLM solves and attacks the task on ShellSim under the first-run validation values (k=8,
+adversary_k=2, every role, band [0.125, 0.875]). Review decides and the loop follows its decision to
+a terminal. The item must end ``ACCEPTED`` or ``REJECTED`` with a ``decision.json`` for every
+``DECIDED`` event, and a relaunch must return the same terminal without a model call. The run root
+goes to ``.evidence/loop/live-test/<utc>/`` with a ``summary.json``.
 """
 
 import asyncio
@@ -33,11 +34,11 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.store import CallStore
 from taskforge.llm.web import web_tools
-from taskforge.loop.events import EventKind, Terminal, derive_state
+from taskforge.loop.events import EventKind, ProposalOrigin, Terminal, derive_state
 from taskforge.loop.policy import POLICY, LoopPolicy
-from taskforge.loop.program import LEDGER_DIR, LoopServices, run_idea, run_item
-from taskforge.proposal.model import TaskProposal, parse
-from taskforge.proposal.source import ProposalBatch, SlotProposal
+from taskforge.loop.program import LEDGER_DIR, LoopServices, run_item
+from taskforge.proposal.model import parse
+from taskforge.proposal.source import ProposalBatch
 from taskforge.review.decision import DECISION_FILE
 from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
 from taskforge.triage.checks import ALL_COMBINATIONS, CHECKS, CheckContext
@@ -50,7 +51,6 @@ from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
 
 DATA = Path(__file__).resolve().parent / "data"
 EVIDENCE = Path(__file__).resolve().parents[2] / ".evidence" / "loop" / "live-test"
-IDEA = "d43.culinary.scaling"
 RUBRIC_SAMPLES = 3
 POOL = Pool.HIGH
 """Every validation run driven from a test uses the interactive pool; unattended runs name BULK in their config."""
@@ -81,14 +81,11 @@ POLICY_VALUES = LoopPolicy(
 )
 
 
-class StoredProposal:
-    """A proposal source that serves the stored proposal: proposal generation is layer 07's live test."""
-
-    def __init__(self, proposal: TaskProposal):
-        self.proposal = proposal
+class NoSource:
+    """The test supplies its proposal to ``run_item``; proposal generation is layer 07's live test."""
 
     async def propose(self, idea: str, n: int) -> ProposalBatch:
-        return ProposalBatch((), (), (SlotProposal(0, self.proposal, (), (), None),))
+        raise AssertionError("the live loop test supplies its proposal and proposes nothing")
 
 
 def event_summary(root: Path, item_id: str) -> list[dict[str, object]]:
@@ -123,7 +120,7 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
         def services() -> LoopServices:
             return LoopServices(
                 client=client,
-                source=StoredProposal(proposal),
+                source=NoSource(),
                 describe_idea=lambda idea: {"idea": idea},
                 checks=CHECKS,
                 rubric=GlmRubric(
@@ -157,12 +154,11 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
                 slots=asyncio.Semaphore(256),
             )
 
-        (item,) = await run_idea(IDEA, IDEA, policy, services())
-        terminal = await run_item(item, policy, services())
+        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services())
         wall_time = time.monotonic() - started
-        item_id = item_id_for(item)
+        item_id = item_id_for(proposal)
         calls = llm_calls(root, item_id)
-        relaunched = await run_item(item, policy, services())
+        relaunched = await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services())
 
     events = event_summary(root, item_id)
     (root / "summary.json").write_text(

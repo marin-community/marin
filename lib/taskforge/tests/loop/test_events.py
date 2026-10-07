@@ -44,7 +44,7 @@ class Log:
 def built_log(tmp_path) -> Log:
     return (
         Log(tmp_path)
-        .add(EventKind.OPENED, input_hash="p1", proposal="d00.x/1", idea="d00.x", policy_digest="pol")
+        .add(EventKind.OPENED, input_hash="p1", proposal="d00.x/1", idea="d00.x", origin="supplied", policy_digest="pol")
         .add(EventKind.TRIAGED, input_hash="p1", decision="accept", tally="1 accept", repairs="0")
         .add(EventKind.AUTHORED, input_hash="prog1", revises="", revision="none")
         .add(EventKind.BUILT, input_hash="task1", program_digest="prog1", steps="5", hits="0", staged="false")
@@ -123,7 +123,7 @@ def test_an_abandoned_item_re_enters_validation_with_a_fresh_retry_count(tmp_pat
 def test_host_failures_hold_the_build_until_abandoned_and_the_relaunch_rebuilds_the_same_program(tmp_path):
     log = (
         Log(tmp_path)
-        .add(EventKind.OPENED, input_hash="p1", proposal="d00.x/1", idea="d00.x", policy_digest="pol")
+        .add(EventKind.OPENED, input_hash="p1", proposal="d00.x/1", idea="d00.x", origin="supplied", policy_digest="pol")
         .add(EventKind.TRIAGED, input_hash="p1", decision="accept", tally="1 accept", repairs="0")
         .add(EventKind.AUTHORED, input_hash="prog1", revises="", revision="none")
     )

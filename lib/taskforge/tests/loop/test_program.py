@@ -19,7 +19,15 @@ from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.build.run import item_id_for
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import Completion
-from taskforge.loop.events import EventKind, Phase, RevisionKind, Terminal, build_host_failures, derive_state
+from taskforge.loop.events import (
+    EventKind,
+    Phase,
+    ProposalOrigin,
+    RevisionKind,
+    Terminal,
+    build_host_failures,
+    derive_state,
+)
 from taskforge.loop.program import NOOP_FAILURE, idea_item_id, run_idea, run_item
 from taskforge.proposal.model import render
 from taskforge.review.decision import DECISION_FILE, Accept, Reject, RejectKind, Repair, load_decision
@@ -59,7 +67,7 @@ async def test_an_idea_item_is_accepted_and_a_relaunch_changes_nothing(loop, pro
 
     async with loop.services() as services:
         proposals = await run_idea(IDEA, "idea", policy, services)
-        terminal = await run_item(proposals[0], policy, services)
+        terminal = await run_item(proposals[0], ProposalOrigin.GENERATED, policy, services)
     item_id = item_id_for(first)
 
     assert proposals == (first, second)
@@ -67,6 +75,7 @@ async def test_an_idea_item_is_accepted_and_a_relaunch_changes_nothing(loop, pro
     assert kinds(loop, idea) == [EventKind.SLOT_FAILED, EventKind.PROPOSED]
     assert events_of(loop, idea, EventKind.PROPOSED)[0].attrs["items"] == f"{item_id},{item_id_for(second)}"
     assert terminal is Terminal.ACCEPTED
+    assert events_of(loop, item_id, EventKind.OPENED)[0].attrs["origin"] == ProposalOrigin.GENERATED
     logged = kinds(loop, item_id)
     assert logged[:5] == [
         EventKind.OPENED,
@@ -84,7 +93,7 @@ async def test_an_idea_item_is_accepted_and_a_relaunch_changes_nothing(loop, pro
 
     async with loop.services() as services:
         assert await run_idea(IDEA, "idea", policy, services) == (first, second)
-        assert await run_item(first, policy, services) is Terminal.ACCEPTED
+        assert await run_item(first, ProposalOrigin.GENERATED, policy, services) is Terminal.ACCEPTED
     assert loop.source.calls == 1 and len(fake_glm.requests) == 1 and len(loop.rubric.assessed) == 1
 
 
@@ -132,6 +141,18 @@ async def test_an_idea_keeps_its_record_and_every_batch_s_calls_beside_its_propo
     assert [c.content for c in repaired] == ["not a proposal", render(second)]
 
 
+async def test_a_supplied_proposal_is_opened_as_supplied_and_a_relaunch_under_another_origin_is_refused(loop, programs):
+    loop.rubric.decisions[:] = [TriageDecision.REJECT]
+    proposal = programs.proposal()
+    async with loop.services() as services:
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(), services) is Terminal.REJECTED
+
+        with pytest.raises(ValueError, match="opened as a supplied proposal"):
+            await run_item(proposal, ProposalOrigin.GENERATED, programs.policy(), services)
+    (opened,) = events_of(loop, item_id_for(proposal), EventKind.OPENED)
+    assert opened.attrs["origin"] == ProposalOrigin.SUPPLIED
+
+
 async def test_a_process_killed_mid_trials_resumes_without_repeating_finished_work(loop, programs, fake_glm, crash):
     proposal = programs.proposal()
     item_id = item_id_for(proposal)
@@ -146,14 +167,14 @@ async def test_a_process_killed_mid_trials_resumes_without_repeating_finished_wo
     loop.model.before_role = die_once_the_solver_is_recorded
     async with loop.services() as services:
         with pytest.raises(BaseExceptionGroup) as killed:
-            await run_item(proposal, policy, services)
+            await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services)
     assert killed.group_contains(crash)
     assert derive_state(loop.entries(item_id)).phase is Phase.TRIALS
     tokenizer_calls, solver_calls = loop.tokenizer.calls, loop.model.calls
 
     loop.model.before_role = None
     async with loop.services() as services:
-        assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.ACCEPTED
 
     assert len(fake_glm.requests) == 1 and len(loop.rubric.assessed) == 1
     assert (loop.tokenizer.calls, loop.model.calls) == (tokenizer_calls, solver_calls)
@@ -175,7 +196,7 @@ async def test_a_repair_that_rebuilds_the_same_task_is_a_failed_revision_and_the
     policy = programs.policy(max_repairs=1)
 
     async with loop.services() as services:
-        terminal = await run_item(proposal, policy, services)
+        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services)
     item_id = item_id_for(proposal)
 
     assert terminal is Terminal.REJECTED
@@ -203,7 +224,7 @@ async def test_a_shortcut_that_reads_the_input_and_solves_is_noted_and_the_item_
     loop.model.reads = frozenset({AdversaryRole.SHORTCUT})
 
     async with loop.services() as services:
-        terminal = await run_item(proposal, programs.policy(), services)
+        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(), services)
     item_id = item_id_for(proposal)
 
     assert terminal is Terminal.ACCEPTED
@@ -220,7 +241,7 @@ async def test_a_staged_draft_is_repaired_into_a_single_stage_task_without_valid
     programs.submit(fake_glm, programs.source())
 
     async with loop.services() as services:
-        terminal = await run_item(proposal, programs.policy(), services)
+        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(), services)
     item_id = item_id_for(proposal)
 
     assert terminal is Terminal.ACCEPTED
@@ -241,7 +262,7 @@ async def test_validation_retries_end_abandoned_and_a_relaunch_re_enters_with_a_
     loop.model.error = unavailable
 
     async with loop.services() as services:
-        assert await run_item(proposal, policy, services) is Terminal.ABANDONED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.ABANDONED
     item_id = item_id_for(proposal)
     decided = events_of(loop, item_id, EventKind.DECIDED)
     assert [(e.attrs["decision"], e.attrs["abandon"]) for e in decided] == [("retry", "false"), ("retry", "true")]
@@ -250,7 +271,7 @@ async def test_validation_retries_end_abandoned_and_a_relaunch_re_enters_with_a_
 
     loop.model.error = None
     async with loop.services() as services:
-        assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.ACCEPTED
 
     assert len(fake_glm.requests) == 1
     assert kinds(loop, item_id).count(EventKind.BUILT) == 1
@@ -263,7 +284,7 @@ async def test_triage_repairs_until_its_bound_then_rejects_without_authoring(loo
     proposal = programs.proposal()
 
     async with loop.services() as services:
-        terminal = await run_item(proposal, programs.policy(max_triage_repairs=1), services)
+        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(max_triage_repairs=1), services)
     item_id = item_id_for(proposal)
 
     assert terminal is Terminal.REJECTED
@@ -284,7 +305,7 @@ async def test_an_item_over_its_output_token_budget_is_rejected_before_authoring
     proposal = programs.proposal()
 
     async with loop.services() as services:
-        terminal = await run_item(proposal, programs.policy(output_token_budget=100), services)
+        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(output_token_budget=100), services)
 
     assert terminal is Terminal.REJECTED
     (closing,) = events_of(loop, item_id_for(proposal), EventKind.TERMINAL)
@@ -300,13 +321,13 @@ async def test_an_unhandled_exception_records_failed_and_a_relaunch_re_enters(lo
 
     async with loop.services() as services:
         with pytest.raises(RuntimeError, match="rubric store unreadable"):
-            await run_item(proposal, policy, services)
+            await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services)
     item_id = item_id_for(proposal)
     (failed,) = events_of(loop, item_id, EventKind.TERMINAL)
     assert failed.attrs["terminal"] == Terminal.FAILED and "RuntimeError" in failed.attrs["reason"]
 
     async with loop.services() as services:
-        assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.ACCEPTED
 
 
 class DroppingFactory:
@@ -331,7 +352,10 @@ async def test_a_dropped_host_connection_rebuilds_the_program_without_telling_th
         flaky = replace(
             services, build=replace(services.build, factories={EnvironmentKind.SHELLSIM: DroppingFactory(1)})
         )
-        assert await run_item(proposal, programs.policy(max_build_retries=1), flaky) is Terminal.ACCEPTED
+        assert (
+            await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(max_build_retries=1), flaky)
+            is Terminal.ACCEPTED
+        )
     item_id = item_id_for(proposal)
 
     (dropped,) = events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE)
@@ -351,7 +375,7 @@ async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuil
         dropping = replace(
             services, build=replace(services.build, factories={EnvironmentKind.SHELLSIM: DroppingFactory(2)})
         )
-        assert await run_item(proposal, policy, dropping) is Terminal.ABANDONED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, dropping) is Terminal.ABANDONED
     item_id = item_id_for(proposal)
     failures = events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE)
     assert [e.attrs["abandon"] for e in failures] == ["false", "true"]
@@ -362,7 +386,7 @@ async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuil
 
     # The relaunch builds the program already authored: no second authoring call is queued.
     async with loop.services() as services:
-        assert await run_item(proposal, policy, services) is Terminal.ACCEPTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.ACCEPTED
     assert len(fake_glm.requests) == 1 and len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
     assert build_host_failures(loop.entries(item_id)) == Counter({InfrastructureCause.HOST_UNREACHABLE: 2})
 
@@ -376,7 +400,7 @@ async def test_a_build_needing_a_machine_the_host_has_no_factory_for_is_rejected
 
     async with loop.services() as services:
         hostless = replace(services, build=replace(services.build, factories={}))
-        assert await run_item(proposal, policy, hostless) is Terminal.REJECTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, hostless) is Terminal.REJECTED
     item_id = item_id_for(proposal)
     assert events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE) == []
     assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
@@ -385,7 +409,7 @@ async def test_a_build_needing_a_machine_the_host_has_no_factory_for_is_rejected
 
     # A rejection is final: the relaunch on a host with the factory does not build again.
     async with loop.services() as services:
-        assert await run_item(proposal, policy, services) is Terminal.REJECTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.REJECTED
     assert len(fake_glm.requests) == 1
 
 
@@ -393,7 +417,7 @@ async def test_a_log_opened_under_another_policy_is_refused(loop, programs):
     loop.rubric.decisions[:] = [TriageDecision.REJECT]
     proposal = programs.proposal()
     async with loop.services() as services:
-        assert await run_item(proposal, programs.policy(), services) is Terminal.REJECTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(), services) is Terminal.REJECTED
 
         with pytest.raises(ValueError, match="opened under policy"):
-            await run_item(proposal, programs.policy(max_repairs=5), services)
+            await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(max_repairs=5), services)

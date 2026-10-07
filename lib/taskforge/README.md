@@ -162,12 +162,14 @@ or on a package the order does not name.
   (`<role>_sentinel`, by `calibration.gave_up`), and `DECIDED` names the kinds of the noted adversary
   passes in `notes`.
 - `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
-  `run_item(proposal, policy, services) -> Terminal`: one idea's proposals, and one proposal carried
-  to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `LoopServices[IdeaT]` holds what a run's items
-  share, including the `slots` semaphore that bounds model- and sandbox-bound phases across items,
-  `rollout_models`, the `validate.solver.ModelFactory` each validation trial's model comes from, and
-  `describe_idea: Callable[[IdeaT], Mapping[str, object]]`, the JSON record `run_idea` writes once
-  to `items/idea--<id>/idea.json`. `run_idea` keeps each batch under
+  `run_item(proposal, origin, policy, services) -> Terminal`: one idea's proposals, and one proposal
+  carried to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `origin` is a `loop.events.ProposalOrigin`
+  (`GENERATED` for a proposal from a `run_idea` batch, `SUPPLIED` for one handed to the loop
+  directly), recorded on `OPENED`. `LoopServices[IdeaT]` holds what a run's items share, including
+  the `slots` semaphore that bounds model- and sandbox-bound phases across items, `rollout_models`,
+  the `validate.solver.ModelFactory` each validation trial's model comes from, and `describe_idea:
+  Callable[[IdeaT], Mapping[str, object]]`, the JSON record `run_idea` writes once to
+  `items/idea--<id>/idea.json`. `run_idea` keeps each batch under
   `items/idea--<id>/batches/<reproposal>/`: `plan/{request,completions}.json` and
   `slots/<slot>/{request,completions}.json` with `repair_error.txt` or `failure.txt`, completions in
   the shape of the author's `completions.json`. Both resume from the run root's event logs.
