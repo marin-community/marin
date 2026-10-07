@@ -27,6 +27,7 @@ from levanter.kernels.pallas.autotune_utils import named_sharding_of
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
     DecodeState,
+    FinishReason,
     SeqDecodingParams,
     TokenQueue,
     _DecodeOutputs,
@@ -251,8 +252,12 @@ class DecodeResult:
     token_list: list[int]
     # Count of newly appended tokens (includes prompt tokens as extracted)
     tokens_decoded: int = 0
-    done: bool = False
+    finish_reason: FinishReason = FinishReason.RUNNING
     logprobs: list[float] = field(default_factory=list)
+
+    @property
+    def done(self) -> bool:
+        return self.finish_reason != FinishReason.RUNNING
 
 
 class GenState(eqx.Module):
@@ -462,7 +467,7 @@ def _prefill_kernel(
         max_seqs=decode_state.max_seqs,
         with_logprobs=True,
     )
-    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
@@ -658,7 +663,7 @@ def _handle_clones(
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state, cache=cache)
 
     # Append clone outputs
-    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finished)
+    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finish_reasons)
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
@@ -727,7 +732,7 @@ def _run_generation_loop(
         # Update the gen_state with all the new components
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
         # Append non-stateful outputs for host-side extraction
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -754,6 +759,7 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+    finish_reasons: list[FinishReason]
 
 
 FIRST_TOKEN_LOGPROB = 0.0
@@ -1097,7 +1103,7 @@ class InferenceEngine:
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
         if not requests:
-            return GenerationResult(tokens=[], logprobs=[], total_generated=0)
+            return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
         if len({r.request_id for r in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a generation batch.")
         assert self.config.max_prefill_size is not None
@@ -1235,18 +1241,15 @@ class InferenceEngine:
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
         logprobs_list: list[list[float]] = []
+        finish_reasons: list[FinishReason] = []
         total_prompt_tokens = 0
         for r in requests:
             rid = int(r.request_id)
             total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
-            # Initialize result buckets for this rid if not present
-            kid_map = self.results.get(rid, {})
+            kid_map = self.results[rid]
             for k in range(int(r.n_generations)):
-                dr = kid_map.get(k)
-                if dr is None:
-                    # Ensure a placeholder exists to avoid KeyErrors
-                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
-                    dr = kid_map[k]
+                dr = kid_map[k]
+                finish_reasons.append(dr.finish_reason)
                 outputs_list.append(dr.token_list)
                 logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
             self.results[rid] = kid_map
@@ -1258,7 +1261,9 @@ class InferenceEngine:
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
-        return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
+        return GenerationResult(
+            tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated, finish_reasons=finish_reasons
+        )
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
@@ -1362,7 +1367,7 @@ class InferenceEngine:
                 continue
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.done = True
+            dr.finish_reason = FinishReason(int(pending_outputs.finish_reasons.array[local_slot]))
 
             del self.local_map[local_slot]
             self.free_slots.append(local_slot)
