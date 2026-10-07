@@ -4,6 +4,8 @@
 """Converter behaviour on the checked-in ``swe_trusted_paths`` exemplar."""
 
 import json
+import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -207,3 +209,46 @@ def test_swesmith_keeps_compatible_pytest_constraint_for_agent_installs(reposito
     assert parse_spec(converted.text(VERIFIER_TOML)).must_pass == tuple(
         json.loads(task.text("tests/config.json"))["FAIL_TO_PASS"]
     )
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("repository", ["john-kurkowski__tldextract.3d1bf184", "marshmallow-code__marshmallow.9716fc62"])
+def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(repository, tmp_path):
+    task = read_task_binary(_fixture())
+    task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
+    # Reproduce pytest 9 and the legacy plugin being installed before the repair.
+    task.files[DOCKERFILE] = (
+        b"FROM python:3.10-bookworm\n" b"RUN pip install pytest pytest-gitignore pytest-json-report\n"
+    )
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    dockerfile = read_task_binary(record.task_binary).text(DOCKERFILE).split(INSTALL_MARKER)[0]
+    (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
+    probe = "import pytest\n\ndef test_compatible_collection():\n    assert pytest.version_tuple[0] < 9\n"
+    if repository.startswith("marshmallow-code__"):
+        probe += "\ndef test_declared_dependency():\n    import simplejson\n    assert simplejson.loads(simplejson.dumps({'ok': True})) == {'ok': True}\n"
+    (tmp_path / "test_probe.py").write_text(probe)
+    image = f"atlas-swesmith-regression:{uuid.uuid4().hex}"
+    try:
+        subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                image,
+                "python",
+                "-m",
+                "pytest",
+                "--json-report",
+                "--json-report-file=/probe/report.json",
+                "test_probe.py",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)
