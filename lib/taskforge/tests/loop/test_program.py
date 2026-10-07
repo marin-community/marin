@@ -148,7 +148,7 @@ async def test_a_repair_that_rebuilds_the_same_task_is_a_failed_revision_and_the
     assert terminal is Terminal.REJECTED
     repair = load_decision(evidence_dir(loop, item_id, 0) / DECISION_FILE)
     assert isinstance(repair, Repair)
-    assert "adv-shortcut-0" in repair.brief.failure
+    assert "The shortcut adversary 0 was graded as passing" in repair.brief.failure
     assert repair.brief.failure in last_user_turn(fake_glm, 1)
 
     (noop,) = events_of(loop, item_id, EventKind.BUILD_FAILED)
