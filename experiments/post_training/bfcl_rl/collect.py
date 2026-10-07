@@ -169,7 +169,7 @@ def collection_recipe() -> str:
                     "max_bytes_per_run": 17179869184,
                 },
             },
-            "data": {"kind": "tasks", "train_data": [], "val_data": []},
+            "data": {"kind": "tasks", "train_data": [], "val_data": [], "shuffle": True},
             "trajectory_runner": {"rollout_workers": {"num_workers": 1, "cpus_per_worker": 4}},
         },
         sort_keys=False,
