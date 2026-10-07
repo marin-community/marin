@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import faulthandler
 import functools
 import logging
 import time
@@ -83,6 +85,12 @@ class GrugTrainerConfig:
     model_axis_size: int = 1
     save_checkpoints: bool = True
     """False skips the checkpointer entirely, including the forced final save; for benchmarks."""
+
+    step_timeout: float | None = None
+    """Seconds after which a train step, other than the first one in this process (which compiles), counts as hung:
+    every thread's traceback is dumped and the process exits with status 1. When one device fails inside a step,
+    for example an allocator OOM, the other devices wait in a collective that never times out, and without this the
+    job sits until its scheduler time limit. None disables it."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -472,6 +480,19 @@ def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> N
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
 
 
+@contextlib.contextmanager
+def exit_if_hung(timeout: float | None):
+    """Dump every thread's traceback and exit the process with status 1 if the block runs longer than ``timeout``."""
+    if timeout is None:
+        yield
+        return
+    faulthandler.dump_traceback_later(timeout, exit=True)
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -624,6 +645,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        first_step = int(state.step)
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
@@ -635,10 +657,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
-                step = int(state.step) - 1
+                # The first step compiles, so it gets no timeout; neither do watch steps, which can compile a variant.
+                step_timeout = None if current_step == first_step or compute_watch else config.trainer.step_timeout
+                with exit_if_hung(step_timeout):
+                    state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                    step = int(state.step) - 1
 
-                jax.block_until_ready(metrics["train/loss"])
+                    jax.block_until_ready(metrics["train/loss"])
 
                 _check_step_numerics(metrics, int(state.step), config.trainer.diagnose_numerics)
                 duration = time.perf_counter() - step_start
