@@ -12,6 +12,9 @@ import FilterBar, { type Facet } from '@/components/shared/FilterBar.vue'
 const route = useRoute()
 const router = useRouter()
 
+const DEFAULT_RESULT_LIMIT = 200
+const MAX_RESULT_LIMIT = 1000
+
 const FACETS = [
   { key: 'model', label: 'Model', searchable: true },
   { key: 'eval', label: 'Eval', searchable: true },
@@ -43,10 +46,10 @@ const selected = computed<Record<string, string>>({
 const limit = computed({
   get: () => {
     const value = Number(queryValue('limit'))
-    return Number.isInteger(value) && value >= 1 && value <= 1000 ? value : 200
+    return Number.isInteger(value) && value >= 1 && value <= MAX_RESULT_LIMIT ? value : DEFAULT_RESULT_LIMIT
   },
   set: (value: number) => {
-    if (Number.isInteger(value) && value >= 1 && value <= 1000) updateQuery({ limit: String(value) })
+    if (Number.isInteger(value) && value >= 1 && value <= MAX_RESULT_LIMIT) updateQuery({ limit: String(value) })
   },
 })
 const group = computed(() => queryValue('group'))
@@ -100,9 +103,11 @@ const facets = computed<Facet[]>(() => FACETS.map((facet) => {
 const runRows = computed(() => runs.value ?? [])
 const launchRows = computed(() => groups.value ?? [])
 const resultCount = computed(() => view.value === 'launches' ? launchRows.value.length : runRows.value.length)
-const resultLabel = computed(() => loading.value
-  ? 'Loading…'
-  : `${resultCount.value} ${view.value === 'launches' ? 'launches' : 'runs'} shown`)
+const resultLabel = computed(() => {
+  if (loading.value) return 'Loading…'
+  const unit = view.value === 'launches' ? 'launch' : 'run'
+  return `${resultCount.value} ${unit}${resultCount.value === 1 ? '' : 's'} shown`
+})
 
 // Expanded launches, keyed by group id.
 const expanded = reactive(new Set<string>())
@@ -188,7 +193,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
             @change="limit = Number(($event.target as HTMLInputElement).value)"
             type="number"
             min="1"
-            max="1000"
+            :max="MAX_RESULT_LIMIT"
             class="rounded border border-surface-border bg-surface px-2 py-1 text-sm w-24"
           />
         </label>
