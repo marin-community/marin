@@ -194,8 +194,12 @@ or on a package the order does not name.
   `run_item(proposal, policy, services) -> Terminal`: one idea's proposals, and one proposal carried
   to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `LoopServices[IdeaT]` holds what a run's items
   share, including the `slots` semaphore that bounds model- and sandbox-bound phases across items,
-  and `rollout_models`, the `validate.solver.ModelFactory` each validation trial's model comes from.
-  Both resume from the run root's event logs.
+  `rollout_models`, the `validate.solver.ModelFactory` each validation trial's model comes from, and
+  `describe_idea: Callable[[IdeaT], Mapping[str, object]]`, the JSON record `run_idea` writes once
+  to `items/idea--<id>/idea.json`. `run_idea` keeps each batch under
+  `items/idea--<id>/batches/<reproposal>/`: `plan/{request,completions}.json` and
+  `slots/<slot>/{request,completions}.json` with `repair_error.txt` or `failure.txt`, completions in
+  the shape of the author's `completions.json`. Both resume from the run root's event logs.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 

@@ -124,6 +124,7 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
             return LoopServices(
                 client=client,
                 source=StoredProposal(proposal),
+                describe_idea=lambda idea: {"idea": idea},
                 checks=CHECKS,
                 rubric=GlmRubric(
                     CallStore(root / "calls", client), LLMPolicy(), RUBRIC_SAMPLES, {proposal.header.source: record}

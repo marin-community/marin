@@ -29,7 +29,11 @@ Run root layout::
     items/<item_id>/verdict.json               triage verdict on the current proposal
     items/<item_id>/rounds/<round>/            program.py, program.json, author/, draft/, scratch/,
                                                build-failures/<n>.txt, evidence-<digest12>/
+    items/idea--<idea_id>/idea.json            the idea as ``LoopServices.describe_idea`` records it
     items/idea--<idea_id>/proposals/<item_id>.md   each proposal as its idea's batch produced it
+    items/idea--<idea_id>/batches/<reproposal>/plan/          request.json, completions.json
+    items/idea--<idea_id>/batches/<reproposal>/slots/<slot>/  request.json, completions.json, and
+                                               repair_error.txt or failure.txt when the slot has one
     cache/                                     the step cache shared by every item
     ledger/<item_id>.jsonl                     the item's spans and events
 """
@@ -39,20 +43,23 @@ import logging
 import time
 import traceback
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+
+from pydantic import TypeAdapter
 
 from taskforge.build.author import PROGRAM_FILE, Revision, author, load_program
 from taskforge.build.infrastructure import HOST_REJECTIONS, BuildInfrastructureFailure
 from taskforge.build.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
 from taskforge.build.sdk import BuildFailure, BuildServices
 from taskforge.build.step import CacheStatus
-from taskforge.canonical import sha256_hex, write_atomic
+from taskforge.canonical import pretty_json, sha256_hex, write_atomic
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry, SpanFields, check_item_id, span
-from taskforge.llm.client import GlmClient, GlmUnavailable
+from taskforge.llm.client import Completion, GlmClient, GlmUnavailable
+from taskforge.llm.policy import Message
 from taskforge.llm.recording import record_completions
 from taskforge.loop.events import (
     FINAL,
@@ -72,7 +79,7 @@ from taskforge.loop.events import (
 )
 from taskforge.loop.policy import LoopPolicy
 from taskforge.proposal.model import ProposalFormatError, TaskProposal, parse, render
-from taskforge.proposal.source import ProposalSource
+from taskforge.proposal.source import ProposalBatch, ProposalSource, SlotFailure
 from taskforge.review.decision import (
     DECISION_FILE,
     Accept,
@@ -109,12 +116,22 @@ VERDICT_FILE = "verdict.json"
 CALIBRATION_FILE = "calibration.json"
 FAILURES_DIR = "build-failures"
 IDEA_PREFIX = "idea--"
+IDEA_FILE = "idea.json"
+BATCHES_DIR = "batches"
+PLAN_DIR = "plan"
+SLOTS_DIR = "slots"
+REQUEST_FILE = "request.json"
+COMPLETIONS_FILE = "completions.json"
+REPAIR_ERROR_FILE = "repair_error.txt"
+SLOT_FAILURE_FILE = "failure.txt"
 
 FAILURE_CHARS = 6000
 """The tail of a build failure's traceback kept for the author's revision."""
 ATTR_CHARS = 500
 """Longest free text kept in an event attribute; the full text stays in the item directory."""
 DIGEST_CHARS = 12
+
+_COMPLETIONS: TypeAdapter[tuple[Completion, ...]] = TypeAdapter(tuple[Completion, ...])
 
 NOOP_FAILURE = """\
 The revised program produced the identical task, so the findings below still stand. Change the steps \
@@ -128,6 +145,7 @@ class LoopServices[IdeaT]:
     Attributes:
         client: The run's one GLM client.
         source: Turns ideas into proposal batches.
+        describe_idea: The JSON-serialisable record of an idea, written once to its ``idea.json``.
         checks: Triage's structural checks.
         rubric: Triage's rubric program.
         check_context: What the structural checks read besides the proposal.
@@ -144,6 +162,7 @@ class LoopServices[IdeaT]:
 
     client: GlmClient
     source: ProposalSource[IdeaT]
+    describe_idea: Callable[[IdeaT], Mapping[str, object]]
     checks: Sequence[Check]
     rubric: RubricProgram
     check_context: CheckContext
@@ -216,10 +235,15 @@ async def run_idea[IdeaT](
     Each batch's failed slots are recorded as ``SLOT_FAILED`` and its siblings proceed. A batch with
     zero proposals is re-proposed up to ``policy.max_idea_reproposals`` times; then the idea is
     ``IDEA_EXHAUSTED`` and yields nothing. A resumed idea returns its recorded batch without a call.
+    The idea's record and every batch's requests and completions are kept in the idea's directory.
     """
     item_id = idea_item_id(idea_id)
     log = EventLog(services.root, services.ledger, item_id)
-    batch_dir = services.root / ITEMS_DIR / item_id / PROPOSALS_DIR
+    idea_dir = services.root / ITEMS_DIR / item_id
+    batch_dir = idea_dir / PROPOSALS_DIR
+    idea_dir.mkdir(parents=True, exist_ok=True)
+    if not (idea_dir / IDEA_FILE).exists():
+        write_atomic(idea_dir / IDEA_FILE, pretty_json(services.describe_idea(idea)).encode())
     while True:
         state = derive_idea_state(log.entries())
         if state.items is not None:
@@ -241,6 +265,7 @@ async def run_idea[IdeaT](
         items = [item_id_for(proposal) for proposal in batch.proposals]
         if len(set(items)) != len(items) or any("," in item for item in items):
             raise ValueError(f"idea {idea_id}: proposal ids must be distinct and comma-free, got {items}")
+        _keep_batch(idea_dir / BATCHES_DIR / str(state.reproposals), batch)
         batch_dir.mkdir(parents=True, exist_ok=True)
         for item, proposal in zip(items, batch.proposals, strict=True):
             write_atomic(batch_dir / f"{item}.md", render(proposal).encode())
@@ -257,6 +282,24 @@ async def run_idea[IdeaT](
             failures=str(len(batch.failures)),
             reproposal=str(state.reproposals),
         )
+
+
+def _keep_call(directory: Path, request: Sequence[Message], completions: Sequence[Completion]) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    write_atomic(directory / REQUEST_FILE, pretty_json(list(request)).encode())
+    write_atomic(directory / COMPLETIONS_FILE, _COMPLETIONS.dump_json(tuple(completions), indent=2))
+
+
+def _keep_batch(directory: Path, batch: ProposalBatch) -> None:
+    """Write the planning call and each slot's calls, repair error or failure under ``directory``."""
+    _keep_call(directory / PLAN_DIR, batch.planning_request, batch.planning)
+    for outcome in batch.slots:
+        slot_dir = directory / SLOTS_DIR / str(outcome.slot)
+        _keep_call(slot_dir, outcome.request, outcome.completions)
+        if isinstance(outcome, SlotFailure):
+            write_atomic(slot_dir / SLOT_FAILURE_FILE, outcome.error.encode())
+        elif outcome.repair_error is not None:
+            write_atomic(slot_dir / REPAIR_ERROR_FILE, outcome.repair_error.encode())
 
 
 @dataclass(frozen=True)

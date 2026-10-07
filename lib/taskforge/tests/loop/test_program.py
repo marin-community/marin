@@ -5,10 +5,12 @@
 validation through RolloutEngine, and fakes only at the source, the rubric and the rollout model."""
 
 import asyncio
+import json
 from collections import Counter
 from dataclasses import replace
 
 import pytest
+from pydantic import TypeAdapter
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Machine, MachineSpec
 from taskcompendium.environment import EnvironmentKind
@@ -16,8 +18,10 @@ from taskcompendium.environment import EnvironmentKind
 from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.build.run import item_id_for
 from taskforge.ledger.records import EntryKind
+from taskforge.llm.client import Completion
 from taskforge.loop.events import EventKind, Phase, RevisionKind, Terminal, build_host_failures, derive_state
 from taskforge.loop.program import NOOP_FAILURE, idea_item_id, run_idea, run_item
+from taskforge.proposal.model import render
 from taskforge.review.decision import DECISION_FILE, Accept, Reject, RejectKind, Repair, load_decision
 from taskforge.review.rules import STAGED_BRIEF
 from taskforge.triage.verdict import TriageDecision
@@ -27,6 +31,7 @@ from taskforge.validate.outcome import TrialKind
 
 IDEA = "d00.arithmetic.products"
 CORRECT = "ANSWER = 42"
+COMPLETIONS = TypeAdapter(tuple[Completion, ...])
 
 
 def kinds(loop, item_id: str) -> list[str]:
@@ -97,6 +102,34 @@ async def test_an_idea_whose_batches_are_empty_is_exhausted_after_its_reproposal
         EventKind.PROPOSED,
         EventKind.IDEA_EXHAUSTED,
     ]
+
+
+async def test_an_idea_keeps_its_record_and_every_batch_s_calls_beside_its_proposals(loop, programs):
+    first, second = programs.proposal(1), programs.proposal(2)
+    loop.source.batches += [("bad front matter",), (first, "slot 1 front matter is not YAML", second)]
+    loop.source.repaired = frozenset({2})
+
+    async with loop.services() as services:
+        assert await run_idea(IDEA, "idea", programs.policy(max_idea_reproposals=1), services) == (first, second)
+
+    idea_dir = loop.root / "items" / idea_item_id(IDEA)
+    assert json.loads((idea_dir / "idea.json").read_text()) == {"idea": "idea", "kind": "test"}
+    empty, accepted = idea_dir / "batches" / "0", idea_dir / "batches" / "1"
+    assert (empty / "slots" / "0" / "failure.txt").read_text() == "bad front matter"
+    plan = accepted / "plan"
+    assert json.loads((plan / "request.json").read_text()) == [{"role": "user", "content": "plan 2 slots for idea"}]
+    assert [c.content for c in COMPLETIONS.validate_json((plan / "completions.json").read_text())] == ["plan"]
+    slots = accepted / "slots"
+    assert sorted(path.name for path in slots.iterdir()) == ["0", "1", "2"]
+    assert json.loads((slots / "0" / "request.json").read_text()) == [
+        {"role": "user", "content": "write slot 0 of idea"}
+    ]
+    assert not (slots / "0" / "repair_error.txt").exists() and not (slots / "0" / "failure.txt").exists()
+    assert (slots / "1" / "failure.txt").read_text() == "slot 1 front matter is not YAML"
+    assert len(COMPLETIONS.validate_json((slots / "1" / "completions.json").read_text())) == 2
+    assert (slots / "2" / "repair_error.txt").read_text() == "front matter missing"
+    repaired = COMPLETIONS.validate_json((slots / "2" / "completions.json").read_text())
+    assert [c.content for c in repaired] == ["not a proposal", render(second)]
 
 
 async def test_a_process_killed_mid_trials_resumes_without_repeating_finished_work(loop, programs, fake_glm, crash):
