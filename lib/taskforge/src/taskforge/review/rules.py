@@ -56,8 +56,9 @@ fails. Prototype the grader on a different submission of the same kind:"""
 
 NOTES_HEADER = """\
 Validation also observed the adversary passes below. They are recorded, not defects to fix: in each the \
-adversary read the task's inputs or stated a reading that did not change the answer, and was graded correct for \
-a correct answer. Do not add controls for them. Mention them only if the finding you are fixing is related."""
+adversary either read the task's inputs and submitted the real answer against its orders, or passed under a \
+stated reading whose submission could not be compared with the honest answer. Do not add controls for them. \
+Mention them only if the finding you are fixing is related."""
 
 STAGED_BRIEF = """\
 Staged tasks are not validated. Build the sequence as separate single-stage tasks whose environment \
