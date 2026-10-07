@@ -64,6 +64,8 @@ def git_image(tmp_path):
     (repository / "value.txt").write_text("broken\n")
     for command in (
         ("git", "init", "-q"),
+        # Keep Git maintenance from changing files during the image copy.
+        ("git", "config", "maintenance.auto", "false"),
         ("git", "config", "user.name", "Test Fixture"),
         ("git", "config", "user.email", "fixture@example.test"),
         ("git", "add", "."),
