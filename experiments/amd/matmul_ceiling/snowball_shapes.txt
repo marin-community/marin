@@ -9,6 +9,6 @@
 4096x2560x2560     # shared expert down projection
 4096x128256x2560   # lm head
 # Backward weight gradients, contracting over tokens
-2560x2560x4096
-2560x5120x4096
-2560x128256x4096
+2560x2560x4096     # q, attention output and shared expert down weight gradients
+2560x5120x4096     # shared expert gate and up weight gradients
+2560x128256x4096   # lm head weight gradient

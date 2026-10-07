@@ -20,13 +20,18 @@ def read_results(path: Path) -> tuple[RunHeader, list[ShapeResult]]:
     return RunHeader(**lines[0]["header"]), [ShapeResult(**row) for row in lines[1:]]
 
 
-def snowball_shape_names() -> dict[str, str]:
-    names = {}
+def snowball_shape_labels() -> dict[str, str]:
+    """Map each Snowball shape to its labels, joining the labels of a shape listed on several lines."""
+    labels: dict[str, list[str]] = {}
     for line in SNOWBALL_SHAPES.read_text().splitlines():
         shape, _, comment = line.partition("#")
-        if shape.strip():
-            names.setdefault(shape.strip(), comment.strip() or "weight gradient")
-    return names
+        shape, comment = shape.strip(), comment.strip()
+        if not shape:
+            continue
+        if not comment:
+            raise ValueError(f"{SNOWBALL_SHAPES.name}: shape {shape} has no label")
+        labels.setdefault(shape, []).append(comment)
+    return {shape: ", ".join(parts) for shape, parts in labels.items()}
 
 
 def main() -> None:
@@ -35,7 +40,7 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=5)
     args = parser.parse_args()
 
-    snowball = snowball_shape_names()
+    snowball = snowball_shape_labels()
     for path in args.results:
         header, results = read_results(path)
         xla_flags = header.xla_flags.strip()
