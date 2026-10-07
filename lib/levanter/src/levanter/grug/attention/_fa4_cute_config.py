@@ -121,6 +121,24 @@ def sm100_flash4_cute_kernel_config() -> Flash4CuteKernelConfig:
     )
 
 
+SM90_BACKWARD_NARROW_KEY_TILE = Flash4CuteSm90BackwardConfig(
+    tile=(64, 64),
+    num_threads=384,
+    num_stages_q=1,
+    num_stages_do=1,
+    num_stages_pds=1,
+    sdp_swap_ab=False,
+    dkv_swap_ab=False,
+    dq_swap_ab=False,
+    atom_layout_m_sdp=1,
+    atom_layout_n_dkv=1,
+    atom_layout_m_dq=1,
+    num_warp_groups=2,
+)
+"""The SM90 backward for head dims above 192, also the fallback when a wider key tile does not divide a banded
+relative-position bias's extent."""
+
+
 def sm90_flash4_cute_backward_config(
     head_dim: int,
     *,
@@ -194,17 +212,4 @@ def sm90_flash4_cute_backward_config(
             atom_layout_m_dq=1,
             num_warp_groups=2,
         )
-    return Flash4CuteSm90BackwardConfig(
-        tile=(64, 64),
-        num_threads=384,
-        num_stages_q=1,
-        num_stages_do=1,
-        num_stages_pds=1,
-        sdp_swap_ab=False,
-        dkv_swap_ab=False,
-        dq_swap_ab=False,
-        atom_layout_m_sdp=1,
-        atom_layout_n_dkv=1,
-        atom_layout_m_dq=1,
-        num_warp_groups=2,
-    )
+    return SM90_BACKWARD_NARROW_KEY_TILE

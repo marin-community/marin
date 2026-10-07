@@ -15,7 +15,9 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
+from levanter.grug.attention._inkling_relpos import rel_extent_of_band
 from levanter.grug.attention._fa4_cute_config import (
+    SM90_BACKWARD_NARROW_KEY_TILE,
     SM100_GQA_RATIOS,
     SM100_HEAD_DIM,
     Flash4CuteKernelConfig,
@@ -317,9 +319,14 @@ def _fa4_cute_attention_forward_sharded(
     return _local_fa4_attention(q, k, v, lower_bounds, valid, *rel_bias_args)
 
 
-def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
+def _segmented_kernel_config(head_dim: int, rel_extent: int | None = None) -> Flash4CuteKernelConfig:
     arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
+    sm90 = kernel_config.sm90_backward
+    if rel_extent is not None and sm90 is not None and rel_extent % sm90.tile[1]:
+        # The SM90 backward for head dims 129-192 tiles keys by 96, which a banded rel_bias extent (a power of
+        # two) never divides; its 64-wide schedule does.
+        kernel_config = replace(kernel_config, sm90_backward=SM90_BACKWARD_NARROW_KEY_TILE)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
     # flash_attn/cute/interface.py. This Grug port is not that native SM100
@@ -378,7 +385,14 @@ def gpu_fa4_cute_attention(
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
     return _gpu_fa4_cute_attention(
-        q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]), rel_bias=rel_bias
+        q,
+        k,
+        v,
+        mask,
+        kernel_config=_segmented_kernel_config(
+            q.shape[-1], None if rel_bias is None else rel_extent_of_band(rel_bias)
+        ),
+        rel_bias=rel_bias,
     )
 
 
