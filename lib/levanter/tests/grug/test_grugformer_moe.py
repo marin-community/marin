@@ -1755,18 +1755,73 @@ def _filled_transport_buffer(fill: float):
     return transport_buffer
 
 
+# The unwritten-rows test's layout: with two GPUs on the expert axis, each holds 6 experts and runs
+# them in two chunks of 3, as the hero's GPUs do.
+_UNWRITTEN_ROWS_EXPERTS = 12
+_UNWRITTEN_ROWS_RANDOM_ROUTINGS = 16
+
+
+def _unwritten_rows_routings(
+    *, tokens: int, num_experts: int, topk: int, shards: int
+) -> list[tuple[str, jax.Array, jax.Array]]:
+    """Routings that leave transport rows unwritten in different ways: (name, selected, valid).
+
+    Experts ``[0, 6)`` live on the first expert-axis rank and ``[6, 12)`` on the second; each rank's
+    chunks hold three experts. Token shards are contiguous blocks of ``tokens // shards``.
+    """
+    local = num_experts // 2
+    chunk = local // 2
+    every_fourth_padded = jnp.arange(tokens) % 4 != 1
+
+    def random_routing(seed: int) -> jax.Array:
+        return jax.random.randint(jax.random.key(seed), (tokens, topk), 0, num_experts, dtype=jnp.int32)
+
+    routings = [
+        (f"random-{seed}", random_routing(seed), every_fourth_padded)
+        for seed in range(_UNWRITTEN_ROWS_RANDOM_ROUTINGS)
+    ]
+    base = random_routing(100)
+    per_shard = tokens // shards
+    first_shard = jnp.arange(tokens) < per_shard
+    # Shard i's tokens pick experts 3i and 3i + 1 (mod 12), so consecutive shards use different chunks.
+    pair_start = (jnp.arange(tokens) // per_shard * chunk) % num_experts
+    spread_pairs = jnp.stack([pair_start, pair_start + 1], axis=1).astype(jnp.int32)
+    routings += [
+        # An expert that no token selects has an empty group on every receiver.
+        ("expert-unused", jnp.where(base == 0, 1, base), every_fourth_padded),
+        # The second rank's first chunk receives no rows at all.
+        (
+            "chunk-unused",
+            jnp.where((base >= local) & (base < local + chunk), base - local, base),
+            every_fourth_padded,
+        ),
+        # The second rank receives no rows in either chunk, and the first rank drops many.
+        ("rank-unused", base % local, every_fourth_padded),
+        # The first shard sends nothing.
+        ("sender-padded", base, every_fourth_padded & ~first_shard),
+        # Every token picks the same two experts: nearly every assignment drops.
+        ("two-experts", jnp.broadcast_to(jnp.array([3, 4], jnp.int32), (tokens, topk)), every_fourth_padded),
+        # One valid token per shard, its two experts in one chunk that no other valid token uses:
+        # nothing drops, and most of each receiver's capacity stays unwritten.
+        ("mostly-padded", spread_pairs, jnp.arange(tokens) % per_shard == 0),
+    ]
+    return routings
+
+
 def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(monkeypatch: pytest.MonkeyPatch):
     # The transport buffers start with unspecified contents, and every consumer must read only the
-    # rows a collective wrote. With drops and padding, many rows stay unwritten. Filling them with
-    # NaN instead of zero must change no output or gradient, in the forward, the backward, or a
-    # recompute, so a reader of an unwritten row anywhere in the layer fails here.
+    # rows a collective wrote. Filling them with NaN instead of zero must change no output or
+    # gradient, in the forward, the backward, or a recompute, so a reader of an unwritten row
+    # anywhere in the layer fails here. The routings cover drops, padding, empty expert groups and
+    # chunks, a receiver and a sender with no rows, and multi-expert chunks, all in one executable.
     mesh = _make_ep_mesh_or_none()
     if mesh is None or jax.devices()[0].platform != "gpu":
         pytest.skip("requires an even number of >=2 GPUs")
 
     tokens = len(jax.devices()) * 8
-    hidden_dim, intermediate_dim, num_experts, topk = 16, 24, 4, 2
-    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+    hidden_dim, intermediate_dim, topk = 16, 24, 2
+    num_experts = _UNWRITTEN_ROWS_EXPERTS
+    x, _selected, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(41),
         tokens=tokens,
         hidden_dim=hidden_dim,
@@ -1774,20 +1829,19 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(monkeypatch: pytest
         num_experts=num_experts,
         topk=topk,
     )
-    token_valid = jnp.arange(tokens) % 4 != 1
     cotangent = jax.random.normal(jax.random.key(43), (tokens, hidden_dim), dtype=jnp.bfloat16)
 
     batch = NamedSharding(mesh, P(("data", "expert"), None))
+    token_axis = NamedSharding(mesh, P(("data", "expert")))
     experts = NamedSharding(mesh, P("expert", None, None))
-    x, selected_experts, combine_weights, cotangent = (
+    x, combine_weights, cotangent = (
         jax.sharding.reshard(a, batch)
-        for a in (x.astype(jnp.bfloat16), selected_experts, combine_weights.astype(jnp.bfloat16), cotangent)
+        for a in (x.astype(jnp.bfloat16), combine_weights.astype(jnp.bfloat16), cotangent)
     )
-    token_valid = jax.sharding.reshard(token_valid, NamedSharding(mesh, P(("data", "expert"))))
     w_up_gate = jax.sharding.reshard(w_up_gate.astype(jnp.bfloat16), experts)
     w_down = jax.sharding.reshard(w_down.astype(jnp.bfloat16), experts)
 
-    def layer(x, w_up_gate, w_down, combine_weights):
+    def layer(x, w_up_gate, w_down, combine_weights, selected_experts, token_valid):
         return moe_mlp(
             x,
             selected_experts,
@@ -1801,33 +1855,41 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(monkeypatch: pytest
             capacity_factor=0.5,
         )
 
-    def loss(*args):
+    def loss(x, w_up_gate, w_down, combine_weights, routing):
         # A fresh function for each fill: jax.checkpoint caches its trace by function, and a cached
         # trace would keep the previous fill in the recompute and the backward.
-        out, _ = jax.checkpoint(lambda *operands: layer(*operands))(*args)
+        out, _ = jax.checkpoint(lambda *operands: layer(*operands))(x, w_up_gate, w_down, combine_weights, *routing)
         return jnp.sum(out * cotangent)
 
-    def run(*args):
-        out, counts = layer(*args)
-        return out, counts.dropped, jax.grad(loss, argnums=range(4))(*args)
+    def run(x, w_up_gate, w_down, combine_weights, routing):
+        out, counts = layer(x, w_up_gate, w_down, combine_weights, *routing)
+        return out, counts.dropped, jax.grad(loss, argnums=range(4))(x, w_up_gate, w_down, combine_weights, routing)
 
     def zero_and_nan(*args):
-        # One executable: each further program with ragged transports asks NCCL for another
-        # symmetric-memory window, which a preallocated test process may not have room for.
+        # One executable for every routing: each further program with ragged transports asks NCCL
+        # for another symmetric-memory window, which a preallocated test process may not have room for.
         results = []
         for fill in (0.0, jnp.nan):
             monkeypatch.setattr(ep_ragged_all_to_all, "_transport_buffer", _filled_transport_buffer(fill))
             results.append(run(*args))
         return results
 
+    routings = _unwritten_rows_routings(tokens=tokens, num_experts=num_experts, topk=topk, shards=len(jax.devices()))
+    dropped = {}
     with jax.set_mesh(mesh):
-        zero_filled, nan_filled = jax.jit(zero_and_nan)(x, w_up_gate, w_down, combine_weights)
+        step = jax.jit(zero_and_nan)
+        for name, selected_experts, token_valid in routings:
+            routing = (jax.sharding.reshard(selected_experts, batch), jax.sharding.reshard(token_valid, token_axis))
+            zero_filled, nan_filled = step(x, w_up_gate, w_down, combine_weights, routing)
+            dropped[name] = int(zero_filled[1])
+            for zero, nan in zip(jax.tree.leaves(zero_filled), jax.tree.leaves(nan_filled), strict=True):
+                nan = np.asarray(nan, dtype=np.float32)
+                assert np.isfinite(nan).all(), f"{name}: a NaN-filled unwritten row reached an output"
+                np.testing.assert_array_equal(nan, np.asarray(zero, dtype=np.float32), err_msg=name)
 
-    assert int(zero_filled[1]) > 0, "the inputs must drop assignments, or no row stays unwritten"
-    for zero, nan in zip(jax.tree.leaves(zero_filled), jax.tree.leaves(nan_filled), strict=True):
-        nan = np.asarray(nan, dtype=np.float32)
-        assert np.isfinite(nan).all()
-        np.testing.assert_array_equal(nan, np.asarray(zero, dtype=np.float32))
+    # The routings must do what they claim, or the cases they name go untested.
+    assert dropped["two-experts"] > 0 and dropped["rank-unused"] > 0, dropped
+    assert dropped["mostly-padded"] == 0, dropped
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
