@@ -68,6 +68,29 @@ class BatchArtifactMissingError(FileNotFoundError):
     status_code = 404
 
 
+def _missing_batch_artifact(path: str, request_method: str, status_code: int) -> bool:
+    if status_code != 404 or request_method != "GET":
+        return False
+    parts = path.split("/")
+    return (len(parts) == 2 and parts[0] == "batches" and bool(parts[1])) or (
+        len(parts) == 3 and parts[0] == "files" and bool(parts[1]) and parts[2] == "content"
+    )
+
+
+def _http_error_details(error: urllib.error.HTTPError, token: str) -> tuple[str, float | None]:
+    """Retain bounded provider evidence after redacting credentials."""
+    try:
+        body = error.read(MAX_ERROR_BODY_BYTES + len(token.encode())).decode("utf-8", errors="replace")
+        if token:
+            body = body.replace(token, "[REDACTED]")
+        body = body.encode("utf-8")[:MAX_ERROR_BODY_BYTES].decode("utf-8", errors="ignore")
+        header = error.headers.get("Retry-After")
+        detail = f"{error}; Retry-After={header[:256] if header is not None else None!r}; body={body!r}"
+        return detail, _retry_after_delay(header)
+    finally:
+        error.close()
+
+
 def jsonl_text(rows: Sequence[Mapping[str, Any]]) -> str:
     return "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
 
@@ -144,15 +167,7 @@ class OpenAIBatchClient:
                 retry_after = None
                 missing_artifact = False
                 if isinstance(error, urllib.error.HTTPError):
-                    parts = path.split("/")
-                    missing_artifact = (
-                        error.code == 404
-                        and request.method == "GET"
-                        and (
-                            (len(parts) == 2 and parts[0] == "batches" and bool(parts[1]))
-                            or (len(parts) == 3 and parts[0] == "files" and bool(parts[1]) and parts[2] == "content")
-                        )
-                    )
+                    missing_artifact = _missing_batch_artifact(path, request.method, error.code)
                     if error.code not in RETRYABLE_HTTP_STATUSES and not missing_artifact:
                         raise
                     if missing_artifact:
@@ -160,18 +175,7 @@ class OpenAIBatchClient:
                         # vanished batch or file cannot restore provider state.
                         safe_to_repeat = False
                     safe_to_repeat |= error.code == 429
-                    try:
-                        body = error.read(MAX_ERROR_BODY_BYTES + len(self.token.encode())).decode(
-                            "utf-8", errors="replace"
-                        )
-                        if self.token:
-                            body = body.replace(self.token, "[REDACTED]")
-                        body = body.encode("utf-8")[:MAX_ERROR_BODY_BYTES].decode("utf-8", errors="ignore")
-                        header = error.headers.get("Retry-After")
-                        retry_after = _retry_after_delay(header)
-                        detail += f"; Retry-After={header[:256] if header is not None else None!r}; body={body!r}"
-                    finally:
-                        error.close()
+                    detail, retry_after = _http_error_details(error, self.token)
                 if self.token:
                     detail = detail.replace(self.token, "[REDACTED]")
                 if missing_artifact:

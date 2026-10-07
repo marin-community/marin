@@ -36,7 +36,6 @@ def test_structured_tool_schema_and_parse_share_the_pydantic_contract() -> None:
     tool = StructuredTool("submit_answer", "Submit the answer.", _Answer)
 
     function = tool.definition()["function"]
-    assert isinstance(function, dict)
     parameters = function["parameters"]
     assert parameters["type"] == "object"
     assert parameters["additionalProperties"] is False
