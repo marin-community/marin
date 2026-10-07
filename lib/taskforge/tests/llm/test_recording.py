@@ -84,11 +84,10 @@ class Answer(BaseModel):
     value: int
 
 
-async def test_structured_call_records_both_requests_and_their_attempts(fake_glm, client):
+async def test_structured_call_records_both_requests_and_their_attempts(fake_glm, client, ledger):
     fake_glm.status(429, "slow down")
     fake_glm.stream(tool_calls=(("answer", '{"value": "x"}'),), prompt_tokens=10, completion_tokens=4)
     fake_glm.stream(tool_calls=(("answer", '{"value": 7}'),), prompt_tokens=20, completion_tokens=3)
-    ledger = ListLedger()
     tool = StructuredTool(name="answer", description="answer", output_type=Answer)
 
     result = await recorded_structured(
