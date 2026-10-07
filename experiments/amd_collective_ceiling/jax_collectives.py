@@ -4,9 +4,9 @@
 """Measure the collective bandwidth JAX reaches across the GPUs of one node.
 
 Times ``all_gather``, ``psum_scatter`` (reduce-scatter), ``psum`` (all-reduce) and ``all_to_all``
-inside ``shard_map`` over a 1-D mesh of every local device, at a list of message sizes. The timing
-follows ``jax_matmul.py`` in the matmul-ceiling study: compile once, run back to back for
-``--warmup-seconds``, then report the median of ``--repeats`` windows of about ``--window-seconds``.
+inside ``shard_map`` over a 1-D mesh of every local device, at a list of message sizes. Each case
+compiles once, runs back to back for ``--warmup-seconds``, then reports the median of ``--repeats``
+windows of about ``--window-seconds``.
 
 Sizes and bus bandwidth follow rccl-tests: the size is the full (gathered) buffer for all-gather and
 reduce-scatter, the per-rank buffer for all-reduce, and the per-rank send buffer for all-to-all.
@@ -38,9 +38,10 @@ from jax.sharding import PartitionSpec as P
 logger = logging.getLogger(__name__)
 
 AXIS = "x"
+OPS = ("all_gather", "reduce_scatter", "all_reduce", "all_to_all")
 DTYPES = {"bfloat16": jnp.bfloat16, "float32": jnp.float32}
-# The June model's EP all-gather output at batch 64: 262,144 tokens x 2,560 hidden in bf16.
-MODEL_ROW_BYTES = 2560 * 2
+# Row width of the June model's EP all-gather output (262,144 tokens x 2,560 hidden at batch 64).
+MODEL_HIDDEN_DIM = 2560
 MATMUL_DIM = 8192
 # Chained matmuls in the overlap test: about 4-5 ms on MI350X, close to a 1.3 GB all-gather.
 MATMUL_CHAIN = 4
@@ -83,7 +84,7 @@ def _input_rows_per_rank(op: str, size_bytes: int, row_bytes: int, n: int) -> in
     return max(n, rows - rows % n)
 
 
-def _time(fn: Callable[[], object], *, warmup_seconds: float, window_seconds: float, repeats: int):
+def _time(fn: Callable[[], object], *, warmup_seconds: float, window_seconds: float, repeats: int) -> tuple[float, int]:
     jax.block_until_ready(fn())
     calls = 0
     start = time.perf_counter()
@@ -105,7 +106,7 @@ def _time(fn: Callable[[], object], *, warmup_seconds: float, window_seconds: fl
 
 def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, timing: dict) -> OpResult:
     n = mesh.size
-    hidden = MODEL_ROW_BYTES // 2
+    hidden = MODEL_HIDDEN_DIM
     row_bytes = hidden * jnp.dtype(DTYPES[dtype]).itemsize
     rows = _input_rows_per_rank(op, size_bytes, row_bytes, n)
     spec = P(AXIS)
@@ -156,7 +157,7 @@ def run_op(mesh: Mesh, op: str, dtype: str, size_bytes: int, *, overlap: bool, t
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ops", nargs="+", default=["all_gather", "reduce_scatter", "all_reduce", "all_to_all"])
+    parser.add_argument("--ops", nargs="+", default=list(OPS), choices=OPS)
     parser.add_argument("--dtypes", nargs="+", default=["bfloat16"], choices=sorted(DTYPES))
     parser.add_argument(
         "--sizes-mb",
