@@ -248,8 +248,15 @@ jobs:
           bash infra/tpu-ci/clean-tpu.sh
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
-          mkdir -p /tmp/uv-cache
-          chmod 777 /tmp/uv-cache
+          # The runner's startup script (infra/tpu-ci/vm_manager.py) creates this cache,
+          # owned by the container user, and pre-populates it with the locked TPU
+          # dependencies, so a fresh VM's first job does not download every package.
+          UV_CACHE_HOST=/var/cache/uv
+          if [ ! -d "$UV_CACHE_HOST" ]; then
+            echo "::error::$UV_CACHE_HOST is missing; the runner VM was not set up by infra/tpu-ci/vm_manager.py"
+            exit 1
+          fi
+          du -sh "$UV_CACHE_HOST"
           TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
           if [ -z "$TPU_TEST_PATHS" ]; then
             TPU_TEST_PATHS="lib/levanter/tests"
@@ -284,7 +291,7 @@ jobs:
             -e UV_CACHE_DIR=/tmp/uv-cache \
             -e UV_PROJECT_ENVIRONMENT=/tmp/uv-cache/levanter-tpu-venv \
             -v ${{ github.workspace }}:/workspace-src:ro \
-            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -v "$UV_CACHE_HOST":/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
