@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+import levanter.grug._moe.routing_top_k as routing_top_k_module
 from levanter.grug._moe.routing_top_k import routing_top_k, triton_top_k_indices
 from levanter.utils.jax_utils import is_rocm_backend
 
@@ -63,3 +64,14 @@ def test_routing_top_k_on_token_sharded_mesh_matches_lax_top_k_on_rocm():
     np.testing.assert_array_equal(np.asarray(indices), np.asarray(expected_indices))
     np.testing.assert_array_equal(np.asarray(values), np.asarray(expected_values))
     np.testing.assert_array_equal(np.asarray(grad), np.asarray(expected_grad))
+
+
+def test_routing_top_k_falls_back_to_lax_for_non_power_of_two_experts(monkeypatch):
+    monkeypatch.setattr(routing_top_k_module, "is_rocm_backend", lambda: True)
+    mesh = Mesh(np.asarray(jax.devices()), axis_names=("data",), axis_types=(AxisType.Explicit,))
+    x = _router_matrix("ties", 64 * len(jax.devices()), 24)
+    expected_values, expected_indices = jax.lax.top_k(x, 5)
+    with jax.set_mesh(mesh):
+        values, indices = routing_top_k(x, 5, mesh=mesh, batch_axes=("data",))
+    np.testing.assert_array_equal(np.asarray(indices), np.asarray(expected_indices))
+    np.testing.assert_array_equal(np.asarray(values), np.asarray(expected_values))

@@ -7,7 +7,8 @@ On ROCm, XLA lowers ``jax.lax.top_k`` over a ``[tokens, experts]`` router matrix
 28 launches and 0.57 ms per call for top-5 of 256 at 32,768 tokens per GPU. The kernel here reads each row once
 and takes ``k`` rounds of max and first-index-of-max in registers, which matches ``jax.lax.top_k`` exactly: the
 same indices in the same order, with ties going to the lower index. Values are gathered from the input outside the
-kernel, so gradients are those of ``jax.lax.top_k``. TPU and other GPUs keep ``jax.lax.top_k``.
+kernel, so gradients are those of ``jax.lax.top_k``. TPU, other GPUs and non-power-of-two expert counts keep
+``jax.lax.top_k``.
 """
 
 import functools
@@ -93,9 +94,11 @@ def routing_top_k(
 ) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
     """``jax.lax.top_k(x, k)`` over the expert axis of a token-sharded router matrix.
 
-    On ROCm this runs the Pallas-Triton kernel per token shard; elsewhere it is ``jax.lax.top_k``.
+    On ROCm with a power-of-two expert count this runs the Pallas-Triton kernel per token shard; otherwise it is
+    ``jax.lax.top_k``.
     """
-    if not is_rocm_backend():
+    experts = x.shape[-1]
+    if not is_rocm_backend() or experts & (experts - 1):
         return jax.lax.top_k(x, k)
     spec = P(batch_axes, None)
 
