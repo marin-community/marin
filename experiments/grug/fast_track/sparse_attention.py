@@ -87,6 +87,7 @@ def _sparse_math(
     *,
     window: int,
     topk: int,
+    dsa_topk: int,
     select_match: bool,
     block: int,
     compress: bool,
@@ -139,9 +140,9 @@ def _sparse_math(
             per_head = jax.nn.relu(jnp.einsum("bqgr,bkr->bqgk", lq, lightning.k.astype(jnp.float32)))
             visible = same & (dist >= 0)
             index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1e9)
-            kth = jax.lax.top_k(index_logits, topk)[0][..., -1:]
+            kth = jax.lax.top_k(index_logits, dsa_topk)[0][..., -1:]
             allowed = allowed | (visible & (index_logits >= kth))[:, None]
-        elif topk and not block_select:
+        if topk and not block_select:
             idx_q = jax.lax.dynamic_slice_in_dim(index, c0, chunk, axis=1)
             score = jnp.einsum("bqgr,bkgr->bgqk", idx_q, index)  # [B, G, C, S] against candidate m
             # Candidate m's follower m + 1 must be visible (m + 1 <= i) and outside the local window.
@@ -204,6 +205,7 @@ def sparse_index_attention(
     *,
     window: int,
     topk: int,
+    dsa_topk: int = 0,
     select_match: bool = False,
     block: int = 32,
     compress: bool = False,
@@ -216,6 +218,7 @@ def sparse_index_attention(
         *a,
         window=window,
         topk=topk,
+        dsa_topk=dsa_topk,
         select_match=select_match,
         block=block,
         compress=compress,
@@ -227,3 +230,37 @@ def sparse_index_attention(
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
     return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning)
+
+
+def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
+    """The MLA layer's sparse attention from its config and index parameters (``attn``: the MLA module)."""
+    cfg = attn.cfg
+    dsa_first = cfg.mla_sparse_index == SparseIndex.LIGHTNING
+    idx = jnp.zeros((*x.shape[:2], 1, 1))
+    if attn.w_sidx is not None:
+        flat = project(cfg, x, attn.w_sidx)
+        idx = rms_norm(flat.reshape(*flat.shape[:-1], -1, cfg.mla_sparse_index_dim))
+    lam = jnp.zeros((q.shape[2],)) if attn.sparse_lam is None else attn.sparse_lam
+    light = None
+    if attn.w_lq is not None and attn.w_lk is not None and attn.w_lw is not None:
+        xs = jax.lax.stop_gradient(x)
+        lq = project(cfg, xs, attn.w_lq)
+        lq = lq.reshape(*lq.shape[:-1], cfg.mla_sparse_index_heads, -1)
+        light = Lightning(lq, project(cfg, xs, attn.w_lk), project(cfg, xs, attn.w_lw), cfg.mla_sparse_kl_weight)
+    return sparse_index_attention(
+        q,
+        k,
+        v,
+        rel_bias,
+        segment_ids,
+        idx,
+        lam,
+        light,
+        window=cfg.mla_sparse_window,
+        topk=0 if dsa_first else cfg.mla_sparse_topk,
+        dsa_topk=cfg.mla_sparse_topk if dsa_first else cfg.mla_sparse_dsa_topk,
+        select_match=cfg.mla_sparse_select_match,
+        block=cfg.mla_sparse_block,
+        compress=cfg.mla_sparse_compress,
+        block_select=cfg.mla_sparse_index == SparseIndex.BLOCK,
+    )

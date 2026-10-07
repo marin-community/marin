@@ -82,7 +82,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.fast_track.sparse_attention import Lightning, SparseIndex, sparse_index_attention
+from experiments.grug.fast_track.sparse_attention import SparseIndex, mla_sparse_attention
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -985,6 +985,8 @@ class GrugModelConfig:
     mla_sparse_index: SparseIndex = SparseIndex.FOLLOW
     mla_sparse_index_heads: int = 4
     mla_sparse_kl_weight: float = 1.0
+    mla_sparse_dsa_topk: int = 0
+    """With the follow index: also the top this many keys of a lightning indexer (the union of both)."""
     mla_sparse_index_per_head: bool = False
     mla_sparse_select_match: bool = False
     """Also attend to the matched tokens themselves, not only their followers."""
@@ -2367,7 +2369,9 @@ class CausalSelfAttention(eqx.Module):
             kv_mix = "kv" in cfg.latent_mix_sites
             match_dim = cfg.mla_shared_match_dim
             appended = cfg.mla_match_append != MatchAppend.OFF
-            lightning = cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.LIGHTNING
+            lightning = cfg.mla_sparse_dsa_topk > 0 or (
+                cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.LIGHTNING
+            )
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             shared_kvl = cfg.kv_shared_latent_dim
             kvl = cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)  # what w_uk / w_uv read
@@ -2989,36 +2993,7 @@ class CausalSelfAttention(eqx.Module):
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
         if self.cfg.mla and self.cfg.mla_sparse_window:
-            topk = self.cfg.mla_sparse_topk
-            r = self.cfg.mla_sparse_index_dim
-            idx = jnp.zeros((*x.shape[:2], 1, 1))
-            if self.w_sidx is not None:
-                idx = rms_norm(rearrange(_proj(self.cfg, x, self.w_sidx), "... (g r) -> ... g r", r=r))
-            lam = jnp.zeros((q.shape[2],)) if self.sparse_lam is None else self.sparse_lam
-            light = None
-            if self.w_lq is not None and self.w_lk is not None and self.w_lw is not None:
-                xs = jax.lax.stop_gradient(x)
-                g = self.cfg.mla_sparse_index_heads
-                lq = rearrange(_proj(self.cfg, xs, self.w_lq), "... (g r) -> ... g r", g=g)
-                light = Lightning(
-                    lq, _proj(self.cfg, xs, self.w_lk), _proj(self.cfg, xs, self.w_lw), self.cfg.mla_sparse_kl_weight
-                )
-            attn_out = sparse_index_attention(
-                q,
-                k,
-                kernel_v,
-                rel_bias,
-                sconv_segment_ids,
-                idx,
-                lam,
-                light,
-                window=self.cfg.mla_sparse_window,
-                topk=topk,
-                select_match=self.cfg.mla_sparse_select_match,
-                block=self.cfg.mla_sparse_block,
-                compress=self.cfg.mla_sparse_compress,
-                block_select=self.cfg.mla_sparse_index == SparseIndex.BLOCK,
-            )
+            attn_out = mla_sparse_attention(self, x, q, k, kernel_v, rel_bias, sconv_segment_ids, rms_norm, _proj)
         else:
             attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
@@ -8986,6 +8961,7 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         final_routing_renorm_sum=0.0,
         mla_sparse_window=cfg.mla_sparse_window if cfg.mla_sparse_tail else 0,
         mla_sparse_topk=cfg.mla_sparse_topk if cfg.mla_sparse_tail else 0,
+        mla_sparse_dsa_topk=cfg.mla_sparse_dsa_topk if cfg.mla_sparse_tail else 0,
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
