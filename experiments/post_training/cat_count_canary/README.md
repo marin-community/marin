@@ -130,7 +130,7 @@ responses that are exact. `eval/sampled/train/avg_score` is the stopping signal.
 Exact responses contain lowercase `cat` words separated by single spaces,
 with no punctuation or extra text. The scorer removes outer whitespace and
 trailing end-of-turn markers. `avg_score` is the shaped reward, not the exact
-rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/60d430cc9f36adfe40a017c71eccb02ba6978c97/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
+rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/a0fb65558994b8430c84a9876bd875f800300d65/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
 defines partial-count rewards and penalties.
 
 `--model` selects `qwen2.5-0.5b-instruct`, `qwen2.5-0.5b`, or `qwen3-0.6b`.
