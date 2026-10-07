@@ -9,6 +9,7 @@ them unless the interactive GLM-5.3 endpoint is configured through the environme
 
 ``fake_glm`` is a scripted fake of the GLM router: ``POST /v1/chat/completions`` streams queued
 responses and ``GET /health`` reports queued worker counts. It runs as a real local HTTP server.
+``ledger`` is an in-memory ``Ledger`` that keeps every recorded entry in ``entries``.
 """
 
 import json
@@ -22,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from taskforge.ledger.records import LedgerEntry
 from taskforge.llm.endpoint import GLM_MODEL
 
 BASE_URL_ENV = "TASKFORGE_GLM_BASE_URL"
@@ -74,6 +76,19 @@ def parallel_key() -> ParallelKey:
     return ParallelKey(read_key_line(Path(key_file).expanduser(), PARALLEL_KEY))
 
 
+class ListLedger:
+    def __init__(self) -> None:
+        self.entries: list[LedgerEntry] = []
+
+    def record(self, entry: LedgerEntry) -> None:
+        self.entries.append(entry)
+
+
+@pytest.fixture
+def ledger() -> ListLedger:
+    return ListLedger()
+
+
 @dataclass
 class ScriptedStream:
     events: list[dict | str]
@@ -109,10 +124,14 @@ class FakeGlm:
         send_done: bool = True,
         stall_after_first: bool = False,
         raw_payload: str | None = None,
+        prompt_token_ids: tuple[int, ...] = (),
+        token_ids: tuple[int, ...] = (),
     ) -> None:
         """Queue one streamed reply; ``tool_calls`` holds ``(name, arguments)`` pairs.
 
         ``raw_payload`` is sent verbatim as the second ``data:`` line, for malformed-stream tests.
+        ``prompt_token_ids`` and ``token_ids`` emulate vLLM's ``return_token_ids``: the first is sent on
+        the first chunk, the second with one logprob per token on the chunk that carries the finish reason.
         """
         deltas: list[dict] = [{"role": "assistant", "content": ""}]
         deltas += [{"reasoning": part} for part in _halves(reasoning)]
@@ -126,6 +145,11 @@ class FakeGlm:
             ]
         events = [{"choices": [{"index": 0, "delta": d, "finish_reason": None}]} for d in deltas]
         events[-1]["choices"][0]["finish_reason"] = finish
+        if prompt_token_ids:
+            events[0]["prompt_token_ids"] = list(prompt_token_ids)
+        if token_ids:
+            events[-1]["choices"][0]["token_ids"] = list(token_ids)
+            events[-1]["choices"][0]["logprobs"] = {"content": [{"token": str(t), "logprob": -0.5} for t in token_ids]}
         events.append(
             {
                 "choices": [],

@@ -10,7 +10,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineSpec, ShellSimBuiltins
 
-from taskforge.ledger.records import EntryKind, LedgerEntry
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import (
     INVALID_ARGUMENTS_KEY,
     AgentRun,
@@ -33,14 +33,6 @@ ECHO_SCHEMA = {
 }
 
 
-class ListLedger:
-    def __init__(self) -> None:
-        self.entries: list[LedgerEntry] = []
-
-    def record(self, entry: LedgerEntry) -> None:
-        self.entries.append(entry)
-
-
 def echo_tool(calls: list[Mapping[str, object]]) -> AgentTool:
     async def handler(arguments: Mapping[str, object]) -> str:
         calls.append(arguments)
@@ -49,11 +41,11 @@ def echo_tool(calls: list[Mapping[str, object]]) -> AgentTool:
     return AgentTool(name="echo", description="Echo text.", parameters=ECHO_SCHEMA, handler=handler)
 
 
-def run(fake_glm, tools, ledger=None, max_turns=8, policy=LLMPolicy()) -> AgentRun:
+def run(fake_glm, ledger, tools, max_turns=8, policy=LLMPolicy()) -> AgentRun:
     async def go() -> AgentRun:
         endpoint = GlmEndpoint(base_url=fake_glm.base_url, token="test-token", pool=Pool.HIGH)
         backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
-        record = CallLedger(ledger=ledger or ListLedger(), item_id="item-1", round=0, step="author")
+        record = CallLedger(ledger=ledger, item_id="item-1", round=0, step="author")
         async with GlmClient(endpoint, backoff=backoff) as client:
             return await run_agent(client, policy, MESSAGES, tools, max_turns, record)
 
@@ -64,15 +56,14 @@ def tool_messages(fake_glm, request: int) -> list[dict]:
     return [m for m in fake_glm.requests[request]["messages"] if m["role"] == "tool"]
 
 
-def test_tool_call_then_answer_replays_reasoning_and_records_turns(fake_glm):
+def test_tool_call_then_answer_replays_reasoning_and_records_turns(fake_glm, ledger):
     fake_glm.stream(
         reasoning="I should echo.", tool_calls=(("echo", '{"text": "hi"}'),), finish="tool_calls", completion_tokens=7
     )
     fake_glm.stream(content="done", reasoning="echoed", completion_tokens=3)
     calls: list[Mapping[str, object]] = []
-    ledger = ListLedger()
 
-    result = run(fake_glm, [echo_tool(calls)], ledger)
+    result = run(fake_glm, ledger, [echo_tool(calls)])
 
     assert result.stop is AgentStop.ANSWERED
     assert calls == [{"text": "hi"}]
@@ -104,13 +95,13 @@ def test_tool_call_then_answer_replays_reasoning_and_records_turns(fake_glm):
     ],
     ids=["unparseable", "not-an-object", "schema-violation", "unknown-tool"],
 )
-def test_bad_tool_call_returns_an_error_result_and_the_run_continues(fake_glm, name, arguments, outcome):
+def test_bad_tool_call_returns_an_error_result_and_the_run_continues(fake_glm, ledger, name, arguments, outcome):
     fake_glm.stream(tool_calls=((name, arguments),), finish="tool_calls")
     fake_glm.stream(tool_calls=(("echo", '{"text": "again"}'),), finish="tool_calls")
     fake_glm.stream(content="done")
     calls: list[Mapping[str, object]] = []
 
-    result = run(fake_glm, [echo_tool(calls)])
+    result = run(fake_glm, ledger, [echo_tool(calls)])
 
     assert result.stop is AgentStop.ANSWERED
     assert calls == [{"text": "again"}]
@@ -120,11 +111,11 @@ def test_bad_tool_call_returns_an_error_result_and_the_run_continues(fake_glm, n
     assert isinstance(replayed, dict)
 
 
-def test_unparseable_arguments_are_replayed_wrapped_in_an_object(fake_glm):
+def test_unparseable_arguments_are_replayed_wrapped_in_an_object(fake_glm, ledger):
     fake_glm.stream(tool_calls=(("echo", '{"text": "unterminated'),), finish="tool_calls")
     fake_glm.stream(content="done")
 
-    run(fake_glm, [echo_tool([])])
+    run(fake_glm, ledger, [echo_tool([])])
 
     replayed = fake_glm.requests[1]["messages"][2]["tool_calls"][0]["function"]["arguments"]
     assert json.loads(replayed) == {INVALID_ARGUMENTS_KEY: '{"text": "unterminated'}
@@ -136,7 +127,7 @@ def test_unparseable_arguments_are_replayed_wrapped_in_an_object(fake_glm):
     ids=["finish-length", "vllm-reports-tool-calls-at-budget"],
 )
 def test_length_cut_inside_a_tool_call_runs_complete_calls_and_returns_the_cut_one_as_an_error(
-    fake_glm, finish, completion_tokens
+    fake_glm, ledger, finish, completion_tokens
 ):
     fake_glm.stream(
         tool_calls=(("echo", '{"text": "whole"}'), ("echo", '{"text": "cut off he')),
@@ -147,7 +138,7 @@ def test_length_cut_inside_a_tool_call_runs_complete_calls_and_returns_the_cut_o
     fake_glm.stream(content="done")
     calls: list[Mapping[str, object]] = []
 
-    result = run(fake_glm, [echo_tool(calls)], policy=LLMPolicy(max_tokens=64))
+    result = run(fake_glm, ledger, [echo_tool(calls)], policy=LLMPolicy(max_tokens=64))
 
     assert result.stop is AgentStop.ANSWERED
     assert calls == [{"text": "whole"}, {"text": "retried"}]
@@ -155,35 +146,34 @@ def test_length_cut_inside_a_tool_call_runs_complete_calls_and_returns_the_cut_o
     assert "cut off by the output limit" in tool_messages(fake_glm, 1)[1]["content"]
 
 
-def test_length_cut_whose_arguments_happen_to_parse_is_still_not_executed(fake_glm):
+def test_length_cut_whose_arguments_happen_to_parse_is_still_not_executed(fake_glm, ledger):
     fake_glm.stream(tool_calls=(("echo", '{"text": "rm -rf /tmp/x"}'),), finish="length")
     fake_glm.stream(content="done")
     calls: list[Mapping[str, object]] = []
 
-    result = run(fake_glm, [echo_tool(calls)])
+    result = run(fake_glm, ledger, [echo_tool(calls)])
 
     assert calls == []
     assert result.turns[0].tool_results[0].outcome is ToolOutcome.TRUNCATED_CALL
 
 
-def test_reply_still_cut_off_after_continuations_stops_with_length(fake_glm):
+def test_reply_still_cut_off_after_continuations_stops_with_length(fake_glm, ledger):
     fake_glm.stream(content="partial", finish="length")
 
-    result = run(fake_glm, [echo_tool([])], policy=LLMPolicy(max_continuations=0))
+    result = run(fake_glm, ledger, [echo_tool([])], policy=LLMPolicy(max_continuations=0))
 
     assert result.stop is AgentStop.LENGTH
     assert result.messages[-1]["content"] == "partial"
 
 
-def test_context_filled_mid_run_returns_the_turns_so_far(fake_glm):
+def test_context_filled_mid_run_returns_the_turns_so_far(fake_glm, ledger):
     context_error = json.dumps({"error": {"message": "This model's maximum context length is 262144 tokens."}})
     fake_glm.stream(tool_calls=(("echo", '{"text": "one"}'),), finish="tool_calls")
     fake_glm.status(400, context_error)
     fake_glm.status(400, context_error)
     calls: list[Mapping[str, object]] = []
-    ledger = ListLedger()
 
-    result = run(fake_glm, [echo_tool(calls)], ledger=ledger)
+    result = run(fake_glm, ledger, [echo_tool(calls)])
 
     assert result.stop is AgentStop.CONTEXT
     assert calls == [{"text": "one"}]
@@ -193,28 +183,27 @@ def test_context_filled_mid_run_returns_the_turns_so_far(fake_glm):
     assert last_call.cause == "GlmContextExhausted"
 
 
-def test_max_turns_stops_after_running_the_last_turns_tools(fake_glm):
+def test_max_turns_stops_after_running_the_last_turns_tools(fake_glm, ledger):
     for text in ("one", "two"):
         fake_glm.stream(tool_calls=(("echo", json.dumps({"text": text})),), finish="tool_calls")
     calls: list[Mapping[str, object]] = []
 
-    result = run(fake_glm, [echo_tool(calls)], max_turns=2)
+    result = run(fake_glm, ledger, [echo_tool(calls)], max_turns=2)
 
     assert result.stop is AgentStop.MAX_TURNS
     assert calls == [{"text": "one"}, {"text": "two"}]
     assert result.messages[-1]["role"] == "tool"
 
 
-def test_tool_handler_exception_propagates_and_is_recorded(fake_glm):
+def test_tool_handler_exception_propagates_and_is_recorded(fake_glm, ledger):
     async def broken(arguments: Mapping[str, object]) -> str:
         raise ConnectionError("sandbox gone")
 
     tool = AgentTool(name="echo", description="Echo text.", parameters=ECHO_SCHEMA, handler=broken)
     fake_glm.stream(tool_calls=(("echo", '{"text": "hi"}'),), finish="tool_calls")
-    ledger = ListLedger()
 
     with pytest.raises(ConnectionError):
-        run(fake_glm, [tool], ledger)
+        run(fake_glm, ledger, [tool])
 
     assert (ledger.entries[-1].kind, ledger.entries[-1].cause) == (EntryKind.STEP, "ConnectionError")
 

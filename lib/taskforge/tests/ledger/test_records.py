@@ -8,16 +8,7 @@ import pytest
 from taskforge.ledger.records import EntryKind, LedgerEntry, span
 
 
-class ListLedger:
-    def __init__(self):
-        self.entries: list[LedgerEntry] = []
-
-    def record(self, entry: LedgerEntry) -> None:
-        self.entries.append(entry)
-
-
-def test_span_records_caller_fields_and_timing():
-    ledger = ListLedger()
+def test_span_records_caller_fields_and_timing(ledger):
     with span(ledger, EntryKind.LLM_CALL, item_id="i1", round=2, step="author", input_hash="in") as s:
         s.model = "glm-5.3"
         s.tokens_in, s.tokens_out, s.tokens_reasoning = 10, 20, 5
@@ -31,8 +22,7 @@ def test_span_records_caller_fields_and_timing():
     assert entry.ended >= entry.started
 
 
-def test_span_records_exception_class_as_cause_and_reraises():
-    ledger = ListLedger()
+def test_span_records_exception_class_as_cause_and_reraises(ledger):
     with pytest.raises(TimeoutError):
         with span(ledger, EntryKind.STEP, item_id="i1", round=0, step="run") as s:
             s.attrs["cmd"] = "pytest"
@@ -43,8 +33,7 @@ def test_span_records_exception_class_as_cause_and_reraises():
     assert entry.attrs == {"cmd": "pytest"}
 
 
-def test_span_records_task_cancellation():
-    ledger = ListLedger()
+def test_span_records_task_cancellation(ledger):
 
     async def work():
         with span(ledger, EntryKind.TRIAL, item_id="i1", round=0, step="trial-0"):
@@ -61,10 +50,10 @@ def test_span_records_task_cancellation():
     assert [e.cause for e in ledger.entries] == ["CancelledError"]
 
 
-def test_span_rejects_bad_item_id_before_running_the_block():
+def test_span_rejects_bad_item_id_before_running_the_block(ledger):
     ran = False
     with pytest.raises(ValueError):
-        with span(ListLedger(), EntryKind.STEP, item_id="../escape", round=0, step="build"):
+        with span(ledger, EntryKind.STEP, item_id="../escape", round=0, step="build"):
             ran = True
     assert not ran
 
@@ -91,8 +80,7 @@ def test_record_failure_does_not_replace_in_flight_cancellation():
     assert any("disk full" in note for note in cancelled.__notes__)
 
 
-def test_caller_classified_cause_wins_over_exception_class():
-    ledger = ListLedger()
+def test_caller_classified_cause_wins_over_exception_class(ledger):
     with pytest.raises(TimeoutError):
         with span(ledger, EntryKind.STEP, item_id="i1", round=0, step="run") as s:
             s.cause = "sandbox_timeout"
