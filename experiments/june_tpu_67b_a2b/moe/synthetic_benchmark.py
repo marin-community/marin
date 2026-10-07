@@ -105,7 +105,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
     parser.add_argument("--attention", choices=get_args(GrugAttentionImplementation), default="reference")
     parser.add_argument("--moe-impl", default="ring", help="MoE dispatch backend (default: ring).")
-    parser.add_argument("--capacity-factor", type=float, help="EP receiver capacity factor (default: model's 1.0).")
+    parser.add_argument(
+        "--capacity-factor", type=float, help="EP receiver capacity factor (default: GrugModelConfig's)."
+    )
     parser.add_argument(
         "--pooled-transport-capacity-factor",
         type=float,
