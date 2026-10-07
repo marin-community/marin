@@ -1,0 +1,518 @@
+{
+  "anchor": {
+    "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+  },
+  "donors": [
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92_fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab-c869d77c2f029573",
+      "revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04_fd07ef0f2b78a83099a0042e59c00de986e7b647-7774bde0c20b769f",
+      "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
+    }
+  ],
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/direct-late06-step20-io",
+  "parameters": {
+    "method": "average",
+    "coefficients": [
+      1.0,
+      0.0
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 42
+  },
+  "preserve_rows": {},
+  "tensor_coefficients": {
+    "model.layers.20.attn_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.attn_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.input_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp.experts.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp.experts.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp.experts.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp.router.bias": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp.router.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.mlp_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.post_attention_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.self_attn.attn_gate.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.self_attn.k_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.self_attn.o_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.self_attn.q_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.self_attn.v_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.shared_expert.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.shared_expert.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.20.shared_expert.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.attn_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.attn_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.input_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp.experts.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp.experts.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp.experts.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp.router.bias": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp.router.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.mlp_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.post_attention_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.self_attn.attn_gate.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.self_attn.k_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.self_attn.o_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.self_attn.q_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.self_attn.v_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.shared_expert.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.shared_expert.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.21.shared_expert.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.attn_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.attn_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.input_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp.experts.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp.experts.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp.experts.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp.router.bias": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp.router.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.mlp_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.post_attention_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.self_attn.attn_gate.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.self_attn.k_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.self_attn.o_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.self_attn.q_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.self_attn.v_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.shared_expert.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.shared_expert.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.22.shared_expert.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.attn_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.attn_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.input_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp.experts.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp.experts.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp.experts.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp.router.bias": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp.router.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.mlp_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.post_attention_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.self_attn.attn_gate.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.self_attn.k_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.self_attn.o_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.self_attn.q_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.self_attn.v_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.shared_expert.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.shared_expert.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.23.shared_expert.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.attn_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.attn_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.input_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp.experts.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp.experts.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp.experts.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp.router.bias": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp.router.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.mlp_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.post_attention_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.self_attn.attn_gate.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.self_attn.k_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.self_attn.o_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.self_attn.q_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.self_attn.v_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.shared_expert.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.shared_expert.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.24.shared_expert.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.attn_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.attn_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.input_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp.experts.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp.experts.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp.experts.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp.router.bias": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp.router.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.mlp_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.post_attention_layernorm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.self_attn.attn_gate.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.self_attn.k_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.self_attn.o_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.self_attn.q_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.self_attn.v_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.shared_expert.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.shared_expert.gate_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.layers.25.shared_expert.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "lm_head.weight": [
+      0.0,
+      1.0
+    ],
+    "model.final_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.final_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.norm.weight": [
+      0.0,
+      1.0
+    ],
+    "model.embed_tokens.weight": [
+      0.0,
+      1.0
+    ],
+    "model.embed_gated_norm.down_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.embed_gated_norm.up_proj.weight": [
+      0.0,
+      1.0
+    ],
+    "model.embed_norm.weight": [
+      0.0,
+      1.0
+    ]
+  }
+}
