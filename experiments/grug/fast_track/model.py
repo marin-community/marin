@@ -993,6 +993,13 @@ class GrugModelConfig:
     mla_sparse_compress: bool = False
     """Also attend to every visible block's mean key / value (NSA's compressed branch)."""
     mla_sparse_block: int = 32
+    mla_sparse_taps: tuple[int, ...] = ()
+    """Value-tap offsets around each pick (``sparse_attention``, identity-init at offset 0); empty: off."""
+    mla_sparse_taps_per_channel: bool = False
+    mla_sparse_untied: bool = False
+    mla_sparse_anchor_match: bool = False
+    mla_sparse_lookback: int = 0
+    mla_sparse_score_only: bool = False
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -2339,6 +2346,7 @@ class CausalSelfAttention(eqx.Module):
     w_lq: Float[Array, "D GR"] | None  # SparseIndex.LIGHTNING: indexer queries, key and head weights
     w_lk: Float[Array, "D R"] | None
     w_lw: Float[Array, "D G"] | None
+    sparse_taps: jax.Array | None  # mla_sparse_taps: [N, T] or [N, T, D] value-tap weights
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2462,7 +2470,12 @@ class CausalSelfAttention(eqx.Module):
                     reshard(
                         _init_weight(
                             random.fold_in(k_q, 10),
-                            (d, (n if cfg.mla_sparse_index_per_head else 1) * cfg.mla_sparse_index_dim),
+                            (
+                                d,
+                                (n if cfg.mla_sparse_index_per_head else 1)
+                                * cfg.mla_sparse_index_dim
+                                * (2 if cfg.mla_sparse_untied else 1),
+                            ),
                             std,
                         ),
                         P(None, None),
@@ -2487,6 +2500,13 @@ class CausalSelfAttention(eqx.Module):
                 sparse_lam=(
                     jnp.ones((n,), jnp.float32)
                     if cfg.mla_sparse_topk and cfg.mla_sparse_index == SparseIndex.FOLLOW
+                    else None
+                ),
+                sparse_taps=(
+                    jnp.zeros((n, len(cfg.mla_sparse_taps)) + ((h,) if cfg.mla_sparse_taps_per_channel else ()))
+                    .at[:, cfg.mla_sparse_taps.index(0)]
+                    .set(1.0)
+                    if cfg.mla_sparse_taps
                     else None
                 ),
                 match_head=(
@@ -2636,6 +2656,7 @@ class CausalSelfAttention(eqx.Module):
             w_lq=None,
             w_lk=None,
             w_lw=None,
+            sparse_taps=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),

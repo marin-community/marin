@@ -38,6 +38,19 @@ class SparseIndex(StrEnum):
     """NSA-style: the ``topk`` key blocks whose compressed (block-mean) keys the heads attend to most."""
 
 
+class IndexSpec(NamedTuple):
+    """Follow-index variants (static)."""
+
+    untied: bool = False
+    """Separate low-rank query and key projections (the index holds both halves) instead of a tied one."""
+    anchor_match: bool = False
+    """Attend to the matched key itself rather than its follower."""
+    lookback: int = 0
+    """> 0: candidates only this far back."""
+    score_only: bool = False
+    """Weight the picks by the low-rank score alone (no head q.k, Inkling bias or local window)."""
+
+
 class Lightning(NamedTuple):
     """DSA lightning-indexer inputs (computed from a stop-gradient attention input)."""
 
@@ -84,7 +97,10 @@ def _sparse_math(
     index,
     lam,
     lightning,
+    tap_weights,
     *,
+    spec: "IndexSpec",
+    tap_offsets: tuple[int, ...],
     window: int,
     topk: int,
     dsa_topk: int,
@@ -142,17 +158,34 @@ def _sparse_math(
             index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1e9)
             kth = jax.lax.top_k(index_logits, dsa_topk)[0][..., -1:]
             allowed = allowed | (visible & (index_logits >= kth))[:, None]
+        chosen = None
         if topk and not block_select:
             idx_q = jax.lax.dynamic_slice_in_dim(index, c0, chunk, axis=1)
-            score = jnp.einsum("bqgr,bkgr->bgqk", idx_q, index)  # [B, G, C, S] against candidate m
-            # Candidate m's follower m + 1 must be visible (m + 1 <= i) and outside the local window.
-            cand = (same & (dist >= 1) & (dist - 1 >= window))[:, None]
+            idx_k = index
+            if spec.untied:  # separate low-rank query / key halves
+                half = index.shape[-1] // 2
+                idx_q, idx_k = idx_q[..., :half], index[..., half:]
+            score = jnp.einsum("bqgr,bkgr->bgqk", idx_q, idx_k)  # [B, G, C, S] against candidate m
+            if spec.anchor_match:
+                # The candidate is the key itself: visible and outside the local window.
+                cand = same & (dist >= 0) & (dist >= window)
+            else:
+                # Candidate m's follower m + 1 must be visible (m + 1 <= i) and outside the local window.
+                cand = same & (dist >= 1) & (dist - 1 >= window)
+            if spec.lookback:
+                cand = cand & (dist < spec.lookback)
+            cand = cand[:, None]
             masked = jnp.where(cand, score, -jnp.inf)
             kth = jax.lax.top_k(masked, topk)[0][..., -1:]
             matched = cand & (masked >= kth)  # kth = -inf (fewer than topk candidates): every candidate
-            # Move candidate m's selection and score onto its follower key m + 1.
-            follow = jnp.pad(matched[..., :-1], ((0, 0), (0, 0), (0, 0), (1, 0)))
-            bias = jnp.where(follow, jnp.pad(score[..., :-1], ((0, 0), (0, 0), (0, 0), (1, 0))), 0.0)
+            if spec.anchor_match:
+                follow = matched
+                bias = jnp.where(matched, score, 0.0)
+            else:
+                # Move candidate m's selection and score onto its follower key m + 1.
+                follow = jnp.pad(matched[..., :-1], ((0, 0), (0, 0), (0, 0), (1, 0)))
+                bias = jnp.where(follow, jnp.pad(score[..., :-1], ((0, 0), (0, 0), (0, 0), (1, 0))), 0.0)
+            chosen = follow
             allowed = allowed | follow
             if select_match:  # also the matched token m itself
                 bias = bias + jnp.where(matched & ~follow, score, 0.0)
@@ -170,7 +203,13 @@ def _sparse_math(
                 picked = c_ok & (importance >= kth)
                 tokens = jnp.repeat(picked, block, axis=-1)  # [B, C, S]
                 allowed = allowed | (tokens & same & (dist >= 0))[:, None]
-        logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
+        if spec.score_only and chosen is not None:
+            # The picks are weighted by their low-rank score alone; the document start is a zero-logit null slot.
+            sink = (keys[None, None, :] == start_q[:, :, None])[:, None]
+            logits = jnp.where(chosen, bias * lam.astype(jnp.float32)[None, :, None, None], jnp.where(sink, 0.0, -1e9))
+            allowed = chosen | sink
+        else:
+            logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
         dense = logits
         logits = jnp.where(allowed, logits, -1e9)
         if compress:
@@ -178,6 +217,25 @@ def _sparse_math(
             weights, c_weights = joint[..., :seq], joint[..., seq:]
             out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32))
             out = (out + jnp.einsum("bhqn,bnhd->bqhd", c_weights, vc)).astype(v.dtype)
+        elif tap_weights is not None and chosen is not None:
+            # Each pick reads a learned mix of the values around it: the picks' weights convolved along the key
+            # axis by the per-head (or per-channel) taps, dropping any tap past the query or out of its document.
+            weights = jax.nn.softmax(logits, axis=-1)
+            far = jnp.where(chosen, weights, 0.0)
+            vf = v.astype(jnp.float32)
+            out = jnp.einsum("bhqk,bkhd->bqhd", weights - far, vf)
+            reach = (same & (dist >= 0))[:, None]
+            tap_w = tap_weights.astype(jnp.float32)  # [H, T] or [H, T, E]
+            for t, offset in enumerate(tap_offsets):
+                moved = far if offset == 0 else jnp.roll(far, offset, axis=-1)
+                if offset > 0:
+                    moved = moved.at[..., :offset].set(0.0)
+                elif offset < 0:
+                    moved = moved.at[..., offset:].set(0.0)
+                read = jnp.einsum("bhqk,bkhd->bqhd", jnp.where(reach, moved, 0.0), vf)
+                w_t = tap_w[:, t] if tap_w.ndim == 2 else tap_w[:, t, :]
+                out = out + read * (w_t[None, None, :, None] if w_t.ndim == 1 else w_t[None, None])
+            out = out.astype(v.dtype)
         else:
             weights = jax.nn.softmax(logits, axis=-1)
             out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
@@ -202,10 +260,13 @@ def sparse_index_attention(
     index: Float[Array, "B S G R"],
     lam: Float[Array, " H"],
     lightning: Lightning | None = None,
+    tap_weights: jax.Array | None = None,
     *,
     window: int,
     topk: int,
     dsa_topk: int = 0,
+    spec: IndexSpec = IndexSpec(),
+    tap_offsets: tuple[int, ...] = (),
     select_match: bool = False,
     block: int = 32,
     compress: bool = False,
@@ -219,6 +280,8 @@ def sparse_index_attention(
         window=window,
         topk=topk,
         dsa_topk=dsa_topk,
+        spec=spec,
+        tap_offsets=tap_offsets,
         select_match=select_match,
         block=block,
         compress=compress,
@@ -226,10 +289,10 @@ def sparse_index_attention(
     )
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning)
+        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
-    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning)
+    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights)
 
 
 def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
@@ -239,7 +302,12 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
     idx = jnp.zeros((*x.shape[:2], 1, 1))
     if attn.w_sidx is not None:
         flat = project(cfg, x, attn.w_sidx)
-        idx = rms_norm(flat.reshape(*flat.shape[:-1], -1, cfg.mla_sparse_index_dim))
+        idx = flat.reshape(*flat.shape[:-1], -1, cfg.mla_sparse_index_dim * (2 if cfg.mla_sparse_untied else 1))
+        if cfg.mla_sparse_untied:  # RMS-norm the query and key halves separately
+            r = cfg.mla_sparse_index_dim
+            idx = jnp.concatenate([rms_norm(idx[..., :r]), rms_norm(idx[..., r:])], axis=-1)
+        else:
+            idx = rms_norm(idx)
     lam = jnp.zeros((q.shape[2],)) if attn.sparse_lam is None else attn.sparse_lam
     light = None
     if attn.w_lq is not None and attn.w_lk is not None and attn.w_lw is not None:
@@ -247,6 +315,12 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         lq = project(cfg, xs, attn.w_lq)
         lq = lq.reshape(*lq.shape[:-1], cfg.mla_sparse_index_heads, -1)
         light = Lightning(lq, project(cfg, xs, attn.w_lk), project(cfg, xs, attn.w_lw), cfg.mla_sparse_kl_weight)
+    spec = IndexSpec(
+        untied=cfg.mla_sparse_untied,
+        anchor_match=cfg.mla_sparse_anchor_match,
+        lookback=cfg.mla_sparse_lookback,
+        score_only=cfg.mla_sparse_score_only,
+    )
     return sparse_index_attention(
         q,
         k,
@@ -256,7 +330,10 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         idx,
         lam,
         light,
+        attn.sparse_taps,
         window=cfg.mla_sparse_window,
+        spec=spec,
+        tap_offsets=cfg.mla_sparse_taps,
         topk=0 if dsa_first else cfg.mla_sparse_topk,
         dsa_topk=cfg.mla_sparse_topk if dsa_first else cfg.mla_sparse_dsa_topk,
         select_match=cfg.mla_sparse_select_match,
