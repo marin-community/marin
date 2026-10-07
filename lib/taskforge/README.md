@@ -20,6 +20,7 @@ src/taskforge/
   sandbox/    MachineFactory selection per host, up-front task refusals, image builds
   proposal/   the TaskProposal document (model.py), the ProposalSource protocol (source.py), sources/
   triage/     structural checks, the GLM rubric, verdicts
+  build/      builder programs: memoized steps, the Build SDK, program authoring, the standard template
   validate/   trials, the failure classifier, control replay, evidence aggregation
 scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
@@ -29,14 +30,15 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> validate
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> build -> validate
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
 only each other and external packages. A later stage reaches an earlier one through its seam
 modules, each of which keeps its types beside the code that checks their invariants:
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
-`ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `validate.outcome` and
+`ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `build.run` (`TaskDraft`,
+`load_draft`, `item_id_for`), `build.author` (`BuildProgram`, `Revision`), `validate.outcome` and
 `validate.evidence`.
 
 ## Seams
@@ -91,6 +93,11 @@ modules, each of which keeps its types beside the code that checks their invaria
 - `triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict`: structural checks run
   first, and a fatal failure or a null proposal rejects without a model call. The rubric scores
   independent samples, and the decision is ACCEPT or REJECT by strict majority, otherwise REPAIR.
+- `build.run.run_build(program, proposal, ...)`: runs a builder program of memoized async steps.
+  A step's memo key covers its code, arguments, the data globals it reads, `SDK_VERSION`, the
+  proposal and the model policy. The verifier must come from a GRADER step and the controls from
+  a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The draft holds
+  the task, its `TaskExecution` and its controls.
 - `validate.trials.run_trials(lowered, plan, settings, model)`: runs k trials of a
   `LoweredTaskSpec` through `ShellboxRolloutEngine`. `TrialPlan.deadlines` (`total_turn_timeout`,
   `attempt_timeout`) and `EngineSettings` (turn, command, tool-turn, model-turn and cleanup limits)
@@ -207,8 +214,8 @@ task, `llm.endpoint.resolve_glm_base_url` resolves the endpoint.
 
 Other live inputs:
 
-- `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent
-  live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
+- `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent and
+  build live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
 
 The package pytest config sets `timeout = 60` and `asyncio_mode = "auto"`. Long live tests carry
 `@pytest.mark.timeout(<seconds>)`.
