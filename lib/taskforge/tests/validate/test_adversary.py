@@ -13,6 +13,7 @@ from taskcompendium.models import ConversationInput, TextMessage
 from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import read_entries
+from taskforge.llm.recording import CallLedger
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.validate.adversary import ROLE_PREAMBLES, AdversaryRole, run_adversaries
 from taskforge.validate.outcome import Graded
@@ -63,7 +64,11 @@ async def test_every_role_sees_its_preamble_as_the_one_system_turn_on_every_requ
     draft = rounds.draft(file_task, (), PLAIN)
 
     outcomes = await run_adversaries(
-        draft, rounds.policy(adversary_k=1), rounds.site(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), inner
+        draft,
+        rounds.policy(adversary_k=1),
+        rounds.site(tmp_path),
+        settings(fakes.flaky_factory(0, RuntimeError)),
+        lambda _: inner,
     )
 
     assert set(outcomes) == set(AdversaryRole)
@@ -91,7 +96,7 @@ async def test_a_task_system_prompt_follows_the_preamble_in_the_same_turn(tmp_pa
         replace(policy, roles=(AdversaryRole.LEAK,)),
         rounds.site(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
-        inner,
+        lambda _: inner,
     )
 
     first = inner.requests[0].messages[0]
@@ -103,13 +108,18 @@ async def test_a_task_system_prompt_follows_the_preamble_in_the_same_turn(tmp_pa
 async def test_adversary_evidence_lands_per_role_and_index(tmp_path, file_task, rounds, fakes):
     inner = TemplateModel([fakes.text("NO_SHORTCUT_FOUND")])
     site = rounds.site(tmp_path)
+    records: list[CallLedger] = []
+
+    def models(record: CallLedger) -> TemplateModel:
+        records.append(record)
+        return inner
 
     outcomes = await run_adversaries(
         rounds.draft(file_task, (), PLAIN),
         rounds.policy(adversary_k=2),
         site,
         settings(fakes.flaky_factory(0, RuntimeError)),
-        inner,
+        models,
     )
 
     assert {role: len(trials) for role, trials in outcomes.items()} == {role: 2 for role in AdversaryRole}
@@ -117,3 +127,7 @@ async def test_adversary_evidence_lands_per_role_and_index(tmp_path, file_task, 
     assert files == sorted(f"adversary/{role}/{i}/attempt-0.json" for role in AdversaryRole for i in range(2))
     steps = {e.step for e in read_entries(tmp_path / "ledger" / "item.jsonl")}
     assert steps == {f"adversary/{role}/{i}/0" for role in AdversaryRole for i in range(2)}
+    # Each trial's model records its calls under its own step, the prefix of its attempts' steps.
+    assert sorted((r.item_id, r.round, r.step) for r in records) == sorted(
+        (site.item_id, site.round, f"adversary/{role}/{i}") for role in AdversaryRole for i in range(2)
+    )

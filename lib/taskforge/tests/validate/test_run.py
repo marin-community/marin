@@ -90,8 +90,8 @@ async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(tmp_path, fil
     solver_model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
     adversary_model = fakes.script_model([fakes.text("NO_SHORTCUT_FOUND")])
     solver, adversaries = await asyncio.gather(
-        run_solver(draft, policy, site, settings(fakes), solver_model),
-        run_adversaries(draft, policy, site, settings(fakes), adversary_model),
+        run_solver(draft, policy, site, settings(fakes), lambda _: solver_model),
+        run_adversaries(draft, policy, site, settings(fakes), lambda _: adversary_model),
     )
     ran = ValidationEvidence(task_digest(draft.task, draft.execution, draft.convention), controls, solver, adversaries)
 
@@ -113,8 +113,8 @@ async def test_a_round_missing_a_trial_below_the_highest_index_does_not_load(
     site = rounds.site(tmp_path)
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
     await asyncio.gather(
-        run_solver(draft, policy, site, settings(fakes), model),
-        run_adversaries(draft, policy, site, settings(fakes), model),
+        run_solver(draft, policy, site, settings(fakes), lambda _: model),
+        run_adversaries(draft, policy, site, settings(fakes), lambda _: model),
     )
     shutil.rmtree(site.evidence_dir / removed)
 
@@ -148,7 +148,7 @@ async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and
     site = rounds.site(tmp_path / "round-0")
     shortcut = fakes.script_model([fakes.shell(SHORTCUT), fakes.text("Done.")])
     shortcut_only = replace(policy, roles=(AdversaryRole.SHORTCUT,))
-    adversaries = await run_adversaries(leaky, shortcut_only, site, settings(fakes), shortcut)
+    adversaries = await run_adversaries(leaky, shortcut_only, site, settings(fakes), lambda _: shortcut)
 
     summary = summarize(ValidationEvidence("ab" * 32, (), (), adversaries), policy)
 
@@ -193,7 +193,7 @@ async def test_only_an_ambiguity_pass_that_ends_on_its_sentinel_reply_is_no_find
     policy = rounds.policy(adversary_k=2)
     honest = HonestAdversary(fakes.shell("echo 60 > /workspace/sum.txt"))
 
-    adversaries = await run_adversaries(draft, policy, rounds.site(tmp_path), settings(fakes), honest)
+    adversaries = await run_adversaries(draft, policy, rounds.site(tmp_path), settings(fakes), lambda _: honest)
     summary = summarize(ValidationEvidence("ab" * 32, (), (), adversaries), policy)
 
     assert [f.kind for f in summary.findings] == [FindingKind.SHORTCUT_PASSED] * 2 + [FindingKind.LEAK_PASSED] * 2

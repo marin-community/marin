@@ -51,7 +51,7 @@ async def test_a_re_entered_solver_runs_only_the_unsettled_trials(tmp_path, math
     site = rounds.site(tmp_path)
     flaky = UnavailableFirst(fakes.script_model([fakes.text("395")]), failures=1)
 
-    first = await run_solver(draft, policy, site, settings(fakes.flaky_factory(0, RuntimeError)), flaky)
+    first = await run_solver(draft, policy, site, settings(fakes.flaky_factory(0, RuntimeError)), lambda _: flaky)
 
     assert sorted(type(o).__name__ for o in first) == ["Graded", "Graded", "Ungraded"]
     (failed_outcome,) = [o for o in first if isinstance(o, Ungraded)]
@@ -59,7 +59,7 @@ async def test_a_re_entered_solver_runs_only_the_unsettled_trials(tmp_path, math
     failed = str(first.index(failed_outcome))
 
     resumed = fakes.script_model([fakes.text("395")])
-    second = await run_solver(draft, policy, site, settings(fakes.flaky_factory(0, RuntimeError)), resumed)
+    second = await run_solver(draft, policy, site, settings(fakes.flaky_factory(0, RuntimeError)), lambda _: resumed)
 
     assert len(resumed.requests) == 1
     assert all(isinstance(o, Graded) and o.reward == 1.0 for o in second)
@@ -77,7 +77,7 @@ async def test_solver_trials_run_under_the_drafts_convention(tmp_path, math_task
     run_wide = settings(fakes.flaky_factory(0, RuntimeError), conventions=(JsonAnswer(id="json"), PLAIN))
 
     outcomes = await run_solver(
-        draft, rounds.policy(k=2), rounds.site(tmp_path), run_wide, fakes.script_model([fakes.text("395")])
+        draft, rounds.policy(k=2), rounds.site(tmp_path), run_wide, lambda _: fakes.script_model([fakes.text("395")])
     )
 
     assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0, 1.0]

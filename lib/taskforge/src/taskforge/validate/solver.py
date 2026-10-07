@@ -4,7 +4,8 @@
 """Solver trials of a built task at a fixed ``k``, resumable per trial.
 
 The solver is the run's rollout model (``llm.rollout_model.GlmRolloutModel``) under the
-validation policy's sampling. Every trial goes through ``trials.run_trial`` with the draft's task
+validation policy's sampling, built per trial by a ``ModelFactory`` so its calls are recorded
+under the trial's ledger step. Every trial goes through ``trials.run_trial`` with the draft's task
 and execution, under ``EngineSettings`` whose conventions are pinned to the draft's own
 convention, so a draft is validated with the presentation its controls were authored for. A trial
 already settled on disk is loaded rather than run again; an unsettled one re-enters with its
@@ -12,17 +13,24 @@ attempt numbers continuing after the files on disk (``attempts.TrialFiles``).
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
 from taskforge.build.run import TaskDraft
 from taskforge.ledger.records import Ledger
+from taskforge.llm.recording import CallLedger
 from taskforge.validate.attempts import trial_files
 from taskforge.validate.controls import ControlPlan
 from taskforge.validate.outcome import Outcome, TrialKind
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, RolloutModel, TrialPlan, run_trial
+
+ModelFactory = Callable[[CallLedger], RolloutModel]
+"""The rollout model for one trial, recording its model calls under the given ``CallLedger``.
+
+For GLM this is ``functools.partial(GlmRolloutModel, client, sampling)``.
+"""
 
 
 class TrialPolicy(Protocol):
@@ -52,6 +60,10 @@ class ValidationSite:
     round: int
     evidence_dir: Path
     ledger: Ledger
+
+    def call_ledger(self, kind: TrialKind, trial: str) -> CallLedger:
+        """Where a trial's model calls are recorded: step ``<kind>/<trial>``, the prefix of its attempts' steps."""
+        return CallLedger(ledger=self.ledger, item_id=self.item_id, round=self.round, step=f"{kind}/{trial}")
 
     def trial_plan(self, kind: TrialKind, k: int, policy: TrialPolicy, first_attempt: int) -> TrialPlan:
         return TrialPlan(
@@ -117,15 +129,15 @@ async def resume_trials(
 
 
 async def run_solver(
-    draft: TaskDraft, policy: TrialPolicy, site: ValidationSite, settings: EngineSettings, model: RolloutModel
+    draft: TaskDraft, policy: TrialPolicy, site: ValidationSite, settings: EngineSettings, models: ModelFactory
 ) -> tuple[Outcome, ...]:
     """``policy.k`` solver trials named ``str(index)``, all concurrent, through ``run_trial``.
 
     Trials already settled under ``site.evidence_dir/solver`` are loaded, not re-run; unsettled ones
-    re-enter with ``first_attempt=TrialFiles.attempts``. Returns one outcome per index.
+    re-enter with ``first_attempt=TrialFiles.attempts``. Each trial's model comes from ``models`` with
+    ``site.call_ledger(SOLVER, <index>)``. Returns one outcome per index.
     """
     names = [str(index) for index in range(policy.k)]
-    outcomes = await resume_trials(
-        draft, policy, site, settings, TrialKind.SOLVER, policy.k, {name: model for name in names}
-    )
+    trial_models = {name: models(site.call_ledger(TrialKind.SOLVER, name)) for name in names}
+    outcomes = await resume_trials(draft, policy, site, settings, TrialKind.SOLVER, policy.k, trial_models)
     return tuple(outcomes[name] for name in names)

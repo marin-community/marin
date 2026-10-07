@@ -13,6 +13,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,8 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.submission import PlainText
 
-from taskforge.ledger.jsonl import JsonlLedger
+from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import GlmRolloutModel
@@ -91,7 +93,8 @@ async def test_a_validation_round_on_shellsim(client, file_task, file_controls, 
     directory = EVIDENCE_ROOT / f"e_evidence_round-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     draft = rounds.draft(file_task, file_controls, PLAIN)
     digest = task_digest(draft.task, draft.execution, draft.convention)
-    site = ValidationSite(file_task.id, 0, directory / f"evidence-{digest[:12]}", JsonlLedger(directory / "ledger"))
+    ledger = JsonlLedger(directory / "ledger")
+    site = ValidationSite(file_task.id, 0, directory / f"evidence-{digest[:12]}", ledger)
     settings = EngineSettings(
         factories={EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
         capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
@@ -100,7 +103,7 @@ async def test_a_validation_round_on_shellsim(client, file_task, file_controls, 
         cleanup_timeout=60,
         conventions=(PLAIN,),
     )
-    model = GlmRolloutModel(client, POLICY.sampling)
+    model = partial(GlmRolloutModel, client, POLICY.sampling)
     started = time.monotonic()
 
     controls = await replay_controls(draft, POLICY, site, settings, ServerTokenizer(client, POLICY.sampling))
@@ -152,3 +155,7 @@ async def test_a_validation_round_on_shellsim(client, file_task, file_controls, 
         name: count for name, count in before.items() if name not in unsettled
     }
     assert all(after[name] > before[name] for name in unsettled)
+    call_steps = {e.step for e in read_entries(ledger.path_for(file_task.id)) if e.kind == EntryKind.LLM_CALL}
+    assert call_steps == {f"solver/{i}" for i in range(POLICY.k)} | {
+        f"adversary/{role}/{i}" for role in AdversaryRole for i in range(POLICY.adversary_k)
+    }

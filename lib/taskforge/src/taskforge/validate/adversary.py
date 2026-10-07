@@ -26,7 +26,7 @@ from rolloutengine.contracts import ModelRequest, ModelTurn
 
 from taskforge.build.run import TaskDraft
 from taskforge.validate.outcome import Outcome, TrialKind
-from taskforge.validate.solver import TrialPolicy, ValidationSite, resume_trials
+from taskforge.validate.solver import ModelFactory, TrialPolicy, ValidationSite, resume_trials
 from taskforge.validate.trials import EngineSettings, RolloutModel
 
 
@@ -135,19 +135,19 @@ def adversary_trial(role: AdversaryRole, index: int) -> str:
 
 
 async def run_adversaries(
-    draft: TaskDraft, policy: AdversaryPolicy, site: ValidationSite, settings: EngineSettings, inner: RolloutModel
+    draft: TaskDraft, policy: AdversaryPolicy, site: ValidationSite, settings: EngineSettings, inner: ModelFactory
 ) -> Mapping[AdversaryRole, tuple[Outcome, ...]]:
     """``policy.adversary_k`` ``run_trial`` calls per role in ``policy.roles``, all concurrent.
 
     Trials are ``TrialKind.ADVERSARY`` named ``f"{role}/{index}"``, so evidence lands under
     ``adversary/<role>/<index>/`` and the ledger step is ``adversary/<role>/<index>/<attempt>``.
-    Resumes per trial like ``run_solver``.
+    Resumes per trial like ``run_solver``; each trial wraps ``inner(site.call_ledger(ADVERSARY, <role>/<index>))``.
     """
-    models: dict[str, RolloutModel] = {
-        adversary_trial(role, index): RoleModel(role, inner)
-        for role in policy.roles
-        for index in range(policy.adversary_k)
-    }
+    models: dict[str, RolloutModel] = {}
+    for role in policy.roles:
+        for index in range(policy.adversary_k):
+            trial = adversary_trial(role, index)
+            models[trial] = RoleModel(role, inner(site.call_ledger(TrialKind.ADVERSARY, trial)))
     outcomes = await resume_trials(draft, policy, site, settings, TrialKind.ADVERSARY, policy.adversary_k, models)
     return {
         role: tuple(outcomes[adversary_trial(role, index)] for index in range(policy.adversary_k))
