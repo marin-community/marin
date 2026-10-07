@@ -81,6 +81,8 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+    save_checkpoints: bool = True
+    """False skips the checkpointer entirely, including the forced final save; for benchmarks."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -531,7 +533,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         if config.trainer.sft_weights_only_init:
             # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
             # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
