@@ -177,7 +177,12 @@ def final_dpo_recipe(scale: RunScale) -> str:
     return yaml.safe_dump(recipe, sort_keys=False)
 
 
-def final_dpo_step(input_version: str, scale: RunScale) -> ArtifactStep:
+DPO_EXECUTION = replace(
+    COLLECTION_EXECUTION, wandb_entity="nyu-dice-lab", coordinator_timeout_hours=72, job_timeout_seconds=72 * 3600
+)
+
+
+def final_dpo_spec(input_version: str, scale: RunScale) -> SkyRLSpec:
     inputs_name = user_owned_name(INPUT_NAME)
     inputs = ArtifactStep.adopt(inputs_name + "-input", input_version, f"{inputs_name}/{input_version}", kind=Artifact)
     model_name = user_owned_name(MODEL_NAME)
@@ -185,7 +190,7 @@ def final_dpo_step(input_version: str, scale: RunScale) -> ArtifactStep:
     tokenizer = MODELS["student"]
     data_file = "full-batches.parquet"
     name = user_owned_name(f"models/bfcl-rl-final-native-dpo-{scale.value}")
-    spec = SkyRLSpec(
+    return SkyRLSpec(
         name=name,
         version=resolve_version(name, None),
         config_yaml=final_dpo_recipe(scale),
@@ -197,10 +202,10 @@ def final_dpo_step(input_version: str, scale: RunScale) -> ArtifactStep:
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=14),
         seed=42,
     )
-    execution = replace(
-        COLLECTION_EXECUTION, wandb_entity="nyu-dice-lab", coordinator_timeout_hours=72, job_timeout_seconds=72 * 3600
-    )
-    return skyrl_step(spec, execution, export_hf=scale is RunScale.SMOKE)
+
+
+def final_dpo_step(input_version: str, scale: RunScale) -> ArtifactStep:
+    return skyrl_step(final_dpo_spec(input_version, scale), DPO_EXECUTION, export_hf=scale is RunScale.SMOKE)
 
 
 @click.command(help=__doc__)
