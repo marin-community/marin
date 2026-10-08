@@ -47,6 +47,8 @@ TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
+IDLE_ENTRYPOINT = "trap 'exit 0' TERM INT; sleep infinity & wait"
+"""Keeps the sandbox alive for exec while exiting promptly when Iris stops it."""
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
@@ -300,7 +302,9 @@ class IrisMachineFactory:
                 send_compression=None,
             )
             job = client.submit(
-                entrypoint=Entrypoint.from_command("sleep", "infinity"),
+                # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
+                # capacity for the whole termination grace period.
+                entrypoint=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT),
                 name=f"shellbox-{uuid.uuid4().hex}",
                 environment=EnvironmentSpec(
                     setup_scripts=[],
