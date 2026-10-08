@@ -55,7 +55,7 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
-from taskforge.canonical import sha256_hex
+from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import FactoryCapabilities, Refusal, task_refusals
 from taskforge.spec.draft import MACHINE_ANSWER_TYPES
