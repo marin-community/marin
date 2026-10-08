@@ -81,6 +81,9 @@ or on a package the order does not name.
   is the front matter's fixed opening, which the prompt dictates and the document repair prefills.
   `capability_idea_record(idea)` is the capability run's `describe_idea`: the capability id, subject
   id and name, catalog version, capability hash, and the prompt record the models were shown.
+  `capability_adversary_context(idea)` is the capability paragraph of the adversary brief: the
+  prompt record as data, and a submission the grader accepts without the capability's new
+  operation (prerequisite work alone, or a route the record's excludes name) counts as a shortcut.
 - `proposal.model.TaskProposal`: YAML front matter (`ProposalHeader`) plus a markdown body with
   required section headings. `parse` and `render` round-trip it; `digest` is the sha256 of the
   canonical form.
