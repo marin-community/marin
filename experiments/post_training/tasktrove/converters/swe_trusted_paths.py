@@ -75,6 +75,7 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         must_pass=selection.must_pass,
         must_not_break=selection.must_not_break,
         setup=restore_setup(trusted, (TRUSTED_TEST_PATHS,), fallback),
+        protected_paths_files=(TRUSTED_TEST_PATHS.removeprefix("tests/"),),
         workspace=TESTBED,
     )
     return ConvertedTask(
