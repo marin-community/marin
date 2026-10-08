@@ -4,11 +4,10 @@
 """Run independent source artifacts through one retained Zephyr worker pool."""
 
 import contextvars
-import hashlib
 import json
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -19,10 +18,8 @@ from threading import Lock
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
-from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
 logger = logging.getLogger(__name__)
@@ -39,14 +36,7 @@ class OutcomeStatus(StrEnum):
 
     QUEUED = "queued"
     RUNNING = "running"
-    NOT_ADMITTED = "not_admitted"
     FAILED = "failed"
-
-
-ADMITTING_SAMPLE_STATUSES = frozenset({SourceStatus.SAMPLED, SourceStatus.COMPLETED})
-"""Sample outcomes whose sources proceed to full processing."""
-TERMINAL_SAMPLE_STATUSES = frozenset({*SourceStatus, OutcomeStatus.FAILED})
-"""Sample outcomes a full campaign accepts: any pipeline status, or a failed build."""
 
 
 @dataclass
@@ -118,43 +108,6 @@ def campaign_plan(steps: Sequence[ArtifactStep[Artifact]], pool: CampaignPool) -
     }
 
 
-def campaign_identity(steps: Sequence[ArtifactStep[Artifact]], worker_image: str) -> str:
-    """Seal sample source definitions and the worker runtime for full admission."""
-    identity = {
-        "sources": sorted((step.name, step.version, step.fingerprint()) for step in steps),
-        "worker_image": worker_image,
-    }
-    return hashlib.sha256(canonical_json(identity).encode()).hexdigest()
-
-
-def require_matching_sample(
-    report: dict, expected_identity: str, sample_steps: Sequence[ArtifactStep[Artifact]]
-) -> tuple[SourceOutcome, ...]:
-    """Validate the whole terminal sample before selecting sources for full processing."""
-    if (
-        report.get("mode") != "sample"
-        or report.get("status") not in {CampaignStatus.COMPLETED, CampaignStatus.FAILED}
-        or report.get("sample_identity") != expected_identity
-    ):
-        raise ValueError(
-            "Full execution requires a terminal sample with matching source, input, model, sampling "
-            "and runtime identities"
-        )
-    expected = {step.name: step.path() for step in sample_steps}
-    sources = tuple(SourceOutcome(**source) for source in report.get("sources", []))
-    if len(expected) != len(sample_steps) or len(sources) != len(expected) or {s.name for s in sources} != set(expected):
-        raise ValueError("Sample outcomes must cover every canonical source exactly once")
-    if any(source.path != expected[source.name] or source.status not in TERMINAL_SAMPLE_STATUSES for source in sources):
-        raise ValueError("Sample outcomes must have matching paths and terminal source states")
-    counts = dict(Counter(source.status for source in sources))
-    if report.get("counts") != counts or (report["status"] == CampaignStatus.FAILED) != bool(
-        counts.get(OutcomeStatus.FAILED)
-    ):
-        raise ValueError("Sample summary does not match its source outcomes")
-    by_name = {source.name: source for source in sources}
-    return tuple(by_name[step.name] for step in sample_steps)
-
-
 def _build_source(
     step: ArtifactStep[CampaignArtifact], started: Callable[[ArtifactStep[CampaignArtifact]], None]
 ) -> SourceOutcome:
@@ -173,25 +126,14 @@ def error_chain(error: BaseException) -> str:
     return " <- ".join(causes)
 
 
-def campaign_report(
-    status: CampaignStatus,
-    *,
-    mode: str,
-    sample_identity: str | None,
-    outcomes: Sequence[SourceOutcome],
-    sample_outcomes: Mapping[str, SourceOutcome] | None,
-) -> dict[str, object]:
-    """The campaign's status with each source outcome, their counts, and the sample outcomes that admitted them."""
+def campaign_report(status: CampaignStatus, *, mode: str, outcomes: Sequence[SourceOutcome]) -> dict[str, object]:
+    """The campaign's status with each source outcome and their counts."""
     return {
         "status": status,
         "updated_at": datetime.now(UTC).isoformat(),
         "mode": mode,
-        "sample_identity": sample_identity,
         "counts": dict(Counter(outcome.status for outcome in outcomes)),
         "sources": [asdict(outcome) for outcome in outcomes],
-        "sample_outcomes": (
-            {name: asdict(outcome) for name, outcome in sample_outcomes.items()} if sample_outcomes is not None else None
-        ),
     }
 
 
@@ -201,9 +143,7 @@ def run_campaign(
     pool: CampaignPool,
     runtime: CampaignRuntime,
     report_path: str,
-    sample_identity: str | None = None,
     mode: str = "sample",
-    sample_outcomes: Mapping[str, SourceOutcome] | None = None,
 ) -> tuple[SourceOutcome, ...]:
     """Queue source builds, preserve peer outputs on failure, and write the campaign report.
 
@@ -214,30 +154,11 @@ def run_campaign(
         raise ValueError("Campaign source concurrency and worker count must be positive")
     if len({step.name for step in steps}) != len(steps):
         raise ValueError("Campaign source artifact names must be unique")
-    if mode == "full" and (sample_outcomes is None or set(sample_outcomes) != {step.name for step in steps}):
-        raise ValueError("Full processing requires a sample outcome for every source")
-    if mode != "full" and sample_outcomes is not None:
-        raise ValueError("Sample admission applies only to full processing")
     outcomes = {step.name: SourceOutcome(step.name, step.path(), OutcomeStatus.QUEUED) for step in steps}
-    admitted = []
-    for step in steps:
-        sample = sample_outcomes[step.name] if sample_outcomes is not None else None
-        if sample is not None and sample.status not in ADMITTING_SAMPLE_STATUSES:
-            outcomes[step.name] = SourceOutcome(
-                step.name, step.path(), OutcomeStatus.NOT_ADMITTED, f"Sample status: {sample.status}"
-            )
-        else:
-            admitted.append(step)
     report_lock = Lock()
 
     def write_report(status: CampaignStatus) -> None:
-        report = campaign_report(
-            status,
-            mode=mode,
-            sample_identity=sample_identity,
-            outcomes=[outcomes[step.name] for step in steps],
-            sample_outcomes=sample_outcomes,
-        )
+        report = campaign_report(status, mode=mode, outcomes=[outcomes[step.name] for step in steps])
         StoragePath(report_path).write_text(json.dumps(report, indent=2))
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
@@ -246,9 +167,6 @@ def run_campaign(
             write_report(CampaignStatus.RUNNING)
 
     write_report(CampaignStatus.RUNNING)
-    if not admitted:
-        write_report(CampaignStatus.COMPLETED)
-        return tuple(outcomes[step.name] for step in steps)
     client = current_client()
     try:
         with (
@@ -268,8 +186,7 @@ def run_campaign(
                 max_workers=pool.concurrent_sources, thread_name_prefix="rl-data-source"
             ) as executor:
                 futures = {
-                    executor.submit(contextvars.copy_context().run, _build_source, step, started): step
-                    for step in admitted
+                    executor.submit(contextvars.copy_context().run, _build_source, step, started): step for step in steps
                 }
                 for future in as_completed(futures):
                     step = futures[future]

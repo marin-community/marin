@@ -12,12 +12,9 @@ from typing import Any
 import click
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import get_job_info
-from marin.execution.artifact import Artifact
-from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import ArtifactStep
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
-from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
@@ -33,16 +30,7 @@ from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
-from experiments.post_training.task_curation.campaign import (
-    ADMITTING_SAMPLE_STATUSES,
-    CampaignPool,
-    CampaignRuntime,
-    SourceOutcome,
-    campaign_identity,
-    campaign_plan,
-    require_matching_sample,
-    run_campaign,
-)
+from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.environment_runtime import LocalGraderMachines
 from experiments.post_training.task_curation.pipeline import RlDataArtifact, RlDataPipeline, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
@@ -217,66 +205,14 @@ def _pipeline_config(
     )
 
 
-def _adopted_sample(
-    pipeline: RlDataPipeline,
-    sample_step: ArtifactStep[RlDataArtifact],
-    outcome: SourceOutcome,
-    *,
-    sample_report: str,
-    sample_identity: str,
-) -> ArtifactStep[Artifact] | None:
-    """The admitted sample output whose control trials a full run of ``pipeline`` reuses."""
-    if outcome.status not in ADMITTING_SAMPLE_STATUSES:
-        return None
-    provenance = {
-        "campaign_report": sample_report,
-        "sample_identity": sample_identity,
-        "sample_source": sample_step.name,
-        "sample_fingerprint": sample_step.fingerprint(),
-        "sample_path": outcome.path,
-    }
-    return ArtifactStep.adopt(
-        f"task-curation/sample/{pipeline.name}-{fingerprint_hash(canonical_json(provenance))[:16]}",
-        sample_step.version,
-        source=outcome.path,
-        kind=Artifact,
-        config=provenance,
-    )
-
-
-def _full_steps(
-    pipelines: dict[str, RlDataPipeline],
-    catalog_sample_steps: dict[str, ArtifactStep[RlDataArtifact]],
-    config: SourcePipelineConfig,
-    runtime: CampaignRuntime,
-    *,
-    sample_report: str,
-    sample_identity: str,
-) -> tuple[list[ArtifactStep[RlDataArtifact]], dict[str, SourceOutcome]]:
-    """Full-mode source steps for ``pipelines``, each reusing its admitted sample output, and their sample outcomes.
-
-    The sample report covers the whole catalog (``catalog_sample_steps``, by source name), so a full run
-    over a subset of sources still validates against the complete sample.
-    """
-    report = json.loads(StoragePath(sample_report).read_text())
-    sampled = require_matching_sample(report, sample_identity, list(catalog_sample_steps.values()))
-    outcome_by_step = {outcome.name: outcome for outcome in sampled}
-    steps = []
-    outcomes = {}
-    for name, pipeline in pipelines.items():
-        sample_step = catalog_sample_steps[name]
-        outcome = outcome_by_step[sample_step.name]
-        step = source_step(
-            pipeline,
-            config,
-            runtime,
-            previous=_adopted_sample(
-                pipeline, sample_step, outcome, sample_report=sample_report, sample_identity=sample_identity
-            ),
-        )
-        steps.append(step)
-        outcomes[step.name] = outcome
-    return steps, outcomes
+def _source_step(
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, runtime: CampaignRuntime
+) -> ArtifactStep[RlDataArtifact]:
+    """The source's step for ``config.mode``; a full step depends on the source's sample step and reuses its trials."""
+    if config.mode == SourceProcessingMode.SAMPLE:
+        return source_step(pipeline, config, runtime)
+    sample = source_step(pipeline, replace(config, mode=SourceProcessingMode.SAMPLE), runtime)
+    return source_step(pipeline, config, runtime, previous=sample)
 
 
 @click.command(help=__doc__)
@@ -317,7 +253,6 @@ def _full_steps(
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
 @click.option("--report-path", required=True)
-@click.option("--sample-report", help="Terminal sample campaign report required before executing full mode.")
 @click.option("--source", "sources", multiple=True, help="Catalog source name to execute; repeat to select multiple.")
 @click.option("--run", "do_run", is_flag=True)
 def main(
@@ -340,15 +275,12 @@ def main(
     seed: int,
     verification_sample_size: int,
     report_path: str,
-    sample_report: str | None,
     sources: tuple[str, ...],
     do_run: bool,
 ) -> None:
     backend = VerificationBackend(verification_backend)
     controller_url = _controller_url(backend, controller_url)
     pipelines = _selected_pipelines(sources)
-    if do_run and mode == "full" and sample_report is None:
-        raise click.UsageError("Full execution requires --sample-report")
     review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
     reviewer = None
     if do_run:
@@ -371,17 +303,7 @@ def main(
         normalized_shards=normalized_shards,
     )
     runtime = CampaignRuntime()
-    steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
-    # The sample identity seals the whole catalog, so a full run over --source subsets still matches it.
-    catalog_sample_steps = (
-        dict(zip(pipelines, steps, strict=True))
-        if mode == "sample"
-        else {
-            name: source_step(pipeline, replace(config, mode=SourceProcessingMode.SAMPLE), runtime)
-            for name, pipeline in all_pipelines().items()
-        }
-    )
-    sample_identity = campaign_identity(list(catalog_sample_steps.values()), worker_image)
+    steps = [_source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
     pool = CampaignPool(
         max_workers,
         concurrent_sources,
@@ -391,26 +313,7 @@ def main(
     if not do_run:
         click.echo(json.dumps(campaign_plan(steps, pool), indent=2))
         return
-    sample_outcomes = None
-    if mode == "full":
-        assert sample_report is not None
-        steps, sample_outcomes = _full_steps(
-            pipelines,
-            catalog_sample_steps,
-            config,
-            runtime,
-            sample_report=sample_report,
-            sample_identity=sample_identity,
-        )
-    run_campaign(
-        steps,
-        runtime=runtime,
-        pool=pool,
-        report_path=report_path,
-        sample_identity=sample_identity,
-        mode=mode,
-        sample_outcomes=sample_outcomes,
-    )
+    run_campaign(steps, runtime=runtime, pool=pool, report_path=report_path, mode=mode)
 
 
 if __name__ == "__main__":

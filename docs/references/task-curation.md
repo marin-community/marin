@@ -237,10 +237,10 @@ Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
 Docker daemon.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
-`--base-url` overrides it. Full execution requires
-`--mode full --sample-report CAMPAIGN_PREFIX/sample.json`; the sample must match
-the current source graph and worker image, and only sources whose sample ended
-`sampled` or `completed` are processed.
+`--base-url` overrides it. `--mode full` processes each source after its own
+sample: the full step depends on the source's sample artifact, reuses its
+control trials, and ends `gated` when the sample's quality or verification gate
+rejected the source. Repeat `--source NAME` to run a subset.
 
 ## Outputs
 

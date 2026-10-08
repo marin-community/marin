@@ -1,16 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
-from collections import Counter
 from dataclasses import replace
 
 import pytest
 from click.testing import CliRunner
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
-from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import StepContext, run
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
@@ -81,7 +78,7 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
-def test_full_run_reuses_only_admitted_sample_outputs(tmp_path, monkeypatch, catalog):
+def test_full_run_depends_on_the_source_sample_and_reuses_its_trials(tmp_path, monkeypatch, catalog):
     captured = {}
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.run_campaign",
@@ -90,72 +87,22 @@ def test_full_run_reuses_only_admitted_sample_outputs(tmp_path, monkeypatch, cat
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     runner = CliRunner()
-    planned = runner.invoke(main, arguments(tmp_path))
-    assert planned.exit_code == 0, planned.output
-    sources = json.loads(planned.output)["sources"]
-    identity = hashlib.sha256(
-        canonical_json(
-            {
-                "sources": sorted((s["name"], s["version"], s["fingerprint"]) for s in sources),
-                "worker_image": "fixture-image",
-            }
-        ).encode()
-    ).hexdigest()
-    statuses = ("sampled", "failed", "gated")
-    outcomes = [
-        {
-            "name": source["name"],
-            "path": str(tmp_path / "artifacts" / source["name"] / source["version"]),
-            "status": status,
-            "error": None,
-        }
-        for source, status in zip(sources, statuses, strict=True)
-    ]
-    sample_report = tmp_path / "sample.json"
-    sample_report.write_text(
-        json.dumps(
-            {
-                "mode": "sample",
-                "status": "failed",
-                "sample_identity": identity,
-                "counts": dict(Counter(statuses)),
-                "sources": outcomes,
-            }
-        )
-    )
+    sampled = runner.invoke(main, [*arguments(tmp_path), "--source", "first"])
+    assert sampled.exit_code == 0, sampled.output
+    (sample,) = json.loads(sampled.output)["sources"]
     result = runner.invoke(
         main,
-        [
-            *arguments(tmp_path),
-            "--mode",
-            "full",
-            "--sample-report",
-            str(sample_report),
-            "--base-url",
-            "https://fixture.invalid",
-            "--run",
-        ],
+        [*arguments(tmp_path), "--source", "first", "--mode", "full", "--base-url", "https://fixture.invalid", "--run"],
     )
     assert result.exit_code == 0, result.output
-    admitted, failed, gated = captured["steps"]
-    samples = [dep for dep in admitted.deps if dep.name.startswith("task-curation/sample/first-")]
-    assert len(samples) == 1
-    assert samples[0].adopt_source == outcomes[0]["path"]
-    assert samples[0].adopt_config == {
-        "campaign_report": str(sample_report),
-        "sample_identity": identity,
-        "sample_source": sources[0]["name"],
-        "sample_fingerprint": sources[0]["fingerprint"],
-        "sample_path": outcomes[0]["path"],
-    }
-    run = admitted.build_config(
-        StepContext.for_run(str(tmp_path / "full-source"), str(tmp_path / "artifacts"), deps=admitted.deps)
+    (full,) = captured["steps"]
+    assert captured["mode"] == "full"
+    (previous,) = [dep for dep in full.deps if dep.name.startswith("data/rl/")]
+    assert (previous.name, previous.fingerprint()) == (sample["name"], sample["fingerprint"])
+    run = full.build_config(
+        StepContext.for_run(str(tmp_path / "full-source"), str(tmp_path / "artifacts"), deps=full.deps)
     )
-    assert run.previous_verification_report == outcomes[0]["path"] + "/verify/report.json"
-    for step in (failed, gated):
-        assert not any(dep.name.startswith("task-curation/sample/") for dep in step.deps)
-    assert [captured["sample_outcomes"][step.name].status for step in captured["steps"]] == list(statuses)
-    assert captured["sample_identity"] == identity
+    assert run.previous_verification_report == previous.path() + "/verify/report.json"
 
 
 def test_iris_schedules_each_grader_image_on_the_controller_without_network():
