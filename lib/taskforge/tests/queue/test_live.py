@@ -29,16 +29,19 @@ from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.queue.config import EngineConfig, LaptopGlm, RunConfig
 from taskforge.queue.job import SUMMARY_FILE, RunInputs, run_job
 from taskforge.queue.run import FailedItems
+from taskforge.review.decision import BandOutcome
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import MachineHost
 from taskforge.triage.checks import ALL_COMBINATIONS, CHECKS, CheckContext
 from taskforge.triage.program import GlmRubric
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.adversary import AdversaryRole, adversary_brief
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, RetryBackoff
 
 EVIDENCE = Path(__file__).parents[2] / ".evidence" / "queue"
 TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
+SUBMISSIONS = 10
 
 PROPOSAL = """---
 id: "live.queue.units/0"
@@ -97,12 +100,22 @@ def describe_unit(idea: str) -> dict[str, object]:
     return {"idea": idea}
 
 
+def no_context(proposal: TaskProposal) -> str:
+    return ""
+
+
 def inputs(client: GlmClient, root: Path) -> RunInputs[str]:
     proposal: TaskProposal = parse(PROPOSAL)
     record = {"capability": "unit conversion in lab inventory", "difficulty": "easy"}
     rubric = GlmRubric(CallStore(root / "calls", client), LLMPolicy(), 1, {proposal.header.source: record})
     return RunInputs(
-        {"live.queue.units": "units"}, OneProposal(), describe_unit, CHECKS, rubric, CheckContext(ALL_COMBINATIONS)
+        ideas={"live.queue.units": "units"},
+        source=OneProposal(),
+        describe_idea=describe_unit,
+        adversary_context=no_context,
+        checks=CHECKS,
+        rubric=rubric,
+        check_context=CheckContext(ALL_COMBINATIONS),
     )
 
 
@@ -110,8 +123,8 @@ def policy() -> LoopPolicy:
     validation = ValidationPolicy(
         k=4,
         adversary_k=1,
-        adversary_output_tokens=32768,
-        roles=tuple(AdversaryRole),
+        adversary_submissions=SUBMISSIONS,
+        adversary_repair_submissions=3,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
         deadlines=Deadlines(agent_timeout=900, attempt_timeout=1200),
@@ -129,6 +142,8 @@ def policy() -> LoopPolicy:
         max_build_retries=1,
         retry_backoff=RetryBackoff(initial=10, maximum=60, factor=2, jitter=0.1),
         output_token_budget=1_000_000,
+        # Taskforge's own band policy: a task outside the band is rejected.
+        band_rules=BandRules(BandRule(1, BandChoice.REJECT), BandRule(1, BandChoice.REJECT)),
         validation=validation,
     )
 
@@ -172,9 +187,15 @@ async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_c
         accepted = first.accepted[item]
         assert accepted.k == config.policy.validation.k
         assert accepted.solve_rate == accepted.solved / accepted.k
+        assert accepted.band is BandOutcome.IN_BAND  # the policy rejects outside the band
         assert written["accepted"][item]["solved"] == accepted.solved
     else:
         assert first.accepted == {}
+    attempts = sorted(root.rglob(f"adversary/{AdversaryRole.SHORTCUT}/*/attempt-*.json"))
+    for path in attempts:
+        adversary = json.loads(path.read_text())["adversary"]
+        assert adversary["system"].startswith(adversary_brief(SUBMISSIONS, "")), path
+        assert len(adversary["submissions"]) <= SUBMISSIONS, path
 
     second = await run_job(config, inputs, FailedItems.SKIP)
 
