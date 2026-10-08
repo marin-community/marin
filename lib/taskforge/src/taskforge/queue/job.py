@@ -28,9 +28,10 @@ import httpx
 from iris.cluster.runtime.env import IRIS_OUTPUT_DIR_ENV
 from rigging.filesystem.storage_path import StoragePath
 
+from taskforge.atomic_file import write_atomic
 from taskforge.build.sdk import BuildServices
 from taskforge.build.template import standard
-from taskforge.canonical import pretty_json, write_atomic
+from taskforge.content_hash import pretty_json
 from taskforge.ledger.finelog import run_ledger
 from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentTool
