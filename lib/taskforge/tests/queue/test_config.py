@@ -8,6 +8,7 @@ import pytest
 
 from taskforge.llm.client import Pool
 from taskforge.queue.config import LaptopGlm, load_run_config, run_config
+from taskforge.review.rules import BandChoice, BandRule
 
 EXAMPLE = Path(__file__).parents[2] / "docs" / "policy.example.json"
 
@@ -21,6 +22,36 @@ def test_the_committed_example_queues_on_the_bulk_pool():
 
     # User decision D3: the committed unattended configuration names the bulk pool.
     assert config.glm.pool is Pool.BULK
+
+
+def test_the_committed_example_accepts_a_too_easy_task_after_one_revision_and_rejects_a_too_hard_one():
+    policy = load_run_config(EXAMPLE).policy
+
+    # The capability run labels a too-easy task with its pass rate instead of losing it; Taskforge's
+    # own default rejects both kinds.
+    assert policy.band_rules.too_easy == BandRule(1, BandChoice.ACCEPT)
+    assert policy.band_rules.too_hard == BandRule(1, BandChoice.REJECT)
+    assert (policy.validation.adversary_submissions, policy.validation.adversary_repair_submissions) == (10, 3)
+
+
+@pytest.mark.parametrize(
+    ("edit", "problem"),
+    [
+        (lambda p: p.pop("band_rules"), "missing fields \\['band_rules'\\]"),
+        (lambda p: p["band_rules"]["too_easy"].update(then="note"), "note"),
+        (
+            lambda p: p["validation"].update(adversary_output_tokens=32768),
+            "unknown fields \\['adversary_output_tokens'\\]",
+        ),
+        (lambda p: p["validation"].pop("adversary_submissions"), "missing fields \\['adversary_submissions'\\]"),
+    ],
+)
+def test_a_policy_must_state_its_band_rules_and_adversary_budget(edit, problem):
+    obj = example()
+    edit(obj["policy"])
+
+    with pytest.raises(ValueError, match=problem):
+        run_config(obj)
 
 
 @pytest.mark.parametrize(
