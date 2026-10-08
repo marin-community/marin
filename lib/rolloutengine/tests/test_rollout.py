@@ -406,7 +406,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
                         "sh",
                         "-c",
                         "mkdir -m 700 /private && printf secret > /private/answer && "
-                        "chmod 600 /private/answer && mkdir -m 777 /workspace && "
+                        "chmod 600 /private/answer && chmod 777 /workspace && "
                         "mkdir -m 777 /workspace/artifacts",
                     ),
                     cwd="/",
