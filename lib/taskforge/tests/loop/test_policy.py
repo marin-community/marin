@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from taskforge.loop.policy import POLICY
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 
 
 def test_policy_json_round_trips_to_the_same_digest(programs):
@@ -17,6 +18,9 @@ def test_policy_json_round_trips_to_the_same_digest(programs):
 
     assert POLICY.validate_json(POLICY.dump_json(policy)).digest == policy.digest
     assert replace(policy, max_repairs=policy.max_repairs + 1).digest != policy.digest
+    accepting = BandRules(BandRule(1, BandChoice.ACCEPT), policy.band_rules.too_hard)
+    assert replace(policy, band_rules=accepting).digest != policy.digest
+    assert json.loads(POLICY.dump_json(policy))["band_rules"]["too_easy"] == {"repairs": 1, "then": "reject"}
 
 
 @pytest.mark.parametrize(
@@ -30,6 +34,16 @@ def test_policy_json_round_trips_to_the_same_digest(programs):
         (lambda p: p["validation"]["deadlines"].pop("agent_timeout"), "missing fields \\['agent_timeout'\\]"),
         (lambda p: p["validation"]["band"].update(min=0.1), "unknown fields \\['min'\\]"),
         (lambda p: p.update(max_retries=3), "unknown fields \\['max_retries'\\]"),
+        (lambda p: p.pop("band_rules"), "missing fields \\['band_rules'\\]"),
+        (lambda p: p["band_rules"].pop("too_hard"), "missing fields \\['too_hard'\\]"),
+        (lambda p: p["band_rules"]["too_easy"].update(then="note"), "accept"),
+        (lambda p: p["band_rules"]["too_easy"].update(notes=1), "unknown fields \\['notes'\\]"),
+        (lambda p: p["validation"].pop("adversary_submissions"), "missing fields \\['adversary_submissions'\\]"),
+        (lambda p: p["validation"].update(roles=["shortcut"]), "unknown fields \\['roles'\\]"),
+        (
+            lambda p: p["validation"].update(adversary_output_tokens=32768),
+            "unknown fields \\['adversary_output_tokens'\\]",
+        ),
     ],
 )
 def test_policy_json_states_every_field_and_no_other(programs, edit, problem):

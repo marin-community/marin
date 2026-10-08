@@ -19,17 +19,20 @@ An item that ended ``ABANDONED`` (build or validation retries spent) or ``FAILED
 exception) is not final: when it is run again, the next event clears ``terminal``, and an abandoned
 item resumes where it stopped (the build of the same program, or ``CONTROLS``) with fresh retry
 counts. Whether a launch runs it again is the caller's choice. ``ACCEPTED`` and ``REJECTED`` are final.
+
+Logs written before the single shortcut adversary (``DECIDED`` findings ``leak_passed`` or
+``ambiguous``) do not fold: ``FindingKind`` no longer names those kinds and ``derive_state`` raises.
 """
 
 import time
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
-from taskforge.review.decision import RejectKind
+from taskforge.review.decision import BandOutcome, RejectKind
 from taskforge.triage.verdict import TriageDecision
 from taskforge.validate.calibration import DECISIVE, FindingKind
 from taskforge.validate.outcome import TrialKind
@@ -39,6 +42,8 @@ SEQ = "seq"
 SCHEMA = "schema"
 LIST_SEPARATOR = ","
 COUNT_SEPARATOR = ":"
+CALIBRATED = "calibrated"
+OUTSIDE_BAND = "accepted outside the band"
 
 
 class EventKind(StrEnum):
@@ -71,15 +76,20 @@ class EventKind(StrEnum):
     SOLVED = "solved"
     """attrs: graded, solved, timed_out, ungraded."""
     ADVERSARIES_RUN = "adversaries_run"
-    """attrs: ``<role>_graded``, ``<role>_passes`` and ``<role>_sentinel`` (trials that gave up) per role."""
+    """attrs per role: ``<role>_graded`` (graded trials), ``<role>_passes`` (graded trials whose grade
+    passed), ``<role>_submissions`` (verifier submissions over the graded trials) and ``<role>_claimed``
+    (graded trials whose verdict line claimed a shortcut); and ``context_digest``, the sha256 of the
+    consumer's adversary context, ``""`` when it was empty."""
     DECIDED = "decided"
     """input_hash: the task digest. attrs: decision (a ``DecisionKind``), repairs_used, retries_used and
-    notes (the kinds of the noted adversary passes, comma-separated; empty when staged or none); kind
-    (a ``RejectKind``) and reasons for reject; findings and invalidate for repair; cause, count, abandon
-    and not_before for retry."""
+    notes (the kinds of the noted adversary passes, comma-separated; empty when staged or none); band
+    (a ``BandOutcome``: where the solve rate fell, or the kind accepted outside it), solved, graded
+    and solve_rate (three decimals) for accept; kind (a ``RejectKind``) and reasons for reject;
+    findings and invalidate for repair; cause, count, abandon and not_before for retry."""
     TERMINAL = "terminal"
-    """attrs: terminal (a ``Terminal``), reason, kind (a ``RejectKind``) when rejected, and causes
-    (``cause:count`` pairs, comma-separated) when abandoned."""
+    """attrs: terminal (a ``Terminal``), reason (``calibrated``, or ``accepted outside the band: <band>``
+    when accepted), kind (a ``RejectKind``) when rejected, and causes (``cause:count`` pairs,
+    comma-separated) when abandoned."""
 
 
 class ProposalOrigin(StrEnum):
@@ -167,7 +177,7 @@ class ItemState:
             re-enters with a fresh budget.
         build_host_failures: The cause of each consecutive host failure of the current build since the
             last ``ABANDONED``; a build that finishes, built or failed, clears it.
-        prior_band_findings: Band findings already repaired once.
+        band_repairs: Review ``Repair`` decisions issued so far for each band finding kind.
         solved: The solver trials of this validation pass are recorded.
         adversaries_run: The adversary trials of this validation pass are recorded.
         not_before: Unix time before which a retried build or validation does not start.
@@ -192,7 +202,7 @@ class ItemState:
     repairs_used: int
     retry_causes: tuple[str, ...]
     build_host_failures: tuple[InfrastructureCause, ...]
-    prior_band_findings: frozenset[FindingKind]
+    band_repairs: Mapping[FindingKind, int]
     solved: bool
     adversaries_run: bool
     not_before: float | None
@@ -354,7 +364,7 @@ def derive_state(entries: Iterable[LedgerEntry]) -> ItemState:
         repairs_used=0,
         retry_causes=(),
         build_host_failures=(),
-        prior_band_findings=frozenset(),
+        band_repairs={},
         solved=False,
         adversaries_run=False,
         not_before=None,
@@ -444,7 +454,9 @@ def _decided(state: ItemState, entry: LedgerEntry) -> ItemState:
     attrs = entry.attrs
     decision = DecisionKind(attrs["decision"])
     if decision is DecisionKind.ACCEPT:
-        return _closing(state, Terminal.ACCEPTED, "calibrated", None)
+        band = BandOutcome(attrs["band"])
+        reason = CALIBRATED if band is BandOutcome.IN_BAND else f"{OUTSIDE_BAND}: {band}"
+        return _closing(state, Terminal.ACCEPTED, reason, None)
     if decision is DecisionKind.REJECT:
         return _closing(state, Terminal.REJECTED, attrs["reasons"], RejectKind(attrs["kind"]))
     if decision is DecisionKind.RETRY:
@@ -454,6 +466,8 @@ def _decided(state: ItemState, entry: LedgerEntry) -> ItemState:
             return _closing(state, Terminal.ABANDONED, attrs["cause"], None, causes)
         return replace(state, phase=Phase.CONTROLS, not_before=float(attrs["not_before"]))
     findings = frozenset(FindingKind(kind) for kind in split(attrs["findings"]))
+    band_repairs = Counter(state.band_repairs)
+    band_repairs.update(findings - DECISIVE)
     return replace(
         state,
         phase=Phase.BUILD,
@@ -466,7 +480,7 @@ def _decided(state: ItemState, entry: LedgerEntry) -> ItemState:
         repair_round=state.round,
         invalidate=split(attrs["invalidate"]),
         repairs_used=state.repairs_used + 1,
-        prior_band_findings=state.prior_band_findings | (findings - DECISIVE),
+        band_repairs=dict(band_repairs),
         solved=False,
         adversaries_run=False,
     )
