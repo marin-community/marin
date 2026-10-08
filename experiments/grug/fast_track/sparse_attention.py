@@ -239,6 +239,8 @@ def _sparse_math(
     spec: "IndexSpec",
     tap_offsets: tuple[int, ...],
     dcmha_mode: "DcmhaMode",
+    far_half: str = "",
+    far_window: int = 128,
     window: int,
     topk: int,
     dsa_topk: int,
@@ -273,6 +275,13 @@ def _sparse_math(
         qc = jax.lax.dynamic_slice_in_dim(q, c0, chunk, axis=1).astype(jnp.float32)
         if compose is None:
             logits = jnp.einsum("bqhd,bkhd->bhqk", qc * scale, k.astype(jnp.float32))  # [B, H, C, S]
+            if far_half:
+                # Keys at least far_window back score on one half of the channels only (cur: first, prev: second).
+                half = qc.shape[-1] // 2
+                sl = slice(0, half) if far_half == "cur" else slice(half, None)
+                far = jnp.einsum("bqhd,bkhd->bhqk", qc[..., sl] * scale, k.astype(jnp.float32)[..., sl])
+                dist_ = qi[:, None] - keys[None, :]
+                logits = jnp.where((dist_ >= far_window)[None, None], far, logits)
         else:
             mask = compose.offset_mask.astype(jnp.float32)  # [H, D]
             kf = k.astype(jnp.float32)
@@ -428,6 +437,8 @@ def sparse_index_attention(
     spec: IndexSpec = IndexSpec(),
     tap_offsets: tuple[int, ...] = (),
     dcmha_mode: DcmhaMode = DcmhaMode(),
+    far_half: str = "",
+    far_window: int = 128,
     select_match: bool = False,
     block: int = 32,
     compress: bool = False,
@@ -444,6 +455,8 @@ def sparse_index_attention(
         spec=spec,
         tap_offsets=tap_offsets,
         dcmha_mode=dcmha_mode,
+        far_half=far_half,
+        far_window=far_window,
         select_match=select_match,
         block=block,
         compress=compress,
@@ -519,6 +532,8 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         window=cfg.mla_sparse_window,
         spec=spec,
         tap_offsets=cfg.mla_sparse_taps,
+        far_half=cfg.mla_far_key_half,
+        far_window=cfg.mla_far_key_window,
         dcmha_mode=DcmhaMode(
             pre="pre" in cfg.mla_dcmha_parts,
             post="post" in cfg.mla_dcmha_parts,

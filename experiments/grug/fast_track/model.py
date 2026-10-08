@@ -1022,6 +1022,9 @@ class GrugModelConfig:
     mla_kv_direct: bool = False
     mla_prev_key_concat: bool = False
     """MLA keys are ``[k_j ; k_{j-1}]`` (each normed) against 2x-wide queries; the emulation only."""
+    mla_far_key_half: str = ""
+    """Emulation: keys ``mla_far_key_window``+ back score on one key half only (``cur`` / ``prev``)."""
+    mla_far_key_window: int = 128
     mla_value_norm: str = "none"
     """Tied-value RMSNorm: ``none``, ``rms`` or ``learned``."""
     """No KV latent: MLA keys / values project the normed attention input directly."""
