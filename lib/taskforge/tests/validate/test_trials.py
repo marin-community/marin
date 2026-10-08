@@ -315,12 +315,12 @@ async def test_engine_settings_replace_the_builders_turn_budget(tmp_path, file_t
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
 
 
-async def test_the_attempt_file_keeps_the_turn_count_but_not_the_steps(tmp_path, file_task, fakes):
+async def test_the_attempt_file_keeps_the_steps(tmp_path, file_task, fakes):
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
 
     outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert isinstance(outcomes[0], Graded) and len(outcomes[0].rollout.steps) == 2
     (record,) = attempt_records(tmp_path)
-    assert (record["turns"], record["rollout"]["steps"]) == (2, [])
-    assert record["rollout"]["messages"] == json.loads(json.dumps(outcomes[0].rollout.messages))
+    steps = record["rollout"]["steps"]
+    assert [step["turn"]["message"]["content"] for step in steps] == ["", "Done."]

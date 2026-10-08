@@ -27,9 +27,9 @@ total-turn and attempt deadlines of the builder's ``TaskSessionSpec`` (``Deadlin
 is bounded whatever the builder set, and the ledger's ``input_hash`` covers the effective
 ``LoweredTaskSpec`` (``task_digest``). The builder's verifier deadline and machine settings stand.
 
-The attempt file holds the ``RolloutData`` without its ``steps``: each step repeats the whole
-conversation and its token prefix, so they would multiply the file's size. ``turns`` keeps their
-count.
+The attempt file holds the whole ``RolloutData``, steps included: a validation round is reviewed
+from its files alone, and the final reply, the tool calls and the per-turn usage are read from the
+steps.
 
 The submission convention is chosen per task (``task_convention``) from
 ``EngineSettings.conventions``: it is presentation, not part of the task, and it changes the
@@ -342,8 +342,7 @@ def _attributes(outcome: Outcome) -> dict[str, str]:
 
 
 def outcome_json(outcome: Outcome) -> bytes:
-    """The evidence record of one attempt: the outcome and the ``RolloutData`` without its ``steps``,
-    whose count is ``turns``."""
+    """The evidence record of one attempt: the outcome and its whole ``RolloutData``."""
     record: dict[str, Any] = (
         {"outcome": "graded", "reward": outcome.reward, "timed_out": outcome.timed_out}
         if isinstance(outcome, Graded)
@@ -355,9 +354,7 @@ def outcome_json(outcome: Outcome) -> bytes:
         }
     )
     record["cleanup_errors"] = cleanup_errors(outcome)
-    rollout = outcome.rollout
-    record["turns"] = None if rollout is None else len(rollout.steps)
-    record["rollout"] = None if rollout is None else dataclasses.asdict(dataclasses.replace(rollout, steps=()))
+    record["rollout"] = None if outcome.rollout is None else dataclasses.asdict(outcome.rollout)
     return json.dumps(record, indent=1).encode()
 
 
