@@ -517,8 +517,9 @@ def _run_source_pipeline(
             context=context,
             telemetry=phase,
         )
+    # Invalid responses count as unavailable, as in the quality gate.
     with telemetry.phase("audit_review_count") as phase:
-        incomplete_reviews = execute_phase(
+        unavailable_reviews = execute_phase(
             context,
             Dataset.from_files(str(audited / AUDIT_INPUT_PATTERN))
             .load_parquet(columns=["review_status"])
@@ -654,6 +655,8 @@ def _run_source_pipeline(
         )
     verification["verification"]["source_path"] = str(output / "normalize")
     verification["verification"]["review_path"] = str(output / "review")
+    # Unavailable reviews only defer their rows. The source is incomplete when the
+    # quality gate could not decide or a control trial hit an infrastructure error.
     retryable_verification = verification["verification"]["counts"]["infra_error"] > 0
     if decision.status == SourceQualityStatus.INCOMPLETE or retryable_verification:
         status = "incomplete"
@@ -681,7 +684,7 @@ def _run_source_pipeline(
         "raw_sample_count": len(sample.rows),
         "raw_population_census": census,
         "full_expansion": expanded,
-        "incomplete_reviews": incomplete_reviews,
+        "unavailable_reviews": unavailable_reviews,
         "quality": decision.model_dump(mode="json"),
         "verification": verification["verification"],
         "admission": source_admission(admissions),

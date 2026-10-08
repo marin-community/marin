@@ -99,9 +99,11 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
 `--verification-backend` selects how sandbox graders run: `qemu` boots the guest
 bundle that the worker image carries for each grader image, `gvisor` runs the
 image on the worker's Docker daemon, and `iris` schedules it on
-`--controller-url`. An image the backend cannot run leaves its source
-inconclusive. Add `--run` to execute, with `GLM_BULK_TOKEN` set; the driver resolves
-the review endpoint from the Iris GLM relay job (`--relay-job`, default
+`--controller-url`. With `qemu`, a `--controller-url` schedules images that have
+no QEMU bundle on Iris, and the artifact identity records both backends. An
+image the backend cannot run leaves its source inconclusive. Add `--run` to
+execute, with `GLM_BULK_TOKEN` set; the driver resolves the review endpoint
+from the Iris GLM relay job (`--relay-job`, default
 `DEFAULT_GLM_RELAY_JOB` in `experiments/post_training/glm.py`) unless `--base-url` is given.
 For full execution, pass `--mode full`, a new `--report-path` and
 `--sample-report CAMPAIGN_PREFIX/sample.json`; only sources whose sample ended

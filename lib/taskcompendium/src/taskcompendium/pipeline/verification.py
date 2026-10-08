@@ -33,9 +33,15 @@ from taskcompendium.runtime.task_grading import grade_task
 MALFORMED_JSON = "[}"
 """A reply no JSON parser accepts."""
 
+DIAGNOSTIC_TAIL_CHARS = 1500
+"""Characters of grader stdout and stderr kept in a failed control's detail."""
+
 
 def control_result(grade: GradeResult, name: str, expected_reward: float) -> CheckResult:
-    """Require the expected reward, counting a rejected submission as zero, while retaining runtime errors."""
+    """Require the expected reward, counting a rejected submission as zero, while retaining runtime errors.
+
+    A result that is not a pass keeps the grader's exit code and the tails of its stdout and stderr.
+    """
     if grade.status == Outcome.UNAVAILABLE:
         status = CheckStatus.UNSUPPORTED
     elif grade.status == Outcome.INFRA_ERROR:
@@ -51,6 +57,13 @@ def control_result(grade: GradeResult, name: str, expected_reward: float) -> Che
         detail += f"; error={grade.error}"
     if grade.detail and status != CheckStatus.PASS:
         detail += f"; detail={grade.detail}"
+    if grade.diagnostics and status != CheckStatus.PASS:
+        diagnostics = grade.diagnostics
+        detail += (
+            f"; exit_code={diagnostics['exit_code']}"
+            f"; stdout_tail={diagnostics['stdout'][-DIAGNOSTIC_TAIL_CHARS:]}"
+            f"; stderr_tail={diagnostics['stderr'][-DIAGNOSTIC_TAIL_CHARS:]}"
+        )
     return CheckResult(check=name, status=status, detail=detail)
 
 

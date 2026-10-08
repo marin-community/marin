@@ -432,9 +432,12 @@ def test_incomplete_source_retry_reuses_successful_reviews(tmp_path, failure):
 
 
 class PartiallyUnavailableReview(BatchService):
-    def __init__(self, bad_count):
+    """Fail the first ``unavailable_count`` tasks it sees and judge the next ``bad_count`` bad."""
+
+    def __init__(self, bad_count, unavailable_count=1):
         super().__init__()
         self.bad_count = bad_count
+        self.unavailable_count = unavailable_count
         self.observed = []
 
     def output(self, batch):
@@ -444,9 +447,9 @@ class PartiallyUnavailableReview(BatchService):
             if task_id not in self.observed:
                 self.observed.append(task_id)
             index = self.observed.index(task_id)
-            if index == 0:
+            if index < self.unavailable_count:
                 row["response"] = {"status_code": 503, "body": {"error": "Review unavailable"}}
-            elif index <= self.bad_count:
+            elif index < self.unavailable_count + self.bad_count:
                 arguments = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
                 verdict = json.loads(arguments["arguments"])
                 arguments["arguments"] = json.dumps({**verdict, "quality": "bad"})
@@ -479,7 +482,7 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     )
     report = read_json(result.manifest_path)
     assert report["quality"]["status"] == quality
-    assert report["incomplete_reviews"] == 1
+    assert report["unavailable_reviews"] == 1
     assert report["processed_rows"] == processed
     assert report["verification"]["status"] == verification
     review = parquet_rows(result.review_path)
@@ -490,6 +493,34 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     assert len(final) == (0 if verification == "rejected" else processed - bad_count - 1)
     assert deferred[0]["task_id"] not in {row["task_id"] for row in final}
     assert list((tmp_path / "output/work/quality/evidence").glob("*/attempt-*/reviews.json"))
+
+
+@pytest.mark.parametrize(
+    "unavailable,bad_count,quality,status,admitted",
+    [(3, 20, "full_review", "completed", 102), (10, 0, "incomplete", "incomplete", 0)],
+    ids=["decision_reached", "decision_open"],
+)
+def test_unavailable_reviews_leave_a_source_incomplete_only_when_the_gate_cannot_decide(
+    tmp_path, unavailable, bad_count, quality, status, admitted
+):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(125))
+    reviewer = BatchReviewer(PartiallyUnavailableReview(bad_count, unavailable), "fixture", "revision", max_attempts=1)
+    result = run_pipeline(
+        fixture_recipe(convert_svamp),
+        source,
+        tmp_path / "output",
+        pipeline_config(SourceProcessingMode.FULL, reviewer),
+    )
+    report = read_json(result.manifest_path)
+    assert report["quality"]["status"] == quality
+    assert result.status == report["status"] == status
+    assert report["unavailable_reviews"] == unavailable
+    review = parquet_rows(result.review_path)
+    deferred = [row for row in review if row["review_status"] == "unavailable"]
+    assert len(deferred) == unavailable
+    assert {row["filter_status"] for row in deferred} == {"defer"}
+    assert len(parquet_rows(result.final_path)) == admitted
 
 
 @dataclass(frozen=True)

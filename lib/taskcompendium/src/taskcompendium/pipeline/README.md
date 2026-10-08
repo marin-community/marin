@@ -49,7 +49,9 @@ cannot convert.
    `quality_basis="inferred_from_source"`.
 5. **Filter.** Rows are kept, rejected or deferred from quality evidence.
    Deferred rows (unavailable or malformed review) are excluded from `final/`
-   and counted separately from defects.
+   and counted separately from defects; the manifest records them as
+   `unavailable_reviews`. They make the source `incomplete` only when resolving
+   them could change the quality decision.
 6. **Verify.** With controls, [source_verification.py](source_verification.py)
    samples kept rows and grades three submissions per task through the same
    grading path rollouts use ([controls.py](controls.py)):

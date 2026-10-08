@@ -15,7 +15,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from taskcompendium.convert.answers import json_schema_task
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.controls import answer_reply, control_suite, wrong_reply
@@ -38,7 +38,7 @@ from taskcompendium.pipeline.source_verification import (
     verification_identity,
     verify_source,
 )
-from taskcompendium.pipeline.verification import control_result
+from taskcompendium.pipeline.verification import DIAGNOSTIC_TAIL_CHARS, control_result
 
 from .pipeline_stages import FixtureGradingMachines
 
@@ -80,6 +80,34 @@ def test_failed_control_retains_runtime_diagnostics_in_saved_checks(outcome, sta
     assert error in saved.detail
     assert "qemu" in saved.detail
     assert "returncode" in saved.detail
+
+
+def test_failed_control_keeps_grader_exit_code_and_output_tails():
+    stderr = "Traceback from the first import\n" + "frame\n" * 500 + "ModuleNotFoundError: No module named 'skyrl_gym'"
+    diagnostics = {
+        "stdout": "grading started",
+        "stderr": stderr,
+        "exit_code": 1,
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+    }
+    failed = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        "Grader did not write a reward file",
+        diagnostics=diagnostics,
+        failure=GradingFailure.MISSING_REWARD,
+    )
+    check = control_result(failed, "golden", 1.0)
+    assert check.status == CheckStatus.INFRA_ERROR
+    assert "exit_code=1" in check.detail
+    assert "grading started" in check.detail
+    assert stderr[-DIAGNOSTIC_TAIL_CHARS:] in check.detail
+    assert "Traceback from the first import" not in check.detail
+
+    passed = control_result(GradeResult(Outcome.GRADED, 1.0, diagnostics=diagnostics), "golden", 1.0)
+    assert passed.status == CheckStatus.PASS
+    assert "skyrl_gym" not in passed.detail
 
 
 @pytest.fixture

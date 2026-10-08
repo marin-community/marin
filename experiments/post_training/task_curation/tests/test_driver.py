@@ -11,6 +11,8 @@ import pytest
 from click.testing import CliRunner
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import StepContext
+from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.image import RegistryImage
 from shellbox.machine import NetworkPolicy, QemuBundle, UnsupportedMachineSpec
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
@@ -23,6 +25,7 @@ from experiments.post_training.task_curation.driver import (
 from experiments.post_training.task_curation.images import APPS_IMAGE, ARC_IMAGE
 
 PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
+CONTROLLER_URL = "http://controller.invalid"
 
 
 def math500():
@@ -142,12 +145,31 @@ def test_full_run_reuses_only_admitted_sample_outputs(tmp_path, monkeypatch, cat
     assert captured["sample_identity"] == identity
 
 
-def test_qemu_runs_committed_images_from_their_worker_bundles():
-    qemu = campaign_machines(VerificationBackend.QEMU, PINNED_WORKER, None)
+@pytest.mark.parametrize("controller_url", [None, CONTROLLER_URL])
+def test_qemu_runs_committed_images_from_their_worker_bundles(controller_url):
+    qemu = campaign_machines(VerificationBackend.QEMU, PINNED_WORKER, controller_url)
     factory, spec = qemu.machine(APPS_IMAGE.reference, 2048)
     assert factory.backend.value == "qemu"
     assert spec.source == QemuBundle(Path(APPS_IMAGE.qemu_bundle))
     assert spec.network == NetworkPolicy.DENY
     assert spec.memory_mb == 2048
-    with pytest.raises(UnsupportedMachineSpec):
-        qemu.machine(ARC_IMAGE.reference, 2048)
+    if controller_url is None:
+        with pytest.raises(UnsupportedMachineSpec):
+            qemu.machine(ARC_IMAGE.reference, 2048)
+        return
+    factory, spec = qemu.machine(ARC_IMAGE.reference, 2048)
+    assert isinstance(factory, IrisMachineFactory)
+    assert spec.source == RegistryImage(ARC_IMAGE.reference)
+    assert spec.network == NetworkPolicy.DENY
+
+
+def test_qemu_with_iris_for_unbundled_images_has_its_own_machine_identity():
+    identities = [
+        canonical_json(campaign_machines(backend, PINNED_WORKER, url).identity())
+        for backend, url in (
+            (VerificationBackend.QEMU, None),
+            (VerificationBackend.IRIS, CONTROLLER_URL),
+            (VerificationBackend.QEMU, CONTROLLER_URL),
+        )
+    ]
+    assert len(set(identities)) == 3

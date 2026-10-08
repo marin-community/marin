@@ -121,14 +121,37 @@ class GvisorMachines:
         return GvisorMachineFactory(), MachineSpec(DockerImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
 
 
+@dataclass(frozen=True)
+class QemuOrIrisMachines:
+    """Boot images that have a QEMU bundle under QEMU and schedule every other image on Iris."""
+
+    qemu: QemuMachines
+    iris: IrisMachines
+
+    def identity(self) -> dict[str, Any]:
+        return {**self.qemu.identity(), "iris": self.iris.identity()}
+
+    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        if image in self.qemu.bundles:
+            return self.qemu.machine(image, memory_mb)
+        return self.iris.machine(image, memory_mb)
+
+
 def qemu_bundles() -> dict[str, str]:
     return {image.reference: image.qemu_bundle for image in IMAGES if image.qemu_bundle is not None}
 
 
 def campaign_machines(backend: VerificationBackend, worker_image: str, controller_url: str | None) -> GradingMachines:
-    """Fresh, network-denied grading machines on ``backend`` for every source in a campaign."""
+    """Fresh, network-denied grading machines on ``backend`` for every source in a campaign.
+
+    QEMU with a controller URL runs images without a QEMU bundle on Iris instead of leaving their
+    sources inconclusive.
+    """
     if backend == VerificationBackend.QEMU:
-        return QemuMachines(worker_image, qemu_bundles())
+        qemu = QemuMachines(worker_image, qemu_bundles())
+        if controller_url is None:
+            return qemu
+        return QemuOrIrisMachines(qemu, IrisMachines(worker_image, controller_url))
     if backend == VerificationBackend.IRIS:
         if controller_url is None:
             raise ValueError("Iris verification requires a controller URL")
@@ -158,7 +181,10 @@ def campaign_machines(backend: VerificationBackend, worker_image: str, controlle
 @click.option(
     "--verification-backend", type=click.Choice([backend.value for backend in VerificationBackend]), required=True
 )
-@click.option("--controller-url", help="Iris controller for --verification-backend iris.")
+@click.option(
+    "--controller-url",
+    help="Iris controller for --verification-backend iris, or for images without a QEMU bundle under qemu.",
+)
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=100)
 @click.option("--report-path", required=True)

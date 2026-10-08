@@ -151,7 +151,7 @@ class RlDataArtifact(CampaignArtifact):
 
 
 class SourcePipelineIncomplete(RuntimeError):
-    """The source retained its evidence but has incomplete review or verification."""
+    """The quality gate could not decide or a control trial hit an infrastructure error; evidence is retained."""
 
 
 def review_rubric(pipeline: RlDataPipeline) -> ReviewRubric | None:

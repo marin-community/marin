@@ -123,8 +123,10 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
 
 `--verification-backend` is `qemu`, `gvisor` or `iris` (with
 `--controller-url`). QEMU boots the guest bundle that the worker image carries
-for each grader image, as recorded in `images/__init__.py`. Grading machines
-never have network access. Add `--run --base-url PROVIDER_URL` to execute, with
+for each grader image, as recorded in `images/__init__.py`; given
+`--controller-url`, it schedules images without a bundle on Iris instead of
+leaving their sources inconclusive. Grading machines never have network
+access. Add `--run --base-url PROVIDER_URL` to execute, with
 `GLM_BULK_TOKEN` in the driver environment. Full execution requires
 `--mode full --sample-report CAMPAIGN_PREFIX/sample.json`; the sample must match
 the current source graph and worker image, and only sources whose sample ended
