@@ -15,7 +15,7 @@ from typing import Any
 from finestore.cache import PersistentKvCache
 from zephyr import counters
 
-from taskcompendium.pipeline.review_transport import DEFAULT_MAX_BATCH_BYTES, BatchClient, batch_output
+from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES, BatchClient, batch_output
 
 logger = logging.getLogger(__name__)
 

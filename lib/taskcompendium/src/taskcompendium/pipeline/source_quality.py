@@ -88,7 +88,7 @@ class SourceQualityReport(BaseModel):
 
 
 def assessment(record: ReviewRecord) -> Assessment:
-    """Separate demonstrated defects from uncertainty and transport failures."""
+    """Separate demonstrated defects from uncertainty and request failures."""
     if record.status != ReviewStatus.REVIEWED or record.verdict is None:
         return Assessment.UNAVAILABLE
     verdict = record.verdict

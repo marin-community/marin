@@ -6,7 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from taskcompendium.pipeline.direct_transport import MAX_DIRECT_CONCURRENT_REQUESTS, direct_output
+from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, chat_output
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import review_records
 
@@ -29,7 +29,7 @@ def test_direct_oversized_request_isolated_with_utf8_bytes_and_evidence(tmp_path
         {"custom_id": "small", "body": {"task_id": "small"}},
     ]
     oversized_bytes = len(json.dumps(requests[0], ensure_ascii=False, separators=(",", ":")).encode()) + 1
-    output = direct_output(service, requests, tmp_path, max_concurrent=2, max_batch_bytes=oversized_bytes - 1)
+    output = chat_output(service, requests, tmp_path, max_concurrent=2, max_batch_bytes=oversized_bytes - 1)
     assert [record.status for record in review_records(output, ["oversized", "small"])] == [
         ReviewStatus.UNAVAILABLE,
         ReviewStatus.REVIEWED,
@@ -68,7 +68,7 @@ def test_concurrent_direct_invocations_share_process_admission_limit(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
             executor.submit(
-                direct_output, service, requests, tmp_path / str(index), max_concurrent=MAX_DIRECT_CONCURRENT_REQUESTS
+                chat_output, service, requests, tmp_path / str(index), max_concurrent=MAX_DIRECT_CONCURRENT_REQUESTS
             )
             for index in range(2)
         ]

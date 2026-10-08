@@ -139,7 +139,7 @@ omitted files.
 ## Telemetry
 
 Zephyr counters report review cache hits and misses, submitted requests and
-bytes, transport failures, review outcomes, check outcomes, control and trial
+bytes, request failures, review outcomes, check outcomes, control and trial
 outcomes, admissions, and time spent in provider calls and grading.
 `telemetry.json` keeps the final counter dictionaries of every execution and the
 wall time of each phase. Join its execution IDs to Zephyr stage rows by

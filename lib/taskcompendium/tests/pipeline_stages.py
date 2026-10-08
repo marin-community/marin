@@ -37,7 +37,7 @@ from taskcompendium.pipeline.review import BatchReviewer
 from taskcompendium.pipeline.stages import (
     AuditExecution,
     ReviewConfig,
-    ReviewTransport,
+    ReviewMode,
     audit_prepared_source,
     filter_source,
     prepare_source,
@@ -120,7 +120,7 @@ def review_config(reviewer: BatchReviewer) -> ReviewConfig:
         reviewer.retry_max_tokens,
         reviewer.retry_max_prompt_characters,
         max_batch_bytes=reviewer.max_batch_bytes,
-        transport=ReviewTransport.PROVIDER_BATCH,
+        mode=ReviewMode.BATCH,
     )
 
 

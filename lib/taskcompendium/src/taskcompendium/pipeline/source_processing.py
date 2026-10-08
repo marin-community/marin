@@ -388,7 +388,7 @@ def _run_source_pipeline(
 ) -> SourcePipelineResult:
     """Review bounded raw tasks, gate full conversion, and persist joined source sidecars.
 
-    The caller owns the entered context and reviewer transport. Reading the raw
+    The caller owns the entered context and reviewer. Reading the raw
     population scans selected raw records with bounded memory, but does not
     execute task converters or controls. Successful outputs retain request
     evidence and decisions while disposing of redundant intermediate task payloads.

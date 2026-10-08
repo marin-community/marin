@@ -48,10 +48,10 @@ from taskcompendium.pipeline.review import (
     DEFAULT_REVIEW_MAX_TOKENS,
     DEFAULT_REVIEW_RETRY_MAX_TOKENS,
     BatchReviewer,
-    DirectReviewer,
+    ChatReviewer,
     Reviewer,
 )
-from taskcompendium.pipeline.review_transport import DEFAULT_MAX_BATCH_BYTES
+from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES
 from taskcompendium.pipeline.source_quality import (
     QualitySampleCoverage,
     SourceQualityPolicy,
@@ -82,9 +82,9 @@ REVIEW_INPUT_PATTERN = "review-inputs/batch-*.jsonl.gz"
 ACCEPTED_SHARD_TEMPLATE = "accepted/part-{shard:05d}.parquet"
 
 
-class ReviewTransport(StrEnum):
-    PROVIDER_BATCH = "provider-batch"
-    DIRECT_CHAT = "direct-chat"
+class ReviewMode(StrEnum):
+    BATCH = "batch"
+    CHAT = "chat"
     MANUAL = "manual"
 
 
@@ -92,7 +92,7 @@ class ReviewTransport(StrEnum):
 class ReviewConfig:
     model: str
     model_revision: str
-    transport: ReviewTransport = field(kw_only=True)
+    mode: ReviewMode = field(kw_only=True)
     prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
@@ -104,7 +104,7 @@ class ReviewConfig:
 
 @dataclass(frozen=True)
 class AuditExecution:
-    """Execution choices and transport; batch size determines the resumable layout."""
+    """Execution choices and review mode; batch size determines the resumable layout."""
 
     max_workers: int = 1
     review_batch_size: int = 100
@@ -203,7 +203,7 @@ def _audit_batch(
                     )
                 yield audit_columns(audit)
         finally:
-            # Each attempt retains its transport evidence, including failed attempts.
+            # Each attempt retains its request evidence, including failed attempts.
             started = time.monotonic()
             try:
                 persist_evidence(local, evidence)
@@ -265,10 +265,10 @@ def manifest_counts(
 def _executing_reviewer(execution: AuditExecution, review: ReviewConfig) -> Reviewer:
     reviewer = execution.reviewer
     if reviewer is None:
-        raise ValueError("Audit execution requires a reviewer transport")
+        raise ValueError("Audit execution requires a reviewer")
     if execution.max_workers < 1 or execution.review_batch_size < 1 or execution.review_input_bytes < 1:
         raise ValueError("Audit worker and batch counts must be positive")
-    if isinstance(reviewer, (BatchReviewer, DirectReviewer)):
+    if isinstance(reviewer, (BatchReviewer, ChatReviewer)):
         actual = ReviewConfig(
             reviewer.model,
             reviewer.model_revision,
@@ -277,7 +277,7 @@ def _executing_reviewer(execution: AuditExecution, review: ReviewConfig) -> Revi
             reviewer.max_attempts,
             reviewer.retry_max_tokens,
             reviewer.retry_max_prompt_characters,
-            transport=ReviewTransport(reviewer.identity["transport"]),
+            mode=ReviewMode(reviewer.identity["mode"]),
             max_batch_bytes=reviewer.max_batch_bytes,
         )
         if actual != review:

@@ -18,7 +18,7 @@ from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
-from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewTransport
+from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -57,7 +57,7 @@ def config() -> SourcePipelineConfig:
         mode=SourceProcessingMode.SAMPLE,
         quality_policy=SourceQualityPolicy(),
         verification_policy=SourceVerificationPolicy(10, 0, 2, 0.9),
-        review=ReviewConfig("fixture-model", "fixture-revision", transport=ReviewTransport.PROVIDER_BATCH),
+        review=ReviewConfig("fixture-model", "fixture-revision", mode=ReviewMode.BATCH),
         execution=AuditExecution(),
         filter_policy=FilterPolicy(),
         normalized_shards=2,

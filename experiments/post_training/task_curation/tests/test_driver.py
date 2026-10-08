@@ -43,7 +43,7 @@ def catalog(monkeypatch):
 
 def arguments(tmp_path) -> list[str]:
     options = {
-        "--review-transport": "direct-chat",
+        "--review-mode": "chat",
         "--model-revision": "fixture-revision",
         "--review-cache": str(tmp_path / "cache"),
         "--max-workers": "1",

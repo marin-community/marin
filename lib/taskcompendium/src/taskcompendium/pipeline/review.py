@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove-style structured review with an injected batch transport."""
+"""TaskTrove-style structured review with injected batch or chat requests."""
 
 import hashlib
 import json
@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from taskcompendium.models import NoGrader, TaskSpec
-from taskcompendium.pipeline.direct_transport import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, direct_output
+from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import cached_batch_output, cached_request_output
-from taskcompendium.pipeline.review_transport import (
+from taskcompendium.pipeline.review_requests import (
     DEFAULT_MAX_BATCH_BYTES,
     BatchClient,
     batch_output,
@@ -413,7 +413,7 @@ class BatchReviewer:
 
     @property
     def identity(self) -> dict[str, Any]:
-        return _reviewer_identity(self, transport="provider-batch")
+        return _reviewer_identity(self, mode="batch")
 
     def review(
         self,
@@ -448,7 +448,7 @@ class BatchReviewer:
 
 
 @dataclass(frozen=True)
-class DirectReviewer:
+class ChatReviewer:
     """Review grouped tasks through bounded direct chat calls."""
 
     client: ChatClient
@@ -465,7 +465,7 @@ class DirectReviewer:
 
     @property
     def identity(self) -> dict[str, Any]:
-        return _reviewer_identity(self, transport="direct-chat")
+        return _reviewer_identity(self, mode="chat")
 
     def review(
         self,
@@ -479,7 +479,7 @@ class DirectReviewer:
 
     def request_output(self, requests: Sequence[dict[str, Any]], output_path: Path) -> str:
         submit = partial(
-            direct_output,
+            chat_output,
             self.client,
             max_concurrent=self.max_concurrent,
             max_batch_bytes=self.max_batch_bytes,
@@ -496,9 +496,9 @@ class DirectReviewer:
         return submit(requests, output_path)
 
 
-def _reviewer_identity(reviewer: BatchReviewer | DirectReviewer, *, transport: str) -> dict[str, Any]:
+def _reviewer_identity(reviewer: BatchReviewer | ChatReviewer, *, mode: str) -> dict[str, Any]:
     return {
-        "transport": transport,
+        "mode": mode,
         "model": reviewer.model,
         "model_revision": reviewer.model_revision,
         "max_tokens": reviewer.max_tokens,
@@ -513,7 +513,7 @@ def _reviewer_identity(reviewer: BatchReviewer | DirectReviewer, *, transport: s
 
 
 def _review_with_retries(
-    reviewer: BatchReviewer | DirectReviewer,
+    reviewer: BatchReviewer | ChatReviewer,
     tasks: Sequence[TaskSpec],
     rubric: ReviewRubric,
     output_path: Path,
@@ -558,7 +558,7 @@ def _review_with_retries(
 
 
 def review_request(
-    reviewer: BatchReviewer | DirectReviewer,
+    reviewer: BatchReviewer | ChatReviewer,
     task: TaskSpec,
     rubric: ReviewRubric,
     original: TaskSpec | None = None,
@@ -578,7 +578,7 @@ def review_request(
 
 
 def review_attempt(
-    reviewer: BatchReviewer | DirectReviewer,
+    reviewer: BatchReviewer | ChatReviewer,
     tasks: Sequence[TaskSpec],
     rubric: ReviewRubric,
     output_path: Path,

@@ -52,7 +52,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.query_cache import cached_batch_output
 from taskcompendium.pipeline.review import BatchReviewer, review_records
-from taskcompendium.pipeline.review_transport import batch_output
+from taskcompendium.pipeline.review_requests import batch_output
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.sources import staged_file_rows, staged_files, staged_inputs
 from taskcompendium.pipeline.stages import (

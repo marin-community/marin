@@ -107,7 +107,7 @@ limits how many sources run at once. Plan first:
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
-  --review-transport direct-chat --model-revision YOUR_GLM_REVISION \
+  --review-mode chat --model-revision YOUR_GLM_REVISION \
   --review-cache CACHE_PREFIX --max-workers 64 --coordinator-memory 16g \
   --concurrent-sources 10 --normalized-shards 32 \
   --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \

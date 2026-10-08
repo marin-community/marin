@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from zephyr import counters
 from zephyr.writers import write_jsonl_file
 
-from taskcompendium.pipeline.review_transport import (
+from taskcompendium.pipeline.review_requests import (
     DEFAULT_MAX_BATCH_BYTES,
     DEFAULT_MAX_BATCH_REQUESTS,
     RAW_OUTPUT_FILENAME,
@@ -35,13 +35,13 @@ class ChatClient(Protocol):
 
 
 @dataclass(frozen=True)
-class DirectResult:
+class ChatResult:
     output: str
     provider_seconds: float
     admission_seconds: float
 
 
-def _direct_request(client: ChatClient, request: dict[str, Any], output_path: Path) -> DirectResult:
+def _chat_request(client: ChatClient, request: dict[str, Any], output_path: Path) -> ChatResult:
     output_path.mkdir(parents=True, exist_ok=True)
     (output_path / "request.json").write_text(json.dumps(request, indent=2))
     admission_started = time.monotonic()
@@ -51,16 +51,16 @@ def _direct_request(client: ChatClient, request: dict[str, Any], output_path: Pa
         try:
             response = dict(client.complete(request["body"]))
         except (ConnectionError, TimeoutError) as error:
-            output = _unavailable_output([request], "direct_transport_failed", str(error))
+            output = _unavailable_output([request], "chat_request_failed", str(error))
         else:
             (output_path / "response.json").write_text(json.dumps(response, indent=2))
             output = json.dumps({"custom_id": request["custom_id"], "response": {"status_code": 200, "body": response}})
         elapsed = time.monotonic() - started
     (output_path / RAW_OUTPUT_FILENAME).write_text(output)
-    return DirectResult(output, provider_seconds=elapsed, admission_seconds=admission_seconds)
+    return ChatResult(output, provider_seconds=elapsed, admission_seconds=admission_seconds)
 
 
-def direct_output(
+def chat_output(
     client: ChatClient,
     requests: Sequence[dict[str, Any]],
     output_path: Path,
@@ -78,7 +78,7 @@ def direct_output(
 
     def oversized(request: dict[str, Any], request_bytes: int) -> None:
         outputs[request["custom_id"]] = _unavailable_output(
-            [request], "direct_request_too_large", f"Request requires {request_bytes} bytes; budget is {max_batch_bytes}"
+            [request], "chat_request_too_large", f"Request requires {request_bytes} bytes; budget is {max_batch_bytes}"
         )
         metrics.update_counter("review/direct/oversized_requests", 1)
 
@@ -91,7 +91,7 @@ def direct_output(
             futures = []
             for request in group:
                 futures.append(
-                    (request, executor.submit(_direct_request, client, request, output_path / "direct" / str(index)))
+                    (request, executor.submit(_chat_request, client, request, output_path / "direct" / str(index)))
                 )
                 index += 1
             for request, future in futures:

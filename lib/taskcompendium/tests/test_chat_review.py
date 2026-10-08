@@ -9,7 +9,7 @@ from finestore.cache import PersistentKvCache
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
-from taskcompendium.pipeline.review import BatchReviewer, DirectReviewer, valid_review_completion
+from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 
 from .pipeline_stages import svamp_row_task
 from .test_pipeline import response
@@ -64,7 +64,7 @@ class ReviewChat:
         }
 
 
-def test_direct_review_reuses_exact_cache_across_transport_and_source_ids(tmp_path):
+def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     task = svamp_row_task(
         RawRow(
             "source-a",
@@ -81,7 +81,7 @@ def test_direct_review_reuses_exact_cache_across_transport_and_source_ids(tmp_pa
     abandoned.parent.mkdir(parents=True)
     abandoned.write_text('{"state": "reserved", "attempts": ["missing.json"]}')
     original = abandoned.read_bytes()
-    direct = DirectReviewer(chat, "fixture", "deployment", query_cache_root=cache)
+    direct = ChatReviewer(chat, "fixture", "deployment", query_cache_root=cache)
     first = direct.review([task], rubric, tmp_path / "first")
     second = direct.review([task.model_copy(update={"id": "source-b"})], rubric, tmp_path / "second")
     batch = BatchReviewer(batches, "fixture", "deployment", query_cache_root=cache)
@@ -154,7 +154,7 @@ def test_direct_provider_failures_have_finite_neutral_retries(tmp_path, recover)
             return super().complete(body)
 
     chat = TransientChat()
-    reviewer = DirectReviewer(chat, "fixture", "deployment", query_cache_root=str(tmp_path / "cache"))
+    reviewer = ChatReviewer(chat, "fixture", "deployment", query_cache_root=str(tmp_path / "cache"))
     record = reviewer.review([task], rubric, tmp_path / "review")[0]
     assert chat.attempts == 3
     assert record.status == (ReviewStatus.REVIEWED if recover else ReviewStatus.UNAVAILABLE)

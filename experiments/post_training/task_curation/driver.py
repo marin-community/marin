@@ -22,14 +22,14 @@ from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy
+from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
-from taskcompendium.pipeline.direct_transport import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.models import FilterPolicy
-from taskcompendium.pipeline.review import BatchReviewer, DirectReviewer, Reviewer
+from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, Reviewer
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
-from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewTransport
+from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import (
@@ -117,7 +117,7 @@ def job_controller_url() -> str | None:
 @click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
 @click.option("--review-cache", required=True)
-@click.option("--review-transport", type=click.Choice(["provider-batch", "direct-chat"]), required=True)
+@click.option("--review-mode", type=click.Choice(["batch", "chat"]), required=True)
 @click.option(
     "--review-concurrency",
     type=click.IntRange(min=1, max=MAX_DIRECT_CONCURRENT_REQUESTS),
@@ -152,7 +152,7 @@ def main(
     base_url: str | None,
     relay_job: str,
     review_cache: str,
-    review_transport: str,
+    review_mode: str,
     review_concurrency: int,
     mode: str,
     max_workers: int,
@@ -179,7 +179,7 @@ def main(
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
     pipelines = {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
-    review = ReviewConfig(model=model, model_revision=model_revision, transport=ReviewTransport(review_transport))
+    review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
     worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image)
     reviewer: Reviewer | None = None
     if do_run:
@@ -188,8 +188,8 @@ def main(
         if mode == "full" and sample_report is None:
             raise click.UsageError("Full execution requires --sample-report")
         token = os.environ[GLM_BULK_TOKEN_ENV]
-        if review.transport == ReviewTransport.DIRECT_CHAT:
-            reviewer = DirectReviewer(
+        if review.mode == ReviewMode.CHAT:
+            reviewer = ChatReviewer(
                 OpenAIChatClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT),
                 model,
                 model_revision,

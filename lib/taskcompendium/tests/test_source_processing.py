@@ -578,7 +578,7 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
         normalized_shards=1,
     )
     with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-        with pytest.raises(ValueError, match="requires a reviewer transport"):
+        with pytest.raises(ValueError, match="requires a reviewer"):
             run_source_pipeline(
                 recipe, context, str(source), str(tmp_path / "output"), config, canonical_source="catalog-selection"
             )

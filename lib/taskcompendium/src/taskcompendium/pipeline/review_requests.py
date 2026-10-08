@@ -74,7 +74,7 @@ def typed_batch_records[T: TypedBatchValue](
 
 
 def batch_tool_arguments(output: str, task_ids: Sequence[str], *, tool_name: str) -> list[BatchToolArguments]:
-    """Parse one complete tool call per request, retaining transport failures."""
+    """Parse one complete tool call per request, retaining request failures."""
     expected = set(task_ids)
     responses: dict[str, list[dict[str, Any]]] = {}
     for line in output.split("\n"):
@@ -193,7 +193,7 @@ def batch_output(
     outputs = []
 
     def oversized(request: Mapping[str, Any], request_bytes: int) -> None:
-        metrics.update_counter("review/transport/oversized_requests", 1)
+        metrics.update_counter("review/requests/oversized_requests", 1)
         outputs.append(
             _unavailable_output(
                 [request],
@@ -224,12 +224,12 @@ def batch_output(
                 )
             )
         except (ConnectionError, TimeoutError, FileNotFoundError) as error:
-            metrics.update_counter("review/transport/unavailable_requests", len(part))
-            failure = _unavailable_output(part, "batch_transport_failed", str(error))
+            metrics.update_counter("review/requests/unavailable_requests", len(part))
+            failure = _unavailable_output(part, "batch_request_failed", str(error))
             (directory / RAW_OUTPUT_FILENAME).write_text(failure)
             outputs.append(failure)
         finally:
-            metrics.update_counter("review/transport/provider_seconds", time.monotonic() - started)
+            metrics.update_counter("review/requests/provider_seconds", time.monotonic() - started)
     output = "\n".join(part.rstrip("\n") for part in outputs if part)
     (output_path / RAW_OUTPUT_FILENAME).write_text(output)
     return output
@@ -258,10 +258,10 @@ def _submitted_batch_output(
         json.dumps({"file_id": submission.file_id, "batch_id": submission.batch_id}, indent=2)
     )
     metrics = counters.current_stage()
-    metrics.update_counter("review/transport/submitted_batches", 1)
-    metrics.update_counter("review/transport/submitted_requests", len(requests))
+    metrics.update_counter("review/requests/submitted_batches", 1)
+    metrics.update_counter("review/requests/submitted_requests", len(requests))
     metrics.update_counter(
-        "review/transport/submitted_bytes",
+        "review/requests/submitted_bytes",
         sum(len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode()) + 1 for row in requests),
     )
     batch = client.wait(submission.batch_id, poll_seconds)

@@ -123,7 +123,7 @@ Run the driver inside an Iris job whose `EnvironmentSpec` includes
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
-  --review-transport direct-chat --model-revision YOUR_GLM_REVISION \
+  --review-mode chat --model-revision YOUR_GLM_REVISION \
   --review-cache CACHE_PREFIX --mode sample \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
