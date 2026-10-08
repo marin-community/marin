@@ -18,7 +18,7 @@ from taskcompendium.environment import EnvironmentKind
 
 from taskforge.build.infrastructure import InfrastructureCause
 from taskforge.build.run import item_id_for
-from taskforge.canonical import sha256_hex
+from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import Completion
 from taskforge.loop.events import (

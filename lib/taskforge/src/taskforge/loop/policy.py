@@ -17,7 +17,7 @@ from typing import Annotated, Any, get_type_hints
 
 from pydantic import PlainSerializer, PlainValidator, TypeAdapter
 
-from taskforge.canonical import digest
+from taskforge.content_hash import digest
 from taskforge.llm.policy import LLMPolicy
 from taskforge.review.rules import BandRule, BandRules
 from taskforge.validate.calibration import CalibrationBand
