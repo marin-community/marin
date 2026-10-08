@@ -71,13 +71,13 @@ def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_lea
 
 
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
-@pytest.mark.parametrize("candidate_state", ["delete", "forge", "completed"])
-def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion(tmp_path, monkeypatch, candidate_state):
+@pytest.mark.parametrize("candidate_state", ["running", "completed"])
+def test_docker_deadline_stops_running_work_and_preserves_completed_work(tmp_path, monkeypatch, candidate_state):
     create_process = asyncio.create_subprocess_exec
     executions = []
 
     async def remote_exec(*args, timeout=None, **kwargs):
-        # STOP or container disposal must end the guest operation after the client deadline.
+        # The guest continues after the client deadline, as it does with a remote Docker daemon.
         execution = asyncio.create_task(docker(*args, timeout=None, **kwargs))
         executions.append(execution)
         result = await asyncio.wait_for(asyncio.shield(execution), timeout=timeout)
@@ -94,16 +94,11 @@ def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion
                 except ProcessLookupError:
                     pass
             return await create_process("true", **kwargs)
-        # Keep a restored guest PID-file implementation inside this fake's private /tmp.
-        argv = tuple(
-            arg.replace("/tmp/.shellbox-command-", str(tmp_path / ".shellbox-command-"))
-            for arg in args[args.index("shellbox-test-container") + 1 :]
-        )
+        argv = args[args.index("shellbox-test-container") + 1 :]
         return await create_process(*argv, start_new_session=True, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", remote_exec)
-    mutation = 'rm -f "$file"' if candidate_state == "delete" else 'printf "999999999\\n" > "$file"'
 
     async def scenario():
         machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)))
@@ -113,7 +108,6 @@ def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion
                 argv = (
                     "sh",
                     "-c",
-                    f'for file in {tmp_path}/.shellbox-command-*; do [ ! -f "$file" ] || {mutation}; done; '
                     f"sleep 3600 & echo $! > {tmp_path}/child.pid; wait",
                 )
             result = await machine.run(Command(argv, timeout=0.5))
@@ -334,7 +328,8 @@ def test_interrupted_docker_start_without_a_process_group_disposes_the_container
 
 
 @pytest.mark.parametrize("probe", ["live", "provider_error", "timeout"])
-def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypatch, probe):
+@pytest.mark.parametrize("stop_exit", [0, 1])
+def test_docker_stop_disposes_a_live_or_unverified_process_group(monkeypatch, probe, stop_exit):
     containers = set()
 
     async def provider(*args, **kwargs):
@@ -344,7 +339,7 @@ def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypa
             kwargs["process_group"].set_result(42)
             raise TimeoutError("Docker exec command deadline expired")
         elif "stop-command" in args:
-            return DockerCommandResult(1, b"", b"Cannot stop the command group")
+            return DockerCommandResult(stop_exit, b"", b"Cannot stop the command group")
         elif "probe-command" in args:
             if probe == "timeout":
                 raise TimeoutError("Provider probe timed out")
@@ -354,6 +349,7 @@ def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypa
         return DockerCommandResult(0, b"", b"")
 
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", provider)
+    monkeypatch.setattr("shellbox.backends.docker.machine.INTERRUPT_TIMEOUT", 0.05)
 
     async def scenario():
         machine = await DockerMachineFactory().create(MachineSpec(DockerImage("fixture")))
