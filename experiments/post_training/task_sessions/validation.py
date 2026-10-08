@@ -10,7 +10,7 @@ import yaml
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.fingerprint import fingerprint_hash
+from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
@@ -63,6 +63,7 @@ class ValidationDataConfig:
 def validation_record(index: int) -> dict:
     if index % 2 == 0:
         count = 1 + index % 13
+        # Parquet keeps one ground-truth column type across task families.
         return {
             **cat_count_record(count, "validation", index),
             "reward_spec": {"method": "rule", "ground_truth": str(count)},
@@ -134,7 +135,15 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
         "required": True,
     }
     rows = BATCH_SIZE * steps
-    data_name = user_owned_name(f"documents/task-session-validation/{fingerprint_hash(repr(rows))}")
+    data_identity = fingerprint_hash(
+        canonical_json(
+            {
+                "train": [validation_record(index) for index in range(rows)],
+                "validation": [validation_record(index) for index in range(VALIDATION_ROWS)],
+            }
+        )
+    )
+    data_name = user_owned_name(f"documents/task-session-validation/{data_identity}")
     data = ArtifactStep(
         name=data_name,
         version=resolve_version(data_name, version),
