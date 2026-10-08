@@ -246,17 +246,27 @@ def _adopted_sample(
 
 def _full_steps(
     pipelines: dict[str, RlDataPipeline],
-    sample_steps: list[ArtifactStep[RlDataArtifact]],
+    catalog_sample_steps: dict[str, ArtifactStep[RlDataArtifact]],
     config: SourcePipelineConfig,
     runtime: CampaignRuntime,
     *,
     sample_report: str,
     sample_identity: str,
 ) -> tuple[list[ArtifactStep[RlDataArtifact]], dict[str, SourceOutcome]]:
-    """Full-mode source steps, each reusing its admitted sample output, and each step's sample outcome."""
-    sampled = require_matching_sample(json.loads(StoragePath(sample_report).read_text()), sample_identity, sample_steps)
-    steps = [
-        source_step(
+    """Full-mode source steps for ``pipelines``, each reusing its admitted sample output, and their sample outcomes.
+
+    The sample report covers the whole catalog (``catalog_sample_steps``, by source name), so a full run
+    over a subset of sources still validates against the complete sample.
+    """
+    report = json.loads(StoragePath(sample_report).read_text())
+    sampled = require_matching_sample(report, sample_identity, list(catalog_sample_steps.values()))
+    outcome_by_step = {outcome.name: outcome for outcome in sampled}
+    steps = []
+    outcomes = {}
+    for name, pipeline in pipelines.items():
+        sample_step = catalog_sample_steps[name]
+        outcome = outcome_by_step[sample_step.name]
+        step = source_step(
             pipeline,
             config,
             runtime,
@@ -264,9 +274,9 @@ def _full_steps(
                 pipeline, sample_step, outcome, sample_report=sample_report, sample_identity=sample_identity
             ),
         )
-        for pipeline, sample_step, outcome in zip(pipelines.values(), sample_steps, sampled, strict=True)
-    ]
-    return steps, {step.name: outcome for step, outcome in zip(steps, sampled, strict=True)}
+        steps.append(step)
+        outcomes[step.name] = outcome
+    return steps, outcomes
 
 
 @click.command(help=__doc__)
@@ -362,15 +372,16 @@ def main(
     )
     runtime = CampaignRuntime()
     steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
-    sample_steps = (
-        steps
+    # The sample identity seals the whole catalog, so a full run over --source subsets still matches it.
+    catalog_sample_steps = (
+        dict(zip(pipelines, steps, strict=True))
         if mode == "sample"
-        else [
-            source_step(pipeline, replace(config, mode=SourceProcessingMode.SAMPLE), runtime)
-            for pipeline in pipelines.values()
-        ]
+        else {
+            name: source_step(pipeline, replace(config, mode=SourceProcessingMode.SAMPLE), runtime)
+            for name, pipeline in all_pipelines().items()
+        }
     )
-    sample_identity = campaign_identity(sample_steps, worker_image)
+    sample_identity = campaign_identity(list(catalog_sample_steps.values()), worker_image)
     pool = CampaignPool(
         max_workers,
         concurrent_sources,
@@ -384,7 +395,12 @@ def main(
     if mode == "full":
         assert sample_report is not None
         steps, sample_outcomes = _full_steps(
-            pipelines, sample_steps, config, runtime, sample_report=sample_report, sample_identity=sample_identity
+            pipelines,
+            catalog_sample_steps,
+            config,
+            runtime,
+            sample_report=sample_report,
+            sample_identity=sample_identity,
         )
     run_campaign(
         steps,
