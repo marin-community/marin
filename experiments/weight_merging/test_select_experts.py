@@ -15,7 +15,9 @@ def test_expert_selection_applies_ranked_ids_to_all_projections_with_matched_con
         "tensor_coefficients": {"router": [1, 0]},
         "preserve_rows": {"embedding": [8, 9]},
     }
-    recipes, selections = build_recipes({"phases": {"generated": {"selection_score": scores}}}, template, [1, 2], 42)
+    recipes, selections = build_recipes(
+        {"phases": {"generated": {"selection_score": scores}}}, template, [1, 2], 42, "nupa", "step20"
+    )
     for layer in range(26):
         for projection in ("gate_proj", "up_proj", "down_proj"):
             key = f"model.layers.{layer}.mlp.experts.{projection}.weight"

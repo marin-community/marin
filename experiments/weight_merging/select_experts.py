@@ -11,7 +11,9 @@ import random
 from pathlib import Path
 
 
-def build_recipes(comparison: dict, template: dict, counts: list[int], seed: int) -> tuple[dict, dict]:
+def build_recipes(
+    comparison: dict, template: dict, counts: list[int], seed: int, benchmark: str, recipient: str
+) -> tuple[dict, dict]:
     """Rank experts independently by layer and preserve the recipient elsewhere."""
     scores = comparison["phases"]["generated"]["selection_score"]
     if len(scores) != 26 or any(len(layer) != 256 for layer in scores):
@@ -25,19 +27,19 @@ def build_recipes(comparison: dict, template: dict, counts: list[int], seed: int
     output_root = template["output"].rsplit("/", 1)[0]
     recipes = {}
     selections = {"seed": seed, "randomization": "Uniform permutation of 256 IDs using seed + layer", "variants": {}}
-    base_name = "routing-base-step20"
+    base_name = f"routing-base-{recipient}"
     base["output"] = f"{output_root}/{base_name}"
     recipes[base_name] = base
     for count in counts:
         if not 0 < count <= 256:
             raise ValueError("Expert counts must be between 1 and 256")
-        for method, ordering in (("nupa", ranked), ("random", randomized)):
-            name = f"routing-{method}{count:03d}-step20"
+        for method, ordering in ((benchmark, ranked), ("random", randomized)):
+            name = f"routing-{method}{count:03d}-{recipient}"
             selected = [sorted(layer[:count]) for layer in ordering]
-            if method == "nupa" and any(
+            if method == benchmark and any(
                 scores[layer][expert] <= 0 for layer, experts in enumerate(selected) for expert in experts
             ):
-                raise ValueError("Targeted selection includes experts without positive NUPA enrichment")
+                raise ValueError("Targeted selection includes experts without positive benchmark enrichment")
             recipe = copy.deepcopy(base)
             recipe["output"] = f"{output_root}/{name}"
             for layer, experts in enumerate(selected):
@@ -56,13 +58,17 @@ def main() -> None:
     parser.add_argument("--counts", type=int, nargs="+", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--expected-requests", type=int, required=True)
+    parser.add_argument("--benchmark", choices=("nupa", "bfcl"), required=True)
+    parser.add_argument("--recipient", choices=("step20", "step92"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     raw = args.comparison.read_bytes()
     comparison = json.loads(raw)
     if sum(comparison["replay_requests"]) != args.expected_requests:
         raise ValueError("Replay coverage does not match the final capture inventory")
-    recipes, selections = build_recipes(comparison, json.loads(args.template.read_text()), args.counts, args.seed)
+    recipes, selections = build_recipes(
+        comparison, json.loads(args.template.read_text()), args.counts, args.seed, args.benchmark, args.recipient
+    )
     args.output.mkdir(parents=True, exist_ok=False)
     for name, recipe in recipes.items():
         (args.output / f"{name}.json").write_text(json.dumps(recipe, indent=2) + "\n")
