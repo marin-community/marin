@@ -442,11 +442,13 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
 
 
 class Dcmha(eqx.Module):
-    """DCMHA parameters: static ``[2, H, H]`` mixes (identity init; pre- and post-softmax) and, per side, a
+    """DCMHA parameters: static ``[H, H]`` pre- and post-softmax mixes (identity init; separate leaves, since a
+    stacked 4-D leaf would be sharded like an expert weight) and, per side, a
     ``GELU(x W_a) W_b`` network giving each token's low-rank factors and gates (the second factors and the gates
     are zero-init, so the layer starts as plain attention). Trained with Adam (``.dcmha.``)."""
 
-    static: jax.Array
+    static_pre: jax.Array
+    static_post: jax.Array
     q_a: jax.Array
     q_b1: jax.Array
     q_b2: jax.Array
@@ -470,7 +472,8 @@ def dcmha_weights(p: Dcmha, x: jax.Array, heads: int, rank: int) -> DcmhaWeights
             (hidden @ bg).reshape(shape),
         )
 
-    return DcmhaWeights(p.static, *side(p.q_a, p.q_b1, p.q_b2, p.q_bg), *side(p.k_a, p.k_b1, p.k_b2, p.k_bg))
+    static = jnp.stack([p.static_pre, p.static_post])
+    return DcmhaWeights(static, *side(p.q_a, p.q_b1, p.q_b2, p.q_bg), *side(p.k_a, p.k_b1, p.k_b2, p.k_bg))
 
 
 def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, init_weight) -> dict:
@@ -516,7 +519,8 @@ def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> D
     a = lambda k: random.normal(k, (d, hidden)) / math.sqrt(d)  # noqa: E731
     b1 = lambda k: random.normal(k, (hidden, width)) / math.sqrt(hidden)  # noqa: E731
     return Dcmha(
-        static=jnp.broadcast_to(jnp.eye(heads), (2, heads, heads)).astype(jnp.float32),
+        static_pre=jnp.eye(heads, dtype=jnp.float32),
+        static_post=jnp.eye(heads, dtype=jnp.float32),
         q_a=a(ka),
         q_b1=b1(kb),
         q_b2=jnp.zeros((hidden, width)),
