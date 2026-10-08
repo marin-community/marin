@@ -7,25 +7,27 @@ from dataclasses import replace
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import RolloutContractError
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import TaskExecution
+from shellbox.machine import Backend
 from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
 from taskforge.sandbox.factories import SHELLSIM
-from taskforge.spec.draft import shell_command
 from taskforge.validate.attempts import load_outcome, trial_files
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, outcome_json, run_trial
 
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
+
 
 def settings(factory) -> EngineSettings:
     return EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: factory},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+        factories={SHELLSIM_BACKEND: factory},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM},
         max_turns=4,
         command_timeout=10,
+        tool_turn_timeout=20,
+        model_turn_timeout=30,
         cleanup_timeout=10,
         conventions=(PlainText(id="plain"),),
     )
@@ -37,7 +39,7 @@ def plan(tmp_path, kind: TrialKind = TrialKind.SOLVER) -> TrialPlan:
         round=0,
         kind=kind,
         k=1,
-        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=0,
         token_contract_retries=0,
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
@@ -50,9 +52,9 @@ def plan(tmp_path, kind: TrialKind = TrialKind.SOLVER) -> TrialPlan:
 async def test_an_attempt_file_reads_back_to_the_outcome_it_records(tmp_path, file_task, fakes):
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
     factory = fakes.flaky_factory(0, RuntimeError)
-    graded = await run_trial(file_task, TaskExecution(), plan(tmp_path), settings(factory), model, "0")
+    graded = await run_trial(file_task, plan(tmp_path), settings(factory), model, "0")
     failing = fakes.raising_model(lambda: GlmUnavailable("router drained", ()))
-    ungraded = await run_trial(file_task, TaskExecution(), plan(tmp_path), settings(factory), failing, "1")
+    ungraded = await run_trial(file_task, plan(tmp_path), settings(factory), failing, "1")
 
     loaded = [load_outcome(tmp_path / "solver" / trial / "attempt-0.json") for trial in ("0", "1")]
 
@@ -62,21 +64,21 @@ async def test_an_attempt_file_reads_back_to_the_outcome_it_records(tmp_path, fi
         assert outcome_json(load_outcome(tmp_path / "solver" / path / "attempt-0.json")) == outcome_json(original)
 
 
-async def test_trial_files_take_each_trials_last_attempt_and_tell_settled_from_rerunnable(tmp_path, file_task, fakes):
+async def test_trial_files_take_each_trials_last_attempt_and_tell_settled_from_rerunnable(
+    tmp_path, file_task, file_task_with, fakes
+):
     factory = fakes.flaky_factory(0, RuntimeError)
     adversary = plan(tmp_path, TrialKind.ADVERSARY)
     unavailable = fakes.raising_model(lambda: GlmUnavailable("router drained", ()))
     solved = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
-    await run_trial(file_task, TaskExecution(), adversary, settings(factory), unavailable, "shortcut/0")
-    await run_trial(file_task, TaskExecution(), adversary, settings(factory), unavailable, "leak/0")
+    await run_trial(file_task, adversary, settings(factory), unavailable, "shortcut/0")
+    await run_trial(file_task, adversary, settings(factory), unavailable, "leak/0")
     diverged = fakes.raising_model(lambda: RolloutContractError("served prompt diverged"))
-    await run_trial(file_task, TaskExecution(), adversary, settings(factory), diverged, "shortcut/1")
+    await run_trial(file_task, adversary, settings(factory), diverged, "shortcut/1")
     retried = replace(adversary, first_attempt=1)
-    await run_trial(file_task, TaskExecution(), retried, settings(factory), solved, "leak/0")
-    broken = file_task.model_copy(
-        update={"environment": file_task.environment.model_copy(update={"setup": (shell_command("exit 3", 10),)})}
-    )
-    await run_trial(broken, TaskExecution(), adversary, settings(factory), solved, "ambiguity/0")
+    await run_trial(file_task, retried, settings(factory), solved, "leak/0")
+    broken = file_task_with(setup=("exit 3",))
+    await run_trial(broken, adversary, settings(factory), solved, "ambiguity/0")
 
     files = trial_files(tmp_path, TrialKind.ADVERSARY)
 

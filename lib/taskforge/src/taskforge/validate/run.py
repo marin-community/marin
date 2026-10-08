@@ -11,8 +11,8 @@ rollouts against a wrong grader are evidence about the wrong grader.
 There is no evidence file besides the attempt files: ``load_validation`` reconstructs a round's
 ``ValidationEvidence`` from ``<evidence_dir>/{control,solver,adversary}/``, so review runs offline
 and a decision can be re-derived from the item directory alone. A round's evidence directory is
-keyed by ``trials.task_digest(draft.task, draft.execution, draft.convention)``, so evidence can never
-be read against a different task, execution or convention.
+keyed by ``trials.task_digest(draft.lowered, draft.convention)``, so evidence can never be read
+against a different task, lowering or convention.
 """
 
 import asyncio
@@ -57,7 +57,7 @@ class ValidationPolicy:
         band: Solve rates that count as calibrated.
         sampling: The solver's and adversaries' sampling; ``max_continuations`` must be 0. The adversary's agent
             loop runs under it too.
-        deadlines: The agent and attempt deadlines validation imposes on every trial.
+        deadlines: The total-turn and attempt deadlines validation imposes on every trial.
         max_retries: Per-trial retries of ``RETRYABLE`` causes.
         token_contract_retries: Per-trial retries of ``TOKEN_CONTRACT``.
         retry_backoff: Wait between a trial's attempts.
@@ -170,7 +170,7 @@ async def replay_controls(
             return control_outcome(control, existing.last)
         model = ScriptedModel(control_turns(control), context_turns, tokenize)
         return control_outcome(
-            control, await run_trial(task, draft.execution, plan.trial_plan(control.id), settings, model, control.id)
+            control, await run_trial(draft.lowered, plan.trial_plan(control.id), settings, model, control.id)
         )
 
     async with asyncio.TaskGroup() as group:
@@ -201,7 +201,7 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
         assert files.last_path is not None
         adversaries.setdefault(AdversaryRole(role), {})[int(index)] = load_adversary_attempt(files.last_path)
     return ValidationEvidence(
-        task_digest=task_digest(draft.task, draft.execution, draft.convention),
+        task_digest=task_digest(draft.lowered, draft.convention),
         controls=tuple(control_outcome(c, _last(controls[c.id].last)) for c in draft.controls),
         solver=_by_index("solver", solver, evidence_dir),
         adversaries={

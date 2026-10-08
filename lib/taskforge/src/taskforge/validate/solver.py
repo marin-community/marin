@@ -5,8 +5,8 @@
 
 The solver is the run's rollout model (``llm.rollout_model.GlmRolloutModel``) under the
 validation policy's sampling, built per trial by a ``ModelFactory`` so its calls are recorded
-under the trial's ledger step. Every trial goes through ``trials.run_trial`` with the draft's task
-and execution, under ``EngineSettings`` whose conventions are pinned to the draft's own
+under the trial's ledger step. Every trial goes through ``trials.run_trial`` with the draft's
+lowered task, under ``EngineSettings`` whose conventions are pinned to the draft's own
 convention, so a draft is validated with the presentation its controls were authored for. A trial
 already settled on disk is loaded rather than run again; an unsettled one re-enters with its
 attempt numbers continuing after the files on disk (``attempts.TrialFiles``).
@@ -121,7 +121,7 @@ async def resume_trials(
             assert existing.last is not None
             return existing.last
         plan = site.trial_plan(kind, k, policy, 0 if existing is None else existing.attempts)
-        return await run_trial(draft.task, draft.execution, plan, settings, model, name)
+        return await run_trial(draft.lowered, plan, settings, model, name)
 
     async with asyncio.TaskGroup() as group:
         runs = {name: group.create_task(trial(name, model)) for name, model in models.items()}

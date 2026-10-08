@@ -10,8 +10,11 @@ regex the submission protocol keeps, the input-read rule (``consumed_inputs``), 
 ``calibration.json`` files hold the retired summary shape and are never rewritten.
 
 ``g_adversary_round-<ts>/`` and ``h_built_adversary_round-<ts>/`` hold rounds under the submission protocol
-(``test_evidence_live``); their invariants are checked here. ``evidence_root`` is the fixture in ``tests/conftest.py``
-and evidence stays on the machine that recorded it, so each test skips where its rounds are absent.
+(``test_evidence_live``); the invariants of the ``g`` rounds of the file task as it is lowered today (their evidence
+directory named by its ``task_digest``) are checked here. Rounds recorded before the task was lowered for RolloutEngine
+on main carry another digest and another candidate record, and are not read. ``evidence_root`` is the fixture in
+``tests/conftest.py`` and evidence stays on the machine that recorded it, so each test skips where its rounds are
+absent.
 """
 
 import json
@@ -21,6 +24,7 @@ import pydantic
 import pytest
 from taskcompendium.submission import PlainText
 
+from taskforge.builder.run import TaskDraft
 from taskforge.validate.adversary import AdversaryRole, adversary_brief
 from taskforge.validate.attempts import load_adversary_attempt, load_outcome, trial_files
 from taskforge.validate.calibration import (
@@ -90,10 +94,16 @@ def old_round_dirs(evidence_dir: Path) -> dict[str, Path]:
 
 
 @pytest.fixture
-def submission_round_dirs(evidence_dir: Path) -> list[Path]:
-    dirs = sorted(evidence_dir.glob("g_adversary_round-*/evidence-*"))
+def file_draft(file_task, file_controls, rounds) -> TaskDraft:
+    return rounds.draft(file_task, file_controls, PLAIN)
+
+
+@pytest.fixture
+def submission_round_dirs(evidence_dir: Path, file_draft: TaskDraft) -> list[Path]:
+    digest = task_digest(file_draft.lowered, file_draft.convention)
+    dirs = sorted(evidence_dir.glob(f"g_adversary_round-*/evidence-{digest[:12]}"))
     if not dirs:
-        pytest.skip("no adversary round under the submission protocol on this machine")
+        pytest.skip("no adversary round of the file task as lowered today on this machine")
     return dirs
 
 
@@ -128,12 +138,10 @@ def test_the_recorded_summaries_held_the_old_findings_and_stay_untouched(old_rou
             load_adversary_attempt(last)
 
 
-def test_recorded_submission_rounds_keep_their_invariants(submission_round_dirs, file_task, file_controls, rounds):
-    draft = rounds.draft(file_task, file_controls, PLAIN)
+def test_recorded_submission_rounds_keep_their_invariants(submission_round_dirs, file_draft, rounds):
     policy = rounds.policy(k=3, adversary_k=2, adversary_submissions=LIVE_SUBMISSIONS, adversary_repair_submissions=3)
     for directory in submission_round_dirs:
-        assert directory.name == f"evidence-{task_digest(draft.task, draft.execution, draft.convention)[:12]}"
-        evidence = load_validation(draft, directory)
+        evidence = load_validation(file_draft, directory)
         for trial in evidence.adversaries[AdversaryRole.SHORTCUT]:
             assert isinstance(trial.outcome, Graded), directory
             assert trial.system == adversary_brief(LIVE_SUBMISSIONS, "")

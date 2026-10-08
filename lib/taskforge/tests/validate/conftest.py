@@ -99,6 +99,27 @@ print(float(got == expected))
 """Rewards 1 when the captured ``/workspace/sum.txt`` holds ``config["expected"]``."""
 
 
+def verdict_grader(passes: str) -> str:
+    """A ``script`` grader that rewards 1 when the Python expression ``passes`` holds. The expression may read
+    ``answer`` (the extracted text answer, "" without one) and ``captured(path)`` (the text of a captured output
+    path, "" when absent)."""
+    return f"""import json, os, pathlib
+workspace = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"])
+def captured(path):
+    file = workspace / "captured" / path.lstrip("/")
+    return file.read_text() if file.is_file() else ""
+answer = (workspace / "answer.txt").read_text() if (workspace / "answer.txt").is_file() else ""
+verdict = {{"status": "scored", "reward": float(bool({passes})), "detail": {{}}}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
+
+
+@pytest.fixture(name="verdict_grader")
+def verdict_grader_fixture() -> Callable[[str], str]:
+    """``verdict_grader``, for test modules (which cannot import the conftest)."""
+    return verdict_grader
+
+
 def source(row: str) -> Source:
     return Source(dataset="taskforge-validate-tests", revision="1", row=row, importer_revision="1")
 
@@ -149,7 +170,12 @@ def json_task() -> LoweredTaskSpec:
     return lowered(task)
 
 
-def file_task_spec(grader_script: str = SUM_GRADER, setup: tuple[str, ...] = (), grader_timeout: float = 30) -> TaskSpec:
+def file_task_spec(
+    grader_script: str = SUM_GRADER,
+    setup: tuple[str, ...] = (),
+    grader_timeout: float = 30,
+    output_paths: tuple[str, ...] = ("/workspace/sum.txt",),
+) -> TaskSpec:
     return assemble(
         "validate-file",
         "The file /workspace/numbers.txt holds one integer per line. Use the shell tool to write their sum, "
@@ -166,7 +192,7 @@ def file_task_spec(grader_script: str = SUM_GRADER, setup: tuple[str, ...] = (),
         source("file"),
         environment=requirements(image=None, setup=setup),
         files=(file("workspace/numbers.txt", NUMBERS),),
-        output_paths=("/workspace/sum.txt",),
+        output_paths=output_paths,
     )
 
 
@@ -177,9 +203,9 @@ def file_task() -> LoweredTaskSpec:
 
 @pytest.fixture
 def file_task_with() -> Callable[..., LoweredTaskSpec]:
-    """``file_task`` with another grader script, setup commands or grader timeout."""
-    return lambda grader_script=SUM_GRADER, setup=(), grader_timeout=30: lowered(
-        file_task_spec(grader_script, tuple(setup), grader_timeout)
+    """``file_task`` with another grader script, setup commands, grader timeout or captured output paths."""
+    return lambda grader_script=SUM_GRADER, setup=(), grader_timeout=30, output_paths=("/workspace/sum.txt",): lowered(
+        file_task_spec(grader_script, tuple(setup), grader_timeout, tuple(output_paths))
     )
 
 
@@ -444,10 +470,10 @@ class TemplateTokenizer:
             raise GlmUnavailable("router drained", ())
 
 
-def draft_of(task: TaskSpec, controls: tuple[Control, ...], convention: SubmissionConvention) -> TaskDraft:
-    """``task`` as a built draft; the provenance names no real program."""
+def draft_of(lowered: LoweredTaskSpec, controls: tuple[Control, ...], convention: SubmissionConvention) -> TaskDraft:
+    """``lowered`` as a built draft; the provenance names no real program."""
     provenance = Provenance(
-        item_id=task.id,
+        item_id=lowered.task.id,
         proposal_digest="proposal",
         program_digest="program",
         sdk_version="tests",
@@ -457,7 +483,7 @@ def draft_of(task: TaskSpec, controls: tuple[Control, ...], convention: Submissi
         steps=(),
         resources=(),
     )
-    return TaskDraft(task, TaskExecution(), convention, controls, provenance)
+    return TaskDraft(lowered.task, lowered, convention, controls, provenance)
 
 
 def validation_policy(
@@ -467,7 +493,7 @@ def validation_policy(
     token_contract_retries: int = 0,
     adversary_submissions: int = 4,
     adversary_repair_submissions: int = 2,
-    agent_timeout: float = 30,
+    total_turn_timeout: float = 30,
 ) -> ValidationPolicy:
     return ValidationPolicy(
         k=k,
@@ -476,7 +502,7 @@ def validation_policy(
         adversary_repair_submissions=adversary_repair_submissions,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
-        deadlines=Deadlines(agent_timeout=agent_timeout, attempt_timeout=60),
+        deadlines=Deadlines(total_turn_timeout=total_turn_timeout, attempt_timeout=60),
         max_retries=max_retries,
         token_contract_retries=token_contract_retries,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1),
@@ -515,7 +541,12 @@ def rounds() -> Rounds:
 @pytest.fixture
 def file_facts() -> TaskFacts:
     """The ``TaskFacts`` of ``file_task``."""
-    return TaskFacts(True, False, ("/workspace/numbers.txt",), ("/workspace/numbers.txt", "/grader/check.sh"))
+    return TaskFacts(
+        True,
+        False,
+        ("/workspace/numbers.txt",),
+        ("/workspace/numbers.txt", "/tests/grader.py", "/tests/config.json"),
+    )
 
 
 @pytest.fixture

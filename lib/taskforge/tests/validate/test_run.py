@@ -10,12 +10,11 @@ import shutil
 from dataclasses import dataclass, field, replace
 
 import pytest
-from taskcompendium.environment import EnvironmentKind, StdoutReward
+from shellbox.machine import Backend
 from taskcompendium.submission import PlainText
 
 from taskforge.llm.client import GlmUnavailable
 from taskforge.sandbox.factories import SHELLSIM
-from taskforge.spec.draft import file, shell_verifier
 from taskforge.validate.adversary import AdversaryRole, ClaimKind, run_adversaries
 from taskforge.validate.calibration import DefectTier, FindingKind, summarize
 from taskforge.validate.controls import ControlVerdict
@@ -26,8 +25,8 @@ from taskforge.validate.trials import EngineSettings, task_digest
 
 PLAIN = PlainText(id="plain")
 ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
-LENIENT_CHECK = "if grep -q 60 /workspace/sum.txt; then echo 1; else echo 0; fi\n"
 SUM = "/workspace/sum.txt"
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
 FLOOD = f"cat /workspace/numbers.txt; seq 0 100 > {SUM}"
 SOLVE = f"awk '{{s+=$1}} END{{print s}}' /workspace/numbers.txt > {SUM}"
 SHORTCUT = AdversaryRole.SHORTCUT
@@ -64,21 +63,21 @@ class TemplateTokenizer:
 
 def settings(fakes) -> EngineSettings:
     return EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: fakes.flaky_factory(0, RuntimeError)},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+        factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError)},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM},
         max_turns=6,
         command_timeout=10,
+        tool_turn_timeout=20,
+        model_turn_timeout=30,
         cleanup_timeout=10,
         conventions=(PLAIN,),
     )
 
 
-def lenient(task):
-    """``task`` graded by a check that accepts any file mentioning 60."""
-    verifier = shell_verifier(
-        ("sh", "/grader/check.sh"), StdoutReward(), timeout=30, files=(file("/grader/check.sh", LENIENT_CHECK),)
-    )
-    return task.model_copy(update={"verifier": verifier})
+@pytest.fixture
+def lenient_file_task(file_task_with, verdict_grader):
+    """``file_task`` graded by a check that accepts any sum file mentioning 60."""
+    return file_task_with(grader_script=verdict_grader(f"'60' in captured({SUM!r})"))
 
 
 async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(
@@ -97,7 +96,7 @@ async def test_a_round_reads_back_from_its_attempt_files_as_it_ran(
         run_solver(draft, policy, site, settings(fakes), lambda _: solver_model),
         run_adversaries(draft, policy, site, settings(fakes), glm_client, ""),
     )
-    digest = task_digest(draft.task, draft.execution, draft.convention)
+    digest = task_digest(draft.lowered, draft.convention)
     ran = rounds.evidence(digest, controls, solver, adversaries, file_facts)
 
     loaded = load_validation(draft, site.evidence_dir)
@@ -150,9 +149,9 @@ async def test_re_entered_controls_replay_only_the_unsettled_ones(tmp_path, math
 
 
 async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and_a_strict_one_meets(
-    tmp_path, file_task, file_controls, file_facts, rounds, fakes, fake_glm, glm_client, turns
+    tmp_path, file_task, lenient_file_task, file_controls, file_facts, rounds, fakes, fake_glm, glm_client, turns
 ):
-    leaky = rounds.draft(lenient(file_task), file_controls, PLAIN)
+    leaky = rounds.draft(lenient_file_task, file_controls, PLAIN)
     policy = rounds.policy(adversary_k=1)
     site = rounds.site(tmp_path / "round-0")
     turns(fake_glm, ("shell", FLOOD), ("submit", "Done.", (SUM,)), "SHORTCUT: any file mentioning 60 passes")
@@ -184,7 +183,7 @@ async def test_a_shortcut_pass_becomes_a_control_the_lenient_grader_violates_and
 
 
 async def test_an_honest_probe_is_no_finding_and_a_late_shortcut_is_a_note(
-    tmp_path, file_task, file_facts, rounds, fakes, fake_glm, glm_client, turns
+    tmp_path, file_task, lenient_file_task, file_facts, rounds, fakes, fake_glm, glm_client, turns
 ):
     policy = rounds.policy(adversary_k=1)
     turns(fake_glm, ("shell", SOLVE), ("submit", "Done.", (SUM,)), "Solved honestly.\nNO_SHORTCUT")
@@ -194,7 +193,7 @@ async def test_an_honest_probe_is_no_finding_and_a_late_shortcut_is_a_note(
     probes = [("submit", "Done.", ())] * 2
     turns(fake_glm, ("shell", FLOOD), *probes, ("submit", "Done.", (SUM,)), "SHORTCUT: any file mentioning 60 passes")
     late = await run_adversaries(
-        rounds.draft(lenient(file_task), (), PLAIN),
+        rounds.draft(lenient_file_task, (), PLAIN),
         policy,
         rounds.site(tmp_path / "late"),
         settings(fakes),

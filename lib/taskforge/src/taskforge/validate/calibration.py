@@ -33,11 +33,16 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from pydantic import TypeAdapter
-from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, LENGTH_STOP_REASON, MAX_TURNS_STOP_REASON, RolloutData
+from rolloutengine.contracts import (
+    LENGTH_STOP_REASON,
+    MAX_TURNS_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
+    RolloutData,
+)
 from rolloutengine.shell_tool import SHELL_TOOL_NAME
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import TaskSpec, TextMessage
@@ -170,14 +175,16 @@ class Comparison(StrEnum):
     """A machine-state answer, no accepted submission, or no honest submission to compare with."""
 
 
-BUDGET_STOPS = frozenset({LENGTH_STOP_REASON, MAX_TURNS_STOP_REASON, AGENT_TIMEOUT_STOP_REASON, CONTEXT_STOP_REASON})
+BUDGET_STOPS = frozenset(
+    {LENGTH_STOP_REASON, MAX_TURNS_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON, CONTEXT_STOP_REASON}
+)
 """Stop reasons that mean the adversary ran out of output, turns, time or context before a verdict."""
 
 UNIQUE_ANSWER_KINDS: frozenset[str] = frozenset(
     {Mode.EXACT, Mode.NUMERIC, Mode.MATH, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT}
 )
 """Grader kinds (``VerifierSpec.kind``, verifyit modes) with one expected answer, where a passing submission that
-mismatches every honest answer is a grader defect. ``shell``, ``external``, ``staged`` and every other kind accept
+mismatches every honest answer is a grader defect. ``shell``, ``script``, ``external`` and every other kind accept
 what their script accepts, so a mismatch there is at most a note (``tier_of`` row 9)."""
 
 
@@ -188,8 +195,10 @@ class TaskFacts:
     Attributes:
         machine_answer: The answer is the machine state (``MACHINE_ANSWER_TYPES``), not a text submission.
         unique_answer: The grader has one expected answer (``UNIQUE_ANSWER_KINDS``).
-        input_paths: The environment's files, in order.
-        protected_paths: ``input_paths`` then the verifier's files, each once, in order.
+        input_paths: The task machine's files (``resources.all`` then ``resources.worker``) as absolute paths, in
+            order.
+        protected_paths: ``input_paths`` then the verifier's private files as installed under ``VERIFIER_ROOT``,
+            each once, in order.
     """
 
     machine_answer: bool
@@ -198,11 +207,19 @@ class TaskFacts:
     protected_paths: tuple[str, ...]
 
 
+VERIFIER_ROOT = PurePosixPath("/tests")
+"""Where RolloutEngine installs ``resources.verifier`` for the grader."""
+
+
 def task_facts(task: TaskSpec) -> TaskFacts:
-    inputs = tuple(f.path for f in task.environment.files)
-    protected = tuple(dict.fromkeys((*inputs, *(f.path for f in task.verifier.files))))
+    resources = task.resources
+    inputs = tuple(str(PurePosixPath("/", r.path)) for r in (*resources.all, *resources.worker))
+    private = tuple(str(VERIFIER_ROOT / r.path) for r in resources.verifier)
     return TaskFacts(
-        task.answer_type in MACHINE_ANSWER_TYPES, task.verifier.kind in UNIQUE_ANSWER_KINDS, inputs, protected
+        task.answer_type in MACHINE_ANSWER_TYPES,
+        task.verifier.kind in UNIQUE_ANSWER_KINDS,
+        inputs,
+        tuple(dict.fromkeys((*inputs, *private))),
     )
 
 
@@ -287,7 +304,7 @@ class RoleStats:
         budget_spent: Graded trials that used the whole submission budget.
         claims: Graded trials per ``ClaimKind``; every kind is present.
         failed_audits: ``SHORTCUT`` claims whose accepted submission is an honest answer (``tier_of`` row 4).
-        exhausted: Graded trials that stopped on output, turns, the agent deadline or context (``BUDGET_STOPS``).
+        exhausted: Graded trials that stopped on output, turns, the total-turn deadline or context (``BUDGET_STOPS``).
         output_tokens: Served response tokens over every trial with a rollout.
         tiers: Graded trials per ``DefectTier``; every tier is present.
     """
@@ -875,7 +892,7 @@ def _band_findings(
     kind = FindingKind.TOO_HARD if rate < band.min_solve_rate else FindingKind.TOO_EASY
     head = (
         f"The solver solved {stats.solved} of {stats.graded} graded trials ({rate:.3f}); the calibrated band is "
-        f"[{band.min_solve_rate}, {band.max_solve_rate}]. {stats.timed_out} trial(s) hit the agent deadline."
+        f"[{band.min_solve_rate}, {band.max_solve_rate}]. {stats.timed_out} trial(s) hit the total-turn deadline."
     )
     shown = [
         (index, outcome)

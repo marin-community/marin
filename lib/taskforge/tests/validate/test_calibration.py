@@ -4,23 +4,24 @@
 """summarize: band findings over complete evidence, decisive findings regardless, and adversary trials tiered by
 their verifier submissions into repairs (with the accepted candidate as a control), notes and no defect.
 
-Adversary trials run for real against ``fake_glm`` (scripted agent turns) on ShellSim with the task's grader."""
+Adversary trials run for real against ``fake_glm`` (scripted agent turns) on ShellSim with the task's grader, a
+script that runs on the host."""
 
 from collections import Counter
 
 import pytest
 from rigging.timing import ExponentialBackoff
-from taskcompendium.environment import EnvironmentKind, StdoutReward
-from taskcompendium.execution import TaskExecution
+from rolloutengine.spec import LoweredTaskSpec
+from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.models import AnswerType
 from taskcompendium.submission import PlainText
 
 from taskforge.builder.step import StepRole
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.controls import REJECTION_CEILING, ControlKind, Transcript, reply
-from taskforge.spec.draft import assemble, environment, file, shell_verifier
+from taskforge.spec.draft import assemble, script_verifier
 from taskforge.validate.adversary import AdversaryRole, ClaimKind, run_adversaries
 from taskforge.validate.calibration import (
     DECISIVE,
@@ -53,42 +54,29 @@ PLAIN = PlainText(id="plain")
 SHORTCUT = AdversaryRole.SHORTCUT
 NUMBERS = "/workspace/numbers.txt"
 SUM = "/workspace/sum.txt"
-RECOMPUTING_CHECK = (
-    "s=$(awk '{s+=$1} END{print s}' /workspace/numbers.txt)\n"
-    'v=$(tr -d " \\n" < /workspace/sum.txt)\n'
-    'if [ "$v" = "$s" ]; then echo 1; else echo 0; fi\n'
-)
-LENIENT_FILE_CHECK = "if grep -q 60 /workspace/sum.txt; then echo 1; else echo 0; fi\n"
-LENIENT_TEXT_CHECK = "if grep -q 395; then echo 1; else echo 0; fi\n"
-ACCEPT_ALL = "echo 1\n"
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
+
+
+RECOMPUTES = f"captured({SUM!r}).strip() == str(sum(int(n) for n in captured({NUMBERS!r}).split()))"
+"""A ``verdict_grader`` condition: the sum file holds the sum of whatever the numbers file holds."""
+MENTIONS_60 = f"'60' in captured({SUM!r})"
 SOLVE = f"awk '{{s+=$1}} END{{print s}}' {NUMBERS} > {SUM}"
 HEDGE = "394 or 395 or 396"
 
 
-def graded_by(task: TaskSpec, script: str) -> TaskSpec:
-    """``task`` graded by ``script`` as a ShellSim stdout-reward verifier at ``/grader/check.sh``."""
-    verifier = shell_verifier(
-        ("sh", "/grader/check.sh"), StdoutReward(), timeout=30, files=(file("/grader/check.sh", script),)
-    )
-    return task.model_copy(update={"verifier": verifier})
-
-
 @pytest.fixture
-def lenient_text_task(math_task) -> TaskSpec:
-    """The math question on ShellSim, graded by a check that accepts any transcript containing 395."""
-    return assemble(
-        "validate-lenient-text",
-        math_task.context.events[-1].content,
-        AnswerType.NUMBER,
-        environment(EnvironmentKind.SHELLSIM),
-        shell_verifier(
-            ("sh", "/grader/check.sh"),
-            StdoutReward(),
-            timeout=30,
-            files=(file("/grader/check.sh", LENIENT_TEXT_CHECK),),
-        ),
-        math_task.source,
-        execution=TaskExecution(),
+def lenient_text_task(math_task, relower, verdict_grader) -> LoweredTaskSpec:
+    """The math question without a machine, graded by a script that accepts any answer containing 395."""
+    task = math_task.task
+    return relower(
+        assemble(
+            "validate-lenient-text",
+            task.context.events[-1].content,
+            AnswerType.NUMBER,
+            script_verifier(verdict_grader("'395' in answer"), {}, timeout=30),
+            task.source,
+            environment=None,
+        )
     )
 
 
@@ -97,7 +85,7 @@ def trial(tmp_path, fakes):
     """Runs ``task`` once with scripted assistant turns (a ``str`` is a shell call, a ``Reply`` a text turn)."""
     count = 0
 
-    async def run(task: TaskSpec, *turns: str, reply: str | None = "Done.", max_turns: int = 6) -> Outcome:
+    async def run(task: LoweredTaskSpec, *turns: str, reply: str | None = "Done.", max_turns: int = 6) -> Outcome:
         nonlocal count
         count += 1
         plan = TrialPlan(
@@ -105,7 +93,7 @@ def trial(tmp_path, fakes):
             round=0,
             kind=TrialKind.SOLVER,
             k=1,
-            deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+            deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
             max_retries=0,
             token_contract_retries=0,
             retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
@@ -114,15 +102,17 @@ def trial(tmp_path, fakes):
             first_attempt=0,
         )
         settings = EngineSettings(
-            factories={EnvironmentKind.SHELLSIM: fakes.flaky_factory(0, RuntimeError)},
-            capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+            factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError)},
+            capabilities={SHELLSIM_BACKEND: SHELLSIM},
             max_turns=max_turns,
             command_timeout=10,
+            tool_turn_timeout=20,
+            model_turn_timeout=30,
             cleanup_timeout=10,
             conventions=(PlainText(id="plain"),),
         )
         messages = [*(fakes.shell(command) for command in turns), *(() if reply is None else (fakes.text(reply),))]
-        return await run_trial(task, TaskExecution(), plan, settings, fakes.script_model(messages), str(count))
+        return await run_trial(task, plan, settings, fakes.script_model(messages), str(count))
 
     return run
 
@@ -132,15 +122,17 @@ def adversary(tmp_path, rounds, fakes, fake_glm, glm_client, turns):
     """Runs one adversary trial of ``task`` with scripted agent turns (see ``conftest.adversary_turns``)."""
     count = 0
 
-    async def run(task: TaskSpec, *script) -> AdversaryTrial:
+    async def run(task: LoweredTaskSpec, *script) -> AdversaryTrial:
         nonlocal count
         count += 1
         turns(fake_glm, *script)
         settings = EngineSettings(
-            factories={EnvironmentKind.SHELLSIM: fakes.flaky_factory(0, RuntimeError)},
-            capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+            factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError)},
+            capabilities={SHELLSIM_BACKEND: SHELLSIM},
             max_turns=8,
             command_timeout=10,
+            tool_turn_timeout=20,
+            model_turn_timeout=30,
             cleanup_timeout=10,
             conventions=(PLAIN,),
         )
@@ -293,11 +285,11 @@ async def test_honest_submissions_come_from_solved_solver_trials_and_positive_tr
 
 
 def test_task_facts_name_inputs_grader_files_and_uniqueness(file_task, math_task, file_facts, math_facts):
-    assert task_facts(file_task) == file_facts and not file_facts.unique_answer
-    assert task_facts(math_task) == math_facts and math_facts.unique_answer
+    assert task_facts(file_task.task) == file_facts and not file_facts.unique_answer
+    assert task_facts(math_task.task) == math_facts and math_facts.unique_answer
 
 
-FILE_FACTS = TaskFacts(True, False, (NUMBERS,), (NUMBERS, "/grader/check.sh"))
+FILE_FACTS = TaskFacts(True, False, (NUMBERS,), (NUMBERS, "/tests/grader.py"))
 TEXT_FACTS = TaskFacts(False, False, (), ())
 UNIQUE_TEXT_FACTS = TaskFacts(False, True, (), ())
 TEXT_INPUT_FACTS = TaskFacts(False, False, ("/data/q.txt",), ("/data/q.txt",))
@@ -375,7 +367,7 @@ async def test_a_claimed_shortcut_within_the_threshold_is_a_repair_with_its_cand
     honest = await trial(lenient_text_task, reply="395")
 
     summary = summarize(
-        evidence(task_facts(lenient_text_task), solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
+        evidence(task_facts(lenient_text_task.task), solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
         rounds.policy(k=1, adversary_k=1),
     )
 
@@ -396,7 +388,7 @@ async def test_a_shortcut_above_the_threshold_is_a_note(adversary, trial, lenien
     honest, wrong = await trial(lenient_text_task, reply="395"), await trial(lenient_text_task, reply="391")
 
     summary = summarize(
-        evidence(task_facts(lenient_text_task), solver=(honest, wrong, wrong), adversaries={SHORTCUT: (late,)}),
+        evidence(task_facts(lenient_text_task.task), solver=(honest, wrong, wrong), adversaries={SHORTCUT: (late,)}),
         rounds.policy(k=3, adversary_k=1),
     )
 
@@ -432,7 +424,7 @@ async def test_a_mismatch_on_a_many_answer_grader_reported_as_no_shortcut_is_a_n
     honest = await trial(lenient_text_task, reply="395")
 
     summary = summarize(
-        evidence(task_facts(lenient_text_task), solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
+        evidence(task_facts(lenient_text_task.task), solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
         rounds.policy(k=1, adversary_k=1),
     )
 
@@ -440,9 +432,9 @@ async def test_a_mismatch_on_a_many_answer_grader_reported_as_no_shortcut_is_a_n
     assert [(a.tier, a.rule) for a in summary.assessments] == [(NOTED, "9")]
 
 
-async def test_a_supplied_protected_file_is_a_repair(adversary, file_task, file_facts, rounds):
+async def test_a_supplied_protected_file_is_a_repair(adversary, file_task_with, verdict_grader, file_facts, rounds):
     tamper = await adversary(
-        graded_by(file_task, RECOMPUTING_CHECK),
+        file_task_with(grader_script=verdict_grader(RECOMPUTES), output_paths=(NUMBERS, SUM)),
         ("shell", f"printf '0\\n' > {NUMBERS} && echo 0 > {SUM}"),
         ("submit", "Done.", (NUMBERS, SUM)),
         "NO_SHORTCUT",
@@ -459,8 +451,10 @@ async def test_a_supplied_protected_file_is_a_repair(adversary, file_task, file_
     assert (assessment.tier, assessment.rule, assessment.signals.protected_supplied) == (REPAIR, "1", (1,))
 
 
-async def test_a_fileless_pass_on_a_machine_task_is_a_repair(adversary, file_task, file_facts, rounds):
-    untouched = await adversary(graded_by(file_task, ACCEPT_ALL), ("submit", "Done."), "NO_SHORTCUT")
+async def test_a_fileless_pass_on_a_machine_task_is_a_repair(
+    adversary, file_task_with, verdict_grader, file_facts, rounds
+):
+    untouched = await adversary(file_task_with(grader_script=verdict_grader("True")), ("submit", "Done."), "NO_SHORTCUT")
 
     summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (untouched,)}), rounds.policy(adversary_k=1))
 
@@ -469,9 +463,11 @@ async def test_a_fileless_pass_on_a_machine_task_is_a_repair(adversary, file_tas
     assert [(a.tier, a.rule) for a in summary.assessments] == [(REPAIR, "2")]
 
 
-async def test_a_pass_without_reading_the_inputs_is_a_repair(adversary, file_task, file_facts, rounds):
+async def test_a_pass_without_reading_the_inputs_is_a_repair(
+    adversary, file_task_with, verdict_grader, file_facts, rounds
+):
     flood = await adversary(
-        graded_by(file_task, LENIENT_FILE_CHECK),
+        file_task_with(grader_script=verdict_grader(MENTIONS_60)),
         ("shell", f"seq 0 100 > {SUM}"),
         ("submit", "Done.", (SUM,)),
         "NO_SHORTCUT",
@@ -501,7 +497,7 @@ async def test_a_claimed_shortcut_that_is_the_honest_answer_is_a_failed_audit(
     honest = await trial(lenient_text_task, reply="395")
 
     summary = summarize(
-        evidence(task_facts(lenient_text_task), solver=(honest,), adversaries={SHORTCUT: (audit,)}),
+        evidence(task_facts(lenient_text_task.task), solver=(honest,), adversaries={SHORTCUT: (audit,)}),
         rounds.policy(k=1, adversary_k=1),
     )
 
@@ -542,11 +538,14 @@ async def test_role_stats_count_submissions_claims_budget_and_tiers(adversary, f
 
 
 async def test_a_summary_reads_back_from_calibration_json(
-    tmp_path, adversary, trial, file_task, file_controls, file_facts, rounds
+    tmp_path, adversary, trial, file_task, file_task_with, verdict_grader, file_controls, file_facts, rounds
 ):
     correct = next(c for c in file_controls if c.kind is ControlKind.POSITIVE)
     flood = await adversary(
-        graded_by(file_task, LENIENT_FILE_CHECK), ("shell", f"seq 0 100 > {SUM}"), ("submit", "Done.", (SUM,)), "x"
+        file_task_with(grader_script=verdict_grader(MENTIONS_60)),
+        ("shell", f"seq 0 100 > {SUM}"),
+        ("submit", "Done.", (SUM,)),
+        "x",
     )
     probe = await adversary(file_task, ("shell", SOLVE), ("submit", "Done.", (SUM,)), "Solved.")
     summary = summarize(

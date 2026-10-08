@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend
 from taskcompendium.models import TextMessage
 from taskcompendium.submission import PlainText
 
@@ -81,7 +81,7 @@ POLICY = ValidationPolicy(
     adversary_repair_submissions=3,
     band=CalibrationBand(0.125, 0.875),
     sampling=LLMPolicy(temperature=0.7, max_continuations=0),
-    deadlines=Deadlines(agent_timeout=900, attempt_timeout=1200),
+    deadlines=Deadlines(total_turn_timeout=900, attempt_timeout=1200),
     max_retries=2,
     token_contract_retries=2,
     retry_backoff=RetryBackoff(initial=0.5, maximum=5.0, factor=1.5, jitter=0.1),
@@ -184,13 +184,15 @@ class LiveRound:
 
 async def live_round(client: GlmClient, draft: TaskDraft, directory: Path, purpose: str) -> LiveRound:
     """Run controls, then solver and adversaries, on ShellSim; summarize from disk, resume, write ``summary.json``."""
-    digest = task_digest(draft.task, draft.execution, draft.convention)
+    digest = task_digest(draft.lowered, draft.convention)
     site = ValidationSite(draft.task.id, 0, directory / f"evidence-{digest[:12]}", JsonlLedger(directory / "ledger"))
     settings = EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+        factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+        capabilities={Backend.SHELLSIM.value: SHELLSIM},
         max_turns=MAX_TURNS,
         command_timeout=60,
+        tool_turn_timeout=120,
+        model_turn_timeout=600,
         cleanup_timeout=60,
         conventions=(draft.convention,),
     )
@@ -243,7 +245,7 @@ async def live_round(client: GlmClient, draft: TaskDraft, directory: Path, purpo
 
 def assert_round_reads_back_and_resumes(run: LiveRound) -> None:
     draft, summary = run.draft, run.summary
-    digest = task_digest(draft.task, draft.execution, draft.convention)
+    digest = task_digest(draft.lowered, draft.convention)
     assert len(run.solver) == POLICY.k
     assert {role: len(o) for role, o in run.adversaries.items()} == {role: POLICY.adversary_k for role in AdversaryRole}
     assert summary == summarize(

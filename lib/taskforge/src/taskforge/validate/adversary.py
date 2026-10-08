@@ -42,14 +42,13 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from rolloutengine.cleanup import Cleanup
 from rolloutengine.contracts import (
-    AGENT_TIMEOUT_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     ModelRequest,
     ModelTurn,
     RolloutData,
@@ -60,14 +59,14 @@ from rolloutengine.contracts import (
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
-from rolloutengine.machines import task_machine
+from rolloutengine.machines import prepare_machine
+from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.task_session import session_start
 from shellbox.machine import Command, Machine
-from taskcompendium.environment import EnvironmentFile
-from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import TaskResource, TaskSpec
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import AnswerCall, FinalAction, SubmissionConvention, conversation_messages
 
 from taskforge.builder.run import TaskDraft
@@ -113,6 +112,8 @@ PREAMBLE_SEPARATOR = "\n\n"
 CONTEXT_HEADER = "What the task's consumer adds:"
 SHELL_OUTPUT_LIMIT = 64 * 1024
 """Bytes of stdout and stderr kept per shell command, as ``Build.shell_tool`` keeps."""
+CAPTURED_FILE_MODE = "644"
+"""The mode a captured candidate file is installed with on the grading machine."""
 FILE_PROBE_TIMEOUT = 60.0
 """Seconds ``capture`` waits for the check that a listed path is a regular file."""
 CONTEXT_STOP_REASON = "context"
@@ -226,11 +227,14 @@ def adversary_convention(task: TaskSpec, convention: SubmissionConvention) -> Su
 
 def candidate_state(messages: tuple[dict[str, Any], ...], candidate: Candidate) -> SuppliedState:
     """The conversation the verifier grades, over the solver's exact task prefix, and the candidate's files."""
-    return SuppliedState(messages=(*messages, {"role": "assistant", "content": candidate.reply}), files=candidate.files)
+    return SuppliedState(
+        messages=(*messages, {"role": "assistant", "content": candidate.reply}), resources=candidate.files
+    )
 
 
-async def capture(machine: Machine, paths: Sequence[str]) -> tuple[EnvironmentFile, ...]:
-    """Each path downloaded from ``machine`` as an ``EnvironmentFile`` with mode 0o644, sorted by path.
+async def capture(machine: Machine, paths: Sequence[str]) -> tuple[TaskResource, ...]:
+    """Each absolute path downloaded from ``machine`` as a ``TaskResource`` relative to the machine root with mode
+    ``CAPTURED_FILE_MODE``, sorted by path.
 
     Raises:
         FileNotFoundError: a path is not a regular file on ``machine``; its argument is the path.
@@ -243,7 +247,8 @@ async def capture(machine: Machine, paths: Sequence[str]) -> tuple[EnvironmentFi
                 raise FileNotFoundError(path)
             target = Path(directory) / str(index)
             await machine.download(path, target)
-            files.append(EnvironmentFile(path=path, content=target.read_bytes()))
+            resource = inline_resource(str(PurePosixPath(path).relative_to("/")), target.read_bytes())
+            files.append(resource.model_copy(update={"mode": CAPTURED_FILE_MODE}))
     return tuple(files)
 
 
@@ -261,7 +266,6 @@ def _observation(submission: Submission, budget: int) -> dict[str, object]:
         "passed": submission.passed,
         "score_min": grade.score_min,
         "score_max": grade.score_max,
-        "rewards": grade.rewards,
     }
     if grade.status is GradeStatus.SUBMISSION_FAILURE:
         body["error"] = grade.error
@@ -273,15 +277,14 @@ class Verifier:
     """The ``submit`` handler of one attempt: grades candidates through ``ShellboxRolloutEngine.grade_state`` on a
     fresh machine each, counts the budget, and keeps every submission in order.
 
-    The model sees the reward, the pass, the score range and the reward components; the grader's
-    diagnostics, detail and failure stay in the record, because a grader may print the expected value.
+    The model sees the reward, the pass and the score range; the grader's diagnostics, detail and failure stay
+    in the record, because a grader may print the expected value.
     Every call that reached ``grade_state`` spends one submission whatever its status. A
     ``RolloutInterrupted`` other than a failed install of the candidate's files is recorded and re-raised,
     ending the attempt as the engine's would.
     """
 
-    task: TaskSpec
-    execution: TaskExecution
+    lowered: LoweredTaskSpec
     task_messages: tuple[dict[str, Any], ...]
     engine: ShellboxRolloutEngine
     machine: Machine | None
@@ -304,9 +307,7 @@ class Verifier:
         ordinal = len(self.submissions) + 1
         started = time.monotonic()
         try:
-            grade = await self.engine.grade_state(
-                self.task, candidate_state(self.task_messages, candidate), execution=self.execution
-            )
+            grade = await self.engine.grade_state(self.lowered, candidate_state(self.task_messages, candidate))
         except RolloutInterrupted as error:
             cause = f"{error.operation}: {error.__cause__!r}"
             self._record(ordinal, candidate, GradeResult(GradeStatus.UNAVAILABLE, None, cause), started)
@@ -380,7 +381,7 @@ def agent_rollout(
     submissions: Sequence[Submission],
 ) -> RolloutData:
     """A ``RolloutData`` of an agent run: the opening conversation, one step per turn whose observations are that
-    turn's tool messages, and no token ids. ``run`` None (the agent deadline) gives no steps."""
+    turn's tool messages, and no token ids. ``run`` None (the total-turn deadline) gives no steps."""
     conversation = [dict(m) for m in opening]
     steps = []
     turns = () if run is None else run.turns
@@ -448,8 +449,7 @@ class _Attempt:
 
 
 async def _agent_attempt(
-    draft: TaskDraft,
-    execution: TaskExecution,
+    lowered: LoweredTaskSpec,
     convention: SubmissionConvention,
     policy: AdversaryPolicy,
     settings: EngineSettings,
@@ -458,22 +458,37 @@ async def _agent_attempt(
     opening: tuple[dict[str, Any], ...],
     submissions: list[Submission],
 ) -> _Attempt:
-    task = draft.task
+    """One agent loop on a machine prepared as RolloutEngine prepares the task machine.
+
+    ``lowered.session.total_turn_timeout`` bounds the loop (the run then ends with stop reason
+    ``total_turn_timeout`` and no turns) and ``attempt_timeout`` the whole attempt. A machine that fails to close
+    after the loop finished is counted under ``CLEANUP_ERROR_COUNT`` rather than failing the attempt.
+    """
+    task = lowered.task
     task_messages = session_start(task, convention).messages
-    cleanup = Cleanup(settings.cleanup_timeout)
-    deadline = asyncio.timeout(execution.attempt_timeout)
+    runtime = lowered.runtime.task_machine
+    deadline = asyncio.timeout(lowered.session.attempt_timeout)
     run: AgentRun | None = None
+    finished = False
+    cleanup_errors = 0
     try:
         async with deadline, AsyncExitStack() as resources:
-            try:
-                machine = await resources.enter_async_context(
-                    task_machine(task.environment, settings.factories, cleanup)
-                )
-            except Exception as error:
-                raise RolloutInterrupted(_empty(task), RolloutOperation.START) from error
+            machine: Machine | None = None
+            if runtime is not None:
+                try:
+                    machine = await resources.enter_async_context(
+                        prepare_machine(
+                            task.environment_requirements,
+                            runtime,
+                            (*task.resources.all, *task.resources.worker),
+                            settings.factories,
+                            cleanup_timeout=settings.cleanup_timeout,
+                        )
+                    )
+                except Exception as error:
+                    raise RolloutInterrupted(_empty(task), RolloutOperation.START) from error
             verifier = Verifier(
-                task,
-                execution,
+                lowered,
                 task_messages,
                 settings.engine(no_model, convention),
                 machine,
@@ -484,28 +499,26 @@ async def _agent_attempt(
             submit = AgentTool(SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, parameters, verifier.submit)
             tools = (submit,)
             if machine is not None:
-                shell = shell_tool(
-                    machine,
-                    timeout=settings.command_timeout,
-                    output_limit_bytes=SHELL_OUTPUT_LIMIT,
-                    user=execution.agent_user,
-                )
+                shell = shell_tool(machine, timeout=settings.command_timeout, output_limit_bytes=SHELL_OUTPUT_LIMIT)
                 tools = (shell, submit)
-            agent_deadline = asyncio.timeout(execution.agent_timeout)
+            agent_deadline = asyncio.timeout(lowered.session.total_turn_timeout)
             try:
                 async with agent_deadline:
                     run = await run_agent(client, policy.sampling, opening, tools, settings.max_turns, record)
             except TimeoutError:
                 if not agent_deadline.expired():
                     raise
+            finished = True
     except Exception as error:
-        cause = Cause.ATTEMPT_TIMEOUT if deadline.expired() else classify(error)
-        return _Attempt(Ungraded(cause, "".join(traceback.format_exception(error)), None), None)
+        if not finished or deadline.expired():
+            cause = Cause.ATTEMPT_TIMEOUT if deadline.expired() else classify(error)
+            return _Attempt(Ungraded(cause, "".join(traceback.format_exception(error)), None), None)
+        cleanup_errors = 1
     if run is not None:
         turns = submission_turns(run)
         submissions[:] = [replace(s, turn=turns.get(s.ordinal)) for s in submissions]
-    stop = AGENT_TIMEOUT_STOP_REASON if run is None else AGENT_STOPS[run.stop]
-    rollout = agent_rollout(task.id, opening, run, trial_grade(submissions), stop, len(cleanup.errors), submissions)
+    stop = TOTAL_TURN_TIMEOUT_STOP_REASON if run is None else AGENT_STOPS[run.stop]
+    rollout = agent_rollout(task.id, opening, run, trial_grade(submissions), stop, cleanup_errors, submissions)
     return _Attempt(Graded(rollout), run)
 
 
@@ -518,15 +531,14 @@ def _claim_attributes(outcome: Outcome, submissions: Sequence[Submission]) -> di
 
 
 def _refuse(
-    draft: TaskDraft,
-    execution: TaskExecution,
+    lowered: LoweredTaskSpec,
     convention: SubmissionConvention | None,
     plan: TrialPlan,
     trial: str,
     system: str,
     outcome: Ungraded,
 ) -> AdversaryTrial:
-    with attempt_span(draft.task, execution, convention, plan, trial, plan.first_attempt) as fields:
+    with attempt_span(lowered, convention, plan, trial, plan.first_attempt) as fields:
         record_attempt(fields, outcome, plan, trial, plan.first_attempt, adversary_attempt_json(outcome, (), system))
         fields.attrs.update(_claim_attributes(outcome, ()))
     return AdversaryTrial(outcome, system, ())
@@ -551,28 +563,26 @@ async def run_adversary_trial(
     one ``TRIAL`` ledger span (step ``adversary/<trial>/<attempt>``) and one attempt file, with a fresh submission
     budget.
     """
-    task = draft.task
-    execution = plan.deadlines.apply(draft.execution)
+    lowered = settings.apply(plan.deadlines.apply(draft.lowered))
+    task = lowered.task
     try:
         convention = adversary_convention(task, draft.convention)
     except ConventionUnavailable as error:
         outcome = Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None)
-        return _refuse(draft, execution, None, plan, trial, brief, outcome)
+        return _refuse(lowered, None, plan, trial, brief, outcome)
     opening = with_preamble(brief, session_start(task, convention).messages)
     system = str(opening[0]["content"])
-    refusals = task_refusals(task, execution, settings.capabilities)
+    refusals = task_refusals(lowered, settings.capabilities)
     if refusals:
         outcome = Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None)
-        return _refuse(draft, execution, convention, plan, trial, system, outcome)
+        return _refuse(lowered, convention, plan, trial, system, outcome)
     backoff = copy.copy(plan.retry_backoff)
     retries = 0
     attempt = plan.first_attempt
     while True:
         submissions: list[Submission] = []
-        with attempt_span(task, execution, convention, plan, trial, attempt) as fields:
-            result = await _agent_attempt(
-                draft, execution, convention, policy, settings, client, record, opening, submissions
-            )
+        with attempt_span(lowered, convention, plan, trial, attempt) as fields:
+            result = await _agent_attempt(lowered, convention, policy, settings, client, record, opening, submissions)
             outcome = result.outcome
             payload = adversary_attempt_json(outcome, submissions, system)
             record_attempt(fields, outcome, plan, trial, attempt, payload)

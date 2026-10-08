@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 
 from rolloutengine.contracts import ModelRequest, ModelTurn
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend
 from taskcompendium.submission import JsonAnswer, PlainText
 
 from taskforge.ledger.jsonl import read_entries
@@ -17,14 +17,17 @@ from taskforge.validate.solver import run_solver
 from taskforge.validate.trials import EngineSettings
 
 PLAIN = PlainText(id="plain")
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
 
 
 def settings(factory, conventions=(PLAIN,)) -> EngineSettings:
     return EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: factory},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+        factories={SHELLSIM_BACKEND: factory},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM},
         max_turns=4,
         command_timeout=10,
+        tool_turn_timeout=20,
+        model_turn_timeout=30,
         cleanup_timeout=10,
         conventions=conventions,
     )

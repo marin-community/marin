@@ -10,9 +10,11 @@ The model is ``fake_glm`` (a scripted GLM router); machines are ShellSim and the
 import json
 
 import pytest
+from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON
 from rolloutengine.task_session import session_start
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend
 from taskcompendium.models import ConversationInput, TextMessage
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import AnswerCall, PlainText
 
 from taskforge.ledger.jsonl import read_entries
@@ -31,9 +33,10 @@ from taskforge.validate.adversary import (
 from taskforge.validate.attempts import ADVERSARY_KEY, load_adversary_attempt, trial_files
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.validate.submissions import trial_claim
-from taskforge.validate.trials import EngineSettings
+from taskforge.validate.trials import CLEANUP_ERROR_COUNT, EngineSettings
 
 PLAIN = PlainText(id="plain")
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
 SUM = "/workspace/sum.txt"
 WRITE_SUM = ("shell", f"echo 60 > {SUM}")
 SHORTCUT = AdversaryRole.SHORTCUT
@@ -41,10 +44,12 @@ SHORTCUT = AdversaryRole.SHORTCUT
 
 def settings(factory, capabilities=None, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: factory},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM} if capabilities is None else capabilities,
+        factories={SHELLSIM_BACKEND: factory},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM} if capabilities is None else capabilities,
         max_turns=max_turns,
         command_timeout=10,
+        tool_turn_timeout=20,
+        model_turn_timeout=30,
         cleanup_timeout=10,
         conventions=(PLAIN,),
     )
@@ -82,7 +87,7 @@ async def test_the_brief_is_the_one_system_turn_and_the_task_follows_it(
 
     first = fake_glm.requests[0]
     assert first["messages"][0] == {"role": "system", "content": adversary_brief(4, "")}
-    assert first["messages"][1:] == [dict(m) for m in session_start(file_task, PLAIN).messages]
+    assert first["messages"][1:] == [dict(m) for m in session_start(file_task.task, PLAIN).messages]
     assert [tool["function"]["name"] for tool in first["tools"]] == ["shell", SUBMIT_TOOL_NAME]
     assert "files" in first["tools"][1]["function"]["parameters"]["properties"]
     record = json.loads((directory / "attempt-0.json").read_text())
@@ -98,10 +103,10 @@ async def test_the_brief_is_the_one_system_turn_and_the_task_follows_it(
 
 
 async def test_a_task_system_prompt_follows_the_brief_in_the_same_turn(
-    tmp_path, file_task, rounds, fakes, fake_glm, glm_client, turns
+    tmp_path, file_task, relower, rounds, fakes, fake_glm, glm_client, turns
 ):
-    events = (TextMessage(role="system", content="You are careful."), *file_task.context.events)
-    task = file_task.model_copy(update={"context": ConversationInput(events=events)})
+    events = (TextMessage(role="system", content="You are careful."), *file_task.task.context.events)
+    task = relower(file_task.task.model_copy(update={"context": ConversationInput(events=events)}))
     turns(fake_glm, "NO_SHORTCUT")
 
     trial, _ = await one_trial(tmp_path, task, rounds, fakes, glm_client)
@@ -140,13 +145,12 @@ async def test_submit_grades_a_fresh_machine_through_the_verifier(
         "passed": True,
         "score_min": 0.0,
         "score_max": 1.0,
-        "rewards": {},
     }
     assert isinstance(trial.outcome, Graded) and trial.outcome.reward == 1.0
     (submission,) = trial.submissions
-    assert submission.grade.diagnostics["stdout"] == "1\n"
+    assert submission.grade.detail["got"] == "60"
     assert submission.turn == 1 and submission.candidate.paths == (SUM,)
-    assert submission.candidate.files[0].content == b"60\n"
+    assert resource_bytes(submission.candidate.files[0]) == b"60\n"
     assert trial_claim(trial.outcome).kind is ClaimKind.NO_SHORTCUT
 
 
@@ -160,16 +164,17 @@ async def test_the_verifier_never_sees_the_adversary_shell_state(
     assert [(s.ordinal, s.grade.reward, s.passed) for s in trial.submissions] == [(1, 0.0, False), (2, 1.0, True)]
 
 
-async def test_a_planted_grader_is_overwritten_at_grading_time(
+async def test_a_planted_grader_is_not_the_grader_that_runs(
     tmp_path, file_task, rounds, fakes, fake_glm, glm_client, turns
 ):
-    plant = ("shell", "mkdir -p /grader && echo 'echo 1' > /grader/check.sh")
-    turns(fake_glm, plant, ("submit", "Done.", ("/grader/check.sh",)), "NO_SHORTCUT")
+    planted = "/tests/grader.py"
+    plant = ("shell", f"mkdir -p /tests && echo 'print(1)' > {planted}")
+    turns(fake_glm, plant, ("submit", "Done.", (planted,)), "NO_SHORTCUT")
 
     trial, _ = await one_trial(tmp_path, file_task, rounds, fakes, glm_client)
 
     (submission,) = trial.submissions
-    assert submission.candidate.paths == ("/grader/check.sh",) and submission.grade.reward == 0.0
+    assert submission.candidate.paths == (planted,) and submission.grade.reward == 0.0
 
 
 async def test_the_submission_budget_is_enforced_by_the_tool(
@@ -216,10 +221,9 @@ async def test_grading_diagnostics_are_withheld_from_the_model(
         "passed",
         "score_min",
         "score_max",
-        "rewards",
     }
     (submission,) = trial.submissions
-    assert submission.grade.diagnostics["stdout"] == "0\n" and not submission.passed
+    assert submission.grade.detail["got"] == "59" and not submission.passed
 
 
 @pytest.mark.parametrize(
@@ -257,20 +261,34 @@ async def test_a_run_without_a_final_text_verdict_has_no_claim(
     assert trial_claim(on_turns.outcome).kind is ClaimKind.NONE and trial_claim(cut.outcome).kind is ClaimKind.NONE
 
 
-async def test_an_agent_deadline_keeps_the_submissions_and_grades_the_trial(
+async def test_a_total_turn_deadline_keeps_the_submissions_and_grades_the_trial(
     tmp_path, file_task, rounds, fakes, fake_glm, glm_client, turns
 ):
     turns(fake_glm, WRITE_SUM, ("submit", "Done.", (SUM,)))
     fake_glm.stream(content="never finished", stall_after_first=True)
-    policy = rounds.policy(adversary_k=1, agent_timeout=0.5)
+    policy = rounds.policy(adversary_k=1, total_turn_timeout=0.5)
 
     trial, _ = await one_trial(tmp_path, file_task, rounds, fakes, glm_client, policy=policy)
 
     outcome = trial.outcome
     assert isinstance(outcome, Graded) and outcome.timed_out and outcome.reward == 1.0
-    assert outcome.rollout.stop_reason == "agent_timeout" and outcome.rollout.steps == ()
+    assert outcome.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON and outcome.rollout.steps == ()
     (submission,) = trial.submissions
     assert submission.turn is None and submission.passed
+
+
+async def test_a_workspace_machine_that_fails_to_close_is_counted_and_the_trial_stays_graded(
+    tmp_path, file_task, rounds, fakes, fake_glm, glm_client, turns
+):
+    turns(fake_glm, WRITE_SUM, ("submit", "Done.", (SUM,)), "NO_SHORTCUT")
+
+    trial, directory = await one_trial(
+        tmp_path, file_task, rounds, fakes, glm_client, factory=fakes.faulty_factory(close_error=True)
+    )
+
+    assert isinstance(trial.outcome, Graded) and trial.outcome.reward == 1.0
+    assert trial.outcome.rollout.metrics[CLEANUP_ERROR_COUNT] == 1
+    assert json.loads((directory / "attempt-0.json").read_text())["cleanup_errors"] == 1
 
 
 async def test_a_drained_router_is_retried_with_a_fresh_budget(

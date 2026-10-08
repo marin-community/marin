@@ -252,7 +252,7 @@ outcomes. A trial is settled when its last attempt is graded or ungraded for a c
 `RERUNNABLE` (`RETRYABLE` plus `TOKEN_CONTRACT`). A re-entered round loads settled trials and
 re-runs the others with `TrialPlan.first_attempt` set to the attempt count on disk, so a crash at
 hundreds-wide repeats no settled rollout and no attempt file is overwritten. The evidence
-directory is keyed by `task_digest(task, execution, convention)`, so evidence is never read
+directory is keyed by `task_digest(lowered, convention)`, so evidence is never read
 against a different draft.
 
 Controls run before any sampled trial: a violated control means the grader is wrong, and rollouts

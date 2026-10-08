@@ -12,11 +12,12 @@ persists both beside the attempt's outcome; ``calibration`` tiers a trial from t
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
 
 from pydantic import TypeAdapter
 from rolloutengine.contracts import LENGTH_STOP_REASON, RolloutData
-from taskcompendium.environment import EnvironmentFile
 from taskcompendium.grading_result import GradeResult
+from taskcompendium.models import TaskResource
 
 from taskforge.validate.outcome import GRADED_STATUSES, Outcome
 
@@ -29,12 +30,14 @@ class Candidate:
     """What one ``submit`` call graded: the final reply and the files captured from the adversary's workspace."""
 
     reply: str
-    files: tuple[EnvironmentFile, ...]
-    """Sorted by path; ``()`` on a null environment or when none were listed."""
+    files: tuple[TaskResource, ...]
+    """Relative to the machine root and sorted by path; ``()`` on a task without a machine or when none were
+    listed."""
 
     @property
     def paths(self) -> tuple[str, ...]:
-        return tuple(f.path for f in self.files)
+        """The files' absolute paths in the machine."""
+        return tuple(str(PurePosixPath("/", f.path)) for f in self.files)
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,7 @@ class Submission:
 
     Attributes:
         ordinal: 1-based: the n-th verifier call of the attempt.
-        turn: 0-based agent turn that issued it; ``None`` when the run was lost to the agent deadline or a
+        turn: 0-based agent turn that issued it; ``None`` when the run was lost to the total-turn deadline or a
             model failure.
         candidate: What was graded.
         grade: The verifier's result in full, diagnostics included; the model saw only part of it.
