@@ -157,9 +157,9 @@ Build the grader image first, with the same `MARIN_PREFIX`:
 uv run python -m experiments.post_training.task_curation.images --recipe grader
 ```
 
-The build pushes `ghcr.io/marin-community/task-curation-grader:<identity>` and
+The build pushes `ghcr.io/marin-community/iris-task:task-curation-grader-<identity>` and
 records the pushed digest in the artifact `images/grader-<identity>`. It needs a
-`docker login` for the registry and, for a CoreWeave `MARIN_PREFIX`, the
+`docker login` for ghcr.io and, for a CoreWeave `MARIN_PREFIX`, the
 `CW_KEY_ID` and `CW_KEY_SECRET` pair in the environment. The
 identity hashes every file in the recipe's context and package directories with
 its mode, the digest-pinned base image and the platform, so a rerun with an

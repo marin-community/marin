@@ -32,7 +32,7 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
     source_step,
 )
-from experiments.post_training.task_curation.tests.image_builds import REGISTRY, install_fake_docker, tracked_recipe
+from experiments.post_training.task_curation.tests.image_builds import REPOSITORY, install_fake_docker, tracked_recipe
 
 CONVERTER_MODULE = """
 from taskcompendium.convert.answers import exact_answer_task
@@ -154,11 +154,11 @@ def grader_recipe(tmp_path, monkeypatch):
 
 def test_a_rebuilt_grader_image_renames_the_artifact(grader_recipe, config):
     pipeline = replace(math500(), grader_image=grader_recipe)
-    (first,) = run(image_artifact(grader_recipe, REGISTRY))
+    (first,) = run(image_artifact(grader_recipe, REPOSITORY))
     original = source_step(pipeline, config, CampaignRuntime())
     assert image_artifact(grader_recipe).name in [dep.name for dep in original.deps]
     (grader_recipe.context / "requirements.lock").write_text("numpy==2.3.4\n")
-    (second,) = run(image_artifact(grader_recipe, REGISTRY))
+    (second,) = run(image_artifact(grader_recipe, REPOSITORY))
     assert second.image != first.image
     assert step_name(pipeline, config) != original.name
 

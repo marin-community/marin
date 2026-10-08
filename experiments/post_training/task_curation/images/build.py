@@ -31,7 +31,9 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.task_curation.images.recipes import RECIPES, ImageRecipe
 
-DEFAULT_REGISTRY = "ghcr.io/marin-community"
+# New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
+# images are tagged into the public iris-task package until a public task-curation package exists.
+DEFAULT_REPOSITORY = "ghcr.io/marin-community/iris-task"
 PLATFORM = "linux/amd64"
 IMAGE_ARTIFACT_VERSION = "2026.10.07"
 IDENTITY_CHARS = 16
@@ -74,7 +76,7 @@ class ImageArtifact(Artifact):
 @dataclass(frozen=True)
 class ImageBuild:
     identity: str
-    registry: str
+    repository: str
     output_path: str
 
 
@@ -124,16 +126,16 @@ def identity_digest(recipe: ImageRecipe) -> str:
     return hashlib.sha256(canonical_json(recipe_identity(recipe)).encode()).hexdigest()
 
 
-def image_repository(recipe: ImageRecipe, registry: str) -> str:
-    return f"{registry}/task-curation-{recipe.name}"
+def image_tag(recipe: ImageRecipe, repository: str, identity: str) -> str:
+    return f"{repository}:task-curation-{recipe.name}-{identity[:IDENTITY_CHARS]}"
 
 
 def _image_build(identity: str, ctx: StepContext) -> ImageBuild:
-    return ImageBuild(identity=identity, registry=ctx.runtime_arg("registry"), output_path=ctx.output_path)
+    return ImageBuild(identity=identity, repository=ctx.runtime_arg("repository"), output_path=ctx.output_path)
 
 
-def image_artifact(recipe: ImageRecipe, registry: str = DEFAULT_REGISTRY) -> ArtifactStep[ImageArtifact]:
-    """The ``images/<name>-<identity[:16]>`` artifact; the registry is where a build pushes, not identity."""
+def image_artifact(recipe: ImageRecipe, repository: str = DEFAULT_REPOSITORY) -> ArtifactStep[ImageArtifact]:
+    """The ``images/<name>-<identity[:16]>`` artifact; the repository is where a build pushes, not identity."""
     identity = identity_digest(recipe)
     return ArtifactStep(
         name=f"images/{recipe.name}-{identity[:IDENTITY_CHARS]}",
@@ -141,7 +143,7 @@ def image_artifact(recipe: ImageRecipe, registry: str = DEFAULT_REGISTRY) -> Art
         artifact_type=ImageArtifact,
         run=partial(build_image, recipe),
         build_config=partial(_image_build, identity),
-        runtime_args={"registry": registry},
+        runtime_args={"repository": repository},
     )
 
 
@@ -151,8 +153,8 @@ def _docker_config() -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def _require_login(registry: str) -> None:
-    host = registry.split("/", 1)[0]
+def _require_login(repository: str) -> None:
+    host = repository.split("/", 1)[0]
     config = _docker_config()
     if host in config.get("auths", {}) or host in config.get("credHelpers", {}) or config.get("credsStore"):
         return
@@ -181,11 +183,11 @@ def _require_tracked(root: Path) -> None:
         raise ValueError(f"{root} has executable files {executable}; set modes inside the Dockerfile instead")
 
 
-def _preflight(recipe: ImageRecipe, registry: str) -> None:
+def _preflight(recipe: ImageRecipe, repository: str) -> None:
     if shutil.which("docker") is None:
         raise RuntimeError("Building an image requires the docker CLI with buildx")
     subprocess.run(["docker", "buildx", "version"], check=True, capture_output=True)
-    _require_login(registry)
+    _require_login(repository)
     for root in (recipe.context, *recipe.packages):
         _require_tracked(root)
 
@@ -194,9 +196,8 @@ def build_image(recipe: ImageRecipe, build: ImageBuild) -> ImageArtifact:
     """Build ``recipe`` for linux/amd64, push it under its identity tag, and resolve the pushed digest."""
     if identity_digest(recipe) != build.identity:
         raise RuntimeError(f"The {recipe.name} recipe changed after its artifact was planned; rerun the build")
-    _preflight(recipe, build.registry)
-    repository = image_repository(recipe, build.registry)
-    tag = f"{repository}:{build.identity[:IDENTITY_CHARS]}"
+    _preflight(recipe, build.repository)
+    tag = image_tag(recipe, build.repository, build.identity)
     package_contexts = [f"--build-context={package.name}={package}" for package in recipe.packages]
     # Without provenance the pushed reference is one platform manifest rather than an attestation index.
     subprocess.run(
@@ -225,7 +226,7 @@ def build_image(recipe: ImageRecipe, build: ImageBuild) -> ImageArtifact:
         name=recipe.name,
         identity=build.identity,
         tag=tag,
-        image=f"{repository}@{digest}",
+        image=f"{build.repository}@{digest}",
         base_image=base_image(recipe.context / "Dockerfile"),
         lock_sha256=hashlib.sha256((recipe.context / LOCK_FILE).read_bytes()).hexdigest(),
         context_files=context_files(recipe.context),
@@ -259,11 +260,13 @@ def built_image(recipe: ImageRecipe) -> ImageArtifact:
     multiple=True,
     help="Recipe to build; repeat to select several. Defaults to every recipe.",
 )
-@click.option("--registry", default=DEFAULT_REGISTRY, show_default=True, help="Registry the build pushes to.")
-def main(names: tuple[str, ...], registry: str) -> None:
+@click.option(
+    "--repository", default=DEFAULT_REPOSITORY, show_default=True, help="Image repository the build pushes to."
+)
+def main(names: tuple[str, ...], repository: str) -> None:
     logging.basicConfig(level=logging.INFO)
     # A workstation reaches the CoreWeave artifact prefix through its ambient CW_KEY_* pair.
     configure_coreweave_s3()
     recipes = [RECIPES[name] for name in names or sorted(RECIPES)]
-    for image in run(*(image_artifact(recipe, registry) for recipe in recipes)):
+    for image in run(*(image_artifact(recipe, repository) for recipe in recipes)):
         click.echo(f"{image.name}: {image.image} ({image.path})")

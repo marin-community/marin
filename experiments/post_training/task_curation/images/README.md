@@ -38,22 +38,25 @@ and its converter packages the files into each task.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images \
-  [--recipe grader] [--registry ghcr.io/marin-community]
+  [--recipe grader] [--repository ghcr.io/marin-community/iris-task]
 ```
 
-The build needs `docker buildx` and a `docker login` for the registry. Run it with
+The build needs `docker buildx` and a `docker login` for the repository's registry.
+The default repository is the public `iris-task` package: GHCR creates new packages
+org-internal, and Iris workers pull anonymously, so an image in a new package never
+starts on the cluster until the package is made public. Run it with
 the `MARIN_PREFIX` the campaign uses. It writes the artifact there.
 
 An image's identity is the SHA-256 of its recipe: the path, mode and content
 digest of every file in the context directory and in each package directory
 (skipping `__pycache__`), the digest-pinned base image named by the Dockerfile's
-single `FROM` line, and the platform `linux/amd64`. The registry is not part of
+single `FROM` line, and the platform `linux/amd64`. The repository is not part of
 the identity. The build:
 
 1. refuses context or package files that git does not track, and executable
    files, because a workspace bundle has neither and would compute another
    identity;
-2. pushes `<registry>/task-curation-<name>:<identity[:16]>` for linux/amd64,
+2. pushes `<repository>:task-curation-<name>-<identity[:16]>` for linux/amd64,
    without provenance attestations;
 3. resolves the pushed digest with `docker buildx imagetools inspect`;
 4. writes the artifact `images/<name>-<identity[:16]>` whose record holds the

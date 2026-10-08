@@ -10,7 +10,7 @@ from pathlib import Path
 from experiments.post_training.task_curation.images.recipes import ImageRecipe
 
 BASE_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "1" * 64
-REGISTRY = "registry.invalid/fixture"
+REPOSITORY = "registry.invalid/fixture/images"
 
 # Records each invocation and answers `imagetools inspect` with a digest derived from the tag, so a
 # changed recipe pushes a different digest.
@@ -26,14 +26,14 @@ esac
 
 
 def install_fake_docker(root: Path, monkeypatch) -> Path:
-    """Put a ``docker`` stand-in first on PATH and credentials for ``REGISTRY`` in DOCKER_CONFIG; return its log."""
+    """Put a ``docker`` stand-in first on PATH and credentials for ``REPOSITORY`` in DOCKER_CONFIG; return its log."""
     bin_dir, config_dir, log = root / "bin", root / "docker-config", root / "docker.log"
     bin_dir.mkdir()
     config_dir.mkdir()
     docker = bin_dir / "docker"
     docker.write_text(FAKE_DOCKER)
     docker.chmod(0o755)
-    (config_dir / "config.json").write_text(json.dumps({"auths": {REGISTRY.split("/")[0]: {}}}))
+    (config_dir / "config.json").write_text(json.dumps({"auths": {REPOSITORY.split("/")[0]: {}}}))
     log.touch()
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     monkeypatch.setenv("DOCKER_CONFIG", str(config_dir))

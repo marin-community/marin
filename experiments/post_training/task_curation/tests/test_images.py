@@ -23,7 +23,7 @@ from experiments.post_training.task_curation.images.build import (
 )
 from experiments.post_training.task_curation.tests.image_builds import (
     BASE_IMAGE,
-    REGISTRY,
+    REPOSITORY,
     install_fake_docker,
     tracked_recipe,
 )
@@ -41,11 +41,11 @@ def docker_log(tmp_path, monkeypatch):
 
 
 def test_build_pushes_the_identity_tag_and_records_the_pushed_digest(recipe, docker_log):
-    (image,) = run(image_artifact(recipe, REGISTRY))
+    (image,) = run(image_artifact(recipe, REPOSITORY))
     identity = identity_digest(recipe)
-    tag = f"{REGISTRY}/task-curation-fixture:{identity[:IDENTITY_CHARS]}"
+    tag = f"{REPOSITORY}:task-curation-fixture-{identity[:IDENTITY_CHARS]}"
     assert image.tag == tag
-    assert image.image == f"{REGISTRY}/task-curation-fixture@sha256:{hashlib.sha256(tag.encode()).hexdigest()}"
+    assert image.image == f"{REPOSITORY}@sha256:{hashlib.sha256(tag.encode()).hexdigest()}"
     assert image.base_image == BASE_IMAGE
     assert image.lock_sha256 == hashlib.sha256(b"numpy==2.3.5\n").hexdigest()
     assert [file.path for file in image.context_files] == ["Dockerfile", "requirements.lock"]
@@ -60,10 +60,10 @@ def test_build_pushes_the_identity_tag_and_records_the_pushed_digest(recipe, doc
 
 
 def test_an_unchanged_recipe_resolves_without_docker(recipe, docker_log, monkeypatch):
-    (first,) = run(image_artifact(recipe, REGISTRY))
+    (first,) = run(image_artifact(recipe, REPOSITORY))
     calls = docker_log.read_text()
     monkeypatch.setenv("PATH", "/nonexistent")
-    (second,) = run(image_artifact(recipe, REGISTRY))
+    (second,) = run(image_artifact(recipe, REPOSITORY))
     assert second.image == first.image
     assert docker_log.read_text() == calls
 
@@ -97,8 +97,8 @@ def test_bytecode_caches_do_not_enter_the_identity(recipe):
     assert image_artifact(recipe).name == original
 
 
-def test_the_registry_is_where_a_build_pushes_not_identity(recipe):
-    assert image_artifact(recipe, "other.invalid/images").name == image_artifact(recipe, REGISTRY).name
+def test_the_repository_is_where_a_build_pushes_not_identity(recipe):
+    assert image_artifact(recipe, "other.invalid/images").name == image_artifact(recipe, REPOSITORY).name
 
 
 @pytest.mark.parametrize(
@@ -113,14 +113,14 @@ def test_the_registry_is_where_a_build_pushes_not_identity(recipe):
 def test_build_refuses_files_a_workspace_bundle_would_not_reproduce(recipe, docker_log, tmp_path, change, message):
     change(recipe)
     with pytest.raises(ValueError, match=message):
-        build_image(recipe, ImageBuild(identity_digest(recipe), REGISTRY, str(tmp_path / "output")))
+        build_image(recipe, ImageBuild(identity_digest(recipe), REPOSITORY, str(tmp_path / "output")))
     assert "buildx build" not in docker_log.read_text()
 
 
-def test_build_requires_registry_credentials(recipe, docker_log, tmp_path):
+def test_build_requires_repository_credentials(recipe, docker_log, tmp_path):
     (tmp_path / "docker-config" / "config.json").write_text(json.dumps({"auths": {}}))
     with pytest.raises(RuntimeError, match=re.escape("docker login registry.invalid")):
-        build_image(recipe, ImageBuild(identity_digest(recipe), REGISTRY, str(tmp_path / "output")))
+        build_image(recipe, ImageBuild(identity_digest(recipe), REPOSITORY, str(tmp_path / "output")))
 
 
 def test_a_declared_recipe_without_a_built_artifact_names_the_build_command(recipe):
