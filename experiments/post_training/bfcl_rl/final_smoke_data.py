@@ -67,7 +67,7 @@ def fresh_smoke_rows(fresh_rows: list[dict], frozen_rows: list[dict]) -> list[di
 
 
 def run_fresh_smoke_data(config: FreshSmokeDataConfig) -> FreshSmokeData:
-    fresh = RecoveryPreferenceCache.load(config.fresh_cache_path)
+    fresh = RecoveryPreferenceCache.raw_load(config.fresh_cache_path)
     raw = StoragePath(fresh.selection_manifest_uri).read_bytes()
     manifest = json.loads(raw)
     cache_path = str(StoragePath(fresh.path) / "train")
