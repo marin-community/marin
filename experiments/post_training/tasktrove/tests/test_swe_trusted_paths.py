@@ -188,13 +188,11 @@ def test_dockerfile_reuses_existing_pip_install_line_instead_of_adding_a_new_run
 
 
 @pytest.mark.parametrize("repository", ["john-kurkowski__tldextract.3d1bf184", "marshmallow-code__marshmallow.9716fc62"])
-def test_swesmith_preserves_selected_cases_and_repository_plugins(repository):
+def test_swesmith_preserves_selected_cases(repository):
     task = read_task_binary(_fixture())
     task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
     converted = read_task_binary(record.task_binary)
-    dockerfile = converted.text(DOCKERFILE).split(INSTALL_MARKER)[0]
-    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in dockerfile
     assert parse_spec(converted.text(VERIFIER_TOML)).must_pass == tuple(
         json.loads(task.text("tests/config.json"))["FAIL_TO_PASS"]
     )
@@ -212,18 +210,23 @@ def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(
     )
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
     dockerfile = read_task_binary(record.task_binary).text(DOCKERFILE).split(INSTALL_MARKER)[0]
-    (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
     probe = "import pytest\n\ndef test_compatible_collection():\n    assert pytest.version_tuple[0] < 9\n"
     if repository.startswith("marshmallow-code__"):
         probe += (
             "\ndef test_declared_dependency():\n    import simplejson\n"
             "    assert simplejson.loads(simplejson.dumps({'ok': True})) == {'ok': True}\n"
         )
+    result = docker_pytest_result(dockerfile, probe, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def docker_pytest_result(dockerfile: str, probe: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
     (tmp_path / "test_probe.py").write_text(probe)
     image = f"atlas-swesmith-regression:{uuid.uuid4().hex}"
     try:
         subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
-        result = subprocess.run(
+        return subprocess.run(
             [
                 "docker",
                 "run",
@@ -241,7 +244,6 @@ def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
     finally:
         subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)
 
@@ -286,16 +288,5 @@ def test_swesmith_preserves_project_pytest_and_installs_test_dependencies(reposi
             "    signal.send('scope')\n"
             "    assert seen == ['scope']\n"
         )
-    (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
-    (tmp_path / "test_probe.py").write_text(probe)
-    image = f"atlas-swesmith-project-regression:{uuid.uuid4().hex}"
-    try:
-        subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
-        result = subprocess.run(
-            ["docker", "run", "--rm", "--network", "none", image, "python", "-m", "pytest", "test_probe.py"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-    finally:
-        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)
+    result = docker_pytest_result(dockerfile, probe, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr

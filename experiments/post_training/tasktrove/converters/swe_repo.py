@@ -161,13 +161,7 @@ def ensure_pytest_json_report(dockerfile: str, conda_lines: tuple[str, ...] = ()
 
 
 def swe_test_environment(dockerfile: str, instruction: str) -> str:
-    """Install SweSmith's missing test dependencies without disabling repository plugins.
-
-    The historical repositories include plugins using pytest's removed ``path`` hook
-    argument. Keep pytest below 9 during image construction and subsequent agent
-    installs. Marshmallow declares simplejson in its tests extra, but the supplied
-    setup installs the base package and silently ignores failed extras installation.
-    """
+    """Return a Dockerfile with compatible pytest and SweSmith repository test dependencies."""
     match = SWESMITH_REPO.search(instruction)
     if match is None:
         return dockerfile
