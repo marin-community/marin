@@ -99,13 +99,14 @@ from taskforge.review.rules import ItemHistory, decide, staged_repair
 from taskforge.triage.checks import Check, CheckContext
 from taskforge.triage.program import RubricProgram, evaluate
 from taskforge.triage.verdict import ModelCall, TriageDecision, Verdict
-from taskforge.validate.adversary import run_adversaries
-from taskforge.validate.calibration import CalibrationSummary, Finding, gave_up, solved, summarize, write_summary
+from taskforge.validate.adversary import AdversaryContext, ClaimKind, parse_claim, run_adversaries
+from taskforge.validate.calibration import CalibrationSummary, Finding, final_reply, summarize, write_summary
 from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
 from taskforge.validate.run import load_validation, replay_controls
 from taskforge.validate.solver import ModelFactory, ValidationSite, run_solver
+from taskforge.validate.submissions import passing
 from taskforge.validate.trials import EngineSettings, RetryBackoff, task_digest
 
 logger = logging.getLogger(__name__)
@@ -156,8 +157,9 @@ class LoopServices[IdeaT]:
         template: The builder template the author adapts (``build.template.standard``).
         build: The author's and builder's services; its ledger is ``ledger``.
         engine: Run-wide engine settings; each draft's trials run under its own convention alone.
-        rollout_models: Builds each validation trial's solver model, recording under the trial's step;
-            every adversary role wraps one.
+        rollout_models: Builds each solver trial's model, recording under the trial's step.
+        adversary_context: The consumer's section of the adversary brief for an item's proposal;
+            ``""`` for none. Adversary trials run their own agent loop on ``client``.
         tokenize: The server tokenizer control replay renders transcripts with.
         ledger: The run's ledger; its local JSONL root must be ``root / "ledger"``.
         root: The run root.
@@ -174,6 +176,7 @@ class LoopServices[IdeaT]:
     build: BuildServices
     engine: EngineSettings
     rollout_models: ModelFactory
+    adversary_context: AdversaryContext
     tokenize: Tokenize
     ledger: Ledger
     root: Path
@@ -649,13 +652,16 @@ async def _trials(item: _Item, state: ItemState) -> None:
         )
 
     async def adversaries() -> None:
-        by_role = await run_adversaries(draft, validation, site, services.engine, services.rollout_models)
-        attrs: dict[str, str] = {}
-        for role, outcomes in by_role.items():
-            graded = [outcome for outcome in outcomes if isinstance(outcome, Graded)]
+        context = services.adversary_context(item.proposal(state.proposal_digest))
+        by_role = await run_adversaries(draft, validation, site, services.engine, services.client, context)
+        attrs = {"context_digest": sha256_hex(context.encode()) if context else ""}
+        for role, trials in by_role.items():
+            graded = [(trial, trial.outcome) for trial in trials if isinstance(trial.outcome, Graded)]
+            claims = [parse_claim(final_reply(outcome.rollout)).kind for _, outcome in graded]
             attrs[f"{role}_graded"] = str(len(graded))
-            attrs[f"{role}_passes"] = str(sum(solved(outcome) for outcome in graded))
-            attrs[f"{role}_sentinel"] = str(sum(gave_up(role, outcome.rollout) for outcome in graded))
+            attrs[f"{role}_passes"] = str(sum(passing(outcome.grade) for _, outcome in graded))
+            attrs[f"{role}_submissions"] = str(sum(len(trial.submissions) for trial, _ in graded))
+            attrs[f"{role}_claimed"] = str(claims.count(ClaimKind.SHORTCUT))
         item.log.append(state.round, EventKind.ADVERSARIES_RUN, state.task_digest, **attrs)
 
     async with services.slots, asyncio.TaskGroup() as group:

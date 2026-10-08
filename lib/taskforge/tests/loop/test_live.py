@@ -6,11 +6,13 @@
 The proposal is a stored d43 culinary-scaling proposal that triage accepted in earlier live runs,
 handed to ``run_item`` as a supplied proposal. The GLM rubric triages it, GLM authors and builds the
 program (with web research through Parallel), the controls replay through the server tokenizer, and
-GLM solves and attacks the task on ShellSim under the first-run validation values (k=8,
-adversary_k=2, every role, band [0.125, 0.875]). Review decides and the loop follows its decision to
-a terminal. The item must end ``ACCEPTED`` or ``REJECTED`` with a ``decision.json`` for every
-``DECIDED`` event, and a relaunch must return the same terminal without a model call. The run root
-goes to ``.evidence/loop/live-test/<utc>/`` with a ``summary.json``.
+GLM solves the task on ShellSim and attacks its verifier through ``submit`` under the first-run
+validation values (k=8, adversary_k=2, 10 verifier submissions, repair threshold 3, band
+[0.125, 0.875]) and Taskforge's own band rules (one repair per kind, then reject). Review decides and
+the loop follows its decision to a terminal. The item must end ``ACCEPTED`` or ``REJECTED`` with a
+``decision.json`` for every ``DECIDED`` event, every adversary attempt file must hold the system turn
+the adversary ran under, and a relaunch must return the same terminal without a model call. The run
+root goes to ``.evidence/loop/live-test/<utc>/`` with a ``summary.json``.
 """
 
 import asyncio
@@ -40,12 +42,15 @@ from taskforge.loop.program import LEDGER_DIR, LoopServices, run_item
 from taskforge.proposal.model import parse
 from taskforge.proposal.source import ProposalBatch
 from taskforge.review.decision import DECISION_FILE
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
 from taskforge.triage.checks import ALL_COMBINATIONS, CHECKS, CheckContext
 from taskforge.triage.program import GlmRubric
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.adversary import adversary_brief
+from taskforge.validate.attempts import load_adversary_attempt, trial_files
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.controls import ServerTokenizer
+from taskforge.validate.outcome import TrialKind
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
 
@@ -66,11 +71,12 @@ POLICY_VALUES = LoopPolicy(
     max_build_retries=2,
     retry_backoff=RetryBackoff(initial=60.0, maximum=900.0, factor=2.0, jitter=0.1),
     output_token_budget=1_000_000,
+    band_rules=BandRules(BandRule(1, BandChoice.REJECT), BandRule(1, BandChoice.REJECT)),
     validation=ValidationPolicy(
         k=8,
         adversary_k=2,
-        adversary_output_tokens=32768,
-        roles=tuple(AdversaryRole),
+        adversary_submissions=10,
+        adversary_repair_submissions=3,
         band=CalibrationBand(0.125, 0.875),
         sampling=SAMPLING,
         deadlines=Deadlines(agent_timeout=1800.0, attempt_timeout=2400.0),
@@ -148,6 +154,7 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
                     ),
                 ),
                 rollout_models=partial(GlmRolloutModel, client, SAMPLING),
+                adversary_context=lambda proposal: "",
                 tokenize=ServerTokenizer(client, SAMPLING),
                 ledger=ledger,
                 root=root,
@@ -186,3 +193,8 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
         digest = str(built["input_hash"])
         evidence = root / "items" / item_id / "rounds" / str(decided["round"]) / f"evidence-{digest[:12]}"
         assert (evidence / DECISION_FILE).exists(), evidence
+        for files in trial_files(evidence, TrialKind.ADVERSARY).values():
+            assert files.last_path is not None
+            trial = load_adversary_attempt(files.last_path)
+            assert trial.system.startswith(adversary_brief(policy.validation.adversary_submissions, "")), files.last_path
+            assert len(trial.submissions) <= policy.validation.adversary_submissions
