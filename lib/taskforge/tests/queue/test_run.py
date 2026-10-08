@@ -159,7 +159,7 @@ async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch
     assert len(fake_glm.requests) == 1
 
 
-async def test_a_build_this_host_has_no_factory_for_is_rejected_and_not_reentered(
+async def test_a_build_this_host_has_no_factory_for_is_abandoned_at_once_and_re_entered(
     queue_run, author_replies, fake_glm, fakes
 ):
     author_replies(1, fakes.machine_program)
@@ -167,10 +167,14 @@ async def test_a_build_this_host_has_no_factory_for_is_rejected_and_not_reentere
     policy = fakes.policy(max_build_retries=1)
 
     first = await hostless({"a": "a"}, policy, width=2)
-    relaunched = await hostless({"a": "a"}, policy, width=2)
 
-    assert first.items == relaunched.items == {"a--0": Terminal.REJECTED}
-    assert first.build_infrastructure == relaunched.build_infrastructure == {}
+    assert first.items == {"a--0": Terminal.ABANDONED}
+    assert first.build_infrastructure == {InfrastructureCause.NO_FACTORY: 1}
+
+    relaunched = await queue_run(rubric=hostless.rubric)({"a": "a"}, policy, width=2)
+
+    assert relaunched.items == {"a--0": Terminal.ACCEPTED}
+    assert relaunched.build_infrastructure == {InfrastructureCause.NO_FACTORY: 1}
     assert len(fake_glm.requests) == 1
 
 
