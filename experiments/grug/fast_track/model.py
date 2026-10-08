@@ -73,6 +73,7 @@ from experiments.grug.fast_track.key_offset import (
     future_heads,
     parse_lag_groups,
     partial_key_offset,
+    previous_token,
     shifted_channels,
     value_lookahead,
 )
@@ -1019,6 +1020,8 @@ class GrugModelConfig:
     mla_shared_kv: bool = False
     mla_shared_kv_tied: bool = False
     mla_kv_direct: bool = False
+    mla_prev_key_concat: bool = False
+    """MLA keys are ``[k_j ; k_{j-1}]`` (each normed) against 2x-wide queries; the emulation only."""
     mla_value_norm: str = "none"
     """Tied-value RMSNorm: ``none``, ``rms`` or ``learned``."""
     """No KV latent: MLA keys / values project the normed attention input directly."""
@@ -1084,10 +1087,7 @@ class GrugModelConfig:
     qb_freeze_step: int | None = None
     """Stop updating the QB router biases from this step on (they keep their last value)."""
     qb_bias_damping: float | None = None
-    """Damped QB bias update (StableMoE arXiv 2204.08396; phi-balancing arXiv 2605.15403): ``b <- (1 - gamma) b +
-    gamma (-beta)`` instead of ``b <- -beta``. Setting it (1.0 is the undamped update) also logs
-    ``knob_router_qb_churn``: the fraction of the first ``_QB_CHURN_TOKENS`` tokens whose top-K set changes
-    when this step's logits are re-routed with the next step's bias. None: undamped, no churn metric."""
+    """Damped QB bias update ``b <- (1 - gamma) b + gamma (-beta)`` (also logs the top-K churn). None: undamped."""
     router_logit_scale: bool = False
     """A learnable scalar per MoE layer (init 1, Adam) multiplying the router logits before QB and the combine.
     Selection is scale-invariant under QB (a positive scale is monotone and QB re-thresholds), so it sets only
@@ -1431,10 +1431,7 @@ class GrugModelConfig:
     """With ``moe_ungated_relu2``, run the EP (pooled-wave or ragged) experts truly ungated (one ``W_up`` GEMM)
     instead of tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""
     moe_dense_router_grad: bool = False
-    """Default MoE (Panda et al. 2025): the router also gets a gradient for the experts it did not pick,
-    through ``sum_{e not in top-k} (w_e - sg(w_e)) * sg(y_e)``. That term is zero in the forward pass.
-    ``y_e`` is expert e applied to the mean input of the tokens routed to it in this batch, so it stands
-    in for the expert's typical output. Only for the renormalized-sigmoid combine."""
+    """Default MoE (Panda et al. 2025): the router also gets a gradient for unpicked experts."""
     moe_ungated_relu2: bool = False
     """Routed experts are ``relu(x @ W_up)^2 @ W_down`` (no gate projection). Run through the gated kernels
     as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
@@ -2409,7 +2406,9 @@ class CausalSelfAttention(eqx.Module):
                 if attn_gate_up is not None:
                     raise ValueError("mla_gdla_noise_heads does not combine with attn_gate_rank")
             return CausalSelfAttention(
-                w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
+                w_q=reshard(
+                    _init_weight(k_q, (d, n * h * (2 if cfg.mla_prev_key_concat else 1)), std), P(_FSDP_AXES, "model")
+                ),
                 w_k=None,
                 w_v=None,
                 w_o=reshard(_init_weight(k_o, (n_out * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
@@ -2701,7 +2700,7 @@ class CausalSelfAttention(eqx.Module):
                 q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
             if self.sconv_q is not None:
                 q_flat = self.sconv_q(q_flat, sconv_segment_ids)
-            return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
+            return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim * (2 if self.cfg.mla_prev_key_concat else 1))
 
         assert self.w_q is not None
         q = project_q(self.w_q)
@@ -2984,6 +2983,8 @@ class CausalSelfAttention(eqx.Module):
         # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
+        if self.cfg.mla and self.cfg.mla_prev_key_concat:  # key j = [k_j ; k_{j-1}] against 2x-wide queries
+            k = reshard(jnp.concatenate([k, previous_token(k, sconv_segment_ids)], axis=-1), _partition_spec_of(k))
         if self.prev_gate is not None:
             # Per head and token, how much the query relies on its previous-token match: 2 sigmoid(x . w), 1 at init.
             gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.prev_gate).astype(jnp.float32))
