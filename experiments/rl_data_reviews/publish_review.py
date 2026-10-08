@@ -150,11 +150,15 @@ def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
     if attestation_path:
         evidence_paths.add(str(attestation_path.relative_to(root)))
     evidence_paths.update(
-        str(path.relative_to(root)) for path in root.glob("tasks/*/execution-*/solver/turn-*/response.json")
+        filename for filename in ["run.json", "quality-review.schema.json"] if (root / filename).is_file()
     )
     evidence_paths.update(
-        str(path.relative_to(root)) for path in root.glob("tasks/*/execution-*/trial/agent/trajectory.json")
+        str(path.relative_to(root)) for path in root.glob("tasks/*/execution-*/solver/turn-*/response.json")
     )
+    for filename in ["trajectory*.json", "offline-tooling.json"]:
+        evidence_paths.update(
+            str(path.relative_to(root)) for path in root.glob(f"tasks/*/execution-*/*/agent/{filename}")
+        )
     artifacts = []
     for relative in sorted(evidence_paths):
         path = root / relative
