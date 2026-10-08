@@ -31,8 +31,7 @@ from .test_daytona_machine import LocalDaytona
 
 
 @pytest.mark.parametrize("backend", ["docker", "gvisor", "daytona", "shellsim", "qemu"])
-@pytest.mark.parametrize("oversized", [False, True])
-def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, monkeypatch, backend, oversized):
+def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, monkeypatch, backend):
     create_process = asyncio.create_subprocess_exec
 
     async def local_process(*args, **kwargs):
@@ -54,7 +53,6 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
     source.write_bytes(payload)
     target = tmp_path / "download"
     target.write_bytes(b"existing")
-    limit = len(payload) - 1 if oversized else len(payload)
 
     async def scenario():
         client = None
@@ -99,13 +97,11 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
             remote = "/workspace/source"
             await machine.upload(source, remote)
         try:
-            if oversized:
-                with pytest.raises(DownloadLimitExceeded):
-                    await machine.download(remote, target, max_bytes=limit)
-                assert target.read_bytes() == b"existing"
-            else:
-                await machine.download(remote, target, max_bytes=limit)
-                assert target.read_bytes() == payload
+            with pytest.raises(DownloadLimitExceeded):
+                await machine.download(remote, target, max_bytes=len(payload) - 1)
+            assert target.read_bytes() == b"existing"
+            await machine.download(remote, target, max_bytes=len(payload))
+            assert target.read_bytes() == payload
             # A large supported limit must not allocate a buffer of that size.
             tracemalloc.start()
             try:
@@ -117,7 +113,7 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
             assert target.read_bytes() == payload
             directory = "/workspace" if backend == "shellsim" else str(tmp_path)
             with pytest.raises(UnsupportedMachineSpec, match="regular file"):
-                await machine.download(directory, target, max_bytes=limit)
+                await machine.download(directory, target, max_bytes=len(payload))
             assert target.read_bytes() == payload
             assert not list(tmp_path.glob(".shellbox-download-*"))
             if client is not None:

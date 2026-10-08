@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import stat
+import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -23,7 +24,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import Command, DownloadLimitExceeded, ExitReason, MachineSpec, UnsupportedMachineSpec
 
 
 class LocalFiles:
@@ -288,6 +289,56 @@ def test_daytona_completion_at_pid_removal_preserves_the_sandbox(tmp_path):
         finally:
             released.touch()
             await asyncio.gather(*executions)
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_download_caps_a_file_that_grows_after_the_regular_file_probe(tmp_path):
+    source, target = tmp_path / "archive.tar", tmp_path / "download"
+    source.write_bytes(b"archive")
+    target.write_bytes(b"existing")
+    limit = 1024**2
+
+    class GrowingFiles(LocalFiles):
+        def grow(self, remote):
+            if Path(remote) != source:
+                return
+            with Path(remote).open("ab") as file:
+                for _ in range(512):
+                    file.write(b"x" * DOWNLOAD_CHUNK_BYTES)
+
+        async def download_file(self, remote):
+            self.grow(remote)
+            return await super().download_file(remote)
+
+        async def download_file_stream(self, remote):
+            self.grow(remote)
+            return await super().download_file_stream(remote)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.fs = GrowingFiles()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            tracemalloc.start()
+            try:
+                with pytest.raises(DownloadLimitExceeded):
+                    await machine.download(str(source), target, max_bytes=limit)
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            assert source.stat().st_size > 32 * 1024**2
+            assert target.read_bytes() == b"existing"
+            assert client.sandbox.fs.downloaded_bytes <= limit + DOWNLOAD_CHUNK_BYTES
+            assert client.sandbox.fs.download_closed
+            assert peak < 8 * 1024**2
+            assert not list(tmp_path.glob(".shellbox-download-*"))
+            following = await machine.run(Command(("printf", "still-ready")))
+            assert (following.exit_code, following.stdout) == (0, b"still-ready")
+        finally:
             await machine.close()
 
     asyncio.run(scenario())
