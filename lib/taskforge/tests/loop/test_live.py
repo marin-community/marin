@@ -12,7 +12,8 @@ validation values (k=8, adversary_k=2, 10 verifier submissions, repair threshold
 the loop follows its decision to a terminal. The item must end ``ACCEPTED`` or ``REJECTED`` with a
 ``decision.json`` for every ``DECIDED`` event, every adversary attempt file must hold the system turn
 the adversary ran under, and a relaunch must return the same terminal without a model call. The run
-root goes to ``.evidence/loop/live-test/<utc>/`` with a ``summary.json``.
+root goes to ``<evidence_root>/loop/live-test/<utc>/`` with a ``summary.json``; ``evidence_root`` is the
+fixture in ``tests/conftest.py``.
 """
 
 import asyncio
@@ -55,7 +56,6 @@ from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
 
 DATA = Path(__file__).resolve().parent / "data"
-EVIDENCE = Path(__file__).resolve().parents[2] / ".evidence" / "loop" / "live-test"
 RUBRIC_SAMPLES = 3
 POOL = Pool.HIGH
 """Every validation run driven from a test uses the interactive pool; unattended runs name BULK in their config."""
@@ -107,12 +107,17 @@ def llm_calls(root: Path, item_id: str) -> int:
     return sum(e.kind is EntryKind.LLM_CALL for e in read_entries(root / LEDGER_DIR / f"{item_id}.jsonl"))
 
 
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "loop" / "live-test"
+
+
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, parallel_key, image_cache):
+async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, parallel_key, image_cache, evidence_dir):
     proposal = parse((DATA / "d43.culinary.scaling-1.md").read_text())
     record = json.loads((DATA / "d43.culinary.scaling.json").read_text())
-    root = EVIDENCE / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    root = evidence_dir / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     root.mkdir(parents=True)
     policy = POLICY.validate_json(POLICY.dump_json(POLICY_VALUES))
     (root / "policy.json").write_bytes(POLICY.dump_json(policy, indent=2))
