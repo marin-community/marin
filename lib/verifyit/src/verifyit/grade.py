@@ -10,7 +10,7 @@ import logging
 import math
 import sys
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from fractions import Fraction
@@ -37,6 +37,7 @@ from verifyit.spec import (
 )
 
 DEFAULT_LOGS_DIR = "/logs/verifier"
+ROUND_DIGITS_ERROR = "aggregation rounding must be an integer from zero to six or None"
 REWARD_JSON = "reward.json"
 REWARD_TXT = "reward.txt"
 VERDICT_JSON = "verdict.json"
@@ -56,6 +57,27 @@ class Aggregation(StrEnum):
     MAX = "max"
     MIN = "min"
     PRODUCT = "product"
+
+
+class ComponentRole(StrEnum):
+    GATE = "gate"
+    CRITERION = "criterion"
+    PENALTY = "penalty"
+
+
+class GateState(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    INVALID_RUBRIC = "invalid_rubric"
+
+
+@dataclass(frozen=True)
+class Component:
+    """A named reward component. ``weight`` must be finite and positive; gates ignore it."""
+
+    name: str
+    role: ComponentRole
+    weight: float = 1.0
 
 
 class InvalidTask(Exception):
@@ -131,8 +153,8 @@ def aggregate_rewards(
         return invalid_task("expected_total must be a positive integer")
     if not isinstance(policy, Aggregation):
         return invalid_task("unknown reward aggregation policy")
-    if round_digits is not None and (type(round_digits) is not int or not 0 <= round_digits <= 6):
-        return invalid_task("aggregation rounding must be an integer from zero to six or None")
+    if not _valid_round_digits(round_digits):
+        return invalid_task(ROUND_DIGITS_ERROR)
     if len(verdicts) > expected_total:
         return invalid_task("more component grades than expected")
     validated = [_validated_reward(verdict) for verdict in verdicts]
@@ -151,10 +173,109 @@ def aggregate_rewards(
         reward = math.prod(verdict.reward for verdict in validated) if len(validated) == expected_total else 0.0
     else:
         reward = sum(verdict.reward for verdict in validated) / expected_total
-    if round_digits is not None:
-        scale = 10**round_digits
-        reward = round(reward * scale) / scale
+    reward = _rounded(reward, round_digits)
     return scored(reward, passed=passed, total=expected_total, missing=expected_total - len(validated))
+
+
+def _valid_round_digits(round_digits: int | None) -> bool:
+    return round_digits is None or (type(round_digits) is int and 0 <= round_digits <= 6)
+
+
+def _rounded(reward: float, round_digits: int | None) -> float:
+    if round_digits is None:
+        return reward
+    scale = 10**round_digits
+    return round(reward * scale) / scale
+
+
+def _components_error(components: Sequence[Component], verdicts: Mapping[str, Reward]) -> str | None:
+    names = [component.name for component in components]
+    if len(set(names)) != len(names):
+        return "component names must be unique"
+    undeclared = sorted(set(verdicts) - set(names))
+    if undeclared:
+        return f"grades for undeclared components: {undeclared}"
+    for component in components:
+        if not isinstance(component.role, ComponentRole):
+            return f"component {component.name!r} has an unknown role"
+        weight = component.weight
+        # The chained comparison rejects NaN, infinities, and integers beyond float range without converting.
+        if component.role != ComponentRole.GATE and (
+            isinstance(weight, bool) or not isinstance(weight, int | float) or not 0 < weight <= sys.float_info.max
+        ):
+            return f"component {component.name!r} weight must be a finite positive number"
+    if not any(component.role == ComponentRole.CRITERION for component in components):
+        return "weighted aggregation needs at least one criterion"
+    for role in (ComponentRole.CRITERION, ComponentRole.PENALTY):
+        if not math.isfinite(_weight_total(components, role)):
+            return f"{role} weights must sum to a finite number"
+    return None
+
+
+def _weight_total(components: Sequence[Component], role: ComponentRole) -> float:
+    return sum(float(component.weight) for component in components if component.role == role)
+
+
+def gate_state(components: Sequence[Component], verdicts: Mapping[str, Reward]) -> GateState:
+    """Report whether the remaining components are worth grading.
+
+    ``INVALID_RUBRIC`` means ``aggregate_weighted`` would return ``invalid_task``.
+    ``FAILED`` means some gate is ungraded or lacks a scored 1.0. ``PASSED`` means
+    every gate holds a scored 1.0.
+    """
+    if _components_error(components, verdicts) is not None:
+        return GateState.INVALID_RUBRIC
+    for component in components:
+        if component.role != ComponentRole.GATE:
+            continue
+        verdict = verdicts.get(component.name)
+        if verdict is None:
+            return GateState.FAILED
+        verdict = _validated_reward(verdict)
+        if verdict.status != Status.SCORED or verdict.reward < 1.0:
+            return GateState.FAILED
+    return GateState.PASSED
+
+
+def aggregate_weighted(
+    components: Sequence[Component], verdicts: Mapping[str, Reward], *, round_digits: int | None = None
+) -> Reward:
+    """Combine gates, weighted criteria, and weighted penalties into one reward.
+
+    An infrastructure error, then an invalid task, discards all credit, and a
+    missing component earns zero. Any gate below 1.0 zeroes the reward, so components after a failed gate may stay
+    ungraded. Otherwise the reward is the criterion-weighted sum minus the
+    penalty-weighted sum, floored at zero and divided by the total criterion weight.
+    """
+    error = _components_error(components, verdicts)
+    if error is not None:
+        return invalid_task(error)
+    if not _valid_round_digits(round_digits):
+        return invalid_task(ROUND_DIGITS_ERROR)
+    validated = {name: _validated_reward(verdict) for name, verdict in verdicts.items()}
+    for status in (Status.INFRA_ERROR, Status.INVALID_TASK):
+        for component in components:
+            verdict = validated.get(component.name)
+            if verdict is not None and verdict.status == status:
+                return Reward(0.0, status, {"component": component.name, "cause": verdict.detail})
+    rewards = {c.name: validated[c.name].reward if c.name in validated else 0.0 for c in components}
+    missing = [c.name for c in components if c.name not in validated]
+    failed_gates = [c.name for c in components if c.role == ComponentRole.GATE and rewards[c.name] < 1.0]
+    # Each sum is bounded by its role's weight total, which _components_error requires to be finite.
+    positive_sum = sum(c.weight * rewards[c.name] for c in components if c.role == ComponentRole.CRITERION)
+    penalty_sum = sum(c.weight * rewards[c.name] for c in components if c.role == ComponentRole.PENALTY)
+    denominator = _weight_total(components, ComponentRole.CRITERION)
+    reward = 0.0 if failed_gates else min(1.0, max(0.0, positive_sum - penalty_sum) / denominator)
+    reward = _rounded(reward, round_digits)
+    return scored(
+        reward,
+        rewards=rewards,
+        missing=missing,
+        failed_gates=failed_gates,
+        positive_sum=positive_sum,
+        penalty_sum=penalty_sum,
+        denominator=denominator,
+    )
 
 
 def aggregate_first_fit(verdicts: Sequence[Sequence[Reward]], *, expected_total: int) -> Reward:
