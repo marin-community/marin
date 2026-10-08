@@ -164,15 +164,16 @@ def test_full_marin_suite_includes_experiment_tests(
 
     selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
 
-    assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
     write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
 
     matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
 
-    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
