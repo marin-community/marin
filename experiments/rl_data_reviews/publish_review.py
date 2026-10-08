@@ -1,10 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["jsonschema", "filelock", "pyarrow"]
-# ///
 """Validate and attach a completed review and its evidence to the private Atlas."""
 
 import argparse

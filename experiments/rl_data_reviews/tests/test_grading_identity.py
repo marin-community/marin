@@ -34,7 +34,7 @@ def test_execution_identity_detects_current_grader_changes_before_publication(tm
         "revision": "repo1",
         "environment": "toy",
         "gym_entrypoint": "skyrl_gym.envs.toy:Env",
-        "verifier_mode": "legacy",
+        "verifier_mode": "verifyit",
         "grading_scope": {"agents": []},
         "grading_repositories": {name: {} for name in packages},
     }
@@ -43,7 +43,14 @@ def test_execution_identity_detects_current_grader_changes_before_publication(tm
     program = python_grading_program(source, route.roots, tuple(packages), route.bindings)
     manifest = {
         "schema_version": 1,
-        "routes": {"toy": {"program_revision": program.digest, "resources": {}, "locked_packages": {}}},
+        "routes": {
+            "toy": {
+                "program_revision": program.digest,
+                "modules": dict(program.modules),
+                "resources": {},
+                "locked_packages": {},
+            }
+        },
     }
     row["grading_manifest"] = manifest
     row["grading_revision"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
@@ -58,9 +65,56 @@ def test_execution_identity_detects_current_grader_changes_before_publication(tm
             "harbor_python": "unused",
         },
     }
+    with pytest.raises(ValueError, match="effective Gym verifyit mode"):
+        verified_execution_grading(config, tmp_path)
+    config["runtime"]["gym_config"] = {"toy": {"verifyit_enabled": True}}
     original = verified_execution_grading(config, tmp_path)
     module.write_text("# Documentation change\n" + module.read_text())
     assert verified_execution_grading(config, tmp_path) == original
     module.write_text(module.read_text().replace('="correct"', '="different"'))
     with pytest.raises(ValueError, match="Executed grading code differs"):
         verified_execution_grading(config, tmp_path)
+
+
+def test_harbor_execution_ignores_unrelated_gym_packages(tmp_path) -> None:
+    checkout = tmp_path / "harbor"
+    package = checkout / "src/harbor"
+    module = package / "verifier/verifier.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("class Verifier:\n def __init__(self):\n  pass\n def verify(self,x):\n  return x\n")
+    source = ExecutionModules({"harbor": package})
+    row = {
+        "id": "MarinSkyRL:swe",
+        "dataset_revision": "data1",
+        "revision": "repo1",
+        "verifier_mode": "harbor",
+        "grading_scope": {"agents": []},
+        "grading_repositories": {"harbor": {}, "verifyit": {}, "harbor_config": {}},
+    }
+    route = skyrl_grading_routes(row, source, ())[0]
+    program = python_grading_program(source, route.roots, ("harbor",), route.bindings)
+    manifest = {
+        "schema_version": 1,
+        "routes": {
+            "harbor": {
+                "program_revision": program.digest,
+                "modules": dict(program.modules),
+                "resources": {},
+                "locked_packages": {},
+            }
+        },
+    }
+    row["grading_manifest"] = manifest
+    row["grading_revision"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    (tmp_path / "snapshot.json").write_text(json.dumps(row))
+    config = {
+        "source": {"source_id": row["id"], "revision": "data1", "grading_snapshot": "snapshot.json"},
+        "runtime": {
+            "marinskyrl_checkout": str(tmp_path / "unused-gym"),
+            "harbor_checkout": str(checkout),
+            "gym_python": "unused",
+            "harbor_python": "unused",
+        },
+    }
+    proof = verified_execution_grading(config, tmp_path)
+    assert proof is not None and proof["selected_code_verified"]

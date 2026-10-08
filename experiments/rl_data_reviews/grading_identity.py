@@ -59,13 +59,19 @@ def verified_execution_grading(config: dict, base: Path) -> dict | None:
     if digest != snapshot["grading_revision"]:
         raise ValueError("The grading snapshot manifest does not match its revision")
     runtime = config["runtime"]
+    if snapshot["verifier_mode"] != "harbor":
+        environment = snapshot["environment"]
+        enabled = runtime.get("gym_config", {}).get(environment, {}).get("verifyit_enabled", False)
+        if enabled != (snapshot["verifier_mode"] == "verifyit"):
+            raise ValueError("The effective Gym verifyit mode differs from the captured grading route")
     checkout = Path(runtime["marinskyrl_checkout"])
     packages = {
         "skyrl_gym": checkout / "skyrl-gym/skyrl_gym",
         "skyrl_train": checkout / "skyrl-train/skyrl_train",
         "harbor": Path(runtime["harbor_checkout"]) / "src/harbor",
     }
-    external = [name for name in snapshot["grading_repositories"] if name not in packages]
+    selected_packages = {module.split(".")[0] for route in manifest["routes"].values() for module in route["modules"]}
+    external = sorted(selected_packages - packages.keys())
     interpreter = runtime["harbor_python"] if snapshot["verifier_mode"] == "harbor" else runtime["gym_python"]
     if external:
         locations = json.loads(

@@ -303,13 +303,17 @@ Python paths, source identity, and local task path. Gym execution requires the
 MarinSkyRL runtime dependencies; Harbor execution also requires Harbor and its
 configured environment provider, such as local Docker. API keys belong in the
 environment variable named by `model.api_key_env`.
+For a source whose snapshot selects `verifier_mode: verifyit`, set
+`runtime.gym_config.<environment>.verifyit_enabled` to `true`, using the snapshot's
+`environment` name. The execution check rejects a config that selects a different
+grading mode. Harbor execution locates only packages used by its selected route.
 
 From the repository root, create and publish a review with:
 
 ```bash
-uv run experiments/rl_data_reviews/make_review.py \
+uv run --with jsonschema --with filelock --with pyarrow python -m experiments.rl_data_reviews.make_review \
   --config /path/to/review-config.json --n 3 --seed 42 --output /path/to/review
-uv run experiments/rl_data_reviews/publish_review.py \
+uv run --with jsonschema --with filelock --with pyarrow python -m experiments.rl_data_reviews.publish_review \
   --run-dir /path/to/review --atlas-id 'MarinSkyRL:svamp'
 ```
 
