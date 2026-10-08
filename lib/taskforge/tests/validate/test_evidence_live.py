@@ -6,11 +6,12 @@ agent loops with the verifier as a tool, read back from the attempt files, summa
 settled trials.
 
 One round runs the file task of ``conftest``; the other runs the newest draft the live build test wrote
-under ``.evidence/build/live-test/`` and skips when there is none. Each writes
-``lib/taskforge/.evidence/validate/{g_adversary_round,h_built_adversary_round}-<utc>/``: the round's attempt files
-and ledger, ``calibration.json``, and ``summary.json`` (per-trial outcome, reward, stop reason, shell commands and
-final reply, each adversary trial's submissions, claim, tier and signals, role statistics, findings, notes, wall
-time). Model behaviour (claims, the submission that passed first, the exploit, budget use) is recorded, not asserted.
+under ``<evidence_root>/build/live-test/`` and skips when there is none. ``evidence_root`` is the fixture in
+``tests/conftest.py``. Each writes ``<evidence_root>/validate/{g_adversary_round,h_built_adversary_round}-<utc>/``:
+the round's attempt files and ledger, ``calibration.json``, and ``summary.json`` (per-trial outcome, reward, stop
+reason, shell commands and final reply, each adversary trial's submissions, claim, tier and signals, role
+statistics, findings, notes, wall time). Model behaviour (claims, the submission that passed first, the exploit,
+budget use) is recorded, not asserted.
 """
 
 import asyncio
@@ -70,8 +71,6 @@ from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, t
 
 pytestmark = pytest.mark.live_glm
 
-EVIDENCE_ROOT = Path(__file__).resolve().parents[2] / ".evidence" / "validate"
-BUILD_EVIDENCE = Path(__file__).resolve().parents[2] / ".evidence" / "build" / "live-test"
 LIVE_TIMEOUT = 2400
 PLAIN = PlainText(id="plain")
 MAX_TURNS = 24
@@ -148,6 +147,17 @@ def attempt_counts(evidence_dir: Path) -> dict[str, int]:
         for kind in (TrialKind.SOLVER, TrialKind.ADVERSARY)
         for name, files in trial_files(evidence_dir, kind).items()
     }
+
+
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "validate"
+
+
+@pytest.fixture
+def build_evidence(evidence_root: Path) -> Path:
+    """Where the live build test writes its drafts."""
+    return evidence_root / "build" / "live-test"
 
 
 @pytest.fixture
@@ -277,11 +287,11 @@ def utc_now() -> str:
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_a_validation_round_on_shellsim(client, file_task, file_controls, rounds):
+async def test_a_validation_round_on_shellsim(client, evidence_dir, file_task, file_controls, rounds):
     run = await live_round(
         client,
         rounds.draft(file_task, file_controls, PLAIN),
-        EVIDENCE_ROOT / f"g_adversary_round-{utc_now()}",
+        evidence_dir / f"g_adversary_round-{utc_now()}",
         "validation round on ShellSim: controls, k=3 solver, adversary_k=2 agent loops with 10 submissions, resume",
     )
 
@@ -290,22 +300,22 @@ async def test_a_validation_round_on_shellsim(client, file_task, file_controls, 
     assert all(a.tier is not DefectTier.REPAIR for a in run.summary.assessments), assessment_summary(run.summary)
 
 
-def newest_built_draft() -> Path | None:
-    drafts = sorted(BUILD_EVIDENCE.glob("*/*/draft/convention.json"))
+def newest_built_draft(build_evidence: Path) -> Path | None:
+    drafts = sorted(build_evidence.glob("*/*/draft/convention.json"))
     return drafts[-1].parent if drafts else None
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_a_validation_round_on_a_built_draft(client):
+async def test_a_validation_round_on_a_built_draft(client, evidence_dir, build_evidence):
     """The newest draft the live build test wrote, validated as the loop would; tiers are recorded, not asserted."""
-    directory = newest_built_draft()
+    directory = newest_built_draft(build_evidence)
     if directory is None:
-        pytest.skip(f"no built draft under {BUILD_EVIDENCE}")
+        pytest.skip(f"no built draft under {build_evidence}")
     run = await live_round(
         client,
         load_draft(directory),
-        EVIDENCE_ROOT / f"h_built_adversary_round-{utc_now()}",
-        f"validation round on the built draft {directory.relative_to(BUILD_EVIDENCE)}: controls, solver, adversaries",
+        evidence_dir / f"h_built_adversary_round-{utc_now()}",
+        f"validation round on the built draft {directory.relative_to(build_evidence)}: controls, solver, adversaries",
     )
 
     assert_round_reads_back_and_resumes(run)

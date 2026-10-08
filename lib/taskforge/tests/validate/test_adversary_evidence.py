@@ -3,15 +3,15 @@
 
 """The recorded live adversary rounds, read offline.
 
-``.evidence/validate/e_evidence_round-<ts>/evidence-776baa368c39/`` holds eighteen rounds of the file task
+``<evidence_root>/validate/e_evidence_round-<ts>/evidence-776baa368c39/`` holds eighteen rounds of the file task
 (``tests/validate/conftest.py``) against GLM-5.3 under the retired role protocol (shortcut, leak and ambiguity
 roles, one final reply graded once). Their attempt files carry no submission record, so only the one transcript
 regex the submission protocol keeps, the input-read rule (``consumed_inputs``), is pinned on them. Their
 ``calibration.json`` files hold the retired summary shape and are never rewritten.
 
 ``g_adversary_round-<ts>/`` and ``h_built_adversary_round-<ts>/`` hold rounds under the submission protocol
-(``test_evidence_live``); their invariants are checked here. ``.evidence`` is local, so each test skips where its
-rounds are absent.
+(``test_evidence_live``); their invariants are checked here. ``evidence_root`` is the fixture in ``tests/conftest.py``
+and evidence stays on the machine that recorded it, so each test skips where its rounds are absent.
 """
 
 import json
@@ -36,8 +36,7 @@ from taskforge.validate.run import load_validation
 from taskforge.validate.submissions import passing
 from taskforge.validate.trials import task_digest
 
-EVIDENCE_ROOT = Path(__file__).resolve().parents[2] / ".evidence" / "validate"
-EVIDENCE_DIR = "evidence-776baa368c39"
+ROUND_EVIDENCE = "evidence-776baa368c39"
 PLAIN = PlainText(id="plain")
 NUMBERS = "/workspace/numbers.txt"
 LIVE_SUBMISSIONS = 10
@@ -77,19 +76,30 @@ NEVER_READ_THE_INPUT = {
 """Shortcut trials (round, index) whose shell commands never read ``numbers.txt`` for content; none passed."""
 
 
-def old_round_dirs() -> dict[str, Path]:
-    return {ts: EVIDENCE_ROOT / f"e_evidence_round-{ts}" / EVIDENCE_DIR for ts in OLD_ROUNDS}
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "validate"
 
 
-old_rounds = pytest.mark.skipif(
-    not all(path.is_dir() for path in old_round_dirs().values()), reason="recorded adversary rounds not on this machine"
-)
+@pytest.fixture
+def old_round_dirs(evidence_dir: Path) -> dict[str, Path]:
+    dirs = {ts: evidence_dir / f"e_evidence_round-{ts}" / ROUND_EVIDENCE for ts in OLD_ROUNDS}
+    if not all(path.is_dir() for path in dirs.values()):
+        pytest.skip("recorded adversary rounds not on this machine")
+    return dirs
 
 
-@old_rounds
-def test_consumed_inputs_on_recorded_rounds():
+@pytest.fixture
+def submission_round_dirs(evidence_dir: Path) -> list[Path]:
+    dirs = sorted(evidence_dir.glob("g_adversary_round-*/evidence-*"))
+    if not dirs:
+        pytest.skip("no adversary round under the submission protocol on this machine")
+    return dirs
+
+
+def test_consumed_inputs_on_recorded_rounds(old_round_dirs):
     never_read = set()
-    for ts, directory in old_round_dirs().items():
+    for ts, directory in old_round_dirs.items():
         for name, files in trial_files(directory, TrialKind.ADVERSARY).items():
             role, index = name.split("/")
             if role != AdversaryRole.SHORTCUT:
@@ -104,11 +114,10 @@ def test_consumed_inputs_on_recorded_rounds():
     assert never_read == NEVER_READ_THE_INPUT
 
 
-@old_rounds
-def test_the_recorded_summaries_held_the_old_findings_and_stay_untouched():
+def test_the_recorded_summaries_held_the_old_findings_and_stay_untouched(old_round_dirs):
     """The ``calibration.json`` each round wrote names the retired roles and parses as no summary today; its attempt
     files carry no submission record."""
-    for ts, path in old_round_dirs().items():
+    for ts, path in old_round_dirs.items():
         recorded = json.loads((path / "calibration.json").read_text())
         assert {"leak", "ambiguity"} <= set(recorded["roles"]), ts
         with pytest.raises(pydantic.ValidationError):
@@ -119,15 +128,10 @@ def test_the_recorded_summaries_held_the_old_findings_and_stay_untouched():
             load_adversary_attempt(last)
 
 
-def v3_round_dirs() -> list[Path]:
-    return sorted(EVIDENCE_ROOT.glob("g_adversary_round-*/evidence-*"))
-
-
-@pytest.mark.skipif(not v3_round_dirs(), reason="no adversary round under the submission protocol on this machine")
-def test_recorded_submission_rounds_keep_their_invariants(file_task, file_controls, rounds):
+def test_recorded_submission_rounds_keep_their_invariants(submission_round_dirs, file_task, file_controls, rounds):
     draft = rounds.draft(file_task, file_controls, PLAIN)
     policy = rounds.policy(k=3, adversary_k=2, adversary_submissions=LIVE_SUBMISSIONS, adversary_repair_submissions=3)
-    for directory in v3_round_dirs():
+    for directory in submission_round_dirs:
         assert directory.name == f"evidence-{task_digest(draft.task, draft.execution, draft.convention)[:12]}"
         evidence = load_validation(draft, directory)
         for trial in evidence.adversaries[AdversaryRole.SHORTCUT]:
