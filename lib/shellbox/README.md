@@ -72,7 +72,8 @@ and injects them into the Iris job environment. Keep credentials out of
 secrets must never be used for actor jobs; ordinary factories inject none.
 
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
-A failed stop raises an infrastructure error and closes the machine. Caller cancellation also closes the machine.
+A failed stop raises an infrastructure error and closes the machine.
+Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
 
 Docker stops commands as the command user or the image's default user.
 Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
