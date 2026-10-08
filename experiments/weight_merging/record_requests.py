@@ -114,7 +114,8 @@ class DurableRecordRequests(RecordRequests):
     """Persist campaign captures before clients can finish their requests."""
 
     def __init__(self, app: ASGIApp):
-        super().__init__(app, remote_prefix=f"{DURABLE_CAPTURE_ROOT}/{uuid.uuid4().hex}")
-        (self.output_dir.parent / "capture-location.json").write_text(
-            json.dumps({"remote_prefix": self.remote_prefix}) + "\n"
-        )
+        capture_id = uuid.uuid4().hex
+        super().__init__(app, remote_prefix=f"{DURABLE_CAPTURE_ROOT}/{capture_id}")
+        locations = self.output_dir.parent / "capture-locations"
+        locations.mkdir(exist_ok=True)
+        (locations / f"{capture_id}.json").write_text(json.dumps({"remote_prefix": self.remote_prefix}) + "\n")
