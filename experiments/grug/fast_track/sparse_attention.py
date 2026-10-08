@@ -24,6 +24,7 @@ from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import auto_axes, reshard
 from jaxtyping import Array, Float, Int
+from levanter.grug.attention import gpu_fa4_cute_attention_with_lse
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
@@ -700,3 +701,106 @@ def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> D
         k_b2=jnp.zeros((hidden, width)),
         k_bg=jnp.zeros((hidden, 2 * heads)),
     )
+
+
+def gauss_kernel(g: Gauss, reach: int) -> jax.Array:
+    """Each head's ``[H, 2K + 1]`` value kernel over offsets ``-K..K`` (see ``gauss_values``)."""
+    offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
+    sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05
+    centred = offsets[None, None, :] - g.mu.astype(jnp.float32)[..., None]
+    components = jax.nn.softmax(-jnp.square(centred) / (2 * sigma[..., None] ** 2), axis=-1)
+    return jnp.einsum("hc,hco->ho", jax.nn.softmax(g.mix.astype(jnp.float32), axis=-1), components)
+
+
+def gauss_attention_fast(q, k, v, rel_bias, segment_ids, g: Gauss, reach: int, attend_with_lse):
+    """Gaussian value-kernel attention without the dense emulation. Each key ``j`` reads its smoothed value
+    ``sum_o G(o) v_{j+o} / sum_o G(o)`` over the offsets visible to the query (in its document, ``j + o <= i``).
+    Keys at least ``K`` back see their whole kernel: one FlashAttention call over keys and smoothed values moved
+    ``K`` slots later (so the causal mask admits exactly ``j <= i - K``; the bias band rolls with them) returns
+    their output and log-sum-exp. The ``K`` nearest keys are scored explicitly over a ``2K``-token window of raw
+    values, and the two parts merge by log-sum-exp. No value after the query enters any sum.
+
+    ``attend_with_lse(q, k, v, lower_bounds, valid, rel_bias) -> (out [B, S, H, E], lse [B, H, S])``."""
+    batch, seq, heads, head_dim = q.shape
+    kernel = gauss_kernel(g, reach)  # [H, 2K + 1]
+    starts = _document_starts(segment_ids)  # [B, S]
+    pos = jnp.arange(seq)
+    vf = v.astype(jnp.float32)
+    # Far keys: their kernel is clipped only by the document (and sequence) ends.
+    ones = jnp.ones(v.shape[:3], jnp.float32)
+    smooth = jnp.zeros_like(vf)
+    mass = jnp.zeros(v.shape[:3], jnp.float32)
+    for t, o in enumerate(range(-reach, reach + 1)):
+        w = kernel[:, t]
+        smooth = smooth + w[None, None, :, None] * shift_tokens(vf, segment_ids, -o)
+        mass = mass + w[None, None, :] * shift_tokens(ones, segment_ids, -o)
+    smooth = (smooth / mass[..., None]).astype(v.dtype)
+    k_far = jnp.pad(k[:, : seq - reach], ((0, 0), (reach, 0), (0, 0), (0, 0)))
+    v_far = jnp.pad(smooth[:, : seq - reach], ((0, 0), (reach, 0), (0, 0), (0, 0)))
+    band = (
+        None if rel_bias is None else jnp.pad(rel_bias[..., : rel_bias.shape[-1] - reach], ((0, 0),) * 3 + ((reach, 0),))
+    )
+    lower = starts + reach
+    far_ok = pos[None, :] >= lower  # [B, S]
+    out_far, lse_far = attend_with_lse(q, reshard_like(k_far, k), reshard_like(v_far, v), lower, far_ok, band)
+    lse_far = jnp.where(far_ok[:, None, :], lse_far.astype(jnp.float32), -jnp.inf)  # [B, H, S]
+    # Near keys j = i - m (m < K): explicit scores, and smoothed values clipped at the query.
+    m = jnp.arange(reach)
+    near_idx = pos[:, None] - m[None, :]  # [S, K]
+    near_ok = near_idx[None] >= starts[:, :, None]  # [B, S, K]
+    k_near = k[:, jnp.clip(near_idx, 0, seq - 1)]  # [B, S, K, H, D]
+    scores = jnp.einsum("bshd,bsmhd->bhsm", q.astype(jnp.float32), k_near.astype(jnp.float32)) / math.sqrt(head_dim)
+    if rel_bias is not None:
+        column = (pos % REL_BIAS_BLOCK)[:, None] + rel_extent_of_band(rel_bias) - m[None, :]  # [S, K]
+        scores = scores + jnp.take_along_axis(
+            rel_bias.astype(jnp.float32), jnp.broadcast_to(column, (batch, heads, seq, reach)), axis=-1
+        )
+    scores = jnp.where(near_ok[:, None], scores, -jnp.inf)
+    r = jnp.arange(2 * reach)  # raw token i - r
+    tok = pos[:, None] - r[None, :]
+    tok_ok = tok[None] >= starts[:, :, None]  # [B, S, 2K] (always <= i)
+    offset = m[:, None] - r[None, :]  # [K(m), 2K(r)]: offset from key i - m to token i - r
+    in_kernel = (offset >= -reach) & (offset <= reach)
+    w_base = jnp.where(in_kernel[None], kernel[:, jnp.clip(offset + reach, 0, 2 * reach)], 0.0)  # [H, K, 2K]
+    w_mr = w_base[None, :, None] * tok_ok[:, None, :, None, :].astype(jnp.float32)  # [B, H, S, K, 2K]
+    near_mass = jnp.sum(w_mr, axis=-1)  # [B, H, S, K]
+    top = jnp.maximum(lse_far, jnp.max(scores, axis=-1))  # [B, H, S]
+    far_w = jnp.exp(lse_far - top)
+    near_p = jnp.exp(scores - top[..., None])  # [B, H, S, K]
+    tok_w = jnp.einsum("bhsm,bhsmr->bhsr", near_p / jnp.maximum(near_mass, 1e-9), w_mr)  # weight on token i - r
+    v_win = vf[:, jnp.clip(tok, 0, seq - 1)]  # [B, S, 2K, H, E]
+    near_num = jnp.einsum("bhsr,bsrhe->bshe", tok_w, v_win)
+    den = far_w + jnp.sum(near_p, axis=-1)  # [B, H, S]
+    num = far_w.transpose(0, 2, 1)[..., None] * out_far.astype(jnp.float32) + near_num
+    return (num / den.transpose(0, 2, 1)[..., None]).astype(v.dtype)
+
+
+def reshard_like(x: jax.Array, like: jax.Array) -> jax.Array:
+    spec = named_sharding_of(like)
+    return x if spec is None else reshard(x, spec.spec)
+
+
+def dense_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias):
+    """Reference ``(out, lse)`` for :func:`gauss_attention_fast` off GPU: causal, keys ``>= lower_bounds``."""
+    seq = q.shape[1]
+    pos = jnp.arange(seq)
+    scores = jnp.einsum("bqhd,bkhd->bhqk", q.astype(jnp.float32), k.astype(jnp.float32)) / math.sqrt(q.shape[-1])
+    if rel_bias is not None:
+        extent = rel_extent_of_band(rel_bias)
+        column = pos[None, :] - (pos[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + extent
+        in_band = (column >= 0) & (column < rel_bias.shape[-1])
+        idx = jnp.broadcast_to(jnp.clip(column, 0, rel_bias.shape[-1] - 1), rel_bias.shape[:2] + column.shape)
+        scores = scores + jnp.where(in_band, jnp.take_along_axis(rel_bias.astype(jnp.float32), idx, axis=-1), 0.0)
+    vis = (pos[None, None, :] <= pos[None, :, None]) & (pos[None, None, :] >= lower_bounds[:, :, None])
+    vis = vis & valid[:, :, None]
+    scores = jnp.where(vis[:, None], scores, -jnp.inf)
+    lse = jax.nn.logsumexp(scores, axis=-1)
+    p = jnp.where(vis[:, None], jnp.exp(scores - jnp.where(jnp.isfinite(lse), lse, 0.0)[..., None]), 0.0)
+    return jnp.einsum("bhqk,bkhd->bqhd", p, v.astype(jnp.float32)).astype(v.dtype), lse
+
+
+def attention_with_lse(q, k, v, lower_bounds, valid, rel_bias):
+    """FA4 ``(out, lse)`` on GPU, :func:`dense_attention_with_lse` elsewhere (for :func:`gauss_attention_fast`)."""
+    if jax.default_backend() != "gpu":
+        return dense_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias)
+    return gpu_fa4_cute_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias=rel_bias)

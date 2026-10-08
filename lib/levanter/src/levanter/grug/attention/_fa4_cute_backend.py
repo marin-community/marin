@@ -233,11 +233,13 @@ def segmented_flash_attention_backward(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     q_offset: jax.Array,
+    dlse: jax.Array | None = None,
 ) -> tuple[jax.Array, ...]:
     """Return gradients for FA4/CuTe packed-segment attention.
 
     Returns ``(dq, dk, dv)``, or ``(dq, dk, dv, d_rel_bias)`` when the native SM90 path also produces the
-    Inkling bias gradient in-kernel.
+    Inkling bias gradient in-kernel. ``dlse`` ([B, Hq, Sq]) is the cotangent of the forward's log-sum-exp;
+    only the native SM90 path supports it.
     """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
     _validate_backward_inputs(q, k, v, out, dout, lse)
@@ -305,8 +307,11 @@ def segmented_flash_attention_backward(
             softmax_scale=softmax_scale,
             kernel_config=kernel_config,
             window_size_left=None,
+            dlse=dlse,
         )
 
+    if dlse is not None:
+        raise NotImplementedError("an LSE cotangent needs the native SM90 backward (H100, head dim 128)")
     backward_tile = kernel_config.backward_tile
     num_threads = kernel_config.num_threads
     launcher = segmented_flash_attention_backward_launcher(
@@ -424,6 +429,7 @@ def segmented_flash_attention_backward_sm90_native(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     window_size_left: int | None = None,
+    dlse: jax.Array | None = None,
 ) -> tuple[jax.Array, ...]:
     """Run the native SM90 segmented backward path for D128 GQA or MHA kernels.
 
@@ -493,6 +499,10 @@ def segmented_flash_attention_backward_sm90_native(
     dpsum, lse_log2 = _native_backward_preprocess(
         modules, q, out, dout, lse, tile=sm90_config.tile, softmax_scale=softmax_scale
     )
+    if dlse is not None:
+        # d lse / d score = P, so dS = P (dP - dpsum) gains dlse * P: fold it into dpsum (rows padded to the tile).
+        pad = dpsum.shape[-1] - dlse.shape[-1]
+        dpsum = dpsum - jnp.pad(dlse.astype(dpsum.dtype), ((0, 0), (0, 0), (0, pad)))
 
     backward_input_spec, backward_output_spec = _sm90_backward_accum_specs(
         modules, vector_elems=8, qhead_per_kvhead=qhead_per_kvhead
@@ -1100,6 +1110,94 @@ def _segmented_flash_attention_custom_vjp_bwd(
 _segmented_flash_attention_custom_vjp.defvjp(
     _segmented_flash_attention_custom_vjp_fwd,
     _segmented_flash_attention_custom_vjp_bwd,
+)
+
+
+def fa4_cute_attention_forward_with_lse(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    rel_bias: jax.Array | None = None,
+    *,
+    sm_scale: float | None = None,
+    kernel_config: Flash4CuteKernelConfig,
+    q_offset: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """:func:`fa4_cute_attention_forward` that also returns the per-row log-sum-exp ``[B, Hq, Sq]`` of the
+    (scaled, biased) scores, differentiable on the native SM90 backward. Rows with no visible key are -inf."""
+    if sm_scale is None:
+        sm_scale = float(q.shape[-1] ** -0.5)
+    if rel_bias is None:
+        rel_bias = _rel_bias_placeholder(q)
+    return _segmented_flash_attention_lse_custom_vjp(
+        q, k, v, lower_bounds, valid, q_offset, rel_bias, sm_scale, kernel_config
+    )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(7, 8))
+def _segmented_flash_attention_lse_custom_vjp(
+    q, k, v, lower_bounds, valid, q_offset, rel_bias, softmax_scale, kernel_config
+) -> tuple[jax.Array, jax.Array]:
+    return segmented_flash_attention_forward(
+        q,
+        k,
+        v,
+        lower_bounds,
+        valid,
+        _real_rel_bias(rel_bias),
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
+        q_offset=q_offset,
+    )
+
+
+def _segmented_flash_attention_lse_custom_vjp_fwd(
+    q, k, v, lower_bounds, valid, q_offset, rel_bias, softmax_scale, kernel_config
+):
+    out, residuals = _segmented_flash_attention_custom_vjp_fwd(
+        q, k, v, lower_bounds, valid, q_offset, rel_bias, softmax_scale, kernel_config
+    )
+    return (out, residuals.lse), residuals
+
+
+def _segmented_flash_attention_lse_custom_vjp_bwd(softmax_scale, kernel_config, residuals, cotangents):
+    cot_out, cot_lse = cotangents
+    r = residuals
+    out_zero = isinstance(cot_out, jax.custom_derivatives.SymbolicZero)
+    lse_zero = isinstance(cot_lse, jax.custom_derivatives.SymbolicZero)
+    if out_zero and lse_zero:
+        return _segmented_flash_attention_custom_vjp_bwd(softmax_scale, kernel_config, r, cot_out)
+    cot = jnp.zeros_like(r.out) if out_zero else cot_out.astype(r.q.dtype)
+    # Rows with no visible key carry lse = -inf and P = 0: their LSE cotangent has nothing to reach.
+    dlse = None if lse_zero else jnp.where(jnp.isfinite(r.lse), cot_lse.astype(jnp.float32), 0.0)
+    rel_bias = _real_rel_bias(r.rel_bias)
+    result = segmented_flash_attention_backward(
+        r.q,
+        r.k,
+        r.v,
+        r.out,
+        cot,
+        r.lse,
+        r.lower_bounds,
+        r.valid,
+        rel_bias,
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
+        q_offset=r.q_offset,
+        dlse=dlse,
+    )
+    if rel_bias is None:
+        dq, dk, dv = result
+        return dq, dk, dv, None, None, None, jnp.zeros_like(r.rel_bias)
+    dq, dk, dv, d_rel_bias = result
+    return dq, dk, dv, None, None, None, d_rel_bias.astype(rel_bias.dtype)
+
+
+_segmented_flash_attention_lse_custom_vjp.defvjp(
+    _segmented_flash_attention_lse_custom_vjp_fwd,
+    _segmented_flash_attention_lse_custom_vjp_bwd,
 )
 
 

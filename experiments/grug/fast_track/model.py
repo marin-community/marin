@@ -87,6 +87,8 @@ from experiments.grug.fast_track.sparse_attention import (
     DcmhaPaper,
     Gauss,
     SparseIndex,
+    attention_with_lse,
+    gauss_attention_fast,
     mla_sparse_attention,
     mla_sparse_params,
 )
@@ -1032,6 +1034,8 @@ class GrugModelConfig:
     mla_gauss_reach: int = 16
     mla_gauss_tied: bool = False
     mla_gauss_components: int = 1
+    mla_gauss_fast: bool = False
+    """Run the Gaussian kernel via ``gauss_attention_fast``."""
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -1507,18 +1511,12 @@ class GrugModelConfig:
     """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
     attn_res_layer_backward=SAVE."""
     moe_shortcut: bool = False
-    """Shortcut-connected MoE (ScMoE, arXiv 2404.05019; LongCat-Flash arXiv 2509.01322): layer ``l``'s MoE
-    gate mixes the same AttnRes sources as layer ``l``'s attention gate (with its own query), excluding that
-    attention's output, which still enters the history for later gates. The MoE dispatch then does not
-    depend on the attention, so its all-to-all can overlap the attention compute. Needs ``attn_res``."""
+    """Shortcut-connected MoE (ScMoE): layer ``l``'s MoE gate excludes layer ``l``'s attention output."""
     mla_share_kv_latent: bool = False
     """Every MLA layer after the first reuses the first MLA layer's normed KV latent (own W_uk / W_uv, so
     absorption still works), halving the MLA KV cache at d512. Needs attn_res_layer_backward=SAVE."""
     value_residual_layers: tuple[int, ...] = ()
-    """ResFormer value residual learning (arXiv 2410.17897): these 0-indexed layers mix the first layer's
-    attention values into their own, ``v <- l1 * v + l2 * v_first``, with learnable per-layer ``(l1, l2)``
-    (KDA: after the v ShortConv + SiLU; MLA: after the up-projection). Layer 0 is the source and cannot
-    be listed. Empty: off. Needs attn_res_layer_backward=SAVE (the values cross layers)."""
+    """ResFormer value residual: these layers mix layer 0's values in, ``v <- l1 v + l2 v_first``."""
     value_residual_init: tuple[float, float] = (0.5, 0.5)
     """Initial ``(l1, l2)`` of ``value_residual_layers`` (modded-nanogpt's learnable 0.5 / 0.5)."""
     learnable_qk_mult: bool = False
@@ -3031,7 +3029,11 @@ class CausalSelfAttention(eqx.Module):
             qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        if self.cfg.mla and self.cfg.mla_sparse_window:
+        if self.gauss is not None and self.cfg.mla_gauss_fast:
+            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
+            reach = self.cfg.mla_gauss_reach
+            attn_out = gauss_attention_fast(q, k, kernel_v, rel_bias, seg, self.gauss, reach, attention_with_lse)
+        elif self.cfg.mla and self.cfg.mla_sparse_window:
             attn_out = mla_sparse_attention(self, x, q, k, kernel_v, rel_bias, sconv_segment_ids, rms_norm, _proj)
         else:
             attn_out = _attend(q, k)[..., :head_dim]

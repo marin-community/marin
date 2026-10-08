@@ -14,7 +14,7 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
-from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
+from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward, fa4_cute_attention_forward_with_lse
 from levanter.grug.attention._inkling_relpos import rel_extent_of_band
 from levanter.grug.attention._fa4_cute_config import (
     SM90_BACKWARD_NARROW_KEY_TILE,
@@ -467,3 +467,56 @@ __all__ = [
     "gpu_fa4_cute_attention",
     "gpu_fa4_cute_sm100_attention",
 ]
+
+
+def gpu_fa4_cute_attention_with_lse(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv E"],
+    lower_bounds: Int[Array, "B Q"],
+    valid: Bool[Array, "B Q"],
+    *,
+    rel_bias: Float[Array, "B Hq Q W"] | None = None,
+) -> tuple[Float[Array, "B Q Hq E"], Float[Array, "B Hq Q"]]:
+    """Causal FA4/CuTe attention with explicit per-query key bounds (query ``i`` sees keys
+    ``lower_bounds[b, i] <= j <= i`` when ``valid[b, i]``), returning ``(out, lse)``. ``lse`` is differentiable
+    on the native SM90 backward (H100, head dim 128); invalid rows' ``lse`` is undefined (mask it)."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_attention_with_lse requires the JAX GPU backend.")
+    _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention_with_lse")
+    kernel_config = _segmented_kernel_config(q.shape[-1], None if rel_bias is None else rel_extent_of_band(rel_bias))
+    sm_scale = 1.0 / math.sqrt(q.shape[-1])
+    lower_bounds = lower_bounds.astype(jnp.int32)
+    valid = valid.astype(jnp.bool_)
+    mesh = get_abstract_mesh()
+    zero = jnp.zeros((1,), dtype=jnp.int32)
+    if mesh is None or mesh.empty or not any(_partitioned_dims(q, mesh)):
+        return fa4_cute_attention_forward_with_lse(
+            q, k, v, lower_bounds, valid, rel_bias, sm_scale=sm_scale, kernel_config=kernel_config, q_offset=zero
+        )
+    q_dims = _partitioned_dims(q, mesh)
+    if q_dims[1] or q_dims[3]:
+        raise NotImplementedError("gpu_fa4_cute_attention_with_lse supports batch / head sharding only")
+    q_spec = tuple(partition_spec_of(q))
+    output_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
+    lse_spec = P(output_spec[0], output_spec[2], None)
+    metadata_spec = P(*output_spec[:2])
+    lower_bounds = reshard(lower_bounds, metadata_spec)
+    valid = reshard(valid, metadata_spec)
+    rel_bias_args = () if rel_bias is None else (reshard(rel_bias, P(output_spec[0], output_spec[2], None, None)),)
+
+    @shard_map(mesh=mesh, out_specs=(output_spec, lse_spec), check_vma=False)
+    def _local(q_local, k_local, v_local, lower_bounds_local, valid_local, *rel_bias_local):
+        return fa4_cute_attention_forward_with_lse(
+            q_local,
+            k_local,
+            v_local,
+            lower_bounds_local,
+            valid_local,
+            *rel_bias_local,
+            sm_scale=sm_scale,
+            kernel_config=kernel_config,
+            q_offset=jnp.zeros((1,), dtype=jnp.int32),
+        )
+
+    return _local(q, k, v, lower_bounds, valid, *rel_bias_args)

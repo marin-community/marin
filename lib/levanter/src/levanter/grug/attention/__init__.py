@@ -14,4 +14,5 @@ from levanter.grug.attention._core import (
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds as fa4_cute_segment_bounds
 from levanter.grug.attention._inkling_relpos import inkling_rel_bias as inkling_rel_bias
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention as gpu_fa4_cute_attention
+from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention_with_lse as gpu_fa4_cute_attention_with_lse
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention as gpu_fa4_cute_sm100_attention
