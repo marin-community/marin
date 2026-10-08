@@ -332,7 +332,7 @@ class Build:
         """
         candidate = GradedCandidate(reply=reply, files=tuple(sorted(workspace, key=lambda f: f.path)))
         self.emit(f"{GRADED_RESOURCE_PREFIX}{digest(candidate)}.json", canonical_json(candidate).encode())
-        execution = TaskExecution()
+        execution = draft_module.task_execution()
         try:
             task = draft_module.assemble(
                 task_id=f"{self.item_id}.try_grader",
