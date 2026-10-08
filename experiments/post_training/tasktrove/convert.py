@@ -17,18 +17,19 @@ from dataclasses import asdict, dataclass
 
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.modes.extract import collapse_whitespace
-from verifyit.spec import mode_of, render_spec
-from zephyr.context import ZephyrContext
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TASK_TOML, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata as template_metadata
+from taskcompendium.convert.tasktrove_nemotron_data import metadata as template_metadata
+from verifyit.modes.extract import collapse_whitespace
+from verifyit.spec import mode_of, render_spec
+from zephyr.context import ZephyrContext
+
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import (
     WORKER_RESOURCES,
@@ -47,17 +48,7 @@ from experiments.post_training.tasktrove.task_format import (
     render_task_toml,
 )
 from experiments.post_training.tasktrove.task_templates import COVERAGE_JSON, uncovered_keys
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    SOLUTION_DIR,
-    TASK_TOML,
-    TEST_SH,
-    TaskFiles,
-    read_task_binary,
-    template_fingerprint,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, template_fingerprint, write_task_binary
 
 CONVERTED_GLOB = "converted/*.parquet"
 

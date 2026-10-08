@@ -1,121 +1,108 @@
 # Task curation
 
-The source catalog in
-[`experiments/post_training/task_curation/sources.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py)
-returns 153 available Atlas source definitions. Each definition calls the
-corresponding source-family module's `pipeline()` factory under `datasets/skyrl`,
-`datasets/tasktrove` or `datasets/nemotron_ultra/{mopd,rlvr1,rlvr2}`. Dataset
-modules own their input pins, component selection, conversion policy and runtime
-binding. `sources.py` also reads Atlas metadata for all 203 entries, including
-50 exclusions.
+Task curation turns pinned RL datasets into TaskSpec parquet files. Each dataset
+is declared once as an `RlDataPipeline` under
+[`experiments/post_training/task_curation/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md),
+and the catalog
+[`sources.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py)
+lists every declaration:
+
+```python
+from experiments.post_training.task_curation.sources import all_pipelines
+
+pipelines = all_pipelines()  # name -> RlDataPipeline
+```
+
+Building the catalog performs no downloads, inference or job submission.
 
 ## Package organization
 
 | Package | Responsibility |
 |---|---|
-| `experiments/post_training/task_curation/datasets/` | Pinned dataset declarations and experiment-specific input bindings |
-| `experiments/post_training/task_curation/sources.py` | Explicit source-name to `pipeline()` catalog |
-| `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` metadata and artifact binding |
-| `experiments/post_training/task_curation/driver.py` and `campaign.py` | Campaign configuration, shared pool and source admission |
-| `taskcompendium.datasets` | Reusable dataset-family converters, rubrics and preserved source contracts |
-| `taskcompendium.pipeline` | Acquisition, sampling, review, filtering, verification and sidecars |
-| `taskcompendium.runtime` | Task execution and environment capture |
-| `verifyit` | Common graders and invocation adapters for installed source scorers |
-| `shellbox` | Isolated execution, image validation and backend implementations |
+| `experiments/post_training/task_curation/datasets/` | Dataset declarations, converters, rubrics, controls and `*_grade.py` grader scripts |
+| `experiments/post_training/task_curation/images/` | Grader image recipes and their digest-pinned `Image` constants |
+| `experiments/post_training/task_curation/sources.py` | The catalog, `all_pipelines()` |
+| `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
+| `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
+| `taskcompendium.convert` | Conversion techniques shared by declarations |
+| `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
+| `taskcompendium.runtime` | Grading in fresh Shellbox machines |
+| `verifyit` | Stock graders and the bridge to image-installed source scorers |
+| `shellbox` | Isolated machines and their backends |
 
-A `TaskPolicy` describes a family's normalization, review rubric and checks.
-Library factories use `policy()` and return this bundle. A `DatasetRecipe` selects
-pinned inputs and intended use, with its conversion policy in `recipe.policy`.
-An `RlDataPipeline`
-attaches source metadata and constructs the whole-source artifact with
-`bind(config, runtime)`. Constructing the catalog performs no downloads, inference,
-machine creation or job submission.
+TaskCompendium does not import experiments, name datasets, or construct
+ArtifactSteps.
 
-TaskCompendium provides reusable components and `run_source_pipeline`, which
-executes an explicit recipe and writes data and evidence. Experiments provides
-the source declarations and ArtifactStep wrappers: pins, dependency handles,
-names, versions, output paths and resources. Only experiment dataset declarations
-expose `pipeline()`. Nemotron acquisition and reference-file plumbing lives in
-`datasets/nemotron_ultra/inputs.py` beside the dataset declarations. TaskCompendium has no imports
-from experiments and constructs no ArtifactSteps.
+## Declarations
 
-```python
-from experiments.post_training.task_curation.sources import rl_data_pipelines
+An `RlDataPipeline` has these fields:
 
-source = rl_data_pipelines()["MarinSkyRL:math500"]
-step = source.bind(source_config, source_runtime)
-```
+| Field | Meaning |
+|---|---|
+| `name` | Catalog key and artifact name. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `convert` | `RawRow -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
+| `version` | Converter revision; bump it when conversion changes outside the converter module. |
+| `environment` | `ShellSim()` for conversation tasks, or an `Image` for agentic tasks. |
+| `intended_use` | `train` or `eval`. |
+| `rubric` | Optional review rubric string, one criterion per paragraph. |
+| `controls` | Optional `Controls(golden, negative, memory_mb)` for grader verification. |
+| `inputs` | Auxiliary pinned sources, passed by name to `select`, `decode` and `read`. |
+| `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
+
+Families whose members differ only by data are tables: one module builds every
+declaration of the family in a loop.
+
+## Graders and controls
+
+A task's grader is one of four kinds:
+
+- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
+  in process; with `environment=IMAGE.requirements()` it grades in a fresh
+  machine of that image.
+- `ScriptGrader` runs a command in a fresh machine of a pinned image and reads
+  its reward from stdout, its exit code, or a reward file. A dataset-specific
+  script is a `<name>_grade.py` file next to its declaration, shipped in the
+  task's verifier resources under `/tests`. Scorers installed in a grader image
+  are called through `verifyit/execution/source_callable.py` with an
+  `invocation.json`, built by `taskcompendium.convert.source_scorer`.
+- `SessionGrader` marks a task graded by its registered interactive session.
+- `NoGrader` records a source evaluator this repository cannot run, with the
+  source contract. Its rows never reach `final/`.
+
+Conversion preserves the source's grading semantics. It does not repair
+comparators or rewrite tests to accept a reference.
+
+Controls check a grader before its tasks are admitted. For each sampled task the
+pipeline grades an empty submission (must score 0), `golden(task)` (must score 1)
+and `negative(task)` (must score 0). A golden is a `Reply`, `WorkspaceFiles`, or
+an `OracleCommand` run in a fresh machine of the grader image with the task's
+oracle files, such as a TaskTrove `solution/solve.sh`. A task without a known
+answer returns `None`, which records a skipped golden. In-process numeric, MCQ,
+exact and action graders are also checked per task during preparation.
 
 ## Source procedure
 
-1. Download or adopt exact pinned inputs and record their identity.
-2. Select 100 raw records with a seeded sample, or all records in a smaller source.
-3. Convert the sample and perform available cheap checks. Send bounded batches to
-   GLM, or adopt hash-validated recorded reviews.
-4. Apply the source quality gate. More than 90% known good judgments skips review
-   of the remainder. More than 50% known defects rejects the source. Both use the
-   entire panel as the denominator; unavailable responses count as neither good
-   nor defective. Intermediate quality requires further review. Missing evidence
-   can leave the gate incomplete.
-5. In full mode, expand admitted sources, normalize their records and apply the
-   selected review policy. Analysis and conversion may share a physical pass.
-6. Verify a seeded sample of accepted outputs using the available source controls.
-   The campaign requests 100 tasks, two attempts and a 0.95 pass fraction.
-7. Persist canonical shards, evidence and the source report.
+1. Download the pinned files once per distinct pin
+   (`task-curation/download/<hash>`).
+2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
+   checks.
+3. With a rubric, send bounded batches to the GLM reviewer. More than 90% known
+   good judgments accepts the source without reviewing the rest; more than 50%
+   known defects rejects it. Both use the whole panel as the denominator.
+   Without a rubric, rows are kept as `unreviewed`.
+4. In full mode, convert and audit every row of an accepted source.
+5. Filter rows into kept, rejected and deferred.
+6. With controls, verify a seeded sample of kept rows: every control runs twice
+   in fresh machines, and the source passes at a 95% pass fraction.
+7. Admit rows and write the outputs.
 
-The shared campaign runs source procedures in threads over one Zephyr context.
-Sources reuse the same worker pool across phases. `--concurrent-sources` controls
-whole-source admission; `--max-workers` controls the shared worker count.
-Independent sources continue when one fails, and the campaign report records
-those failures.
-
-GLM request batches are bounded by task count and bytes. Requests have bounded
-retries. Failed or malformed reviews defer records, retain diagnostics and do
-not count as task defects. Exact-query caching includes the complete request and
-model revision. Regenerating TaskSpecs does not require repeating identical
-expensive inference requests. Sidecars retain separate normalization, review and
-verification identities.
-
-Inference cache reuse is best effort. Unreadable storage and invalid cached
-responses become misses; changed identities can regenerate outputs.
-
-## Graders and goldens
-
-Conversion preserves source grading semantics, including inline pytest graders.
-A broken source test suite is a rollout failure and rejects the task. Conversion
-does not repair comparators or rewrite tests to accept the golden.
-
-A task's grader is one of four kinds. A `VerifyitGrader` names a stock verifyit
-mode. A `ScriptGrader` runs a source-supplied scorer in a fresh machine built from
-a pinned image and reads its reward from stdout, its exit code, or a reward file
-(a number, or JSON with a reward and optional detail object). Image-installed
-evaluators are acquired from pinned upstream commits; the experiment's runtime
-manifest supplies their resolved image pins. Verifier resources carry the
-scorer's inputs. Neither execution path imports the converter. Packaging must
-preserve the original scorer's decisions. A source whose evaluator cannot run
-here declares a `NoGrader` with the reason and the source contract; verification
-records unsupported readiness without creating a synthetic grader script. A
-`SessionGrader` marks a task that a registered interactive session grades itself.
-
-TaskSpec has no universal golden-script field. Each dataset's control suite finds
-its own source-provided witness, such as a private answer, reference program or
-TaskTrove `solve.sh`. `/solution/solve.sh` belongs to the TaskTrove layout; it is
-not required of every dataset. Missing goldens skip the positive control while
-other available checks still run. Negative controls check that an incorrect
-candidate fails. Missing controls and unsupported evaluators cannot certify a
-working grader.
-
-`EnvironmentRequirements.compatible_backends` declares acceptable Shellbox
-backends separately for the agent and the grader. Verification and RL
-rollouts must select a declared backend and satisfy the task's runtime and image
-requirements. A sampled pass certifies the backend exercised. QEMU runs inside a
-Zephyr worker; Iris gVisor verification creates an isolated Iris job through
-`IrisMachineFactory`. Secrets are passed only to grading machines.
-
-Quality acceptance and executable readiness remain separate. A completed source
-procedure can retain inconclusive verification evidence. Read the source report's
-quality decision, verification decision and grader readiness before choosing data
-for executable RL.
+The campaign runs source procedures in threads over one Zephyr context and
+worker pool. `--concurrent-sources` limits whole-source admission and
+`--max-workers` the shared worker count. A failed source does not stop the
+others; the campaign report records it. Review requests are cached by the
+complete request and declared model revision, so rebuilt artifacts do not repeat
+identical inference.
 
 ## Run a campaign
 
@@ -125,49 +112,48 @@ Run the driver inside an Iris job whose `EnvironmentSpec` includes
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
-  --runtime-manifest runtime.json \
   --review-transport direct-chat --model-revision YOUR_GLM_REVISION \
   --review-cache CACHE_PREFIX --mode sample \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
-  --normalized-shards 32 --worker-image REGISTRY/WORKER@sha256:DIGEST \
+  --normalized-shards 32 \
+  --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
+  --verification-backend qemu \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-The runtime manifest maps canonical source names to explicit settings. A QEMU entry
-contains `backend: "qemu"`, an immutable grader `image`, its `worker_image`, and
-the staged `qemu_bundle` path. Iris entries use `backend: "iris-gvisor"` and
-an immutable grader image. Pass `--controller-url` when required by the runtime.
-`--staged-inputs` adopts exact existing inputs; `--recorded-review-bundles` adopts
-reviews with checked content hashes.
-
-Add `--run --base-url PROVIDER_URL` to execute, with `GLM_BULK_TOKEN` configured in the
-driver environment. Full execution also requires `--mode full
---sample-report CAMPAIGN_PREFIX/sample.json`. The full-admission guard checks the
-sample campaign's source identities and outcomes. A changed grader requires new
-verification evidence; an old sampled pass cannot certify it.
+`--verification-backend` is `qemu`, `gvisor` or `iris` (with
+`--controller-url`). QEMU boots the guest bundle that the worker image carries
+for each grader image, as recorded in `images/__init__.py`. Grading machines
+never have network access. Add `--run --base-url PROVIDER_URL` to execute, with
+`GLM_BULK_TOKEN` in the driver environment. Full execution requires
+`--mode full --sample-report CAMPAIGN_PREFIX/sample.json`; the sample must match
+the current source graph and worker image, and only sources whose sample ended
+`sampled` or `completed` are processed.
 
 ## Outputs
 
-Each source artifact keeps these paths together beneath its dataset prefix:
+Each source artifact `data/rl/<name>-<hash>` contains:
 
 | Relative path | Contents |
 |---|---|
-| `hf/` | Pinned input manifest and raw locator ledger |
-| `normalized/part-*.parquet` | TaskSpecs and conversion outcomes in canonical shards |
-| `analysis/part-*.parquet` | Review evidence, decisions and identity fields |
-| `analysis/unprocessed-*.parquet` | Records outside an unexpanded sample and gate reasons |
-| `verification/part-*.parquet` | Per-task controls and grader readiness |
-| `accepted/part-*.parquet` | Rows admitted by the final publication decision |
-| `report.json` | Source decisions, revisions, counts and output links |
+| `download/locators/` | Row locators of the staged source files |
+| `normalize/part-*.parquet` | Every converted row: TaskSpec JSON or rejection, and normalization changes |
+| `review/part-*.parquet` | Review evidence and filter decisions |
+| `review/unprocessed-*.parquet` | Rows outside an unexpanded sample, with the gate's reason |
+| `review/report.json` | The source quality decision |
+| `verify/part-*.parquet` | Per-row checks, grader readiness and admission |
+| `verify/report.json` | Sampled controls, trials and the source verification decision |
+| `final/part-*.parquet` | Admitted rows only |
+| `manifest.json` | Status, counts, revisions, reports and the source admission |
+| `telemetry.json` | Zephyr execution IDs, counters and phase wall times |
 
-Sidecars join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
-`raw_sha256`. Rejected and deferred rows remain auditable. Successful procedures
-remove redundant scratch payloads; failed procedures retain diagnostics.
+Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader`,
+`deferred:judge` or `unverified`; `final/` holds the admitted rows. Sidecars
+join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
+`raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
+converter module bytes, grader scripts, referenced images, rubric, controls and
+pipeline settings, so changing any of them produces a new artifact.
 
-To add a source, create a declaration under the appropriate `datasets/<family>/` directory with a `pipeline()` factory,
-reuse a family converter or add a concrete one in `taskcompendium.datasets`, then
-add its explicit entry to `sources.py`. Preserve private answers and fixtures,
-pin runtime requirements and run the source through the sample campaign before
-full processing. The
-[library rubric](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/README.md)
-describes family and verification requirements.
+The
+[pipeline contract](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/README.md)
+describes each stage in detail.

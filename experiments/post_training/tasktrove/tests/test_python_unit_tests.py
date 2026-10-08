@@ -3,22 +3,16 @@
 
 import sys
 
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import Status, run
 from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    TEST_SH,
-    TaskFiles,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 
 TOOL_REF = "0123abc"
 SOURCE = "DCAgent__exp_rpt_unitsyn-python-large-v2"

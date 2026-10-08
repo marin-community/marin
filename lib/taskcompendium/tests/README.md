@@ -1,9 +1,12 @@
 # TaskCompendium tests
 
 Tests cover task serialization and answer formats, source conversions,
-in-process and machine grading, output capture, source quality gates, review
-evidence and pipeline sidecars. [fixtures/](fixtures/README.md) contains recorded inputs;
-`pipeline_stages.py` provides pipeline test support.
+in-process and machine grading, grader controls, row admission, output capture,
+source quality gates, review evidence and the pipeline's output views.
+[fixtures/](fixtures/README.md) contains recorded inputs. `pipeline_stages.py`
+provides the fixture source recipe, converters and grading machines;
+`FixtureGradingMachines` runs grader controls on in-memory ShellSim machines that
+stand in for a grader image.
 
 From the repository root:
 

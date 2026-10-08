@@ -25,7 +25,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 
-SOURCE_QUALITY_REVISION = "6"
+SOURCE_QUALITY_REVISION = "7"
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ class SourceQualityPolicy:
 
 
 class SourceQualityStatus(StrEnum):
+    UNREVIEWED = "unreviewed"
     CENSUS = "census"
     FULL_REVIEW = "full_review"
     TRUST = "trust"
@@ -265,6 +266,29 @@ def source_quality_report(
         population=sample,
         coverage=coverage,
         assessments=dict(counts),
+        defect_fraction=defect_fraction,
+        status=status,
+        reason=reason,
+    )
+
+
+def unreviewed_quality_report(
+    sample: QualitySample, policy: SourceQualityPolicy, *, coverage: QualitySampleCoverage
+) -> SourceQualityReport:
+    """Decide on a source without a rubric from observed conversion and check failures alone."""
+    defects = sample.exclusions.get("normalization:source_defect", 0) + sample.exclusions.get("check:failed", 0)
+    defect_fraction = defects / sample.input_count if sample.input_count else None
+    if defect_fraction is not None and defect_fraction > policy.reject_above:
+        status, reason = SourceQualityStatus.REJECT, "Known defects exceed the rejection threshold over the whole panel"
+    elif not sample.eligible_count:
+        status, reason = SourceQualityStatus.INCOMPLETE, "No usable tasks in the fixed raw panel; no source inference"
+    else:
+        status, reason = SourceQualityStatus.UNREVIEWED, "The source declares no rubric; model review is skipped"
+    return SourceQualityReport(
+        policy=policy,
+        population=sample,
+        coverage=coverage,
+        assessments={Assessment.DEFECT: defects} if defects else {},
         defect_fraction=defect_fraction,
         status=status,
         reason=reason,

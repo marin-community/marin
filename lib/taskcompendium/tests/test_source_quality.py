@@ -9,7 +9,6 @@ import pytest
 from shellbox.machine import Backend
 from verifyit.spec import ScriptSpec
 
-from taskcompendium.datasets.numeric_answers import normalize_svamp
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import EnvironmentRequirements, ResourceGroups, Source
 from taskcompendium.pipeline.models import (
@@ -40,6 +39,8 @@ from taskcompendium.pipeline.source_quality import (
     source_quality_report,
 )
 from taskcompendium.runtime.resources import inline_resource
+
+from .pipeline_stages import convert_svamp
 
 
 def reviewed(task_id, quality=Quality.GOOD, confidence=Confidence.HIGH):
@@ -212,7 +213,7 @@ def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
     audits = []
     for index in range(80):
         source = Source(dataset="fixture", revision="1", row=str(index), importer_revision="1")
-        task = normalize_svamp(
+        task = convert_svamp(
             RawRow(
                 str(index),
                 source,
@@ -285,9 +286,9 @@ def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
     assert whole.task_ids != sample_quality_rows(iter(audits), policy=replace(policy, seed=1)).task_ids
 
 
-def test_contract_signature_separates_grader_code_but_not_private_reference_values():
+def test_contract_signature_separates_grader_code_but_not_reference_values():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = normalize_svamp(
+    task = convert_svamp(
         RawRow(
             "task",
             source,

@@ -7,8 +7,9 @@ import hashlib
 import heapq
 import json
 import time
-from collections.abc import Iterator
-from dataclasses import asdict, dataclass, replace
+from collections import Counter
+from collections.abc import Iterator, Mapping
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
 from itertools import batched
@@ -17,16 +18,17 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from verifyit.spec import Mode
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
+from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
-from taskcompendium.pipeline.inputs import SourceFiles
-from taskcompendium.pipeline.models import CheckSuite, DatasetRecipe, FilterPolicy, VerificationReport
+from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe
 from taskcompendium.pipeline.sampling import merge_sample_rows
 from taskcompendium.pipeline.source_quality import (
     SOURCE_QUALITY_REVISION,
@@ -39,12 +41,14 @@ from taskcompendium.pipeline.source_verification import (
     SOURCE_VERIFICATION_REVISION,
     SourceVerificationPolicy,
     SourceVerificationStatus,
+    VerificationCounts,
     verify_source,
 )
 from taskcompendium.pipeline.sources import (
     decode_staged_row,
     source_files_identity,
     staged_files,
+    staged_inputs,
     staged_raw_file_rows,
 )
 from taskcompendium.pipeline.stages import (
@@ -57,31 +61,27 @@ from taskcompendium.pipeline.stages import (
     audit_prepared_source,
     filter_source,
     prepare_source,
+    skip_source_review,
 )
-from taskcompendium.pipeline.transforms import UNBOUND_CONTROLS_REASON, normalize_row
-from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.pipeline.transforms import normalize_row, row_source, row_task_id
 
-SOURCE_PIPELINE_REVISION = "7"
+SOURCE_PIPELINE_REVISION = "8"
 PANEL_ROWS_PER_SHARD = 16
-
-
-def _answer_report(task: TaskSpec) -> VerificationReport:
-    return VerificationReport(verify_task(task))
-
-
-def answer_check_suite() -> CheckSuite:
-    """Return the existing VerifyIT answer controls for sources without custom controls."""
-    return CheckSuite("answer-controls", "1", {}, _answer_report)
+OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
 
 
 class SourceProcessingMode(StrEnum):
     SAMPLE = "sample"
     FULL = "full"
-    NORMALIZE_ONLY = "normalize_only"
 
 
 @dataclass(frozen=True)
 class SourcePipelineConfig:
+    """Campaign settings shared by every source.
+
+    ``machines`` runs sandbox grader controls; ``None`` permits only in-process graders.
+    """
+
     mode: SourceProcessingMode
     quality_policy: SourceQualityPolicy
     verification_policy: SourceVerificationPolicy
@@ -89,16 +89,17 @@ class SourcePipelineConfig:
     execution: AuditExecution
     filter_policy: FilterPolicy
     normalized_shards: int
+    machines: GradingMachines | None
 
 
 @dataclass(frozen=True)
 class SourcePipelineResult:
-    hf_path: str
-    normalized_path: str
-    analysis_path: str
-    verification_path: str
-    report_path: str
-    accepted_path: str
+    download_path: str
+    normalize_path: str
+    review_path: str
+    verify_path: str
+    final_path: str
+    manifest_path: str
     status: str
 
 
@@ -137,9 +138,9 @@ def merge_raw_samples(samples: Iterator[RawSample], *, size: int, seed: int) -> 
     return RawSample(count, rows)
 
 
-def _raw_dataset(source_input: str, files: SourceFiles) -> Dataset:
-    return Dataset.from_list(list(staged_files(source_input, files))).flat_map(
-        partial(staged_raw_file_rows, source_input, spec=files)
+def _raw_dataset(source_input: str, recipe: SourceRecipe) -> Dataset:
+    return Dataset.from_list(list(staged_files(source_input, recipe.source))).flat_map(
+        partial(staged_raw_file_rows, source_input, spec=recipe.source, inputs=staged_inputs(recipe.inputs))
     )
 
 
@@ -156,14 +157,12 @@ def _raw_input_sha256(data: dict[str, Any]) -> str:
     return hashlib.sha256(document.encode()).hexdigest()
 
 
-def _decode_and_normalize(
-    row: dict[str, Any], *, recipe: DatasetRecipe, source_input: str, files: SourceFiles
-) -> dict[str, Any]:
+def _decode_and_normalize(row: dict[str, Any], *, recipe: SourceRecipe) -> dict[str, Any]:
     metrics = counters.current_stage()
     raw_input_sha256 = _raw_input_sha256(row["data"])
     started = time.monotonic()
     try:
-        decoded = decode_staged_row(row, source_input, files)
+        decoded = decode_staged_row(row, recipe.source, staged_inputs(recipe.inputs))
     finally:
         metrics.update_counter("source/decode/seconds", time.monotonic() - started)
         metrics.update_counter("source/decode/attempts", 1)
@@ -185,15 +184,9 @@ def _decode_and_normalize(
     return result
 
 
-def _source_identity(row: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
-    source = Source(
-        dataset=recipe.source.dataset,
-        revision=recipe.source.revision,
-        row=f"{recipe.source.config}:{recipe.source.split}:{row['locator']}",
-        importer_revision=recipe.version,
-    )
+def _source_identity(row: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
     return {
-        "task_id": f"{recipe.name}-{canonical_sha256(source.model_dump())}",
+        "task_id": row_task_id(recipe, row_source(recipe, row["locator"])),
         "source_locator": row["locator"],
         "raw_input_sha256": _raw_input_sha256(row["data"]),
         "raw_sha256": None,
@@ -201,21 +194,23 @@ def _source_identity(row: dict[str, Any], recipe: DatasetRecipe) -> dict[str, An
 
 
 def _staged_rows_with_ledger(
-    relative_file: str, *, source_input: str, files: SourceFiles, recipe: DatasetRecipe, output: StoragePath
+    relative_file: str, *, source_input: str, recipe: SourceRecipe, output: StoragePath
 ) -> Iterator[dict[str, Any]]:
     """Read selected rows without decoding and retain their original content identities."""
     metrics = counters.current_stage()
     started = time.monotonic()
     filename = hashlib.sha256(relative_file.encode()).hexdigest()
-    path = output / "hf" / "locators" / f"part-{filename}.parquet"
+    path = output / "download" / "locators" / f"part-{filename}.parquet"
     try:
         with path.open("wb", auto_mkdir=True) as stream:
             with pq.ParquetWriter(stream, RAW_SCHEMA) as writer:
                 batch = []
-                for row in staged_raw_file_rows(source_input, relative_file, files):
+                for row in staged_raw_file_rows(
+                    source_input, relative_file, recipe.source, staged_inputs(recipe.inputs)
+                ):
                     batch.append(_source_identity(row, recipe))
                     metrics.update_counter("source/raw/selected_rows", 1)
-                    metrics.update_counter("source/output/hf/rows", 1)
+                    metrics.update_counter("source/output/download/rows", 1)
                     metrics.update_counter(
                         "source/raw/binary_bytes",
                         sum(len(value) for value in row["data"].values() if isinstance(value, bytes)),
@@ -226,25 +221,14 @@ def _staged_rows_with_ledger(
                     yield row
                 if batch:
                     writer.write_table(pa.Table.from_pylist(batch, schema=RAW_SCHEMA))
-            metrics.update_counter("source/output/hf/parquet_bytes", stream.tell())
+            metrics.update_counter("source/output/download/parquet_bytes", stream.tell())
     finally:
         metrics.update_counter("source/raw/read_seconds", time.monotonic() - started)
 
 
-def _reuse_normalized(
-    row: dict[str, Any],
-    *,
-    recipe: DatasetRecipe,
-    cached: dict[str, dict[str, Any]],
-    source_input: str,
-    files: SourceFiles,
-) -> dict[str, Any]:
+def _reuse_normalized(row: dict[str, Any], *, recipe: SourceRecipe, cached: dict[str, dict[str, Any]]) -> dict[str, Any]:
     previous = cached.get(row["locator"])
-    return (
-        previous
-        if previous is not None
-        else _decode_and_normalize(row, recipe=recipe, source_input=source_input, files=files)
-    )
+    return previous if previous is not None else _decode_and_normalize(row, recipe=recipe)
 
 
 IDENTITY_FIELDS = [
@@ -265,11 +249,10 @@ NORMALIZED_COLUMNS = (
     "normalization_detail",
     "normalization_changes",
 )
-ANALYSIS_COLUMNS = tuple(
-    field.name
-    for field in TASK_SCHEMA
-    if field.name not in {"task_json", "raw_json", "original_task_json", "cleanup_lineage_json", "checks"}
+REVIEW_COLUMNS = tuple(
+    field.name for field in TASK_SCHEMA if field.name not in {"task_json", "raw_json", "checks", "admission"}
 )
+VERIFY_COLUMNS = ("task_id", "checks", "grader_readiness", "filter_status", "filter_reasons", "admission")
 
 
 def _project_sidecar(row: dict[str, Any], columns: tuple[str, ...], view: str) -> dict[str, Any]:
@@ -283,26 +266,67 @@ def _project_sidecar(row: dict[str, Any], columns: tuple[str, ...], view: str) -
     }
 
 
-def _unprocessed_analysis(
-    identity: dict[str, Any], *, recipe: DatasetRecipe, processed: frozenset[str], disposition: str
+def _unprocessed_review(
+    identity: dict[str, Any], *, recipe: SourceRecipe, processed: frozenset[str], disposition: str
 ) -> Iterator[dict[str, Any]]:
     if identity["task_id"] in processed:
         return
-    counters.current_stage().update_counter("source/output/analysis/rows", 1)
+    counters.current_stage().update_counter("source/output/review/rows", 1)
     yield {
-        **{column: None for column in ANALYSIS_COLUMNS},
+        **{column: None for column in REVIEW_COLUMNS},
         **identity,
         "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
-        "source_row": f"{recipe.source.config}:{recipe.source.split}:{identity['source_locator']}",
+        "source_row": identity["source_locator"],
         "intended_use": recipe.intended_use.value,
         "filter_status": disposition,
         "filter_reasons": ["source_gate:not_expanded"],
         "review_defects": [],
         "normalization_changes": [],
-        "cleanup_edits": [],
         "grader_readiness": "unverified",
     }
+
+
+def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -> Admission:
+    """Admit kept rows whose grader runs in process or passed source verification."""
+    if row["filter_status"] == Disposition.REJECT.value:
+        return Admission.REJECTED
+    if row["filter_status"] == Disposition.DEFER.value:
+        return Admission.DEFERRED
+    grader = TaskSpec.model_validate_json(row["task_json"]).grader
+    if isinstance(grader, NoGrader):
+        return Admission.NO_GRADER
+    if isinstance(grader, VerifyitGrader) and grader.mode == Mode.JUDGE:
+        return Admission.JUDGE_DEFERRED
+    if grades_in_process(grader) or verification == SourceVerificationStatus.PASSED:
+        return Admission.ADMITTED
+    return Admission.UNVERIFIED
+
+
+def _admit(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+    admission = row_admission(row, verification)
+    counters.current_stage().update_counter(f"source/admission/{admission.value}", 1)
+    return {**row, "admission": admission.value}
+
+
+def _count_admissions(rows: Iterator[dict[str, Any]]) -> Counter[str]:
+    return Counter(row["admission"] for row in rows)
+
+
+def _merge_admissions(parts: Iterator[Counter[str]]) -> Counter[str]:
+    total: Counter[str] = Counter()
+    for part in parts:
+        total.update(part)
+    return total
+
+
+def source_admission(counts: Mapping[str, int]) -> str:
+    """Summarize whether a source reaches the final export."""
+    if counts.get(Admission.ADMITTED.value):
+        return "admitted"
+    if counts.get(Admission.JUDGE_DEFERRED.value):
+        return Admission.JUDGE_DEFERRED.value
+    return "none"
 
 
 def _written_output(path: str, view: str) -> str:
@@ -342,24 +366,34 @@ def _remove_completed_scratch(scratch: StoragePath) -> None:
                 path.rmtree()
 
 
+def _skipped_verification(filtered: StoragePath) -> dict[str, Any]:
+    manifest = _read_json(filtered / "manifest.json")
+    return {
+        **manifest,
+        "verification": {
+            "status": SourceVerificationStatus.SKIPPED.value,
+            "reason": "The source declares no controls",
+            "counts": asdict(VerificationCounts()),
+            "results": [],
+        },
+    }
+
+
 def _run_source_pipeline(
-    recipe: DatasetRecipe,
+    recipe: SourceRecipe,
     context: ZephyrContext,
     source_input: str,
     output_path: str,
-    files: SourceFiles,
     config: SourcePipelineConfig,
-    verification_suite: CheckSuite,
     *,
-    previous_verification_report: str | None = None,
-    previous_sample_path: str | None = None,
+    previous_verification_report: str | None,
     telemetry: SourceTelemetry,
 ) -> SourcePipelineResult:
     """Review bounded raw tasks, gate full conversion, and persist joined source sidecars.
 
     The caller owns the entered context and reviewer transport. Reading the raw
     population scans selected raw records with bounded memory, but does not
-    execute task converters or golden controls. Successful outputs retain request
+    execute task converters or controls. Successful outputs retain request
     evidence and decisions while disposing of redundant intermediate task payloads.
     """
     if config.normalized_shards < 1:
@@ -371,16 +405,8 @@ def _run_source_pipeline(
     with telemetry.phase("raw_sample") as phase:
         sample = execute_phase(
             context,
-            Dataset.from_list(list(staged_files(source_input, files)))
-            .flat_map(
-                partial(
-                    _staged_rows_with_ledger,
-                    source_input=source_input,
-                    files=files,
-                    recipe=recipe,
-                    output=output,
-                )
-            )
+            Dataset.from_list(list(staged_files(source_input, recipe.source)))
+            .flat_map(partial(_staged_rows_with_ledger, source_input=source_input, recipe=recipe, output=output))
             .reduce(
                 partial(sample_raw_rows, size=config.quality_policy.sample_size, seed=config.quality_policy.seed),
                 partial(merge_raw_samples, size=config.quality_policy.sample_size, seed=config.quality_policy.seed),
@@ -389,15 +415,12 @@ def _run_source_pipeline(
         ).results[0]
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
-    # Runtime controls belong after the quality gate. Structural verification
-    # remains part of preparation, without invoking the recipe's golden suite.
-    structural_recipe = replace(recipe, policy=replace(recipe.policy, check_suite=None))
     with telemetry.phase("panel_normalize") as phase:
         normalized = execute_phase(
             context,
             Dataset.from_list(list(batched(sample.rows, PANEL_ROWS_PER_SHARD)))
             .flat_map(iter)
-            .map(partial(_decode_and_normalize, recipe=structural_recipe, source_input=source_input, files=files)),
+            .map(partial(_decode_and_normalize, recipe=recipe)),
             telemetry=phase,
         ).results
     prepared = scratch / "sample"
@@ -406,8 +429,7 @@ def _run_source_pipeline(
         prepare_source(
             source_input,
             str(prepared),
-            structural_recipe,
-            files,
+            recipe,
             None,
             config.execution,
             context=context,
@@ -416,24 +438,29 @@ def _run_source_pipeline(
             telemetry=phase,
         )
     census = sample.population_count <= config.quality_policy.sample_size
-    if config.mode == SourceProcessingMode.NORMALIZE_ONLY:
-        if previous_sample_path is None:
-            raise ValueError("Normalize-only processing requires admitted sample evidence")
-        decision = SourceQualityReport.model_validate(
-            _read_json(StoragePath(previous_sample_path) / "analysis/report.json")
-        )
-        _write_json(quality / "manifest.json", {"prepared_source": str(prepared), "review": asdict(config.review)})
-    else:
-        with telemetry.phase("quality_review") as phase:
+    coverage = QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE
+    review = config.review if recipe.rubric is not None else None
+    with telemetry.phase("quality_review") as phase:
+        if review is None:
+            decision = skip_source_review(
+                str(prepared),
+                str(quality),
+                config.quality_policy,
+                config.execution,
+                coverage=coverage,
+                context=context,
+                telemetry=phase,
+            )
+        else:
             decision = assess_source_quality(
                 str(prepared),
                 str(quality),
-                structural_recipe,
-                config.review,
+                recipe,
+                review,
                 config.quality_policy,
                 config.execution,
                 context=context,
-                coverage=QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
+                coverage=coverage,
                 telemetry=phase,
             )
     with telemetry.phase("quality_gate") as phase:
@@ -449,7 +476,8 @@ def _run_source_pipeline(
             telemetry=phase,
         ).results[0]
     _write_json(quality / "report.json", decision.model_dump(mode="json"))
-    expanded = config.mode in {SourceProcessingMode.FULL, SourceProcessingMode.NORMALIZE_ONLY} and decision.status in {
+    expanded = config.mode == SourceProcessingMode.FULL and decision.status in {
+        SourceQualityStatus.UNREVIEWED,
         SourceQualityStatus.TRUST,
         SourceQualityStatus.CENSUS,
         SourceQualityStatus.FULL_REVIEW,
@@ -461,19 +489,12 @@ def _run_source_pipeline(
             prepare_source(
                 source_input,
                 str(prepared),
-                structural_recipe,
-                files,
+                recipe,
                 None,
                 config.execution,
                 context=context,
-                normalized_rows=_raw_dataset(source_input, files).map(
-                    partial(
-                        _reuse_normalized,
-                        recipe=structural_recipe,
-                        cached=cached,
-                        source_input=source_input,
-                        files=files,
-                    )
+                normalized_rows=_raw_dataset(source_input, recipe).map(
+                    partial(_reuse_normalized, recipe=recipe, cached=cached)
                 ),
                 telemetry=phase,
             )
@@ -491,17 +512,11 @@ def _run_source_pipeline(
             str(prepared),
             str(quality),
             str(audited),
-            structural_recipe,
-            config.review,
+            recipe,
+            review,
             config.execution,
             context=context,
             telemetry=phase,
-            sampled_analysis_path=(
-                str(StoragePath(previous_sample_path) / "analysis")
-                if config.mode == SourceProcessingMode.NORMALIZE_ONLY and previous_sample_path is not None
-                else None
-            ),
-            unreviewed_reason=(UNBOUND_CONTROLS_REASON if config.mode == SourceProcessingMode.NORMALIZE_ONLY else None),
         )
     with telemetry.phase("audit_review_count") as phase:
         incomplete_reviews = execute_phase(
@@ -522,60 +537,57 @@ def _run_source_pipeline(
             context=context,
             telemetry=phase,
         )
-    with telemetry.phase("verification") as phase:
-        verification = verify_source(
-            str(filtered),
-            str(verified),
-            config.verification_policy,
-            verification_suite,
-            config.execution.max_workers,
-            config.execution.worker_resources,
-            context=context,
-            previous_report_path=previous_verification_report,
-            telemetry=phase,
-        )
-    raw = Dataset.from_files(str(output / "hf/locators/*.parquet")).load_parquet()
+    if recipe.controls is None:
+        verification = _skipped_verification(filtered)
+        checked = filtered
+    else:
+        with telemetry.phase("verification") as phase:
+            verification = verify_source(
+                str(filtered),
+                str(verified),
+                config.verification_policy,
+                control_suite(recipe.controls, config.machines),
+                config.execution.max_workers,
+                config.execution.worker_resources,
+                context=context,
+                previous_report_path=previous_verification_report,
+                telemetry=phase,
+            )
+        checked = verified
+    verification_status = SourceVerificationStatus(verification["verification"]["status"])
+    source_files = source_files_identity(recipe.source)
     _write_json(
-        output / "hf/manifest.json",
+        output / "download/manifest.json",
         {
             "source_input": source_input,
-            "source": {
-                "dataset": recipe.source.dataset,
-                "revision": recipe.source.revision,
-                "config": recipe.source.config,
-                "split": recipe.source.split,
-            },
-            "files": source_files_identity(files),
-            "staged_files": staged_files(source_input, files),
+            "inputs": dict(recipe.inputs),
+            "files": source_files,
+            "staged_files": staged_files(source_input, recipe.source),
             "input_identity_sha256": canonical_sha256(
-                {
-                    "source_input": source_input,
-                    "source": {
-                        "dataset": recipe.source.dataset,
-                        "revision": recipe.source.revision,
-                        "config": recipe.source.config,
-                        "split": recipe.source.split,
-                    },
-                    "files": source_files_identity(files),
-                }
+                {"source_input": source_input, "inputs": dict(recipe.inputs), "files": source_files}
             ),
             "population_count": sample.population_count,
-            "locator_sidecars": str(output / "hf/locators/*.parquet"),
+            "locator_sidecars": str(output / "download/locators/*.parquet"),
             "raw_payloads": "Retained at the immutable source input",
             "raw_input_sha256": "Canonical source JSON with binary values represented by their SHA256 and byte size",
             "raw_sha256": "SHA256 of decoded canonical JSON; absent until the row is converted",
         },
     )
-    audit = Dataset.from_files(str(verified / AUDIT_INPUT_PATTERN)).load_parquet()
+    raw = Dataset.from_files(str(output / "download/locators/*.parquet")).load_parquet()
+    audit = (
+        Dataset.from_files(str(checked / AUDIT_INPUT_PATTERN))
+        .load_parquet()
+        .map(partial(_admit, verification=verification_status))
+    )
     # A recovered panel can expand a formerly deferred source. Remove old
     # derived shards, including unprocessed locators, before publishing that view.
-    for name in ("normalized", "analysis", "verification", "accepted"):
+    for name in OUTPUT_VIEWS[1:]:
         previous_output = output / name
         if previous_output.exists():
             previous_output.rmtree()
-    for name, columns in (("normalized", NORMALIZED_COLUMNS), ("analysis", ANALYSIS_COLUMNS)):
+    for name, columns in (("normalize", NORMALIZED_COLUMNS), ("review", REVIEW_COLUMNS)):
         projected = audit.map(partial(_project_sidecar, columns=columns, view=name))
-        if name == "normalized":
+        if name == "normalize":
             # Scatter bounds serialized bytes; reshard only moves existing
             # pickle chunks and cannot subdivide a partition of wide tasks.
             projected = projected.group_by(
@@ -596,70 +608,76 @@ def _run_source_pipeline(
             )
     if not expanded and not census:
         processed = frozenset(_source_identity(row, recipe)["task_id"] for row in sample.rows)
-        with telemetry.phase("export_unprocessed_analysis") as phase:
+        with telemetry.phase("export_unprocessed_review") as phase:
             execute_phase(
                 context,
                 raw.flat_map(
                     partial(
-                        _unprocessed_analysis,
+                        _unprocessed_review,
                         recipe=recipe,
                         processed=processed,
                         disposition="reject" if decision.status == SourceQualityStatus.REJECT else "defer",
                     )
                 )
                 .write_parquet(
-                    str(output / "analysis/unprocessed-{shard:05d}.parquet"), schema=_sidecar_schema(ANALYSIS_COLUMNS)
+                    str(output / "review/unprocessed-{shard:05d}.parquet"), schema=_sidecar_schema(REVIEW_COLUMNS)
                 )
-                .map(partial(_written_output, view="analysis")),
+                .map(partial(_written_output, view="review")),
                 telemetry=phase,
             )
-    checks_columns = ("task_id", "checks", "grader_readiness", "filter_status", "filter_reasons")
-    with telemetry.phase("export_verification") as phase:
+    with telemetry.phase("export_verify") as phase:
         execute_phase(
             context,
-            audit.map(partial(_project_sidecar, columns=checks_columns, view="verification"))
-            .write_parquet(
-                str(output / "verification/part-{shard:05d}.parquet"),
-                schema=_sidecar_schema(checks_columns),
-            )
-            .map(partial(_written_output, view="verification")),
+            audit.map(partial(_project_sidecar, columns=VERIFY_COLUMNS, view="verify"))
+            .write_parquet(str(output / "verify/part-{shard:05d}.parquet"), schema=_sidecar_schema(VERIFY_COLUMNS))
+            .map(partial(_written_output, view="verify")),
             telemetry=phase,
         )
-    with telemetry.phase("export_accepted") as phase:
+    with telemetry.phase("export_final") as phase:
         execute_phase(
             context,
-            audit.filter(lambda row: row["filter_status"] == "keep")
-            .map(partial(_project_sidecar, columns=NORMALIZED_COLUMNS, view="accepted"))
-            .write_parquet(str(output / "accepted/part-{shard:05d}.parquet"), schema=_sidecar_schema(NORMALIZED_COLUMNS))
-            .map(partial(_written_output, view="accepted")),
+            audit.filter(lambda row: row["admission"] == Admission.ADMITTED.value)
+            .map(partial(_project_sidecar, columns=NORMALIZED_COLUMNS, view="final"))
+            .write_parquet(str(output / "final/part-{shard:05d}.parquet"), schema=_sidecar_schema(NORMALIZED_COLUMNS))
+            .map(partial(_written_output, view="final")),
             telemetry=phase,
         )
-    verification["verification"]["source_path"] = str(output / "normalized")
-    verification["verification"]["analysis_path"] = str(output / "analysis")
+        admissions = dict(
+            execute_phase(
+                context,
+                Dataset.from_files(str(checked / AUDIT_INPUT_PATTERN))
+                .load_parquet()
+                .map(partial(_admit, verification=verification_status))
+                .reduce(_count_admissions, _merge_admissions),
+                telemetry=phase,
+                operation="admission_count",
+            ).results[0]
+        )
+    verification["verification"]["source_path"] = str(output / "normalize")
+    verification["verification"]["review_path"] = str(output / "review")
     retryable_verification = verification["verification"]["counts"]["infra_error"] > 0
     if decision.status == SourceQualityStatus.INCOMPLETE or retryable_verification:
         status = "incomplete"
-    elif (
-        decision.status == SourceQualityStatus.REJECT
-        or verification["verification"]["status"] == SourceVerificationStatus.REJECTED
-    ):
+    elif decision.status == SourceQualityStatus.REJECT or verification_status == SourceVerificationStatus.REJECTED:
         status = "gated"
     elif expanded or census:
         status = "completed"
     else:
         status = "sampled" if config.mode == SourceProcessingMode.SAMPLE else "gated"
-    report = {
+    manifest = {
         "telemetry": str(output / "telemetry.json"),
         "implementation_revision": SOURCE_PIPELINE_REVISION,
         "quality_revision": SOURCE_QUALITY_REVISION,
         "verification_revision": SOURCE_VERIFICATION_REVISION,
         "normalized_shards": config.normalized_shards,
-        "datasets": {name: str(output / name) for name in ("hf", "normalized", "analysis", "verification", "accepted")},
+        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS},
+        "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
         "recipe_revision": recipe.version,
         "status": status,
         "mode": config.mode.value,
         "source": recipe.name,
+        "intended_use": recipe.intended_use.value,
         "raw_population_count": sample.population_count,
         "raw_sample_count": len(sample.rows),
         "raw_population_census": census,
@@ -667,65 +685,66 @@ def _run_source_pipeline(
         "incomplete_reviews": incomplete_reviews,
         "quality": decision.model_dump(mode="json"),
         "verification": verification["verification"],
+        "admission": source_admission(admissions),
+        "admission_counts": admissions,
         "processed_rows": verification["input_rows"],
         "unprocessed_rows": sample.population_count - verification["input_rows"],
     }
-    _write_json(output / "analysis/report.json", decision.model_dump(mode="json"))
+    _write_json(output / "review/report.json", decision.model_dump(mode="json"))
     _write_json(
-        output / "analysis/manifest.json",
+        output / "review/manifest.json",
         {
             "telemetry": str(output / "telemetry.json"),
-            "normalized_source": str(output / "normalized"),
-            "quality_report": str(output / "analysis/report.json"),
+            "normalized_source": str(output / "normalize"),
+            "quality_report": str(output / "review/report.json"),
+            "rubric": asdict(recipe.rubric) if recipe.rubric is not None else None,
             "review_evidence": [str(quality / "evidence"), str(audited / "evidence")],
         },
     )
-    _write_json(output / "verification/report.json", verification["verification"])
+    _write_json(output / "verify/report.json", verification["verification"])
     _write_json(
-        output / "verification/manifest.json",
+        output / "verify/manifest.json",
         {
             "telemetry": str(output / "telemetry.json"),
-            "normalized_source": str(output / "normalized"),
-            "report": str(output / "verification/report.json"),
-            "policy": {
-                "sample_size": config.verification_policy.sample_size,
-                "seed": config.verification_policy.seed,
-                "attempts": config.verification_policy.attempts,
-                "minimum_pass_fraction": config.verification_policy.minimum_pass_fraction,
-            },
+            "normalized_source": str(output / "normalize"),
+            "report": str(output / "verify/report.json"),
+            "controls": recipe.controls is not None,
+            "policy": asdict(config.verification_policy),
         },
     )
-    _write_json(output / "report.json", report)
+    _write_json(output / "manifest.json", manifest)
     if status != "incomplete":
         _remove_completed_scratch(scratch)
     for phase in ("sample", "full", "quality", "audited", "filtered", "verified"):
         path = scratch / phase / "manifest.json"
         if path.exists():
-            manifest = _read_json(path)
-            manifest.pop("prepared_source", None)
-            manifest.pop("audited_source", None)
-            manifest["normalized_source"] = str(output / "normalized")
-            _write_json(path, manifest)
+            phase_manifest = _read_json(path)
+            phase_manifest.pop("prepared_source", None)
+            phase_manifest.pop("audited_source", None)
+            phase_manifest["normalized_source"] = str(output / "normalize")
+            _write_json(path, phase_manifest)
     return SourcePipelineResult(
-        *(str(output / name) for name in ("hf", "normalized", "analysis", "verification", "report.json", "accepted")),
+        *(str(output / name) for name in OUTPUT_VIEWS),
+        manifest_path=str(output / "manifest.json"),
         status=status,
     )
 
 
 def run_source_pipeline(
-    recipe: DatasetRecipe,
+    recipe: SourceRecipe,
     context: ZephyrContext,
     source_input: str,
     output_path: str,
-    files: SourceFiles,
     config: SourcePipelineConfig,
-    verification_suite: CheckSuite,
     *,
     previous_verification_report: str | None = None,
-    previous_sample_path: str | None = None,
     canonical_source: str,
 ) -> SourcePipelineResult:
-    """Run one source and persist final execution counters and partial phase evidence."""
+    """Run one source and persist final execution counters and partial phase evidence.
+
+    ``previous_verification_report`` names an earlier ``verify/report.json`` whose matching
+    control trials are reused.
+    """
     telemetry = SourceTelemetry(canonical_source, output_path)
     with telemetry.record():
         return _run_source_pipeline(
@@ -733,10 +752,7 @@ def run_source_pipeline(
             context,
             source_input,
             output_path,
-            files,
             config,
-            verification_suite,
             previous_verification_report=previous_verification_report,
-            previous_sample_path=previous_sample_path,
             telemetry=telemetry,
         )

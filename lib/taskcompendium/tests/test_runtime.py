@@ -16,10 +16,9 @@ import pytest
 from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineSpec, Result
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
-from taskcompendium.datasets import nemo_actions
-from taskcompendium.datasets.direct_contracts import source_contract_package
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -38,7 +37,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.models import CheckStatus, RawRow
+from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_in_sandbox
@@ -56,7 +55,6 @@ EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 @pytest.fixture
 def shell_task():
     source = Source(dataset="mock/shell-files", revision="1", row="0", importer_revision="1")
-    package = source_contract_package("test fixture", "1", {}, ("Test overrides the grader where needed",))
     return TaskSpec(
         id="shell-0",
         source=source,
@@ -76,7 +74,7 @@ def shell_task():
         output_paths=(OUTPUT_PATH,),
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
-        grader=package.grader,
+        grader=NoGrader(reason="Test overrides the grader where needed"),
     )
 
 
@@ -379,19 +377,12 @@ async def test_environment_failure_is_recorded_without_reward(script_grading_tas
     assert rollout.detail == "Machine service unavailable"
 
 
-def test_nemo_pipeline_normalizes_untyped_source_messages_and_checks_actions():
+def test_nemo_import_accepts_untyped_source_messages_and_checks_actions():
     path = Path(__file__).parent / "fixtures/nemo/predicted-action.json"
     data = json.loads(path.read_text())
     for item in data["responses_create_params"]["input"]:
         if item.get("type") == "message" and item["role"] in {"system", "user"}:
             del item["type"]
-    source = Source(
-        dataset="fixture/nemo",
-        revision="1",
-        row="0",
-        importer_revision="1",
-    )
-    task = nemo_actions.normalize(RawRow("action-0", source, data))
-    assert isinstance(task, TaskSpec)
+    task = import_row(data, expected_sha256=canonical_sha256(data))
     assert all(check.status == CheckStatus.PASS for check in verify_task(task))
     assert task.context.events[-1].content == data["responses_create_params"]["input"][-1]["content"]

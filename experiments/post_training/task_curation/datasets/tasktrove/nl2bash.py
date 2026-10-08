@@ -1,36 +1,56 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned nl2bash source declaration."""
+"""TaskTrove natural-language-to-bash tasks, graded on the agent's captured command output.
 
-from functools import partial
+The agent runs a command in the nl2bash image and writes its combined output to the capture file. A
+checker compares the capture with the oracle command's recorded output as an order-insensitive multiset of
+normalized lines. The oracle control runs the source's ``solution/solve.sh``.
+"""
 
-from taskcompendium.datasets import executable_tasks
-from taskcompendium.datasets.source_definitions import tasktrove_files
-from taskcompendium.pipeline.execution_binding import ExecutionAdapter
-from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.convert.executable import broken_submission, solve_script, tasktrove_archive_task
+from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bash
+from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
-from experiments.post_training.task_curation.datasets.shared import executable_pipeline
-from experiments.post_training.task_curation.datasets.tasktrove.conversion import converted_row
+from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.images import TASKTROVE_NL2BASH_IMAGE
 from experiments.post_training.task_curation.pipeline import RlDataPipeline
-from experiments.post_training.tasktrove.converters.nl2bash import convert_nl2bash
+
+CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+
+NL2BASH_RUBRIC = f"""
+{ANSWERABILITY_CRITERIA}
+The public seed/setup files must recreate the command's input files. Flag unavailable tools or inputs.
+
+The hidden comparator is a normalized multiset: ordering is ignored and non-error extra lines are allowed.
+Check whether the public request requires distinctions that this comparator cannot grade.
+
+The expected output is an oracle capture, not an instruction to print that output without doing the work.
+
+Every mandatory package or side-effect deliverable needs a public specification or provided helper. An
+undefined 'sandboxes task' package is a missing-context defect even if only stdout is graded. Test a literal
+minimal answer to the public request; unstated oracle output prefixes are a grading mismatch.
+"""
 
 
-def pipeline() -> RlDataPipeline:
-    return executable_pipeline(
-        source_key="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-        name="tasktrove-nl2bash",
-        version="tasktrove-nl2bash-v1-raw-conversion-v2",
-        hf_id="open-thoughts/TaskTrove",
-        revision="02923004846e4e73862c20962f823a6d05100e7a",
-        config="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-        split="train",
-        files=tasktrove_files("DCAgent2__nl2bash-tasks-cleaned-oracle-v2"),
-        adapter=ExecutionAdapter(
-            policy=partial(executable_tasks.policy, "nl2bash"),
-            converter=partial(converted_row, converter=convert_nl2bash),
-            converter_revision="nl2bash-v2",
-            output_paths=("/output/command_capture.txt",),
-        ),
-        intended_use=IntendedUse.TRAIN,
+def convert_nl2bash_task(row: RawRow) -> NormalizedTask | ImportRejection:
+    return tasktrove_archive_task(
+        row, convert=convert_nl2bash, environment=TASKTROVE_NL2BASH_IMAGE.requirements(), output_paths=(OUTPUT_PATH,)
     )
+
+
+def pipelines() -> list[RlDataPipeline]:
+    return [
+        RlDataPipeline(
+            name="tasktrove-nl2bash",
+            source=tasktrove_source(CONFIG),
+            convert=convert_nl2bash_task,
+            version="1",
+            environment=TASKTROVE_NL2BASH_IMAGE,
+            intended_use=IntendedUse.TRAIN,
+            rubric=NL2BASH_RUBRIC,
+            controls=Controls(golden=solve_script, negative=broken_submission),
+            atlas_id=f"Task Trove:{CONFIG}",
+        )
+    ]

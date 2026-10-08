@@ -6,12 +6,12 @@ import json
 import pytest
 from finestore.cache import PersistentKvCache
 
-from taskcompendium.datasets.numeric_answers import normalize_svamp
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
 from taskcompendium.pipeline.review import BatchReviewer, DirectReviewer, valid_review_completion
 
+from .pipeline_stages import convert_svamp
 from .test_pipeline import response
 
 
@@ -65,7 +65,7 @@ class ReviewChat:
 
 
 def test_direct_review_reuses_exact_cache_across_transport_and_source_ids(tmp_path):
-    task = normalize_svamp(
+    task = convert_svamp(
         RawRow(
             "source-a",
             Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
@@ -134,7 +134,7 @@ def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
 
 @pytest.mark.parametrize("recover", [False, True])
 def test_direct_provider_failures_have_finite_neutral_retries(tmp_path, recover):
-    task = normalize_svamp(
+    task = convert_svamp(
         RawRow(
             "task",
             Source(dataset="fixture", revision="1", row="0", importer_revision="1"),

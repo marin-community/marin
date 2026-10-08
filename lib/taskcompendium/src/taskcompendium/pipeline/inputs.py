@@ -1,14 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned downloads and staged record selection owned by a recipe."""
+"""Select and decode rows from a staged source and its staged auxiliary inputs."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
+
+type StagedInputs = Mapping[str, StoragePath]
+"""Staged auxiliary input roots by name."""
 
 
 class SourceFormat(StrEnum):
@@ -22,32 +25,17 @@ class SourceFormat(StrEnum):
 
 @dataclass(frozen=True)
 class SourceFiles:
-    patterns: tuple[str, ...]
-    format: SourceFormat
-    selector: Callable[[dict[str, Any], StoragePath], bool] | None = None
-    decoder: Callable[[dict[str, Any], StoragePath], dict[str, Any]] | None = None
-    reader: Callable[[StoragePath], Iterator[dict[str, Any]]] | None = None
+    """Rows of one staged source and the provenance recorded on each task.
 
+    ``select`` and ``decode`` run on raw records before sampling, so a panel is drawn from the
+    intended rows. ``read`` replaces the format reader for files that are not one record per row.
+    Each callable also receives the staged auxiliary inputs by name.
+    """
 
-@dataclass(frozen=True)
-class HubDownload:
     dataset: str
     revision: str
     patterns: tuple[str, ...]
-    subdirectory: str = ""
-
-
-@dataclass(frozen=True)
-class UrlDownload:
-    url: str
-    filename: str
-
-
-@dataclass(frozen=True)
-class RecipeInputs:
-    files: SourceFiles
-    downloads: tuple[HubDownload | UrlDownload, ...]
-
-
-def hub_inputs(dataset: str, revision: str, files: SourceFiles) -> RecipeInputs:
-    return RecipeInputs(files, (HubDownload(dataset, revision, files.patterns),))
+    format: SourceFormat
+    select: Callable[[dict[str, Any], StagedInputs], bool] | None = None
+    decode: Callable[[dict[str, Any], StagedInputs], dict[str, Any]] | None = None
+    read: Callable[[StoragePath, StagedInputs], Iterator[dict[str, Any]]] | None = None

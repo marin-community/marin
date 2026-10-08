@@ -7,15 +7,14 @@ import hashlib
 import json
 import time
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from functools import partial
-from math import ceil
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 import msgspec
@@ -28,24 +27,20 @@ from zephyr.dataset import Dataset
 from zephyr.writers import DEFAULT_TARGET_BUFFER_BYTES, write_jsonl_file
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.filtering import task_decision
-from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.pipeline.models import (
     CheckStatus,
-    DatasetRecipe,
     Decision,
     Disposition,
     FilterPolicy,
-    NormalizationChange,
     QualityBasis,
     ReviewRecord,
     ReviewRubric,
+    SourceRecipe,
     TaskAudit,
 )
-from taskcompendium.pipeline.recorded_review import RecordedReviewer
 from taskcompendium.pipeline.review import (
     BASE_RUBRIC,
     DEFAULT_PROMPT_CHARACTERS,
@@ -57,7 +52,6 @@ from taskcompendium.pipeline.review import (
     Reviewer,
 )
 from taskcompendium.pipeline.review_transport import DEFAULT_MAX_BATCH_BYTES
-from taskcompendium.pipeline.rewriting import BatchRewriter
 from taskcompendium.pipeline.source_quality import (
     QualitySampleCoverage,
     SourceQualityPolicy,
@@ -67,19 +61,16 @@ from taskcompendium.pipeline.source_quality import (
     quality_exclusion,
     sample_quality_rows,
     source_quality_report,
+    unreviewed_quality_report,
 )
-from taskcompendium.pipeline.sources import staged_file_rows, staged_files
+from taskcompendium.pipeline.sources import staged_file_rows, staged_files, staged_inputs
 from taskcompendium.pipeline.transforms import (
-    canonical_merge_record,
-    canonical_representative_order,
-    canonicalize_group,
     deduplicate_group,
     filter_row,
     is_accepted,
     normalize_row,
     public_group_key,
     review_record,
-    selected_view,
     source_locator_order,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -89,7 +80,6 @@ AUDIT_INPUT_PATTERN = "audit/*.parquet"
 AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 REVIEW_INPUT_PATTERN = "review-inputs/batch-*.jsonl.gz"
 ACCEPTED_SHARD_TEMPLATE = "accepted/part-{shard:05d}.parquet"
-OUTPUT_SHARD_ROWS = 100000
 
 
 class ReviewTransport(StrEnum):
@@ -135,47 +125,6 @@ def _read_json(path: StoragePath) -> Any:
         return json.load(stream)
 
 
-def canonicalize_sources(
-    merged_path: str, output_path: str, max_workers: int, worker_resources: ResourceConfig | None = None
-) -> dict[str, Any]:
-    """Deduplicate a merged audit, exclude evaluation overlap, and export curated views."""
-    source, output = StoragePath(merged_path), StoragePath(output_path)
-    expected = _read_json(source / "manifest.json")["input_rows"]
-    dataset = (
-        Dataset.from_files(str(source / "data/*.parquet"))
-        .load_parquet()
-        .map(canonical_merge_record)
-        .group_by(
-            public_group_key,
-            reducer=canonicalize_group,
-            sort_by=canonical_representative_order,
-            num_output_shards=max(1, ceil(expected / OUTPUT_SHARD_ROWS)),
-        )
-        .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA)
-    )
-    with ZephyrContext(max_workers=max_workers, resources=worker_resources, name="canonical-task-merge") as context:
-        context.execute(dataset)
-        for view in ("accepted", "train", "eval", "executable"):
-            context.execute(
-                Dataset.from_files(str(output / AUDIT_INPUT_PATTERN))
-                .load_parquet()
-                .filter(partial(selected_view, view=view))
-                .write_parquet(str(output / view / "part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
-            )
-        counts = manifest_counts(output, context)
-    manifest = {
-        **counts,
-        "merged_source": str(source),
-        "deduplication_scope": "cross-source exact public and verifier semantics",
-        "representative_policy": "evaluation first, then source dataset, revision, row and task ID",
-        "conflict_policy": "reject competing accepted verifier contracts; preserve prior rejections",
-    }
-    if manifest["input_rows"] != expected:
-        raise ValueError("Canonical merge lost source audit rows")
-    _write_json(output / "manifest.json", manifest)
-    return manifest
-
-
 def persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
     """Copy one attempt's evidence tree to its unique durable path."""
     copy(str(local_path), str(remote_path), recursive=True)
@@ -200,32 +149,18 @@ def _review_input_window(
     return count < max_records and next_size <= max_bytes, (count + 1, next_size)
 
 
-def _check_prepared_audit(record: dict[str, Any], recipe: DatasetRecipe, output: StoragePath) -> dict[str, Any]:
+def _check_prepared_audit(record: dict[str, Any]) -> dict[str, Any]:
     audit = TaskAudit.model_validate(record)
     if audit.decision is not None or audit.normalized is None:
         return record
     metrics = counters.current_stage()
     started = time.monotonic()
     try:
-        if recipe.policy.check_suite is None:
-            checks, rollouts = verify_task(audit.normalized), ()
-        else:
-            report = recipe.policy.check_suite.run(audit.normalized)
-            checks, rollouts = report.checks, report.rollouts
+        checks = verify_task(audit.normalized)
     finally:
         metrics.update_counter("prepare/check_seconds", time.monotonic() - started)
     for check in checks:
         metrics.update_counter(f"prepare/check/{check.check}/{check.status.value}", 1)
-    if rollouts:
-        task_key = hashlib.sha256(audit.task_id.encode()).hexdigest()
-        _write_json(
-            output / "checks" / task_key / f"attempt-{uuid4().hex}.json",
-            {
-                "task_id": audit.task_id,
-                "checks": [check.model_dump(mode="json") for check in checks],
-                "rollouts": [rollout.model_dump(mode="json") for rollout in rollouts],
-            },
-        )
     failed = [f"check:{check.check}" for check in checks if check.status == CheckStatus.FAIL]
     return audit.model_copy(
         update={
@@ -238,7 +173,7 @@ def _check_prepared_audit(record: dict[str, Any], recipe: DatasetRecipe, output:
 
 
 def _audit_batch(
-    records: list[dict[str, Any]], recipe: DatasetRecipe, reviewer: Reviewer, output_path: StoragePath
+    records: list[dict[str, Any]], rubric: ReviewRubric, reviewer: Reviewer, output_path: StoragePath
 ) -> Iterator[dict[str, Any]]:
     audits = [TaskAudit.model_validate(record) for record in records]
     candidates = [audit.normalized for audit in audits if audit.decision is None and audit.normalized is not None]
@@ -251,7 +186,7 @@ def _audit_batch(
         local = Path(directory)
         try:
             reviews_path = local / "reviews.json"
-            reviews = reviewer.review(candidates, recipe.policy.rubric, local / "review")
+            reviews = reviewer.review(candidates, rubric, local / "review")
             reviews_path.write_text(json.dumps([review.model_dump(mode="json") for review in reviews]))
             expected = {task.id for task in candidates}
             if len(reviews) != len(candidates) or {review.task_id for review in reviews} != expected:
@@ -277,7 +212,7 @@ def _audit_batch(
 
 
 def _count_manifest_rows(rows: Iterator[dict[str, Any]]) -> dict[str, Any]:
-    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0, rewritten_rows=0)
+    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0)
     dispositions: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
     quality_bases: Counter[str] = Counter()
@@ -285,7 +220,6 @@ def _count_manifest_rows(rows: Iterator[dict[str, Any]]) -> dict[str, Any]:
         counts["input_rows"] += 1
         counts["normalized_rows"] += row["normalization_reason"] is None
         counts["reviewed_rows"] += row["review_status"] == "reviewed"
-        counts["rewritten_rows"] += row["parent_id"] is not None and row["task_id"] != row["parent_id"]
         if row["filter_status"] is not None:
             dispositions[row["filter_status"]] += 1
         reasons.update(row["filter_reasons"])
@@ -295,14 +229,12 @@ def _count_manifest_rows(rows: Iterator[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _combine_manifest_counts(partials: Iterator[dict[str, Any]]) -> dict[str, Any]:
-    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0, rewritten_rows=0)
+    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0)
     dispositions: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
     quality_bases: Counter[str] = Counter()
     for part in partials:
-        counts.update(
-            {name: part[name] for name in ("input_rows", "normalized_rows", "reviewed_rows", "rewritten_rows")}
-        )
+        counts.update({name: part[name] for name in ("input_rows", "normalized_rows", "reviewed_rows")})
         dispositions.update(part["dispositions"])
         reasons.update(part["reasons"])
         quality_bases.update(part["quality_bases"])
@@ -318,7 +250,6 @@ def manifest_counts(
         .load_parquet(
             columns=[
                 "task_id",
-                "parent_id",
                 "normalization_reason",
                 "review_status",
                 "quality_basis",
@@ -337,18 +268,17 @@ def _executing_reviewer(execution: AuditExecution, review: ReviewConfig) -> Revi
         raise ValueError("Audit execution requires a reviewer transport")
     if execution.max_workers < 1 or execution.review_batch_size < 1 or execution.review_input_bytes < 1:
         raise ValueError("Audit worker and batch counts must be positive")
-    transport_reviewer = reviewer.fallback if isinstance(reviewer, RecordedReviewer) else reviewer
-    if isinstance(transport_reviewer, (BatchReviewer, DirectReviewer)):
+    if isinstance(reviewer, (BatchReviewer, DirectReviewer)):
         actual = ReviewConfig(
-            transport_reviewer.model,
-            transport_reviewer.model_revision,
-            transport_reviewer.max_prompt_characters,
-            transport_reviewer.max_tokens,
-            transport_reviewer.max_attempts,
-            transport_reviewer.retry_max_tokens,
-            transport_reviewer.retry_max_prompt_characters,
-            transport=ReviewTransport(transport_reviewer.identity["transport"]),
-            max_batch_bytes=transport_reviewer.max_batch_bytes,
+            reviewer.model,
+            reviewer.model_revision,
+            reviewer.max_prompt_characters,
+            reviewer.max_tokens,
+            reviewer.max_attempts,
+            reviewer.retry_max_tokens,
+            reviewer.retry_max_prompt_characters,
+            transport=ReviewTransport(reviewer.identity["transport"]),
+            max_batch_bytes=reviewer.max_batch_bytes,
         )
         if actual != review:
             raise ValueError("Review configuration differs from the executing reviewer")
@@ -362,8 +292,7 @@ def _prepared_records(prepared: StoragePath) -> Dataset:
 def prepare_source(
     source_path: str,
     output_path: str,
-    recipe: DatasetRecipe,
-    files: SourceFiles,
+    recipe: SourceRecipe,
     limit: int | None,
     execution: AuditExecution,
     *,
@@ -378,10 +307,10 @@ def prepare_source(
     source = StoragePath(source_path)
     output = StoragePath(output_path)
     if raw_rows is None:
-        relative_files = staged_files(str(source), files)
+        relative_files = staged_files(str(source), recipe.source)
         selected = (
             Dataset.from_list(list(relative_files))
-            .flat_map(partial(staged_file_rows, str(source), spec=files))
+            .flat_map(partial(staged_file_rows, str(source), spec=recipe.source, inputs=staged_inputs(recipe.inputs)))
             .reshard(1)
         )
     else:
@@ -401,7 +330,7 @@ def prepare_source(
         normalized.group_by(
             public_group_key, reducer=deduplicate_group, sort_by=source_locator_order, num_output_shards=AUDIT_SHARDS
         )
-        .map(partial(_check_prepared_audit, recipe=recipe, output=output))
+        .map(_check_prepared_audit)
         # Persist inside each dedup reducer: reference-only resharding would
         # first collect whole audits into count-only pickle chunks. An indivisible
         # oversized audit remains lossless in its own review-input file.
@@ -447,7 +376,7 @@ def prepare_source(
 def assess_source_quality(
     prepared_path: str,
     output_path: str,
-    recipe: DatasetRecipe,
+    recipe: SourceRecipe,
     review: ReviewConfig,
     policy: SourceQualityPolicy,
     execution: AuditExecution,
@@ -457,6 +386,9 @@ def assess_source_quality(
     coverage: QualitySampleCoverage | None = None,
 ) -> SourceQualityReport:
     """Review a fixed panel of eligible tasks and persist its source-level decision."""
+    rubric = recipe.rubric
+    if rubric is None:
+        raise ValueError("Quality review requires a rubric")
     reviewer = _executing_reviewer(execution, review)
     prepared, output = StoragePath(prepared_path), StoragePath(output_path)
     with (
@@ -495,7 +427,7 @@ def assess_source_quality(
             Dataset.from_files(str(output / REVIEW_INPUT_PATTERN), empty_glob_ok=not ids)
             .load_jsonl()
             .map(lambda batch: batch["records"])
-            .flat_map(partial(_audit_batch, recipe=recipe, reviewer=reviewer, output_path=output))
+            .flat_map(partial(_audit_batch, rubric=rubric, reviewer=reviewer, output_path=output))
             .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA),
             map_task_resources=execution.review_task_resources,
             telemetry=telemetry,
@@ -520,9 +452,43 @@ def assess_source_quality(
             "source_quality": report.model_dump(mode="json"),
             "review": asdict(review),
             "reviewer": reviewer.identity,
-            "rubric": asdict(recipe.policy.rubric),
+            "rubric": asdict(rubric),
             "prepared_source": str(prepared),
         },
+    )
+    return report
+
+
+def skip_source_review(
+    prepared_path: str,
+    output_path: str,
+    policy: SourceQualityPolicy,
+    execution: AuditExecution,
+    *,
+    coverage: QualitySampleCoverage,
+    telemetry: PhaseTelemetry | None = None,
+    context: ZephyrContext | None = None,
+) -> SourceQualityReport:
+    """Gate a source that declares no rubric on its conversion and check failures alone."""
+    prepared, output = StoragePath(prepared_path), StoragePath(output_path)
+    with (
+        nullcontext(context)
+        if context is not None
+        else ZephyrContext(max_workers=execution.max_workers, resources=execution.worker_resources, name="unreviewed")
+    ) as context:
+        sample = execute_phase(
+            context,
+            _prepared_records(prepared).reduce(
+                partial(sample_quality_rows, policy=policy), partial(merge_quality_samples, policy=policy)
+            ),
+            telemetry=telemetry,
+            operation="select",
+        ).results[0]
+    report = unreviewed_quality_report(sample, policy, coverage=coverage)
+    _write_json(output / "report.json", report.model_dump(mode="json"))
+    _write_json(
+        output / "manifest.json",
+        {"source_quality": report.model_dump(mode="json"), "review": None, "prepared_source": str(prepared)},
     )
     return report
 
@@ -533,10 +499,9 @@ def _complete_audit_batch(
     sampled: dict[str, ReviewRecord],
     report: SourceQualityReport | None,
     quality_path: str | None,
-    recipe: DatasetRecipe,
-    reviewer: Reviewer,
+    rubric: ReviewRubric | None,
+    reviewer: Reviewer | None,
     output: StoragePath,
-    unreviewed_reason: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     remainder = []
     for record in records:
@@ -569,23 +534,13 @@ def _complete_audit_batch(
         if quality_exclusion(audit) is not None:
             yield audit_columns(audit)
             continue
-        if unreviewed_reason is not None:
-            yield audit_columns(
-                audit.model_copy(
-                    update={
-                        "decision": Decision(
-                            task_id=audit.task_id, disposition=Disposition.DEFER, reasons=[unreviewed_reason]
-                        )
-                    }
-                )
-            )
-            continue
         if report is None or report.status == SourceQualityStatus.FULL_REVIEW:
             remainder.append(record)
             continue
         if report.status == SourceQualityStatus.CENSUS:
             raise ValueError("A census quality report omitted an eligible task")
         disposition, basis = {
+            SourceQualityStatus.UNREVIEWED: (Disposition.KEEP, QualityBasis.UNREVIEWED),
             SourceQualityStatus.TRUST: (Disposition.KEEP, QualityBasis.INFERRED_FROM_SOURCE),
             SourceQualityStatus.REJECT: (Disposition.REJECT, QualityBasis.SOURCE_REJECTED),
             SourceQualityStatus.INCOMPLETE: (Disposition.DEFER, QualityBasis.SOURCE_INCOMPLETE),
@@ -601,24 +556,31 @@ def _complete_audit_batch(
                 }
             )
         )
-    yield from _audit_batch(remainder, recipe, reviewer, output)
+    if not remainder:
+        return
+    if rubric is None or reviewer is None:
+        raise ValueError("Reviewing remaining tasks requires a rubric and a reviewer")
+    yield from _audit_batch(remainder, rubric, reviewer, output)
 
 
 def audit_prepared_source(
     prepared_path: str,
     quality_path: str | None,
     output_path: str,
-    recipe: DatasetRecipe,
-    review: ReviewConfig,
+    recipe: SourceRecipe,
+    review: ReviewConfig | None,
     execution: AuditExecution,
     *,
     telemetry: PhaseTelemetry | None = None,
     context: ZephyrContext | None = None,
-    sampled_analysis_path: str | None = None,
-    unreviewed_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Reuse sampled reviews and review or classify the remaining prepared records."""
-    reviewer = _executing_reviewer(execution, review)
+    """Reuse sampled reviews and review or classify the remaining prepared records.
+
+    ``review=None`` requires a source without a rubric, whose eligible rows are kept unreviewed.
+    """
+    if (review is None) != (recipe.rubric is None):
+        raise ValueError("A review configuration applies exactly to sources with a rubric")
+    reviewer = _executing_reviewer(execution, review) if review is not None else None
     prepared, output = StoragePath(prepared_path), StoragePath(output_path)
     report = (
         SourceQualityReport.model_validate(_read_json(StoragePath(quality_path) / "report.json"))
@@ -627,7 +589,9 @@ def audit_prepared_source(
     )
     if quality_path:
         quality_manifest = _read_json(StoragePath(quality_path) / "manifest.json")
-        if StoragePath(quality_manifest["prepared_source"]) != prepared or quality_manifest["review"] != asdict(review):
+        if StoragePath(quality_manifest["prepared_source"]) != prepared or quality_manifest["review"] != (
+            asdict(review) if review is not None else None
+        ):
             raise ValueError("Source quality evidence belongs to different prepared data or review configuration")
     with (
         nullcontext(context)
@@ -639,16 +603,10 @@ def audit_prepared_source(
         sampled = {}
         if quality_path:
             assert report is not None
+            sampled_ids = report.population.task_ids if review is not None else ()
             review_rows = Dataset.from_files(
-                (
-                    str(StoragePath(sampled_analysis_path) / "part-*.parquet")
-                    if sampled_analysis_path is not None
-                    else str(StoragePath(quality_path) / AUDIT_INPUT_PATTERN)
-                ),
-                empty_glob_ok=not report.population.task_ids,
+                str(StoragePath(quality_path) / AUDIT_INPUT_PATTERN), empty_glob_ok=not sampled_ids
             ).load_parquet()
-            if sampled_analysis_path is not None:
-                review_rows = review_rows.filter(lambda row: row["task_id"] in report.population.task_ids)
             reviews = execute_phase(
                 context,
                 review_rows.map(review_record),
@@ -656,7 +614,7 @@ def audit_prepared_source(
                 operation="read_sample_reviews",
             ).results
             sampled = {record.task_id: record for record in reviews}
-            if len(sampled) != len(reviews) or set(sampled) != set(report.population.task_ids):
+            if len(sampled) != len(reviews) or set(sampled) != set(sampled_ids):
                 raise ValueError("Saved quality reviews do not match the declared sample")
         execute_phase(
             context,
@@ -669,10 +627,9 @@ def audit_prepared_source(
                     sampled=sampled,
                     report=report,
                     quality_path=quality_path,
-                    recipe=recipe,
+                    rubric=recipe.rubric,
                     reviewer=reviewer,
                     output=output,
-                    unreviewed_reason=unreviewed_reason,
                 )
             )
             .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA, skip_existing=True),
@@ -687,28 +644,14 @@ def audit_prepared_source(
         **counts,
         "recipe": recipe.name,
         "recipe_version": recipe.version,
-        "review": asdict(review),
-        "reviewer": reviewer.identity,
-        "rubric": asdict(recipe.policy.rubric),
+        "review": asdict(review) if review is not None else None,
+        "reviewer": reviewer.identity if reviewer is not None else None,
+        "rubric": asdict(recipe.rubric) if recipe.rubric is not None else None,
         "source_quality": report.model_dump(mode="json") if report else None,
         "prepared_source": str(prepared),
     }
     _write_json(output / "manifest.json", manifest)
     return manifest
-
-
-def audit_source(
-    source_path: str,
-    output_path: str,
-    recipe: DatasetRecipe,
-    review: ReviewConfig,
-    execution: AuditExecution,
-    files: SourceFiles,
-    limit: int | None,
-) -> dict[str, Any]:
-    """Prepare and fully review a source without source-level quality extrapolation."""
-    prepare_source(source_path, output_path, recipe, files, limit, execution)
-    return audit_prepared_source(output_path, None, output_path, recipe, review, execution)
 
 
 def filter_source(
@@ -751,215 +694,5 @@ def filter_source(
         raise ValueError("Filtering lost rows from the complete audit ledger")
     if sum(manifest["dispositions"].values()) != manifest.get("input_rows", 0):
         raise ValueError("Every final row must have a keep, reject, or defer decision")
-    _write_json(output / "manifest.json", manifest)
-    return manifest
-
-
-def concat_sources(
-    input_paths: Sequence[str],
-    output_path: str,
-    view: Literal["audit", "accepted"],
-    max_workers: int,
-    worker_resources: ResourceConfig | None = None,
-) -> dict[str, Any]:
-    """Stream one selected view from per-source artifacts into a merged dataset."""
-    if not input_paths:
-        raise ValueError("At least one source is required")
-    files = []
-    expected = 0
-    for path in input_paths:
-        source = StoragePath(path)
-        manifest = _read_json(source / "manifest.json")
-        expected += manifest["input_rows"] if view == "audit" else manifest["dispositions"].get("keep", 0)
-        files.extend(str(file) for file in sorted((source / view / "*.parquet").glob(), key=str))
-    output = StoragePath(output_path)
-    dataset = (
-        Dataset.from_list(files)
-        .load_parquet()
-        .reshard(max(1, ceil(expected / OUTPUT_SHARD_ROWS)))
-        .write_parquet(str(output / "data/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
-    )
-    with ZephyrContext(max_workers=max_workers, resources=worker_resources, name=f"concat-{view}") as context:
-        context.execute(dataset)
-        actual = context.execute(
-            Dataset.from_files(str(output / "data/*.parquet")).load_parquet(columns=["task_id"]).count()
-        ).results[0]
-    if actual != expected:
-        raise ValueError(f"Merged output contains {actual} rows; source manifests declare {expected}")
-    manifest = {
-        "input_sources": list(input_paths),
-        "view": view,
-        "input_rows": expected,
-        "deduplication_scope": "within each source",
-    }
-    _write_json(output / "manifest.json", manifest)
-    return manifest
-
-
-def _selected_rewrite_row(row: dict[str, Any], selected: frozenset[str]) -> bool:
-    return row["task_id"] in selected
-
-
-def _rewrite_window(
-    rows: list[dict[str, Any]],
-    *,
-    selected: frozenset[str],
-    recipe: DatasetRecipe,
-    policy: FilterPolicy,
-    rewrite_rubric: ReviewRubric,
-    rewriter: BatchRewriter,
-    reviewer: Reviewer,
-    output: StoragePath,
-) -> Iterator[dict[str, Any]]:
-    selected_rows = [row for row in rows if row["task_id"] in selected]
-    if not selected_rows:
-        yield from rows
-        return
-    originals = {row["task_id"]: TaskSpec.model_validate_json(row["task_json"]) for row in selected_rows}
-    evidence_id = canonical_sha256({"task_ids": sorted(originals)})
-    evidence = output / "evidence" / evidence_id / f"attempt-{uuid4().hex}"
-    with TemporaryDirectory(prefix="task-curation-rewrite-") as directory:
-        work = Path(directory)
-        try:
-            result = rewriter.rewrite(list(originals.values()), rewrite_rubric, work)
-            proposals = {record.task_id: record for record in result.records}
-            lineage = {record.parent_id: record for record in result.lineage}
-            candidates_by_id = {task.id: task for task in result.candidates}
-            candidates = {parent: candidates_by_id[item.task_id] for parent, item in lineage.items()}
-            if len(result.records) != len(originals) or set(proposals) != set(originals):
-                raise ValueError("Cleanup records do not account for every selected task")
-            checks = {}
-            for parent, candidate in candidates.items():
-                checks[parent] = (
-                    verify_task(candidate)
-                    if recipe.policy.check_suite is None
-                    else recipe.policy.check_suite.run(candidate).checks
-                )
-            reviews = (
-                reviewer.review(
-                    list(candidates.values()),
-                    recipe.policy.rubric,
-                    work / "candidate-review",
-                    originals={candidate.id: originals[parent] for parent, candidate in candidates.items()},
-                )
-                if candidates
-                else []
-            )
-            reviews_by_id = {record.task_id: record for record in reviews}
-            if len(reviews_by_id) != len(reviews) or set(reviews_by_id) != {task.id for task in candidates.values()}:
-                raise ValueError("Candidate reviews do not account for every rewritten task")
-            for row in rows:
-                parent = row["task_id"]
-                proposal = proposals.get(parent)
-                if proposal is None:
-                    yield row
-                    continue
-                candidate = candidates.get(parent)
-                if candidate is None:
-                    yield {
-                        **row,
-                        "original_task_json": row["task_json"],
-                        "parent_id": parent,
-                        "cleanup_status": proposal.status.value,
-                        "cleanup_action": proposal.proposal.action.value if proposal.proposal else None,
-                        "cleanup_reason": proposal.proposal.reason if proposal.proposal else None,
-                        "cleanup_edits": (
-                            [edit.model_dump(mode="json") for edit in proposal.proposal.edits]
-                            if proposal.proposal
-                            else []
-                        ),
-                        "cleanup_detail": proposal.detail,
-                    }
-                    continue
-                original = originals[parent]
-                candidate_checks = checks[parent]
-                review = reviews_by_id[candidate.id]
-                audit = TaskAudit(
-                    task_id=candidate.id,
-                    source=original.source,
-                    raw=json.loads(row["raw_json"]),
-                    original=original,
-                    normalized=candidate,
-                    normalization_rejection=None,
-                    cleanup=proposal,
-                    lineage=lineage[parent].model_copy(update={"original_audit": row}),
-                    checks=list(candidate_checks),
-                    review=review,
-                    decision=task_decision(candidate.id, candidate_checks, review, policy),
-                    intended_use=recipe.intended_use,
-                    normalization_changes=tuple(
-                        NormalizationChange.model_validate(change) for change in row["normalization_changes"]
-                    ),
-                )
-                yield audit_columns(audit)
-        finally:
-            persist_evidence(work, evidence)
-
-
-def rewrite_audit_source(
-    source_path: str,
-    output_path: str,
-    recipe: DatasetRecipe,
-    policy: FilterPolicy,
-    rewrite_rubric: ReviewRubric,
-    rewriter: BatchRewriter,
-    reviewer: Reviewer,
-    selected_task_ids: tuple[str, ...],
-    review_batch_size: int,
-    max_workers: int,
-    worker_resources: ResourceConfig | None = None,
-) -> dict[str, Any]:
-    """Rewrite selected audit rows in resumable Zephyr windows and export final decisions."""
-    if review_batch_size < 1 or max_workers < 1:
-        raise ValueError("Rewrite worker and batch counts must be positive")
-    selected = frozenset(selected_task_ids)
-    if len(selected) != len(selected_task_ids):
-        raise ValueError("Selected rewrite task IDs must be unique")
-    source, output = StoragePath(source_path), StoragePath(output_path)
-    input_pattern = str(source / AUDIT_INPUT_PATTERN)
-    membership = (
-        Dataset.from_files(input_pattern)
-        .load_parquet(columns=["task_id", "task_json"])
-        .filter(partial(_selected_rewrite_row, selected=selected))
-    )
-    with ZephyrContext(max_workers=max_workers, resources=worker_resources, name="rewrite-selection") as context:
-        selected_rows = context.execute(membership).results
-    if len(selected_rows) != len(selected) or {row["task_id"] for row in selected_rows} != selected:
-        raise ValueError("Selected rewrite tasks must all occur exactly once in the source audit")
-    for row in selected_rows:
-        if row["task_json"] is None:
-            raise ValueError(f"Selected task {row['task_id']} has no normalized task")
-    dataset = (
-        Dataset.from_files(input_pattern)
-        .load_parquet()
-        .window(review_batch_size)
-        .flat_map(
-            partial(
-                _rewrite_window,
-                selected=selected,
-                recipe=recipe,
-                policy=policy,
-                rewrite_rubric=rewrite_rubric,
-                rewriter=rewriter,
-                reviewer=reviewer,
-                output=output,
-            )
-        )
-        .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA, skip_existing=True)
-    )
-    with ZephyrContext(max_workers=max_workers, resources=worker_resources, name=f"rewrite-{recipe.name}") as context:
-        context.execute(dataset)
-        context.execute(
-            Dataset.from_files(str(output / AUDIT_INPUT_PATTERN))
-            .load_parquet()
-            .filter(is_accepted)
-            .write_parquet(str(output / ACCEPTED_SHARD_TEMPLATE), schema=TASK_SCHEMA)
-        )
-        counts = manifest_counts(output, context)
-    manifest: dict[str, Any] = {**counts, "selected_rows": len(selected)}
-    if manifest["input_rows"] != _read_json(source / "manifest.json")["input_rows"]:
-        raise ValueError("Rewriting lost rows from the complete audit ledger")
-    if sum(manifest["dispositions"].values()) != manifest["input_rows"]:
-        raise ValueError("Every rewritten audit row must retain a final decision")
     _write_json(output / "manifest.json", manifest)
     return manifest

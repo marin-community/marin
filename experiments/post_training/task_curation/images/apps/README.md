@@ -1,5 +1,5 @@
 # APPS grader image
 
-The [Dockerfile](Dockerfile) pins Python 3.10 and the dependencies needed by the original APPS `testing_util.py`, then downloads that evaluator from a pinned upstream commit and verifies its hash. The curation [code binding](../../datasets/README.md) supplies task cases and an invocation adapter; candidate execution and scoring remain in the installed source evaluator.
+The [Dockerfile](Dockerfile) pins Python 3.10 and the dependencies needed by the original APPS `testing_util.py`, then downloads that evaluator from a pinned upstream commit and verifies its hash. The [SkyRL code declarations](../../datasets/README.md) supply each task's test cases and a runner script; candidate execution and scoring stay in the installed evaluator.
 
-Build and image-selection instructions are in the [image overview](../README.md).
+See the [image overview](../README.md).

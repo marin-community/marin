@@ -1,24 +1,74 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise directory evidence through real filesystem reads and private grading upload."""
+"""Exercise directory evidence through real filesystem reads and grader upload."""
 
 import asyncio
-from dataclasses import dataclass
+import io
+import json
+import tarfile
+from dataclasses import dataclass, field
 
 import pytest
 from shellbox.machine import Backend, DockerImage, ExitReason, MachineSpec, Result, UnsupportedMachineSpec
+from verifyit.spec import StdioSpec
 
-from taskcompendium.models import GradingAttempt, OutputDirectory, TaskSpec, VerifyitGrader
+from taskcompendium.convert.environment import grading_environment
+from taskcompendium.convert.executable import SOLUTION_PATHS, workspace_task
+from taskcompendium.models import GradingAttempt, OutputDirectory, Source, TaskSpec, VerifyitGrader
+from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellEnvironment, ShellFactory
 
-from . import test_executable_ingestion
-from .test_executable_ingestion import GradingMachines
-from .test_runtime import FileMachine, FileMachines, finished
+from .test_runtime import EXITED, FileMachine, FileMachines, finished
 
-executable_row = test_executable_ingestion.executable_row
-executable_task = test_executable_ingestion.executable_task
+IMAGE = "test@sha256:" + "a" * 64
+
+
+@pytest.fixture
+def executable_task():
+    row = RawRow("program-1", Source(dataset="test/program", revision="1", row="1", importer_revision="1"), {})
+    return workspace_task(
+        row,
+        instruction="Read two integers and print their sum in /app/solution.py.",
+        spec=StdioSpec(command="python3 /app/solution.py"),
+        environment=grading_environment(IMAGE, (Backend.DOCKER,)),
+        output_paths=SOLUTION_PATHS,
+        verifier=(inline_resource("cases/input_1.txt", b"3 4\n"), inline_resource("cases/output_1.txt", b"7\n")),
+        worker=(inline_resource("setup_files/readme.txt", b"Public setup"),),
+    )
+
+
+@dataclass
+class GradingMachine(FileMachine):
+    """A grader machine that unpacks the staged archive and writes a fixed verdict."""
+
+    async def run(self, command):
+        if command.argv[0] == "tar":
+            with tarfile.open(fileobj=io.BytesIO(self.files[command.argv[2]])) as archive:
+                for member in archive.getmembers():
+                    stream = archive.extractfile(member)
+                    assert stream is not None
+                    self.files["/" + member.name] = stream.read()
+            return EXITED
+        if command.argv[0] != "python3":
+            return await super().run(command)
+        self.files["/logs/verifier/verdict.json"] = json.dumps(
+            {"status": "scored", "reward": 0.0, "detail": {}}
+        ).encode()
+        return EXITED
+
+
+@dataclass
+class GradingMachines:
+    backend = Backend.DOCKER
+    machines: list[GradingMachine] = field(default_factory=list)
+
+    async def create(self, spec):
+        machine = GradingMachine()
+        self.machines.append(machine)
+        return machine
 
 
 @dataclass
@@ -99,7 +149,7 @@ async def test_directory_over_budget_never_returns_partial_evidence(directory_ta
     environment = ShellEnvironment(DirectoryMachine(), (), 10, 1024, (selection,))
     with pytest.raises(RuntimeError, match="Directory capture unavailable"):
         await environment.evidence()
-    # Oversized captured evidence is also rejected before starting a private
+    # Oversized captured evidence is also rejected before starting a
     # grader, even when supplied by a caller other than the shell runtime.
     machines = GradingMachines()
     task = directory_task.model_copy(update={"output_directories": (selection,)})
@@ -112,7 +162,7 @@ async def test_directory_over_budget_never_returns_partial_evidence(directory_ta
 
 
 @pytest.mark.parametrize("root", ["/tests", "/logs", "/solution", "/unrelated"])
-async def test_directory_private_or_outside_root_rejected_before_capture_and_upload(executable_task, root):
+async def test_directory_grader_mount_or_outside_root_rejected_before_capture_and_upload(executable_task, root):
     task = executable_task.model_copy(
         update={"output_directories": (OutputDirectory(root=root, patterns=("*.yml",), max_files=2, max_bytes=100),)}
     )
@@ -126,7 +176,7 @@ async def test_directory_private_or_outside_root_rejected_before_capture_and_upl
     assert not machines.machines
 
 
-async def test_directory_traversal_candidate_cannot_overwrite_private_grader(directory_task, tmp_path):
+async def test_directory_traversal_candidate_cannot_overwrite_grader_files(directory_task, tmp_path):
     machines = GradingMachines()
     files = {str(tmp_path) + "/../tests/reference.yml": b"tampered"}
     with pytest.raises(ValueError, match="normalized"):

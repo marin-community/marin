@@ -11,7 +11,7 @@ plus reusable ingestion procedures. Source declarations and ArtifactSteps live i
 | [submission.py](submission.py) | Answer-format instructions, compatibility checks and model-visible requests |
 | [grading.py](grading.py) | In-process verifyit grading and verdict normalization |
 | [grader.py](grader.py) | Grader packages: a grader with its verifier resources |
-| [datasets/](datasets/README.md) | Dataset-family conversion policies and review rubrics |
+| [convert/](convert/) | Shared conversion techniques: answer tasks, TaskTrove archives, image-installed source scorers, executable tasks |
 | [importers/](importers/README.md) | Input format decoding and provenance |
 | [pipeline/](pipeline/README.md) | Sampling, review, filtering, source gates and sidecars |
 | [runtime/](runtime/README.md) | Acquired evidence, workspace capture and grading in a fresh Shellbox machine |

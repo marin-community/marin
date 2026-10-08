@@ -5,38 +5,34 @@
 
 import csv
 import json
-from collections.abc import Callable, Iterator
-from dataclasses import asdict, is_dataclass
-from typing import Any, cast
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import load_jsonl, load_parquet
 
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
-
-
-def _callable_identity(fn: Callable[..., Any] | None) -> dict[str, Any] | None:
-    if fn is None:
-        return None
-    configured = is_dataclass(fn) and not isinstance(fn, type)
-    target = type(fn) if configured else fn
-    identity: dict[str, Any] = {"module": target.__module__, "name": target.__qualname__}
-    if configured:
-        identity["parameters"] = asdict(cast(Any, fn))
-    return identity
+from taskcompendium.pipeline.fingerprints import callable_identity
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, StagedInputs
 
 
 def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
     """Stable artifact identity for a staged reader and its selection rules."""
     return {
-        "revision": "1",
+        "revision": "2",
+        "dataset": spec.dataset,
+        "source_revision": spec.revision,
         "patterns": spec.patterns,
         "format": spec.format.value,
-        "selector": _callable_identity(spec.selector),
-        "decoder": _callable_identity(spec.decoder),
-        "reader": _callable_identity(spec.reader),
+        "select": callable_identity(spec.select) if spec.select is not None else None,
+        "decode": callable_identity(spec.decode) if spec.decode is not None else None,
+        "read": callable_identity(spec.read) if spec.read is not None else None,
     }
+
+
+def staged_inputs(paths: Mapping[str, str]) -> StagedInputs:
+    """Resolve staged auxiliary input paths for the source callables."""
+    return {name: StoragePath(path) for name, path in paths.items()}
 
 
 def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
@@ -74,28 +70,29 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
         raise ValueError(f"Unsupported staged source format: {source_format}")
 
 
-def staged_raw_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterator[dict[str, Any]]:
+def staged_raw_file_rows(
+    path: str, relative_file: str, spec: SourceFiles, inputs: StagedInputs
+) -> Iterator[dict[str, Any]]:
     """Yield selected source rows before decoding with their original stable locators."""
     if relative_file.startswith("/") or ".." in relative_file.split("/"):
         raise ValueError(f"Source file must be relative to its staged root: {relative_file}")
-    root = StoragePath(path)
-    file = root / relative_file
-    records = spec.reader(file) if spec.reader is not None else _decoded_rows(file, spec.format)
+    file = StoragePath(path) / relative_file
+    records = spec.read(file, inputs) if spec.read is not None else _decoded_rows(file, spec.format)
     for index, row in enumerate(records):
         if not isinstance(row, dict):
             raise ValueError(f"Expected an object at {relative_file}:{index}")
-        if spec.selector is not None and not spec.selector(row, root):
+        if spec.select is not None and not spec.select(row, inputs):
             continue
         yield {"index": index, "locator": f"{relative_file}:{index}", "data": row}
 
 
-def decode_staged_row(record: dict[str, Any], path: str, spec: SourceFiles) -> dict[str, Any]:
+def decode_staged_row(record: dict[str, Any], spec: SourceFiles, inputs: StagedInputs) -> dict[str, Any]:
     """Apply a source decoder to an already selected row without changing its locator."""
-    data = spec.decoder(record["data"], StoragePath(path)) if spec.decoder is not None else record["data"]
+    data = spec.decode(record["data"], inputs) if spec.decode is not None else record["data"]
     return {**record, "data": data}
 
 
-def staged_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterator[dict[str, Any]]:
+def staged_file_rows(path: str, relative_file: str, spec: SourceFiles, inputs: StagedInputs) -> Iterator[dict[str, Any]]:
     """Yield selected, decoded records with their original file and row locators."""
-    for record in staged_raw_file_rows(path, relative_file, spec):
-        yield decode_staged_row(record, path, spec)
+    for record in staged_raw_file_rows(path, relative_file, spec, inputs):
+        yield decode_staged_row(record, spec, inputs)

@@ -6,22 +6,18 @@
 from pathlib import Path
 
 import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
+from taskcompendium.convert.tasktrove_codeforces import _BUILD, _COMMAND, _JUDGE_PY, CHECKER_PATH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import Status
 from verifyit.modes import grade_stdio
 from verifyit.spec import Compare, StdioSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.codeforces import (
-    _BUILD,
-    _COMMAND,
-    _JUDGE_PY,
-    CHECKER_PATH,
-)
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, TEST_SH, read_task_binary, write_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"

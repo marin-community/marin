@@ -114,7 +114,7 @@ def require_matching_sample(
         or report.get("sample_identity") != expected_identity
     ):
         raise ValueError(
-            "Full execution requires a terminal sample with matching source, input, model, policy "
+            "Full execution requires a terminal sample with matching source, input, model, sampling "
             "and runtime identities"
         )
     expected = {step.name: step.path() for step in sample_steps}

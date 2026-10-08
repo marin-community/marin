@@ -13,17 +13,17 @@ contract and leaves execution unsupported until that runtime is bound.
 import re
 import tomllib
 
-from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
+from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
+
 from experiments.post_training.tasktrove.task_format import OLD_GRADER_LINE, RESPONSE_OUTPUT, drop_dockerfile_lines
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 JUDGE_TOML = "tests/judge.toml"
 CONVERSATION = "conversation.txt"

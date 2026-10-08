@@ -29,9 +29,10 @@ from iris.cluster.client.job_info import get_job_info
 from marin.inference.openai_batch import CHAT_COMPLETIONS_ENDPOINT, OpenAIBatchClient, jsonl_text
 from marin.inference.structured_output import sole_tool_arguments
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.tasktrove import INSTRUCTION
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
-from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, read_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 logger = logging.getLogger(__name__)
 

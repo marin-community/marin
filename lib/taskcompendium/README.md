@@ -1,11 +1,10 @@
 # TaskCompendium
 
-The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every selected input, source locator, edit and rejection reason. Library families define normalization, checks and rubrics; the experiment binds pinned inputs, intended use, download artifacts and inference clients.
+The [task curation pipeline](../../docs/references/task-curation.md) downloads pinned sources, normalizes tasks, runs grading checks and GLM review, then writes final filtering decisions to sharded Parquet. Its audit retains every selected input, source locator, edit and rejection reason. Dataset declarations in the experiment name the pinned source, converter, rubric and grader controls; `taskcompendium.convert` holds the conversion techniques they share.
 
 For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
 and the [experiment flow](../../experiments/post_training/task_curation/README.md).
-The [package index](src/taskcompendium/README.md) links the implementation areas;
-[GOAL.md](../../GOAL.md) records the current campaign status and proposed cleanup.
+The [package index](src/taskcompendium/README.md) links the implementation areas.
 The sections below describe the task model and its presentation and grading contracts.
 
 ## What problem does it solve?
@@ -225,7 +224,7 @@ TaskSpec validation ties the grader to the answer:
 - `ScriptGrader.answer_path` must be `None` for `file`, `state`, and `workspace_state` answers. `conversation_path` must not replace a verifier resource.
 - Answer paths, output paths, and output directories must lie outside `/tests` and `/logs/verifier`.
 
-A `SessionGrader` task is graded by the registered custom `TaskSession` that runs it; TaskCompendium cannot grade it. A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Importers use `NoGrader` when the source evaluator needs a runtime this repository cannot provide, or when its grader image has not been selected. `taskcompendium.datasets.direct_contracts.source_contract_package` records the evaluator, source revision, contract, and runtime requirements in `contract`. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
+A `SessionGrader` task is graded by the registered custom `TaskSession` that runs it; TaskCompendium cannot grade it. A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Converters use `NoGrader` when the source evaluator needs a runtime this repository cannot provide; its `contract` records the evaluator, source revision, grading data and runtime requirements. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
 
 `taskcompendium.grader.GraderPackage` pairs a grader with its verifier resources, whose paths are relative to `/tests`. `verifyit_package(spec, resources=(), environment=None)` builds a `VerifyitGrader` from a verifyit `Spec`. Build other packages directly with `GraderPackage(grader, resources)`.
 

@@ -1,364 +1,381 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Explicit Atlas source selections bound to whole-source curation artifacts."""
+"""Dataset declarations and the artifact steps that ingest them.
+
+An ``RlDataPipeline`` names one pinned source, the converter that turns each row into a
+``TaskSpec`` with its grader fixed, the agent environment, an optional review rubric and optional
+grader controls. ``source_step`` turns a declaration into one cached ``data/rl/<name>-<hash>``
+artifact produced by ``taskcompendium.pipeline.source_processing.run_source_pipeline``.
+"""
 
 import hashlib
-from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, field, replace
-from enum import StrEnum
+import re
+import sys
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import asdict, dataclass, field
 from functools import partial
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any
 
+import requests
+from marin.datakit.download.huggingface import (
+    DownloadConfig,
+    finish_download,
+    plan_download,
+    stream_file_to_fsspec,
+)
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SecretSpec
-from taskcompendium.datasets.kto_components import TRAIN_FILE, KtoComponentRows
-from taskcompendium.pipeline.fingerprints import recipe_code_identity
-from taskcompendium.pipeline.inputs import HubDownload, UrlDownload
-from taskcompendium.pipeline.models import CheckSuite, DatasetRecipe, HFSource, IntendedUse
-from taskcompendium.pipeline.recorded_review import RecordedReviewer, load_recorded_reviews
+from shellbox.machine import Backend
+from taskcompendium.convert.environment import grading_environment
+from taskcompendium.models import DOCKER_IMAGE_PATTERN, EnvironmentRequirements
+from taskcompendium.pipeline.controls import controls_identity
+from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, StagedInputs
+from taskcompendium.pipeline.models import Controls, Converter, IntendedUse, ReviewRubric, SourceRecipe
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
     SourcePipelineConfig,
-    SourceProcessingMode,
-    answer_check_suite,
     run_source_pipeline,
 )
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION
 from taskcompendium.pipeline.sources import source_files_identity
+from zephyr.dataset import Dataset
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.datasets.nemotron_ultra.inputs import bind_reference_paths
-from experiments.post_training.task_curation.staging import DownloadInputs, download_inputs
 
-PIPELINE_VERSION = "2026.10.06.2"
+PIPELINE_VERSION = "2026.10.07.1"
+GRADER_SCRIPT_SUFFIX = "_grade.py"
+URL_CHUNK_BYTES = 1024 * 1024
+URL_TIMEOUT = 60
+PINNED_IMAGE = re.compile(DOCKER_IMAGE_PATTERN)
 
-
-class AtlasStatus(StrEnum):
-    AVAILABLE = "Available"
-    EXCLUDED = "Excluded"
-
-
-@dataclass(frozen=True)
-class AtlasSource:
-    id: str
-    name: str
-    origin: str
-    family: str
-    status: AtlasStatus
-    exclusion_reason: str | None
-    dataset_id: str
-    dataset_revision: str | None
-    archive_revision: str | None
-    verifier_revision: str | None
-    historical_disposition: str | None
-    historical_contract_changed: bool | None
-
-    @property
-    def input_revision(self) -> str | None:
-        """Keep archive pins distinct from TaskTrove upstream lineage."""
-        return self.archive_revision if self.origin == "Task Trove" else self.dataset_revision
+type RowSelector = Callable[[dict[str, Any], StagedInputs], bool]
+type RowDecoder = Callable[[dict[str, Any], StagedInputs], dict[str, Any]]
+type FileReader = Callable[[StoragePath, StagedInputs], Iterator[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
-class SourceRuntime:
-    backend: Literal["local-gvisor", "iris-gvisor", "qemu"]
-    image: str
-    worker_image: str | None = None
+class HfSource:
+    """Files from a Hugging Face dataset repository at a pinned revision.
+
+    ``select`` drops rows before raw sampling (for example, one component of a blend). ``decode``
+    rewrites a selected row before conversion (for example, unpacking an archive). ``read`` replaces
+    the format reader for files that need a custom parser. Each receives the staged auxiliary inputs.
+    """
+
+    repo: str
+    revision: str
+    files: tuple[str, ...]
+    format: SourceFormat
+    select: RowSelector | None = None
+    decode: RowDecoder | None = None
+    read: FileReader | None = None
+
+
+@dataclass(frozen=True)
+class UrlSource:
+    """One file fetched from ``url`` and checked against ``sha256``, staged as ``filename``."""
+
+    url: str
+    sha256: str
+    filename: str
+    format: SourceFormat
+    select: RowSelector | None = None
+    decode: RowDecoder | None = None
+    read: FileReader | None = None
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
+            raise ValueError(f"URL source requires a lowercase SHA-256 digest: {self.url}")
+
+
+@dataclass(frozen=True)
+class Image:
+    """A digest-pinned container image and the machine backends that can run it.
+
+    ``qemu_bundle`` is the guest bundle path on the campaign worker image; an image runs on QEMU
+    only when it has one.
+    """
+
+    reference: str
+    backends: tuple[Backend, ...] = (Backend.GVISOR, Backend.DOCKER, Backend.QEMU)
     qemu_bundle: str | None = None
 
+    def __post_init__(self) -> None:
+        if PINNED_IMAGE.fullmatch(self.reference) is None or "@sha256:" not in self.reference:
+            raise ValueError(f"Image must be pinned by digest: {self.reference}")
+        if (Backend.QEMU in self.backends) != (self.qemu_bundle is not None):
+            raise ValueError(f"Image runs on QEMU exactly when it has a QEMU bundle: {self.reference}")
+
+    def requirements(self) -> EnvironmentRequirements:
+        return grading_environment(self.reference, self.backends)
+
 
 @dataclass(frozen=True)
-class RecordedReviewInput:
-    path: str
-    sha256: str
+class ShellSim:
+    """No agent image: conversation tasks, or shell tasks served by the simulated shell."""
+
+    def requirements(self) -> EnvironmentRequirements:
+        return EnvironmentRequirements()
 
 
 @dataclass(frozen=True)
-class SourceRuntimeConfig:
-    images: Mapping[str, SourceRuntime]
-    controller_url: str | None
-    campaign: CampaignRuntime = field(default_factory=CampaignRuntime)
-    source_inputs: Mapping[str, ArtifactStep[Artifact]] = field(default_factory=dict)
-    verification_suites: Mapping[str, CheckSuite] = field(default_factory=dict)
-    verifier_secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
-    verification_inputs: Mapping[str, ArtifactStep[Artifact]] = field(default_factory=dict)
-    recorded_reviews: Mapping[str, RecordedReviewInput] = field(default_factory=dict)
+class RlDataPipeline:
+    """One RL data source and how its rows become tasks.
+
+    ``name`` is the catalog key and artifact name. ``version`` is the converter revision; bump it
+    when conversion changes in a way the converter module's bytes do not capture. ``rubric=None``
+    skips model review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary
+    pinned files staged before conversion, passed to the source callables by name.
+    """
+
+    name: str
+    source: HfSource | UrlSource
+    convert: Converter
+    version: str
+    environment: Image | ShellSim
+    intended_use: IntendedUse
+    rubric: str | None = None
+    controls: Controls | None = None
+    inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
+    atlas_id: str | None = None
 
 
 class RlDataArtifact(Artifact):
     status: str
-    report: dict[str, Any]
+    manifest: dict[str, Any]
 
 
 class SourcePipelineIncomplete(RuntimeError):
     """The source retained its evidence but has incomplete review or verification."""
 
 
-@dataclass(frozen=True)
-class RlDataPipeline:
-    source_key: str
-    source: HFSource
-    intended_use: IntendedUse
-    atlas: AtlasSource | None
-    recipe_builder: Callable[[SourceRuntimeConfig], DatasetRecipe]
-
-    @property
-    def hf_id(self) -> str:
-        return self.source.dataset
-
-    @property
-    def revision(self) -> str:
-        return self.source.revision
-
-    @property
-    def config(self) -> str:
-        return self.source.config
-
-    @property
-    def split(self) -> str:
-        return self.source.split
-
-    @property
-    def atlas_id(self) -> str | None:
-        return self.atlas.id if self.atlas is not None else None
-
-    @property
-    def atlas_status(self) -> AtlasStatus | None:
-        return self.atlas.status if self.atlas is not None else None
-
-    @property
-    def atlas_revision(self) -> str | None:
-        return self.atlas.input_revision if self.atlas is not None else None
-
-    @property
-    def atlas_verifier_revision(self) -> str | None:
-        return self.atlas.verifier_revision if self.atlas is not None else None
-
-    def recipe(self, runtime: SourceRuntimeConfig) -> DatasetRecipe:
-        return self.recipe_builder(runtime)
-
-    def bind(self, config: SourcePipelineConfig, runtime: SourceRuntimeConfig) -> ArtifactStep[RlDataArtifact]:
-        recipe = self.recipe(runtime)
-        return _bind(self, recipe, config, runtime)
+def review_rubric(pipeline: RlDataPipeline) -> ReviewRubric | None:
+    """Split a rubric string into criteria at blank lines."""
+    if pipeline.rubric is None:
+        return None
+    criteria = tuple(" ".join(part.split()) for part in pipeline.rubric.strip().split("\n\n"))
+    if not all(criteria):
+        raise ValueError(f"Rubric criteria must be nonempty: {pipeline.name}")
+    return ReviewRubric(id=pipeline.name, version=pipeline.version, criteria=criteria)
 
 
-def _source_identity(
-    recipe: DatasetRecipe, config: SourcePipelineConfig, suite: CheckSuite, runtime: SourceRuntime | None
-) -> dict[str, Any]:
+def source_files(source: HfSource | UrlSource) -> SourceFiles:
+    if isinstance(source, HfSource):
+        return SourceFiles(
+            source.repo, source.revision, source.files, source.format, source.select, source.decode, source.read
+        )
+    return SourceFiles(
+        source.url, source.sha256, (source.filename,), source.format, source.select, source.decode, source.read
+    )
+
+
+def source_recipe(pipeline: RlDataPipeline, inputs: Mapping[str, str]) -> SourceRecipe:
+    return SourceRecipe(
+        name=pipeline.name,
+        version=pipeline.version,
+        source=source_files(pipeline.source),
+        convert=pipeline.convert,
+        rubric=review_rubric(pipeline),
+        controls=pipeline.controls,
+        intended_use=pipeline.intended_use,
+        inputs=dict(inputs),
+    )
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def converter_identity(convert: Converter) -> dict[str, Any]:
+    """Converter code, packaged grader scripts and image digests the converter module references."""
+    module = sys.modules[callable_module(convert)]
+    assert module.__file__ is not None
+    module_path = Path(module.__file__)
     return {
-        "source": asdict(recipe.source),
-        "recipe": recipe.name,
-        "version": recipe.version,
-        "intended_use": recipe.intended_use,
+        "function": callable_identity(convert),
+        "module_sha256": _file_sha256(module_path),
+        "grader_scripts": {
+            path.name: _file_sha256(path) for path in sorted(module_path.parent.glob(f"*{GRADER_SCRIPT_SUFFIX}"))
+        },
+        "images": sorted({value.reference for value in vars(module).values() if isinstance(value, Image)}),
+    }
+
+
+def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
+    """The pinned bytes a source download stages; reader callables do not change them."""
+    if isinstance(source, HfSource):
+        return {"repo": source.repo, "revision": source.revision, "files": sorted(source.files)}
+    return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
+
+
+def pipeline_identity(pipeline: RlDataPipeline, config: SourcePipelineConfig) -> dict[str, Any]:
+    """Everything that can change a source artifact's contents."""
+    recipe = source_recipe(pipeline, {})
+    execution = config.execution
+    return {
+        "name": pipeline.name,
+        "version": pipeline.version,
+        "intended_use": pipeline.intended_use,
+        "source": {**download_identity(pipeline.source), "files": source_files_identity(recipe.source)},
+        "inputs": {name: download_identity(source) for name, source in sorted(pipeline.inputs.items())},
         "code": recipe_code_identity(recipe),
-        "files": source_files_identity(recipe.inputs.files),
-        "rubric": asdict(recipe.policy.rubric),
-        "review": asdict(config.review),
+        "converter": converter_identity(pipeline.convert),
+        "environment": (
+            {"image": pipeline.environment.reference, "backends": pipeline.environment.backends}
+            if isinstance(pipeline.environment, Image)
+            else {"shellsim": True}
+        ),
+        "rubric": pipeline.rubric,
+        "review": asdict(config.review) if pipeline.rubric is not None else None,
+        "controls": controls_identity(pipeline.controls) if pipeline.controls is not None else None,
+        "machines": (
+            config.machines.identity() if pipeline.controls is not None and config.machines is not None else None
+        ),
         "mode": config.mode,
-        "review_batch_size": config.execution.review_batch_size,
-        "review_input_bytes": config.execution.review_input_bytes,
-        "execution_image": config.execution.worker_resources.image if config.execution.worker_resources else None,
+        "review_batch_size": execution.review_batch_size,
+        "review_input_bytes": execution.review_input_bytes,
+        "worker_image": execution.worker_resources.image if execution.worker_resources else None,
         "normalized_shards": config.normalized_shards,
         "quality_policy": asdict(config.quality_policy),
         "verification_policy": asdict(config.verification_policy),
         "filter_policy": asdict(config.filter_policy),
-        "suite": {"id": suite.id, "revision": suite.revision, "parameters": dict(suite.parameters)},
-        "runtime": asdict(runtime) if runtime else None,
-        "procedure_revision": SOURCE_PIPELINE_REVISION,
-        "quality_revision": SOURCE_QUALITY_REVISION,
-        "verification_revision": SOURCE_VERIFICATION_REVISION,
+        "revisions": {
+            "procedure": SOURCE_PIPELINE_REVISION,
+            "quality": SOURCE_QUALITY_REVISION,
+            "verification": SOURCE_VERIFICATION_REVISION,
+        },
     }
 
 
 @dataclass(frozen=True)
-class SourceBinding:
+class DownloadRequest:
+    source: HfSource | UrlSource
+    output_path: str
+
+
+def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> None:
+    """Stage a source's pinned files; a URL download must match its declared digest."""
+    source = request.source
+    if isinstance(source, HfSource):
+        download = DownloadConfig(
+            hf_dataset_id=source.repo,
+            revision=source.revision,
+            hf_urls_glob=list(source.files),
+            gcs_output_path=request.output_path,
+            wait_for_completion=True,
+        )
+        plan = plan_download(download)
+        campaign.context.execute(
+            Dataset.from_list(list(plan.tasks))
+            .map(stream_file_to_fsspec)
+            .write_jsonl(plan.metrics_path, skip_existing=True)
+        )
+        finish_download(plan)
+        return
+    digest = hashlib.sha256()
+    destination = StoragePath(request.output_path) / source.filename
+    with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
+        response.raise_for_status()
+        with destination.open("wb", auto_mkdir=True) as stream:
+            for chunk in response.iter_content(URL_CHUNK_BYTES):
+                digest.update(chunk)
+                stream.write(chunk)
+    if digest.hexdigest() != source.sha256:
+        destination.rm()
+        raise ValueError(f"{source.url} has SHA-256 {digest.hexdigest()}; expected {source.sha256}")
+
+
+def _download_request(source: HfSource | UrlSource, ctx: StepContext) -> DownloadRequest:
+    return DownloadRequest(source, ctx.output_path)
+
+
+def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+    """One shared artifact per distinct set of pinned bytes."""
+    identity = hashlib.sha256(canonical_json(download_identity(source)).encode()).hexdigest()[:16]
+    return ArtifactStep(
+        name=f"task-curation/download/{identity}",
+        version=PIPELINE_VERSION,
+        artifact_type=Artifact,
+        run=partial(download_source, campaign=campaign),
+        build_config=partial(_download_request, source),
+    )
+
+
+@dataclass(frozen=True)
+class SourceRun:
     identity: dict[str, Any]
     source_input: str
+    inputs: dict[str, str]
     output_path: str
-    reference_paths: dict[str, str]
-    verification_report_path: str | None = None
-    recorded_review_path: str | None = None
-    recorded_review_sha256: str | None = None
+    previous_verification_report: str | None
 
 
-def _source_config(
+def _source_run(
     identity: dict[str, Any],
     downloaded: ArtifactStep[Artifact],
-    references: Mapping[str, ArtifactStep[Artifact]],
-    verification_input: ArtifactStep[Artifact] | None,
-    recorded_review_input: ArtifactStep[Artifact] | None,
-    recorded_review_sha256: str | None,
+    inputs: Mapping[str, ArtifactStep[Artifact]],
+    previous: ArtifactStep[Artifact] | None,
     ctx: StepContext,
-) -> SourceBinding:
-    return SourceBinding(
+) -> SourceRun:
+    return SourceRun(
         identity=identity,
         source_input=ctx.artifact_path(downloaded),
+        inputs={name: ctx.artifact_path(step) for name, step in inputs.items()},
         output_path=ctx.output_path,
-        reference_paths={name: ctx.artifact_path(step) for name, step in references.items()},
-        recorded_review_path=ctx.artifact_path(recorded_review_input) if recorded_review_input is not None else None,
-        recorded_review_sha256=recorded_review_sha256,
-        verification_report_path=(
-            str(StoragePath(ctx.artifact_path(verification_input)) / "verification/report.json")
-            if verification_input is not None
-            else None
+        previous_verification_report=(
+            str(StoragePath(ctx.artifact_path(previous)) / "verify/report.json") if previous is not None else None
         ),
     )
 
 
 def _run_source(
-    recipe: DatasetRecipe,
-    config: SourcePipelineConfig,
-    suite: CheckSuite,
-    binding: SourceBinding,
-    *,
-    canonical_source: str,
-    campaign: CampaignRuntime,
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, run: SourceRun, *, campaign: CampaignRuntime
 ) -> RlDataArtifact:
-    if binding.recorded_review_path is not None:
-        assert binding.recorded_review_sha256 is not None
-        load_recorded_reviews(binding.recorded_review_path, binding.recorded_review_sha256)
-        fallback = config.execution.reviewer
-        if fallback is None:
-            raise ValueError("Recorded review requires the original fallback reviewer transport")
-        config = replace(
-            config,
-            execution=replace(
-                config.execution,
-                reviewer=RecordedReviewer(fallback, binding.recorded_review_path, binding.recorded_review_sha256),
-            ),
-        )
-    files = recipe.inputs.files
-    if binding.reference_paths:
-        if isinstance(files.reader, KtoComponentRows):
-            parent_path = str(StoragePath(binding.reference_paths["component-parent"]) / TRAIN_FILE)
-            files = replace(files, reader=replace(files.reader, parent_path=parent_path))
-        else:
-            files = bind_reference_paths(files, binding.reference_paths)
     result = run_source_pipeline(
-        recipe,
+        source_recipe(pipeline, run.inputs),
         campaign.context,
-        binding.source_input,
-        binding.output_path,
-        files,
+        run.source_input,
+        run.output_path,
         config,
-        suite,
-        previous_verification_report=binding.verification_report_path,
-        previous_sample_path=(
-            str(StoragePath(binding.verification_report_path).parent.parent)
-            if config.mode == SourceProcessingMode.NORMALIZE_ONLY and binding.verification_report_path is not None
-            else None
-        ),
-        canonical_source=canonical_source,
+        previous_verification_report=run.previous_verification_report,
+        canonical_source=pipeline.name,
     )
     if result.status == "incomplete":
-        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.report_path}")
-    report = asdict(result)
-    return RlDataArtifact(path=binding.output_path, status=str(result.status), report=report)
+        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
+    return RlDataArtifact(path=run.output_path, status=result.status, manifest=asdict(result))
 
 
-def _download_config(declaration: HubDownload | UrlDownload, ctx: StepContext) -> DownloadInputs:
-    return DownloadInputs((declaration,), ctx.output_path)
-
-
-def _download_source(config: DownloadInputs, *, campaign: CampaignRuntime) -> None:
-    download_inputs(config, context=campaign.context)
-
-
-def _source_download(declaration: HubDownload | UrlDownload, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
-    # The same source bytes can appear under different auxiliary subdirectories.
-    acquisition = replace(declaration, subdirectory="") if isinstance(declaration, HubDownload) else declaration
-    identity = hashlib.sha256(canonical_json(acquisition).encode()).hexdigest()[:16]
-    return ArtifactStep(
-        name=f"task-curation/download/{identity}",
-        version=PIPELINE_VERSION,
-        artifact_type=Artifact,
-        run=partial(_download_source, campaign=campaign),
-        build_config=partial(_download_config, acquisition),
-    )
-
-
-def _source_inputs(
-    recipe: DatasetRecipe,
-    adopted: ArtifactStep[Artifact] | None,
+def source_step(
+    pipeline: RlDataPipeline,
+    config: SourcePipelineConfig,
     campaign: CampaignRuntime,
-) -> tuple[ArtifactStep[Artifact], dict[str, ArtifactStep[Artifact]]]:
-    if adopted is not None:
-        return adopted, {}
-    primary = []
-    references = {}
-    for declaration in recipe.inputs.downloads:
-        artifact = _source_download(declaration, campaign)
-        if isinstance(declaration, HubDownload) and declaration.subdirectory:
-            references[declaration.subdirectory] = artifact
-        else:
-            primary.append(artifact)
-    if len(primary) != 1:
-        raise ValueError(f"Source {recipe.name} requires one primary acquisition or an explicitly staged input artifact")
-    return primary[0], references
-
-
-def _bind(
-    definition: RlDataPipeline, recipe: DatasetRecipe, config: SourcePipelineConfig, runtime: SourceRuntimeConfig
+    *,
+    previous: ArtifactStep[Artifact] | None = None,
 ) -> ArtifactStep[RlDataArtifact]:
-    name = definition.source_key
-    assert name is not None
-    environment = runtime.images.get(name)
-    suite = runtime.verification_suites.get(name) or recipe.policy.check_suite or answer_check_suite()
-    downloaded, references = _source_inputs(recipe, runtime.source_inputs.get(name), runtime.campaign)
-    verification_input = runtime.verification_inputs.get(name)
-    recorded_review = runtime.recorded_reviews.get(name)
-    recorded_review_input = (
-        ArtifactStep.adopt(
-            f"task-curation/recorded-review/{name}-{recorded_review.sha256[:16]}",
-            PIPELINE_VERSION,
-            source=recorded_review.path,
-            kind=Artifact,
-            config=asdict(recorded_review),
-        )
-        if recorded_review is not None
+    """The ``data/rl/<name>-<hash>`` artifact for one declaration.
+
+    ``previous`` is an earlier output of the same source whose control trials are reused.
+    """
+    downloaded = download_step(pipeline.source, campaign)
+    inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
+    identity = pipeline_identity(pipeline, config)
+    identity["previous"] = (
+        {"name": previous.name, "version": previous.version, "fingerprint": previous.fingerprint()}
+        if previous is not None
         else None
     )
-    identity = _source_identity(recipe, config, suite, environment)
-    if recorded_review is not None:
-        identity["recorded_review"] = asdict(recorded_review)
-    identity["acquisition"] = recipe.inputs.downloads
-    identity["input"] = {"name": downloaded.name, "version": downloaded.version, "fingerprint": downloaded.fingerprint()}
-    identity["references"] = {
-        name: {"name": step.name, "version": step.version, "fingerprint": step.fingerprint()}
-        for name, step in references.items()
-    }
-    identity["verification_input"] = (
-        {
-            "name": verification_input.name,
-            "version": verification_input.version,
-            "fingerprint": verification_input.fingerprint(),
-        }
-        if verification_input is not None
-        else None
-    )
+    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]
     return ArtifactStep(
-        name=f"data/rl/{name}-{hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]}",
+        name=f"data/rl/{pipeline.name}-{digest}",
         version=PIPELINE_VERSION,
         artifact_type=RlDataArtifact,
-        run=partial(_run_source, recipe, config, suite, canonical_source=name, campaign=runtime.campaign),
-        build_config=partial(
-            _source_config,
-            identity,
-            downloaded,
-            references,
-            verification_input,
-            recorded_review_input,
-            recorded_review.sha256 if recorded_review is not None else None,
-        ),
-        deps=(
-            downloaded,
-            *references.values(),
-            *((verification_input,) if verification_input is not None else ()),
-            *((recorded_review_input,) if recorded_review_input is not None else ()),
-        ),
+        run=partial(_run_source, pipeline, config, campaign=campaign),
+        build_config=partial(_source_run, identity, downloaded, inputs, previous),
+        deps=(downloaded, *inputs.values(), *((previous,) if previous is not None else ())),
     )

@@ -17,18 +17,18 @@ appears in the source but is handled identically to ``choice``.
 import json
 import re
 
-from verifyit.spec import ExactSpec, MathSpec, MathType
-
-from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
+from verifyit.spec import ExactSpec, MathSpec, MathType
+
+from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
 from experiments.post_training.tasktrove.task_format import drop_dockerfile_lines
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
 
 GOLD_FILE = "tests/gold.json"
 _STRING_ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list"})

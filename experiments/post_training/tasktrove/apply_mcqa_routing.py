@@ -8,11 +8,11 @@ import json
 import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import APPROX_SHARD_BYTES, WORKER_RESOURCES, WORKING_SHARDS
 from experiments.post_training.tasktrove.mcqa_routing import (
     MCQA_SOURCE,

@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus, Rejected
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus, Rejected
 
 PLUGIN = "pytest-json-report"
 CONFIG_JSON = "tests/config.json"

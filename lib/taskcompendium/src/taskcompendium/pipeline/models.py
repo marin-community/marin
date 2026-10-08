@@ -1,35 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dataset recipes and persisted curation evidence."""
+"""Source recipes and persisted curation evidence."""
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.pipeline.inputs import RecipeInputs
+from taskcompendium.models import AssistantToolCalls, Source, TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.runtime.models import RolloutRecord
-
-
-@dataclass(frozen=True)
-class HFSource:
-    dataset: str
-    revision: str
-    config: str
-    split: str
-
-
-@dataclass(frozen=True)
-class GeneratedSource:
-    dataset: str
-    revision: str
-    config: str
-    split: str
-    module: str
 
 
 @dataclass(frozen=True)
@@ -92,25 +75,69 @@ class NormalizedTask:
     changes: tuple[NormalizationChange, ...]
 
 
-@dataclass(frozen=True)
-class TaskPolicy:
-    """Reusable conversion and review policy, independent of source acquisition."""
-
-    normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
-    rubric: ReviewRubric
-    check_suite: "CheckSuite | None" = None
+type Converter = Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
+"""Convert one raw row into a task with its grader fixed, or reject it."""
 
 
 @dataclass(frozen=True)
-class DatasetRecipe:
-    """An experiment's source and acquisition inputs bound to conversion policy."""
+class Reply:
+    """A final assistant event, graded after the task's context."""
+
+    event: TextMessage | AssistantToolCalls
+
+
+@dataclass(frozen=True)
+class WorkspaceFiles:
+    """Agent output files, graded as a file submission."""
+
+    files: Mapping[str, bytes]
+
+
+@dataclass(frozen=True)
+class OracleCommand:
+    """A shell command run with the task's worker and oracle files; its output is the submission.
+
+    File-answer tasks submit their captured output files. Conversation-answer tasks submit the
+    contents of ``answer_file``, resolved in the grader workspace, as the final assistant message.
+    """
+
+    command: str
+    answer_file: str | None = None
+
+
+type ControlSubmission = Reply | WorkspaceFiles | OracleCommand
+
+
+@dataclass(frozen=True)
+class Controls:
+    """Known-correct and known-wrong submissions that test a source's grader.
+
+    Every task is also graded on an empty submission, which must score zero. ``golden`` returns
+    ``None`` for a task whose source supplies no known-correct answer. ``memory_mb`` sizes each
+    fresh grading machine.
+    """
+
+    golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
+    negative: Callable[[TaskSpec], ControlSubmission] | None = None
+    memory_mb: int = 512
+
+
+@dataclass(frozen=True)
+class SourceRecipe:
+    """One staged source and how its rows become reviewed, verified tasks.
+
+    ``rubric=None`` skips model review. ``controls=None`` skips grader verification, so sandbox
+    graders remain unverified. ``inputs`` holds staged auxiliary input paths by name.
+    """
 
     name: str
     version: str
-    source: HFSource | GeneratedSource
-    policy: TaskPolicy
+    source: SourceFiles
+    convert: Converter
+    rubric: ReviewRubric | None
+    controls: Controls | None
     intended_use: IntendedUse
-    inputs: RecipeInputs
+    inputs: Mapping[str, str] = field(default_factory=dict)
 
 
 class CheckStatus(StrEnum):
@@ -125,6 +152,17 @@ class GraderReadiness(StrEnum):
     READY = "ready"
     SOURCE_SAMPLED = "source_sampled"
     FAILED = "failed"
+    UNVERIFIED = "unverified"
+
+
+class Admission(StrEnum):
+    """Whether a row reaches the final export, and why not."""
+
+    ADMITTED = "admitted"
+    REJECTED = "rejected"
+    DEFERRED = "deferred"
+    NO_GRADER = "no_grader"
+    JUDGE_DEFERRED = "deferred:judge"
     UNVERIFIED = "unverified"
 
 
@@ -212,6 +250,7 @@ class Disposition(StrEnum):
 
 
 class QualityBasis(StrEnum):
+    UNREVIEWED = "unreviewed"
     DIRECT_REVIEW = "direct_review"
     INFERRED_FROM_SOURCE = "inferred_from_source"
     SOURCE_REJECTED = "source_rejected"
@@ -232,61 +271,6 @@ class Decision(BaseModel):
     duplicate_of: str | None = None
 
 
-class RewriteAction(StrEnum):
-    REWRITE = "rewrite"
-    UNCHANGED = "unchanged"
-    UNREPAIRABLE = "unrepairable"
-
-
-class InstructionEdit(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-    old_text: str = Field(min_length=1)
-    replacement: str
-
-
-class RewriteProposal(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-    task_id: str
-    action: RewriteAction
-    edits: list[InstructionEdit]
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @model_validator(mode="after")
-    def validate_replacement(self) -> "RewriteProposal":
-        if (self.action == RewriteAction.REWRITE) != bool(self.edits):
-            raise ValueError("Only a rewrite must supply nonempty edits")
-        return self
-
-
-class RewriteRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_id: str
-    status: ReviewStatus
-    proposal: RewriteProposal | None
-    detail: str
-
-
-class RewriteIdentity(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    tasks_sha256: str
-    rubric: ReviewRubric
-    model: str
-    model_revision: str
-    max_tokens: int
-    max_prompt_characters: int
-    instructions_sha256: str
-
-
-class RewriteLineage(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_id: str
-    parent_id: str
-    parent_sha256: str
-    candidate_sha256: str
-    rewrite: RewriteIdentity
-    original_audit: dict[str, Any] | None = None
-
-
 class TaskAudit(BaseModel):
     """One source row and all observations retained before the accepted export."""
 
@@ -299,9 +283,6 @@ class TaskAudit(BaseModel):
     checks: list[CheckResult]
     review: ReviewRecord | None
     decision: Decision | None
-    original: TaskSpec | None = None
-    cleanup: RewriteRecord | None = None
-    lineage: RewriteLineage | None = None
     normalization_changes: tuple[NormalizationChange, ...] = ()
     intended_use: IntendedUse | None = None
     quality_basis: QualityBasis | None = None

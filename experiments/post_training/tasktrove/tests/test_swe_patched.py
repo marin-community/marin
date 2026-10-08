@@ -8,12 +8,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove import verify
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.converters.swe_patched import TEST_PATCH, TRUSTED_PATCH_PATHS
 from experiments.post_training.tasktrove.converters.swe_repo import TRUSTED_TEST_PATHS, restore_setup

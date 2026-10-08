@@ -10,15 +10,17 @@ from functools import partial
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from verifyit.spec import SchemaFormat
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from taskcompendium.datasets import structured_output
+from taskcompendium.convert.answers import json_schema_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
+from taskcompendium.pipeline.controls import answer_reply, control_suite, wrong_reply
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
-from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness, RawRow
+from taskcompendium.pipeline.models import CheckResult, CheckStatus, Controls, GraderReadiness, RawRow, Reply
 from taskcompendium.pipeline.source_verification import (
     SOURCE_VERIFICATION_REVISION,
     SampleResult,
@@ -36,8 +38,33 @@ from taskcompendium.pipeline.source_verification import (
     verification_identity,
     verify_source,
 )
-from taskcompendium.pipeline.transforms import selected_view
 from taskcompendium.pipeline.verification import control_result
+
+from .pipeline_stages import FixtureGradingMachines
+
+OBJECT_SCHEMA = {"type": "object"}
+# Requires a "count" property while forbidding every property, so no reply satisfies it.
+CONTRADICTORY_SCHEMA = {"type": "object", "required": ["count"], "properties": {}, "additionalProperties": False}
+
+
+def count_reply(task: TaskSpec) -> Reply:
+    return answer_reply(task, json.dumps({"count": 1}))
+
+
+# A JSON schema grader has no reference instance, so these controls have no golden.
+SCHEMA_CONTROLS = Controls(negative=wrong_reply)
+COUNT_CONTROLS = Controls(golden=count_reply, negative=wrong_reply)
+
+
+def schema_task(task_id: str, schema: dict) -> TaskSpec:
+    task = json_schema_task(
+        RawRow(task_id, Source(dataset="fixture", revision="1", row=task_id, importer_revision="1"), {}),
+        prompt="Return JSON matching " + json.dumps(schema),
+        schema=json.dumps(schema),
+        schema_format=SchemaFormat.JSON,
+    )
+    assert isinstance(task, TaskSpec)
+    return task
 
 
 @pytest.mark.parametrize(
@@ -57,17 +84,7 @@ def test_failed_control_retains_runtime_diagnostics_in_saved_checks(outcome, sta
 
 @pytest.fixture
 def reusable_schema_row():
-    task = structured_output.normalize(
-        RawRow(
-            "reusable-schema",
-            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-            {
-                "instruction": "Return a JSON object",
-                "verifier_data": {"schema_type": "json", "schema": {"type": "object"}},
-            },
-        )
-    )
-    assert isinstance(task, TaskSpec)
+    task = schema_task("reusable-schema", OBJECT_SCHEMA)
     return {"task_id": task.id, "task_json": task.model_dump_json(), "filter_status": "keep"}
 
 
@@ -85,8 +102,7 @@ def write_evidence(path, verified, policy):
 
 
 def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_path, reusable_schema_row):
-    suite = structured_output.policy().check_suite
-    assert suite is not None
+    suite = control_suite(SCHEMA_CONTROLS, None)
     policy = SourceVerificationPolicy(1, 0, 2, 1.0)
     identity = verification_identity(suite, policy)
     original_path = tmp_path / "sample-verification.json"
@@ -153,14 +169,13 @@ def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_
 def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_failure(
     tmp_path, reusable_schema_row, second_failed
 ):
-    suite = structured_output.policy().check_suite
-    assert suite is not None
+    suite = control_suite(SCHEMA_CONTROLS, None)
     policy = SourceVerificationPolicy(1, 0, 2, 1.0)
     identity = verification_identity(suite, policy)
     original = _verify_sample_with_evidence(
         reusable_schema_row, suite=suite, attempts=2, identity=identity, report_path="original"
     )
-    failed = CheckResult(check="reference", status=CheckStatus.FAIL, detail="Wrong captured output")
+    failed = CheckResult(check="golden", status=CheckStatus.FAIL, detail="Wrong captured output")
     unavailable = CheckResult(check="runtime", status=CheckStatus.INFRA_ERROR, detail="Machine unavailable")
     original = replace(
         original,
@@ -203,7 +218,7 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
         results={resumed.result.task_id: sample_result_checks(resumed.result)},
     )
     assert gated["filter_status"] == "reject"
-    assert "check:reference" in gated["filter_reasons"]
+    assert "check:golden" in gated["filter_reasons"]
     write_evidence(path, resumed, policy)
     assert len(saved_trials(str(path), identity=identity, attempts=2)) == 2
     payload = json.loads(path.read_text())
@@ -214,18 +229,17 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
 
 
 @pytest.mark.parametrize(
-    "runtime",
+    "runtime,reusable",
     [
-        {"backend": "qemu", "bundle_path": "/tmp/changeable"},
-        {"provider_configured": True},
-        {"machine": {"network": "allow"}},
-        {"backend": "qemu", "worker_image": "image@sha256:" + "1" * 64},
+        ({"backend": "qemu", "bundle_path": "/tmp/changeable"}, False),
+        ({"network": "allow"}, False),
+        ({"backend": "qemu", "worker_image": "image@sha256:" + "1" * 64}, True),
+        (FixtureGradingMachines().identity(), True),
     ],
+    ids=["qemu_bundle_path", "network_allowed", "qemu_worker_image", "offline_machines"],
 )
-def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_schema_row, runtime):
-    suite = structured_output.policy().check_suite
-    assert suite is not None
-    suite = replace(suite, parameters=runtime)
+def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_schema_row, runtime, reusable):
+    suite = replace(control_suite(SCHEMA_CONTROLS, None), parameters=runtime)
     source = tmp_path / "source" / "audit"
     source.mkdir(parents=True)
     (source.parent / "manifest.json").write_text(json.dumps({"input_rows": 1}))
@@ -236,7 +250,7 @@ def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_sche
     with ZephyrContext(max_workers=1, name="persisted-verification-reuse") as context:
         first = verify_source(str(source.parent), str(output), policy, suite, 1, context=context)
         second = verify_source(str(source.parent), str(output), policy, suite, 1, context=context)
-        if "worker_image" in runtime:
+        if reusable:
             sample_report = output / "verification.json"
             original_bytes = sample_report.read_bytes()
             full = verify_source(
@@ -258,7 +272,7 @@ def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_sche
     assert first["status"] == second["status"] == "passed"
     first_ids = {item["execution_id"] for item in first["evidence"]}
     second_ids = {item["execution_id"] for item in second["evidence"]}
-    if "worker_image" in runtime:
+    if reusable:
         assert first_ids == second_ids
         assert all(item["reused_from"] == str(output / "verification.json") for item in second["evidence"])
     else:
@@ -273,17 +287,7 @@ def test_sample_failure_remains_rejected_outside_full_verification_sample(tmp_pa
     extra_id = min(selected)
     rows = []
     for row in ids:
-        schema = {"type": "object"}
-        if row["task_id"] == bad_id:
-            schema = {"type": "object", "required": ["count"], "properties": {}, "additionalProperties": False}
-        task = structured_output.normalize(
-            RawRow(
-                row["task_id"],
-                Source(dataset="fixture", revision="1", row=row["task_id"], importer_revision="1"),
-                {"instruction": "Return a JSON object", "verifier_data": {"schema_type": "json", "schema": schema}},
-            )
-        )
-        assert isinstance(task, TaskSpec)
+        task = schema_task(row["task_id"], CONTRADICTORY_SCHEMA if row["task_id"] == bad_id else OBJECT_SCHEMA)
         rows.append({**row, "task_json": task.model_dump_json(), "filter_reasons": []})
     sample_source, full_source = tmp_path / "sample-source", tmp_path / "full-source"
     for source, records in (
@@ -293,8 +297,7 @@ def test_sample_failure_remains_rejected_outside_full_verification_sample(tmp_pa
         (source / "audit").mkdir(parents=True)
         pq.write_table(pa.Table.from_pylist(records, schema=TASK_SCHEMA), source / "audit/part-00000.parquet")
         (source / "manifest.json").write_text(json.dumps({"input_rows": len(records)}))
-    suite = structured_output.policy().check_suite
-    assert suite is not None
+    suite = control_suite(COUNT_CONTROLS, None)
     policy = SourceVerificationPolicy(100, 0, 2, 0.95)
     sample_output, full_output = tmp_path / "sample", tmp_path / "full"
     with ZephyrContext(max_workers=2, name="sample-failure-provenance") as context:
@@ -331,17 +334,7 @@ def test_sample_failure_remains_rejected_outside_full_verification_sample(tmp_pa
             context=context,
             previous_report_path=str(full_output / "verification.json"),
         )
-        corrected = structured_output.normalize(
-            RawRow(
-                bad_id,
-                Source(dataset="fixture", revision="1", row=bad_id, importer_revision="1"),
-                {
-                    "instruction": "Return a JSON object",
-                    "verifier_data": {"schema_type": "json", "schema": {"type": "object"}},
-                },
-            )
-        )
-        assert isinstance(corrected, TaskSpec)
+        corrected = schema_task(bad_id, OBJECT_SCHEMA)
         corrected_rows = [
             {**row, "task_json": corrected.model_dump_json()} if row["task_id"] == bad_id else row for row in rows
         ]
@@ -447,31 +440,12 @@ def test_source_decision_counts_tasks_and_requires_complete_coverage(
         row = {"task_id": "0", "filter_status": "keep", "filter_reasons": [], "grader_readiness": "unverified"}
         gated = gate_source_row(row, status=SourceVerificationStatus.SKIPPED, results={"0": results[0].trials[0].checks})
         assert gated["filter_status"] == "keep"
-        assert not selected_view(gated, "executable")
+        assert gated["grader_readiness"] == "unverified"
 
 
-@pytest.mark.parametrize("contradictory", [False, True])
-def test_missing_schema_golden_keeps_available_checks_and_does_not_certify_tasks(tmp_path, contradictory):
-    schema = {
-        "type": "object",
-        "required": ["count"],
-        "properties": {} if contradictory else {"count": {"type": "integer"}},
-        "additionalProperties": False,
-    }
-    task = structured_output.normalize(
-        RawRow(
-            "schema-task",
-            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-            {
-                "instruction": "Return JSON matching " + json.dumps(schema),
-                "verifier_data": {"schema_type": "json", "schema": schema},
-            },
-        )
-    )
-    assert isinstance(task, TaskSpec)
+def test_missing_schema_golden_keeps_available_checks_and_does_not_certify_tasks(tmp_path):
+    task = schema_task("schema-task", OBJECT_SCHEMA)
     row = {"task_id": task.id, "task_json": task.model_dump_json(), "filter_status": "keep", "filter_reasons": []}
-    suite = structured_output.policy().check_suite
-    assert suite is not None
     source = tmp_path / "source"
     (source / "audit").mkdir(parents=True)
     (source / "manifest.json").write_text(json.dumps({"input_rows": 1}))
@@ -483,7 +457,7 @@ def test_missing_schema_golden_keeps_available_checks_and_does_not_certify_tasks
             str(source),
             str(output),
             SourceVerificationPolicy(1, 0, 2, 1.0),
-            suite,
+            control_suite(SCHEMA_CONTROLS, None),
             1,
             context=context,
             telemetry=telemetry,
@@ -492,27 +466,25 @@ def test_missing_schema_golden_keeps_available_checks_and_does_not_certify_tasks
     result = SampleResult.model_validate(report["results"][0])
     metrics = next(execution.counters for execution in telemetry.executions if execution.operation == "trials")
     assert metrics["verification/attempts"] == 2
-    assert metrics["verification/control/reference/skipped"] == 2
-    assert metrics["verification/control/empty/pass"] == 2
-    assert metrics["verification/trial/" + ("fail" if contradictory else "pass")] == 2
+    assert metrics["verification/control/golden/skipped"] == 2
+    assert metrics["verification/control/empty/pass"] == metrics["verification/control/negative/pass"] == 2
+    assert metrics["verification/trial/pass"] == 2
     for trial in result.trials:
         checks = {check.check: check.status for check in trial.checks}
-        assert checks["reference"] == CheckStatus.SKIPPED
-        assert checks["empty"] == checks["malformed"] == CheckStatus.PASS
-    assert report["status"] == ("rejected" if contradictory else "passed")
+        assert checks == {"empty": CheckStatus.PASS, "golden": CheckStatus.SKIPPED, "negative": CheckStatus.PASS}
+    assert report["status"] == "passed"
     assert report["counts"]["checked"] == report["counts"]["skipped"] == 1
-    status = SourceVerificationStatus(report["status"])
-    results = {task.id: [check for trial in result.trials for check in trial.checks]}
     gated = pq.read_table(output / "audit").to_pylist()[0]
-    assert gated["filter_status"] == ("reject" if contradictory else "keep")
-    assert not selected_view(gated, "executable")
+    assert gated["filter_status"] == "keep"
+    assert gated["grader_readiness"] == "unverified"
     unsampled = gate_source_row(
         {**row, "task_id": "unsampled"},
-        status=status,
-        results=results,
+        status=SourceVerificationStatus(report["status"]),
+        results={task.id: [check for trial in result.trials for check in trial.checks]},
         sampled_readiness=GraderReadiness.UNVERIFIED,
     )
-    assert not selected_view(unsampled, "executable")
+    assert unsampled["filter_status"] == "keep"
+    assert unsampled["grader_readiness"] == "unverified"
 
 
 def test_source_decision_preserves_infrastructure_failure_alongside_failed_control():
@@ -547,9 +519,8 @@ def test_passing_source_preserves_individual_failures_and_marks_source_only_evid
     assert rejected["filter_status"] == "reject"
     assert rejected["filter_reasons"] == ["check:oracle"]
     accepted = gate_source_row(unsampled, status=SourceVerificationStatus.PASSED, results=results)
+    assert accepted["filter_status"] == "keep"
     assert accepted["grader_readiness"] == "source_sampled"
-    assert selected_view(accepted, "executable")
-    assert not selected_view(rejected, "executable")
 
 
 @pytest.mark.parametrize("source_status", list(SourceVerificationStatus))
@@ -562,7 +533,6 @@ def test_source_gate_preserves_unavailable_review_for_retry(source_status):
     }
     gated = gate_source_row(row, status=source_status, results={})
     assert gated == row
-    assert not selected_view(gated, "executable")
 
 
 def test_inconclusive_source_defers_eligible_rows_but_preserves_failed_controls():
@@ -571,10 +541,8 @@ def test_inconclusive_source_defers_eligible_rows_but_preserves_failed_controls(
     deferred = gate_source_row(row, status=SourceVerificationStatus.INCONCLUSIVE, results={"one": checks})
     assert deferred["filter_status"] == "defer"
     assert deferred["filter_reasons"] == ["source_verification:inconclusive"]
-    assert not selected_view(deferred, "executable")
 
     checks.append(CheckResult(check="negative", status=CheckStatus.FAIL, detail="incorrect submission accepted"))
     rejected = gate_source_row(row, status=SourceVerificationStatus.INCONCLUSIVE, results={"one": checks})
     assert rejected["filter_status"] == "reject"
     assert rejected["filter_reasons"] == ["check:negative"]
-    assert not selected_view(rejected, "executable")

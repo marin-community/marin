@@ -11,101 +11,44 @@ from typing import Any
 from pydantic import ValidationError
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import Source
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
     CheckResult,
     Confidence,
-    DatasetRecipe,
     Decision,
     Disposition,
     FilterPolicy,
-    GraderReadiness,
     ImportFailureKind,
     ImportRejection,
     NormalizedTask,
     QualityBasis,
     RawRow,
     ReviewRecord,
+    SourceRecipe,
     TaskAudit,
 )
 
 GROUP_MEMORY_BYTES = 1024 * 1024
-UNBOUND_CONTROLS_REASON = "readiness:unbound_controls"
 
 
-def canonical_merge_record(row: dict[str, Any]) -> dict[str, Any]:
-    task = TaskSpec.model_validate_json(row["task_json"]) if row["task_json"] is not None else None
-    return {
-        "public_key": deduplication_key(task) if task is not None else row["task_id"],
-        "semantic_key": semantic_digest(task, include_reference=True) if task is not None else row["task_id"],
-        "row": row,
-    }
-
-
-def canonical_representative_order(record: dict[str, Any]) -> str:
-    row = record["row"]
-    return json.dumps(
-        [
-            int(row["intended_use"] != "eval"),
-            row["source_dataset"],
-            row["source_revision"],
-            row["source_row"],
-            row["task_id"],
-        ]
-    )
-
-
-def canonicalize_group(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Choose a deterministic accepted representative and retain every audit row."""
-    references = set()
-    representative = None
-    has_eval = False
-    with SpooledTemporaryFile(max_size=GROUP_MEMORY_BYTES, mode="w+t") as spool:
-        for record in records:
-            row = record["row"]
-            has_eval |= row["intended_use"] == "eval"
-            if row["filter_status"] == "keep":
-                if len(references) < 2:
-                    references.add(record["semantic_key"])
-                if representative is None:
-                    representative = row["task_id"]
-            spool.write(json.dumps(record) + "\n")
-        spool.seek(0)
-        for line in spool:
-            row = json.loads(line)["row"]
-            if row["filter_status"] == "keep":
-                reason = None
-                if len(references) > 1:
-                    reason = "cross_source_conflicting_verifier_contracts"
-                elif has_eval and row["intended_use"] != "eval":
-                    reason = "evaluation_overlap"
-                elif row["task_id"] != representative:
-                    reason = "cross_source_exact_duplicate"
-                    row["duplicate_of"] = representative
-                if reason is not None:
-                    row["filter_status"] = "reject"
-                    row["filter_reasons"] = [*row["filter_reasons"], reason]
-            yield row
-
-
-def selected_view(row: dict[str, Any], view: str) -> bool:
-    if row["filter_status"] != "keep":
-        return False
-    if view == "executable":
-        return row["grader_readiness"] in (GraderReadiness.READY, GraderReadiness.SOURCE_SAMPLED)
-    return view == "accepted" or row["intended_use"] == view
-
-
-def normalize_row(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
-    source = Source(
+def row_source(recipe: SourceRecipe, locator: str) -> Source:
+    return Source(
         dataset=recipe.source.dataset,
         revision=recipe.source.revision,
-        row=f"{recipe.source.config}:{recipe.source.split}:{record['locator']}",
+        row=locator,
         importer_revision=recipe.version,
     )
-    task_id = f"{recipe.name}-{canonical_sha256(source.model_dump())}"
+
+
+def row_task_id(recipe: SourceRecipe, source: Source) -> str:
+    return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
+
+
+def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
+    source = row_source(recipe, record["locator"])
+    task_id = row_task_id(recipe, source)
     raw = {
         "task_id": task_id,
         "source": source.model_dump(),
@@ -113,7 +56,7 @@ def normalize_row(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, An
         "data": record["data"],
     }
     try:
-        result = recipe.policy.normalize(RawRow(task_id, source, record["data"]))
+        result = recipe.convert(RawRow(task_id, source, record["data"]))
     except ValidationError as error:
         result = ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
     audit = TaskAudit(
@@ -229,9 +172,8 @@ def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
         or "conflicting_references" in row["filter_reasons"]
     ):
         return row
-    if UNBOUND_CONTROLS_REASON in row["filter_reasons"]:
-        return row
     if row["quality_basis"] in (
+        QualityBasis.UNREVIEWED,
         QualityBasis.INFERRED_FROM_SOURCE,
         QualityBasis.SOURCE_REJECTED,
         QualityBasis.SOURCE_INCOMPLETE,

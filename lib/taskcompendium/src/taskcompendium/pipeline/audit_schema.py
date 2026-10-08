@@ -8,7 +8,6 @@ from typing import Any
 
 import pyarrow as pa
 
-from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import QualityBasis, ReviewStatus, TaskAudit
 from taskcompendium.pipeline.verification import grader_readiness
 
@@ -34,8 +33,6 @@ TASK_SCHEMA = pa.schema(
         ),
         ("task_json", pa.string()),
         ("raw_json", pa.string()),
-        ("original_task_json", pa.string()),
-        ("parent_id", pa.string()),
         ("normalization_kind", pa.string()),
         ("normalization_reason", pa.string()),
         ("normalization_detail", pa.string()),
@@ -53,14 +50,9 @@ TASK_SCHEMA = pa.schema(
         ("source_quality_report", pa.string()),
         ("checks", pa.list_(pa.struct([("check", pa.string()), ("status", pa.string()), ("detail", pa.string())]))),
         ("grader_readiness", pa.string()),
-        ("cleanup_status", pa.string()),
-        ("cleanup_action", pa.string()),
-        ("cleanup_reason", pa.string()),
-        ("cleanup_edits", pa.list_(pa.struct([("old_text", pa.string()), ("replacement", pa.string())]))),
-        ("cleanup_detail", pa.string()),
-        ("cleanup_lineage_json", pa.string()),
+        ("admission", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"8"},
+    metadata={b"taskcompendium.curation_schema": b"9"},
 )
 
 
@@ -69,27 +61,11 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
     review = audit.review
     verdict = review.verdict if review is not None else None
     decision = audit.decision
-    cleanup = audit.cleanup
-    proposal = cleanup.proposal if cleanup is not None else None
     rejection = audit.normalization_rejection
     quality_basis = audit.quality_basis
     if quality_basis is None and review is not None and review.status == ReviewStatus.REVIEWED:
         quality_basis = QualityBasis.DIRECT_REVIEW
-    data = audit.raw.get("data", {}) if audit.raw is not None else {}
     changes = [change.model_dump(mode="json") for change in audit.normalization_changes]
-    if not changes:
-        changes = data.get("converted", {}).get("normalization_changes", [])
-    if not changes and audit.normalized is not None and isinstance(data.get("instruction"), str):
-        events = audit.normalized.context.events
-        if len(events) == 1 and isinstance(events[0], TextMessage) and events[0].content != data["instruction"]:
-            changes = [
-                {
-                    "field": "instruction",
-                    "reason": "Source normalizer changed instruction delivery",
-                    "original": data["instruction"],
-                    "replacement": events[0].content,
-                }
-            ]
     return {
         "task_id": audit.task_id,
         "source_dataset": audit.source.dataset,
@@ -99,8 +75,6 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "normalization_changes": changes,
         "task_json": audit.normalized.model_dump_json() if audit.normalized is not None else None,
         "raw_json": json.dumps(audit.raw, ensure_ascii=False, allow_nan=False) if audit.raw is not None else None,
-        "original_task_json": audit.original.model_dump_json() if audit.original is not None else None,
-        "parent_id": audit.original.id if audit.original is not None else None,
         "normalization_kind": rejection.kind.value if rejection is not None else None,
         "normalization_reason": rejection.reason if rejection is not None else None,
         "normalization_detail": rejection.detail if rejection is not None else None,
@@ -118,10 +92,5 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "source_quality_report": audit.source_quality_report,
         "checks": [check.model_dump(mode="json") for check in audit.checks],
         "grader_readiness": grader_readiness(audit.checks).value,
-        "cleanup_status": cleanup.status.value if cleanup is not None else None,
-        "cleanup_action": proposal.action.value if proposal is not None else None,
-        "cleanup_reason": proposal.reason if proposal is not None else None,
-        "cleanup_edits": [edit.model_dump(mode="json") for edit in proposal.edits] if proposal is not None else [],
-        "cleanup_detail": cleanup.detail if cleanup is not None else None,
-        "cleanup_lineage_json": audit.lineage.model_dump_json(exclude_none=True) if audit.lineage is not None else None,
+        "admission": None,
     }

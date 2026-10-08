@@ -6,6 +6,7 @@
 import base64
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -27,6 +28,7 @@ from taskcompendium.models import (
     FunctionCall,
     FunctionDefinition,
     OutputDirectory,
+    TaskResource,
     TaskSpec,
     grader_workspace,
     require_compatible_backend,
@@ -76,6 +78,22 @@ def require_image(machine_spec: MachineSpec, image: str) -> None:
         if metadata.get("image_reference") == image:
             return
     raise ValueError("Machine must use the task's pinned image")
+
+
+async def upload_resources(machine: Machine, resources: Sequence[TaskResource], timeout: float) -> None:
+    """Write task resources at their absolute paths, applying declared file modes."""
+    with TemporaryDirectory() as directory:
+        for index, resource in enumerate(resources):
+            if resource.mtime_ns is not None:
+                raise ValueError("Shell factory cannot mount resource timestamps")
+            local = Path(directory) / str(index)
+            local.write_bytes(resource_bytes(resource))
+            target = f"/{resource.path}"
+            await machine.upload(local, target)
+            if resource.mode is not None:
+                permissions = await machine.run(Command(("chmod", resource.mode, target), timeout=timeout))
+                if permissions.exit_code != 0:
+                    raise RuntimeError(f"Could not set resource permissions: {target}")
 
 
 @dataclass
@@ -225,27 +243,14 @@ class ShellFactory:
             )
             if initialized.exit_code != 0:
                 raise RuntimeError("Could not initialize shell workspace")
-            with TemporaryDirectory() as directory:
-                roles = {
-                    "worker": task.resources.worker,
-                    "oracle": task.resources.oracle,
-                }
-                resources = list(task.resources.all)
-                for role in self.mounted_roles:
-                    resources.extend(roles[role])
-                for index, resource in enumerate(resources):
-                    if resource.mtime_ns is not None:
-                        raise ValueError("Shell factory cannot mount resource timestamps")
-                    local = Path(directory) / str(index)
-                    local.write_bytes(resource_bytes(resource))
-                    target = f"/{resource.path}"
-                    await machine.upload(local, target)
-                    if resource.mode is not None:
-                        permissions = await machine.run(
-                            Command(("chmod", resource.mode, target), timeout=self.command_timeout)
-                        )
-                        if permissions.exit_code != 0:
-                            raise RuntimeError(f"Could not set resource permissions: {target}")
+            roles = {
+                "worker": task.resources.worker,
+                "oracle": task.resources.oracle,
+            }
+            resources = list(task.resources.all)
+            for role in self.mounted_roles:
+                resources.extend(roles[role])
+            await upload_resources(machine, resources, self.command_timeout)
         except BaseException:
             await machine.close()
             raise

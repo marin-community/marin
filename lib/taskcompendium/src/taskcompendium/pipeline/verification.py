@@ -106,7 +106,7 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     return answer_checks(task, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0)))
 
 
-def _control_response(task: TaskSpec, answer: str) -> TextMessage | AssistantToolCalls:
+def answer_event(task: TaskSpec, answer: str) -> TextMessage | AssistantToolCalls:
     """Present a control answer in the task's answer format."""
     if isinstance(task.answer_format, AnswerCall):
         call = ConversationToolCall(call_id="control", name=ANSWER_CALL_NAME, arguments={ANSWER_FIELD: answer})
@@ -117,7 +117,7 @@ def _control_response(task: TaskSpec, answer: str) -> TextMessage | AssistantToo
 
 
 def _grade_control(task: TaskSpec, answer: str) -> GradeResult:
-    events = (*task.context.events, _control_response(task, answer))
+    events = (*task.context.events, answer_event(task, answer))
     return grade_task(task, GradingAttempt(ConversationTrace(events=events)))
 
 
