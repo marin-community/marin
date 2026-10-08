@@ -175,13 +175,15 @@ def restore(source: str, root: Path) -> None:
 
 @dataclass(frozen=True)
 class RunInputs[IdeaT]:
-    """What a run takes beyond its config: its ideas, the source that proposes from them, and triage's checks.
+    """What a run takes beyond its config: its ideas, the source that proposes from them, each idea's
+    record (``LoopServices.describe_idea``), and triage's checks.
 
     The capability layer supplies these for the capability catalog.
     """
 
     ideas: Mapping[str, IdeaT]
     source: ProposalSource[IdeaT]
+    describe_idea: Callable[[IdeaT], Mapping[str, object]]
     checks: tuple[Check, ...]
     rubric: RubricProgram
     check_context: CheckContext
@@ -228,6 +230,7 @@ async def loop_services[IdeaT](
         services = LoopServices(
             client=client,
             source=run_inputs.source,
+            describe_idea=run_inputs.describe_idea,
             checks=run_inputs.checks,
             rubric=run_inputs.rubric,
             check_context=run_inputs.check_context,

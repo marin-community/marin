@@ -354,6 +354,7 @@ class QueueRun:
             services = LoopServices(
                 client=client,
                 source=self.source,
+                describe_idea=lambda idea: {"idea": idea},
                 checks=(),
                 rubric=self.rubric,
                 check_context=CheckContext(allowed_combinations=ALL_COMBINATIONS),
