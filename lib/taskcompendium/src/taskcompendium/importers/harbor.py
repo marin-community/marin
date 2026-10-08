@@ -83,7 +83,7 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
     if config.steps or config.multi_step_reward_strategy:
         raise NotImplementedError("Multi-stage Harbor tasks are unsupported")
-    if config.verifier.environment_mode != VerifierEnvironmentMode.SEPARATE and config.verifier.environment is None:
+    if config.verifier.environment_mode != VerifierEnvironmentMode.SEPARATE:
         raise NotImplementedError("Harbor shell grading requires a separate verifier environment")
     requirements = _environment(config.environment, capabilities=("shell", "filesystem"))
     requirements = requirements.model_copy(

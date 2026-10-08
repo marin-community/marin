@@ -30,11 +30,11 @@ PYTEST_ENV = "/opt/tasktrove-pytest"
 PYTEST_PYTHON = f"{PYTEST_ENV}/bin/python"
 PYTEST_INSTALL = (
     f"RUN python3 -m venv --system-site-packages {PYTEST_ENV}"
-    f" && {PYTEST_ENV}/bin/pip install --no-cache-dir pytest pytest-json-report\n"
+    f" && {PYTEST_ENV}/bin/pip install --no-cache-dir pytest pytest-json-report{{dependencies}}\n"
 )
 
 
-def _test_file(task: TaskFiles, test_files: tuple[str, ...]) -> str | Rejected:
+def _test_module(task: TaskFiles, test_files: tuple[str, ...]) -> tuple[str, ast.Module] | Rejected:
     candidates = [path for path in test_files if path in task.files]
     if len(candidates) != 1:
         return Rejected(
@@ -43,7 +43,7 @@ def _test_file(task: TaskFiles, test_files: tuple[str, ...]) -> str | Rejected:
         )
     path = candidates[0]
     try:
-        tree = ast.parse(task.text(path))
+        tree = ast.parse(task.files[path])
     except SyntaxError as error:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"{path} is not valid Python: {error.msg}")
     has_test = any(
@@ -52,7 +52,7 @@ def _test_file(task: TaskFiles, test_files: tuple[str, ...]) -> str | Rejected:
     )
     if not has_test:
         return Rejected(ConvertStatus.NULL_GRADER, f"{path} defines no local test function")
-    return path
+    return path, tree
 
 
 def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
@@ -62,7 +62,7 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
     if set(files) != {ORACLE_FILE}:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"unsupported oracle files: {sorted(files)}")
     try:
-        ast.parse(task.text(ORACLE_FILE))
+        ast.parse(task.files[ORACLE_FILE])
     except SyntaxError as error:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"{ORACLE_FILE} is not valid Python: {error.msg}")
     return {**files, SOLVE_SH: ORACLE_SCRIPT.encode()}
@@ -70,18 +70,26 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
 
 def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> ConvertedTask | Rejected:
     """Convert one self-contained Python task without preserving its legacy shell grader."""
-    test_file = _test_file(task, test_files)
-    if isinstance(test_file, Rejected):
-        return test_file
+    module = _test_module(task, test_files)
+    if isinstance(module, Rejected):
+        return module
+    test_file, tree = module
     solution_files = _solution_files(task)
     if isinstance(solution_files, Rejected):
         return solution_files
 
+    modules = {
+        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
+    } | {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    dependencies = " mock" if "mock" in modules else ""
     data_files = {test_file: task.files[test_file], **task.under("setup_files/")}
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
-        spec=PytestSpec(paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",), python=PYTEST_PYTHON),
-        dockerfile=task.text(DOCKERFILE).rstrip() + "\n" + PYTEST_INSTALL,
+        spec=PytestSpec(
+            paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",),
+            python=PYTEST_PYTHON,
+        ),
+        dockerfile=task.text(DOCKERFILE).rstrip() + "\n" + PYTEST_INSTALL.format(dependencies=dependencies),
         tags=("code", "python", "unit-test", "kata"),
         language="python",
         data_files=data_files,
