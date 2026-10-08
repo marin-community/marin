@@ -87,7 +87,13 @@ def build_task_files(converted: ConvertedTask, tool_ref: str, metadata: dict) ->
     files: dict[str, bytes] = {
         INSTRUCTION: converted.instruction.encode(),
         TASK_TOML: render_task_toml(converted.agent_timeout, converted.verifier_timeout, metadata).encode(),
-        DOCKERFILE: edit_dockerfile(converted.dockerfile, tool_ref, MODE_EXTRAS.get(mode, ())).encode(),
+        DOCKERFILE: (
+            edit_dockerfile(
+                converted.dockerfile,
+                tool_ref,
+                tuple(dict.fromkeys(MODE_EXTRAS.get(mode, ()) + converted.verifier_extras)),
+            ).encode()
+        ),
         TEST_SH: VERIFY_TEST_SH.encode(),
         VERIFIER_TOML: render_spec(converted.spec).encode(),
     }

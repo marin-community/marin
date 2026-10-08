@@ -18,6 +18,18 @@ Each retained task contains:
 `task_format.py` defines this layout. [`verifyit`](../../../lib/verifyit/README.md)
 defines and executes the grader contract.
 
+Nemotron structured-output tasks require correct extraction as well as valid output structure.
+Their script grader first checks the requested JSON, YAML, TOML, XML, or CSV format, then asks a
+judge whether the field values are supported by the supplied document. A requested value absent
+from the document uses the explicit string `__MISSING__`, including numeric or nested fields;
+the task instruction and effective schema permit this marker. Available facts must still be
+extracted, and using the marker for a supplied fact scores zero. Configure
+`VERIFYIT_JUDGE_BASE_URL`, `VERIFYIT_JUDGE_API_KEY`, and `VERIFYIT_JUDGE_MODEL` in the verifier's
+environment. Unsupported field values score zero. Missing judge configuration or judge execution
+errors produce an unscored infrastructure verdict. Task images
+install the schema and judge dependencies through `ConvertedTask.verifier_extras`; credentials
+are supplied at execution time.
+
 ## Run
 
 The release version and TaskTrove revision are constants in `pipeline.py`. The verifier commit

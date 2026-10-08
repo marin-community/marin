@@ -15,6 +15,26 @@
   "reason": "constructive problem has interchangeable witnesses but no special judge"
  },
  {
+  "source": "DCAgent__exp_rpt_e2egit-v2",
+  "path": "e2egit-0289",
+  "reason": "inventory tests impose an unstated underflow policy and omit required price checks"
+ },
+ {
+  "source": "DCAgent__exp_rpt_e2egit-v2",
+  "path": "e2egit-0328",
+  "reason": "factorial instruction places student tests in the private verifier directory and grading omits required recursion and test coverage"
+ },
+ {
+  "source": "DCAgent__exp_rpt_e2egit-v2",
+  "path": "e2egit-0359",
+  "reason": "calculator instruction omits the imported module path and grading omits required arithmetic and documentation checks"
+ },
+ {
+  "source": "DCAgent__exp_rpt_e2egit-v2",
+  "path": "e2egit-0433",
+  "reason": "instruction requires JavaScript or TypeScript but tests import Python and assume isolated state"
+ },
+ {
   "source": "DCAgent__exp_rpt_pymethods2test-large-v2",
   "path": "pymethods2test-2067",
   "reason": "tests require a recurrence that the instruction does not define"
