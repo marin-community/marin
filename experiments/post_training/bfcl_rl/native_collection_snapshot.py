@@ -51,12 +51,14 @@ def seal_completed_collection(config: CollectionSnapshotConfig) -> Artifact:
         raise ValueError("Collection snapshot requires literal logs and retained archives")
     retained = set()
     for path in groups["archives"]:
-        with path.open("rb", block_size=65536, cache_type="none") as stream, zipfile.ZipFile(stream) as archive:
-            manifest = json.loads(archive.read("manifest.json"))
-            for record in manifest["records"]:
-                if record["record_id"] in retained or archive.getinfo(record["entry"]).file_size != record["bytes"]:
-                    raise ValueError("Collection snapshot contains duplicate or incomplete retained records")
-                retained.add(record["record_id"])
+        archive_fs, archive_key = filesystem_for(str(path))
+        with archive_fs.open(archive_key, "rb", block_size=65536, cache_type="none") as stream:
+            with zipfile.ZipFile(stream) as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+                for record in manifest["records"]:
+                    if record["record_id"] in retained or archive.getinfo(record["entry"]).file_size != record["bytes"]:
+                        raise ValueError("Collection snapshot contains duplicate or incomplete retained records")
+                    retained.add(record["record_id"])
     if len(retained) != len(tasks):
         raise ValueError("Collection snapshot retained count differs from its completed tasks")
     manifest = {
