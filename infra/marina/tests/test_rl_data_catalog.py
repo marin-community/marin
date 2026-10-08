@@ -31,6 +31,7 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
     count_metadata,
     dataset_metadata,
     registry_sources,
+    shared_verifier_revision,
     skyrl_snapshot,
     source_row,
     split_count,
@@ -63,6 +64,18 @@ def cached_verifier_metadata(rows: list[dict]) -> list[dict]:
         row.setdefault("verifyit_dependency_revised_at", row["verifier_revised_at"])
         row.setdefault("harbor_verifier_revision", "harbor1")
         row.setdefault("harbor_verifier_revised_at", row["verifier_revised_at"])
+        row.setdefault("registry_revised_at", row["verifier_revised_at"])
+        row.setdefault(
+            "verifyit_adapter_revisions",
+            {
+                "skyrl-gym/skyrl_gym/envs/verifyit_clients.py": {"sha": "shared1", "date": row["verifier_revised_at"]},
+                "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py": {
+                    "sha": "shared1",
+                    "date": row["verifier_revised_at"],
+                },
+                "skyrl-gym/skyrl_gym/envs/sqlite_verifyit.py": {"sha": "shared1", "date": row["verifier_revised_at"]},
+            },
+        )
     return rows
 
 
@@ -1238,11 +1251,17 @@ def test_verifyit_dependency_change_invalidates_quality_and_difficulty_only_on_a
         "component_name": "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
         "component_selector": "ultra_sft_step3200_swe_pivot_len40k",
     }
-    for row in (aime, preference, arc, swe):
+    mcq = {
+        **arc,
+        "id": "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa",
+        "component_name": "ultra_sft_step3200_stem_mcqa",
+        "component_selector": "ultra_sft_step3200_stem_mcqa",
+    }
+    for row in (aime, preference, arc, swe, mcq):
         annotate_verifier_dependency(row, "a" * 40, "shared-code", date, date, "harbor-code", date)
-    before = {row["id"]: row["verifier_revision"] for row in (aime, preference, arc, swe)}
+    before = {row["id"]: row["verifier_revision"] for row in (aime, preference, arc, swe, mcq)}
 
-    for row in (aime, preference, arc, swe):
+    for row in (aime, preference, arc, swe, mcq):
         row["verifier_revision"] = row["verifier_path_revision"]
         pin = "b" * 40 if row["environment"] == "aime" else "a" * 40
         shared = "new-shared-code" if row["environment"] == "nemotron_ultra" else "shared-code"
@@ -1260,7 +1279,7 @@ def test_verifyit_dependency_change_invalidates_quality_and_difficulty_only_on_a
                 "verifier_issues": [],
             }
         )
-        expected_stale = row["environment"] not in {"preference"} and row is not swe
+        expected_stale = row is aime or row is mcq
         assert reviewed["review_stale"] == expected_stale
         assert bool(reviewed["difficulty"]) != expected_stale
 
@@ -1320,6 +1339,79 @@ SOURCES = {source.name: source for source in (math(),)}
     assert reviewed["review_stale"] and reviewed["difficulty"] is None
 
 
+@pytest.mark.parametrize("repository,mode", [("SWE-Gym/SWE-Gym", "harbor"), ("nvidia/Nemotron-RL-Math-v2", "verifyit")])
+def test_fallback_nemotron_dependency_change_invalidates_prior_review(repository, mode):
+    date = "2026-10-08T00:00:00Z"
+    parent = source_row("MarinSkyRL", "nemotron_ultra_rlvr2", "sky1", date)
+    parent.update(
+        dataset_id=composition.NEMOTRON,
+        dataset_revision="new-data",
+        dataset_revised_at=date,
+        environment="nemotron_ultra",
+        task_count=10,
+        url="https://huggingface.co/datasets/example/blend",
+        verifier_revision="native1",
+        verifier_revised_at=date,
+    )
+    info = {
+        "card_text": f"### rlvr2\n| [Tasks](https://huggingface.co/datasets/{repository}) | 100% |\n",
+        "card_url": "https://huggingface.co/datasets/example/blend/blob/new-data/README.md",
+    }
+    row = component_rows(parent, info)[0]
+    annotate_verifier_dependency(row, "a" * 40, "shared1", date, date, "harbor1", date)
+    before = row["verifier_revision"]
+    assert row["verifier_mode"] == mode
+    row["verifier_revision"] = row["verifier_path_revision"]
+    annotate_verifier_dependency(row, "b" * 40, "shared1", date, date, "harbor2", date)
+    reviewed = source_with_review(
+        {
+            "payload": row,
+            "quality": "good",
+            "difficulty": "measured",
+            "traces": 0,
+            "review_date": date,
+            "review_id": "prior-review",
+            "review_source_revision": "new-data",
+            "review_verifier_revision": before,
+            "verifier_issues": [],
+        }
+    )
+    assert reviewed["review_stale"] and reviewed["difficulty"] is None
+
+
+def test_harbor_skyrl_route_change_invalidates_prior_review_and_advances_date():
+    date = "2026-10-08T00:00:00Z"
+    later = "2026-10-09T00:00:00Z"
+    row = {
+        "environment": "nemotron_ultra",
+        "component_selector": "ultra_sft_step3200_swe_pivot_len40k",
+        "component_name": "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "verifier_revision": "native1",
+        "verifier_revised_at": date,
+        "dataset_revision": "data1",
+        "dataset_revised_at": date,
+    }
+    annotate_verifier_dependency(row, "a" * 40, "shared1", date, date, "harbor1", date)
+    before = row["verifier_revision"]
+    row.update(verifier_revision="native2", verifier_revised_at=later)
+    annotate_verifier_dependency(row, "a" * 40, "shared1", date, date, "harbor1", date)
+    reviewed = source_with_review(
+        {
+            "payload": row,
+            "quality": "good",
+            "difficulty": "measured",
+            "traces": 0,
+            "review_date": date,
+            "review_id": "prior-review",
+            "review_source_revision": "data1",
+            "review_verifier_revision": before,
+            "verifier_issues": [],
+        }
+    )
+    assert reviewed["review_stale"] and reviewed["difficulty"] is None
+    assert row["verifier_revised_at"] == later
+
+
 def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_changes():
     date = "2026-10-01T00:00:00Z"
     revision = composition.NEMOTRON_COUNTS["revision"]
@@ -1338,9 +1430,10 @@ def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_chang
         verifier_path_revised_at=date,
     )
     rows = component_rows(parent, {})
-    for row in rows:
-        annotate_verifier_dependency(row, "a" * 40, "shared1", date, date, "harbor1", date)
     cached = cached_verifier_metadata(rows)
+    for row in cached:
+        shared_revision, shared_date = shared_verifier_revision(row)
+        annotate_verifier_dependency(row, "a" * 40, shared_revision, shared_date, date, "harbor1", date)
     before = {row["id"]: row["verifier_revision"] for row in cached}
 
     def upstream(request):

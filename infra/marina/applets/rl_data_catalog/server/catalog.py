@@ -16,7 +16,7 @@ import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
 from .nemotron_counts import NEMOTRON_COUNTS
-from .nemotron_records import SWE_AGENT
+from .nemotron_records import SWE_AGENT, record_source
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -61,18 +61,9 @@ VERIFYIT_CAPABLE_ENVS = {
     "reasoning_gym",
 }
 
-VERIFYIT_NEMOTRON_COMPONENTS = {
-    group["dataset"]
-    for blend in NEMOTRON_COUNTS["blends"].values()
-    for group in blend["groups"]
-    if not set(group["agents"]) & {"indirect_prompt_injection_simple_agent", SWE_AGENT}
-}
-
-HARBOR_NEMOTRON_COMPONENTS = {
-    group["dataset"]
-    for blend in NEMOTRON_COUNTS["blends"].values()
-    for group in blend["groups"]
-    if SWE_AGENT in group["agents"]
+NEMOTRON_SHARED_ADAPTER_AGENTS = {
+    "skyrl-gym/skyrl_gym/envs/verifyit_clients.py": {"mcqa_simple_agent", "reasoning_gym_simple_agent"},
+    "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py": {"instruction_following_simple_agent"},
 }
 
 VERIFYIT_PIN_PATTERN = re.compile(r"github\.com/marin-community/marin\.git@([0-9a-f]{40})#subdirectory=lib/verifyit")
@@ -472,13 +463,48 @@ def verifyit_pin(project_text: str) -> str:
 def verifier_mode(row: dict[str, Any]) -> str:
     """Return the scorer selected for the Atlas verifyit review campaign."""
     environment = row["environment"]
-    if environment == NEMOTRON_ENV and row.get("component_selector") in HARBOR_NEMOTRON_COMPONENTS:
-        return "harbor"
+    if environment == NEMOTRON_ENV:
+        agents = nemotron_component_agents(row)
+        if SWE_AGENT in agents:
+            return "harbor"
+        if agents and "indirect_prompt_injection_simple_agent" not in agents:
+            return "verifyit"
+        return "legacy"
     if environment in VERIFYIT_CAPABLE_ENVS:
         return "verifyit"
-    if environment == NEMOTRON_ENV and row.get("component_selector") in VERIFYIT_NEMOTRON_COMPONENTS:
-        return "verifyit"
     return "legacy"
+
+
+def nemotron_component_agents(row: dict[str, Any]) -> set[str]:
+    selector = row.get("component_selector") or row.get("component_name")
+    if not selector:
+        return set()
+    agents = set()
+    for blend in NEMOTRON_COUNTS["blends"].values():
+        for group in blend["groups"]:
+            repository = record_source(group["dataset"], group["swe_source"]).repository
+            if selector in {group["dataset"], repository}:
+                agents.update(group["agents"])
+    if not agents:
+        raise ValueError(f"Unknown Nemotron verifier routing for {selector}")
+    return agents
+
+
+def shared_verifier_paths(row: dict[str, Any]) -> tuple[str, ...]:
+    if row["environment"] != NEMOTRON_ENV:
+        return VERIFYIT_SHARED_PATHS.get(row["environment"], ())
+    agents = nemotron_component_agents(row)
+    return tuple(path for path, users in NEMOTRON_SHARED_ADAPTER_AGENTS.items() if agents & users)
+
+
+def shared_verifier_revision(row: dict[str, Any]) -> tuple[str, str]:
+    paths = shared_verifier_paths(row)
+    commits = row["verifyit_adapter_revisions"]
+    revision = hashlib.sha256(
+        json.dumps({path: commits[path]["sha"] for path in paths}, sort_keys=True).encode()
+    ).hexdigest()
+    revised_at = max((commits[path]["date"] for path in paths), default=row["registry_revised_at"])
+    return revision, revised_at
 
 
 def annotate_verifier_dependency(
@@ -509,9 +535,14 @@ def annotate_verifier_dependency(
         harbor_verifier_revised_at=harbor_revised_at,
     )
     if mode == "harbor":
-        components = {"mode": mode, "component": row.get("component_name", ""), "framework": harbor_revision}
+        components = {
+            "mode": mode,
+            "component": row.get("component_name", ""),
+            "path": path_revision,
+            "framework": harbor_revision,
+        }
         row["verifier_revision"] = hashlib.sha256(json.dumps(components, sort_keys=True).encode()).hexdigest()
-        row["verifier_revised_at"] = harbor_revised_at
+        row["verifier_revised_at"] = max(row["verifier_revised_at"], harbor_revised_at)
         row["verifier_url"] = f"https://github.com/{HARBOR}/tree/{harbor_revision}/{HARBOR_VERIFIER_PATH}"
         set_revision_date(row)
         return
@@ -521,13 +552,13 @@ def annotate_verifier_dependency(
     components = {"mode": mode, "route": row["environment"], "path": path_revision, "package": pin}
     if row["environment"] == NEMOTRON_ENV:
         components["component"] = row.get("component_name", "")
-    if row["environment"] in VERIFYIT_SHARED_PATHS:
+    if shared_verifier_paths(row):
         components["shared_adapter"] = shared_revision
     row["verifier_revision"] = hashlib.sha256(json.dumps(components, sort_keys=True).encode()).hexdigest()
     row["verifier_revised_at"] = max(
         row["verifier_revised_at"],
         dependency_revised_at,
-        *([shared_revised_at] if row["environment"] in VERIFYIT_SHARED_PATHS else []),
+        *([shared_revised_at] if shared_verifier_paths(row) else []),
     )
     set_revision_date(row)
 
@@ -560,11 +591,12 @@ def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -
             )
         for component in source_components(row, info):
             if component.get("verifier_path_revision"):
+                shared_revision, shared_revised_at = shared_verifier_revision(component)
                 annotate_verifier_dependency(
                     component,
                     component["verifyit_revision"],
-                    component["verifyit_shared_revision"],
-                    component["verifyit_shared_revised_at"],
+                    shared_revision,
+                    shared_revised_at,
                     component["verifyit_dependency_revised_at"],
                     component["harbor_verifier_revision"],
                     component["harbor_verifier_revised_at"],
@@ -598,6 +630,7 @@ def skyrl_snapshot(
             and row.get("harbor_verifier_revision")
             and row.get("harbor_verifier_revised_at")
             and row.get("verifier_path_revised_at")
+            and "verifyit_adapter_revisions" in row
             for row in cached_rows
         )
     ):
@@ -706,15 +739,12 @@ def skyrl_snapshot(
         row["gym_alias"] = f"gym/{env}"
         row["gym_entrypoint"] = verifier["entrypoint"]
         row["gym_url"] = f"https://github.com/{SKYRL}/blob/{revision}/{GYM_PATH}"
-        shared_paths = VERIFYIT_SHARED_PATHS.get(env, ())
-        shared_revision = hashlib.sha256(
-            json.dumps({path: shared_commits[path]["sha"] for path in shared_paths}, sort_keys=True).encode()
-        ).hexdigest()
-        shared_revised_at = max(
-            (shared_commits[path]["commit"]["committer"]["date"] for path in shared_paths),
-            default=registry_date,
-        )
+        row["verifyit_adapter_revisions"] = {
+            path: {"sha": commit["sha"], "date": commit["commit"]["committer"]["date"]}
+            for path, commit in shared_commits.items()
+        }
         for component in source_components(row, info):
+            shared_revision, shared_revised_at = shared_verifier_revision(component)
             annotate_verifier_dependency(
                 component,
                 pin,
