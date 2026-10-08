@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build a task's DockerBuild in an Iris CPU job and push it to the task registry, pinned by digest.
+"""Build a DockerBuild in an Iris CPU job and push it to the task registry, pinned by digest.
 
     uv run scripts/build_image_job.py --context DIR --repository capability-infra/taskforge-smoke
 
@@ -25,8 +25,8 @@ shares a container with the model-authored Dockerfile:
    No code from the build runs in this job; ``crane`` parsing the untrusted tarball is the
    remaining surface.
 3. The submitter reads the manifest back by that tag, takes its digest from the bytes, checks the
-   digest resolves to the same bytes and the config says linux/amd64, and returns the pinned
-   ``RegistryImage``.
+   digest resolves to the same bytes and the config says linux/amd64, and returns the
+   digest-pinned reference (``registry/repository@sha256:...``).
 
 The registry speaks only Basic auth (``WWW-Authenticate: Basic realm="envgen"``), so there is no
 short-lived scoped token to hand the push job instead. Exposure that remains: the push job's pod
@@ -54,11 +54,11 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from rigging.timing import Duration
-from taskcompendium.environment import DockerBuild, RegistryImage
 
 from taskforge.sandbox.images import (
     BUILD_LIMITS,
     REPOSITORY,
+    DockerBuild,
     build_context_archive,
     build_digest,
     check_build_limits,
@@ -113,7 +113,7 @@ cp -a /tmp/kroot/kaniko/. "$K/"
 mkdir -p "$K/ssl/certs"
 cp /etc/ssl/certs/ca-certificates.crt "$K/ssl/certs/"
 tar xzf "/app/$CONTEXT_FILE" -C /app/context
-SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context dir:///app/context --dockerfile "/app/context$DOCKERFILE" \
+SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context dir:///app/context --dockerfile "/app/context/$DOCKERFILE" \
   --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" --custom-platform linux/amd64
 """
 
@@ -155,7 +155,7 @@ class BuildFailed(RuntimeError):
 
 @dataclass(frozen=True)
 class Published:
-    image: RegistryImage
+    image: str
     build_digest: str
     build_job_id: str
     push_job_id: str
@@ -203,7 +203,7 @@ class IrisImageBuilder:
         self.cluster = cluster
         self.target_cluster = target_cluster
 
-    async def publish(self, build: DockerBuild, repository: str) -> RegistryImage:
+    async def publish(self, build: DockerBuild, repository: str) -> str:
         return (await self.publish_with_timings(build, repository)).image
 
     async def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
@@ -318,7 +318,7 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "image": published.image.reference,
+                "image": published.image,
                 "build_digest": published.build_digest,
                 "build_job_id": published.build_job_id,
                 "push_job_id": published.push_job_id,
