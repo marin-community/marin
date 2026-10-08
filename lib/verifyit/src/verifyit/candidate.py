@@ -135,6 +135,9 @@ def _grade(spec: Spec, candidate: Candidate, resources: Mapping[str, bytes]) -> 
     if not isinstance(candidate, str):
         raise TypeError(f"Mode {mode_of(spec)} grades text, got {type(candidate).__name__}")
     text = candidate
+    # The schema is part of the task, so a missing one is a task defect whatever the answer.
+    if isinstance(spec, JsonSchemaSpec) and spec.schema not in resources:
+        raise InvalidTask(f"schema file not found: {spec.schema}")
     if not text.strip() and empty_output_policy(spec) is EmptyOutputPolicy.ZERO:
         return scored(0.0, reason="empty_output")
     match spec:
@@ -153,8 +156,6 @@ def _grade(spec: Spec, candidate: Candidate, resources: Mapping[str, bytes]) -> 
         case IfevalSpec():
             return module.grade_ifeval_candidate(spec, text)
         case JsonSchemaSpec():
-            if spec.schema not in resources:
-                raise InvalidTask(f"schema file not found: {spec.schema}")
             try:
                 schema_text = resources[spec.schema].decode()
             except UnicodeDecodeError as error:

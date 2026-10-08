@@ -296,7 +296,7 @@ def test_a_command_cannot_start_unbounded_tasks(python_factory):
     assert NPROC_HEADROOM // 2 < started < attempts
 
 
-def test_commands_cannot_reach_host_files_or_processes(python_factory, outside_dir):
+def test_commands_see_only_their_private_root_and_processes(python_factory, outside_dir):
     (outside_dir / "secret.txt").write_text("host")
     outcomes = access_outcomes(
         python_factory,
@@ -315,3 +315,23 @@ def test_deny_network_policy_refuses_tcp_connections(python_factory, network, co
     with socket.create_server(("127.0.0.1", 0)) as server:
         outcomes = access_outcomes(python_factory, ("connect", server.getsockname()[1]), spec=spec)
     assert (outcomes == ["ok"]) == connects
+
+
+def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, factory, outside_dir):
+    (outside_dir / "secret.txt").write_text("host")
+    source = tmp_path / "payload"
+    source.write_text("x")
+
+    async def scenario() -> None:
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            await machine.run(Command(("ln", "-s", str(outside_dir), "/app/escape")))
+            with pytest.raises(RuntimeError, match="symlink"):
+                await machine.upload(source, "/app/escape/planted.txt")
+            with pytest.raises(RuntimeError, match="symlink"):
+                await machine.download("/app/escape/secret.txt", tmp_path / "stolen.txt")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()

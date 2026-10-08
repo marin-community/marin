@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Apply a command's resource limits and exec bwrap.
+"""Apply a command's resource limits, then exec the sandboxed program.
 
-The local backend runs this source as ``python -I -S -c <source> <limits JSON> <program> <args>...``,
-so it imports only the standard library. The limits pass through bwrap to every sandboxed process.
+Usage: ``python -I -S -c <source> <limits JSON> <program> <args>...``. The limits apply to every process
+in the sandbox.
 """
 
 import json

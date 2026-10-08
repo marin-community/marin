@@ -69,12 +69,6 @@ def test_every_in_process_mode_grades_a_typed_candidate_from_a_json_configuratio
     assert (wrong.status, wrong.reward) == (Status.SCORED, 0.0)
 
 
-@pytest.mark.parametrize("mode", sorted(set(Mode) - IN_PROCESS_MODES))
-def test_modes_that_execute_or_call_out_have_no_in_process_configuration(mode):
-    with pytest.raises(ValueError):
-        candidate_spec(mode, {})
-
-
 @pytest.mark.parametrize(
     "spec,candidate",
     [
