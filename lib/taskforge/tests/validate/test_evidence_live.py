@@ -41,6 +41,7 @@ from taskforge.validate.adversary import (
     AdversaryRole,
     adversary_brief,
     run_adversaries,
+    trial_grade,
 )
 from taskforge.validate.attempts import load_adversary_attempt, trial_files
 from taskforge.validate.calibration import (
@@ -50,7 +51,6 @@ from taskforge.validate.calibration import (
     commands,
     final_reply,
     load_summary,
-    solved,
     summarize,
     task_facts,
     write_summary,
@@ -65,7 +65,7 @@ from taskforge.validate.run import (
     replay_controls,
 )
 from taskforge.validate.solver import ValidationSite, run_solver
-from taskforge.validate.submissions import AdversaryTrial, passing, trial_claim
+from taskforge.validate.submissions import AdversaryTrial, trial_claim
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, task_digest
 
 pytestmark = pytest.mark.live_glm
@@ -263,7 +263,8 @@ def assert_round_reads_back_and_resumes(run: LiveRound) -> None:
             assert isinstance(trial.outcome, Graded), trial.outcome
             assert trial.system == expected
             assert len(trial.submissions) <= POLICY.adversary_submissions
-            assert passing(trial.outcome.grade) == solved(trial.outcome)
+            # The trial's grade is its last passing submission's, else its last submission's.
+            assert trial.outcome.grade == trial_grade(trial.submissions)
     # Every recorded submission, in every attempt, is a submit span; a call refused for the budget or a missing
     # file is a span with no submission.
     attempts = (run.site.evidence_dir / TrialKind.ADVERSARY).rglob("attempt-*.json")
