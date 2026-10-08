@@ -25,7 +25,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> spec -> sandbox -> llm
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
 ```
 
 ## Seams
@@ -41,11 +41,23 @@ content_hash -> atomic_file -> ledger -> spec -> sandbox -> llm
   `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
   with it. Use it to force an output format such as proposal front matter.
   `llm.client.prefill_request_fields(policy, request_fields)` returns the request fields it sends.
+- `spec.draft.assemble(task_id, instruction, answer_type, grader, source, *, environment, files,
+  output_paths, system, final_tools, tags) -> TaskSpec`: the semantic task. `environment` is
+  `requirements(image=, setup=, workdir=, env=)` or `None` for a task without a machine; `files`
+  are agent-visible `file("workspace/x", ...)` resources relative to the machine root; `grader`
+  is a `GraderPackage` from `answer_verifier(spec)` (verifyit candidate modes), `script_verifier(script,
+  config, timeout=)` (a verifyit `script` grader run on the host) or `shell_verifier(argv, reward,
+  image=, ...)` (a grader command in a separate verifier machine, image-backed tasks only).
+- `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories) ->
+  LoweredTaskSpec`: the only place Taskforge builds a lowered spec. `machine(...)` gives each
+  machine's settings and `session(...)` the turn budget and deadlines; `lower` picks ShellSim for a
+  machine without an image and the host's container backend otherwise, so a lowered spec is bound
+  to its host.
 - `spec.controls.Control`: one labeled candidate submission (`kind`, `category`, `concern`,
-  `author`, a `Transcript` or `Workspace` payload, an `Expectation`, `stage`). `concern` is a
-  required `ControlConcern`: `reference`, `acceptance`, `extraction` or `shortcut`.
-  `validate_controls(task, controls)` checks a set against its task; `controls_json` and
-  `parse_controls` round-trip it.
+  `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is a required
+  `ControlConcern`: `reference`, `acceptance`, `extraction` or `shortcut`. A `Workspace` holds
+  files relative to the machine root and needs a task machine. `validate_controls(task, controls)`
+  checks a set against its task; `controls_json` and `parse_controls` round-trip it.
 - `sandbox.factories.machine_factories(where, controller_url, image_cache)`: the
   `EnvironmentKind -> MachineFactory` mapping for `ShellboxRolloutEngine`. On Iris it takes the
   controller URL and no image cache; on a laptop it takes the directory where the Docker factory
@@ -76,15 +88,18 @@ content-addressed cache and does not record to the ledger.
 Task specs are upstream's. A built task is a TaskCompendium `TaskSpec` and the `LoweredTaskSpec`
 that says how it runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone
 builds the lowered record, so a move of either is a single-site change.
-Task-specific grading is the task's own scripts, run as a `ShellVerifierSpec` (private files on its
-`VerifierSpec`; reward on stdout, by exit code, or in reward files). Generic verifier types
-(math, mcq, judge, pytest, aggregation) belong to `lib/verifyit`, which `TaskSpec` reaches
-through its verifier registry. A gap in either is fixed upstream.
+Task-specific grading is the task's own code, private in `resources.verifier`. A task without a
+container image is graded by a verifyit `script` grader that RolloutEngine runs on the host after
+the attempt, reading the captured `output_paths` or the text answer; an image-backed task may
+instead run a `ShellVerifierSpec` command in a separate verifier machine started from its image.
+Generic verifier types (exact, numeric, mcq, structured answers, predicted actions) belong to
+`lib/verifyit`, which `TaskSpec` reaches through its verifier registry. A gap in either is fixed
+upstream.
 
 Every control names the part of the grader it exercises. Answer extraction is expected to move to
 a cheap model, so controls that only pin today's parser carry `concern = extraction` and can be
-found and retired together. A task's control set needs a `reference` control, an `acceptance` control and a
-`shortcut` control, so the required coverage never rests on extraction controls alone. The concern
+found and retired together. A task's control set needs a `reference` control, an `acceptance`
+control and a `shortcut` control, so the required coverage never rests on extraction controls alone. The concern
 a control may carry follows its category (`spec.controls.CONCERNS`): `reference` only on
 known-correct controls, `shortcut` only on shortcut and reward-hack controls.
 
