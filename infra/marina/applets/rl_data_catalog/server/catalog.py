@@ -37,13 +37,15 @@ HARBOR = "marin-community/harbor"
 HARBOR_VERIFIER_PATH = "src/harbor/verifier"
 
 VERIFYIT_DEPENDENCY_PATH = "skyrl-gym/pyproject.toml"
+VERIFYIT_CLIENTS_PATH = "skyrl-gym/skyrl_gym/envs/verifyit_clients.py"
+INSTRUCTION_VERIFYIT_PATH = "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py"
 
 VERIFYIT_SHARED_PATHS = {
     NEMOTRON_ENV: (
-        "skyrl-gym/skyrl_gym/envs/verifyit_clients.py",
-        "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py",
+        VERIFYIT_CLIENTS_PATH,
+        INSTRUCTION_VERIFYIT_PATH,
     ),
-    "ifeval": ("skyrl-gym/skyrl_gym/envs/instruction_verifyit.py",),
+    "ifeval": (INSTRUCTION_VERIFYIT_PATH,),
     "text_to_sql": ("skyrl-gym/skyrl_gym/envs/sqlite_verifyit.py",),
 }
 
@@ -62,8 +64,8 @@ VERIFYIT_CAPABLE_ENVS = {
 }
 
 NEMOTRON_SHARED_ADAPTER_AGENTS = {
-    "skyrl-gym/skyrl_gym/envs/verifyit_clients.py": {"mcqa_simple_agent", "reasoning_gym_simple_agent"},
-    "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py": {"instruction_following_simple_agent"},
+    VERIFYIT_CLIENTS_PATH: {"mcqa_simple_agent", "reasoning_gym_simple_agent"},
+    INSTRUCTION_VERIFYIT_PATH: {"instruction_following_simple_agent"},
 }
 
 VERIFYIT_PIN_PATTERN = re.compile(r"github\.com/marin-community/marin\.git@([0-9a-f]{40})#subdirectory=lib/verifyit")
