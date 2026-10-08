@@ -189,10 +189,23 @@ def test_getitem():
         assert np.all(result["a"] == np.array([5.0, 6.0]))
         assert np.all(result["b"] == np.array([7.0, 8.0]))
 
-        # test slice
-        # result = builder[0:2]
-        # assert isinstance(result["a"], JaggedArray)
-        # assert isinstance(result["b"], JaggedArray)
+
+def test_getitem_slice_returns_selected_rows(tmp_path):
+    exemplar = {"a": np.array([0], dtype=np.float64), "b": np.array([0], dtype=np.float64)}
+    builder = TreeStore.open(exemplar, str(tmp_path), mode="w")
+    rows = [
+        {"a": np.array([1.0]), "b": np.array([2.0, 3.0])},
+        {"a": np.array([4.0, 5.0]), "b": np.array([6.0])},
+        {"a": np.array([7.0]), "b": np.array([8.0, 9.0])},
+    ]
+    builder.extend(rows)
+
+    selected = builder[1:3]
+    assert len(selected) == 2
+    for actual, expected in zip(selected, rows[1:]):
+        np.testing.assert_array_equal(actual["a"], expected["a"])
+        np.testing.assert_array_equal(actual["b"], expected["b"])
+    assert builder[1:1] == []
 
 
 def test_getitem_out_of_bounds():

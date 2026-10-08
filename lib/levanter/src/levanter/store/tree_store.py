@@ -154,9 +154,8 @@ class TreeStore(Generic[T]):
         elif isinstance(item, slice):
             # debatch
             leaves, structure = jax.tree.flatten(self.tree, is_leaf=heuristic_is_leaf)
-            # batched_items = jtu.tree_map(lambda reader: reader[item], self.tree, is_leaf=heuristic_is_leaf)
             batched_item_leaves = [leaf[item] for leaf in leaves]
-            num_items = len(leaves[0])
+            num_items = len(batched_item_leaves[0])
             return [jtu.tree_unflatten(structure, [leaf[i] for leaf in batched_item_leaves]) for i in range(num_items)]
         else:
             return jtu.tree_map(lambda reader: reader[item], self.tree, is_leaf=heuristic_is_leaf)
