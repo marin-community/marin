@@ -7,18 +7,26 @@ Steps, in order:
 
 1. ``sources``: web research for the proposal's research items (an agent with web tools).
 2. ``fixtures``: solver-visible files and private reference data.
-3. ``environment``: the task machine. Reasoning and shellsim proposals run in ShellSim, so the
-   task can ship a grader script; container proposals get a ``DockerBuild``.
-4. ``grader`` (GRADER): a task-specific ``ShellVerifierSpec`` script, or a verifyit-backed answer
-   verifier, prototyped with ``b.try_grader`` on its reference answer and on an empty answer.
+3. ``requirements``: the task machine. Reasoning and shellsim proposals run in ShellSim (no image);
+   container proposals get a ``DockerBuild`` that ``b.publish_image`` pushes, and the step's output
+   memoizes the digest-pinned reference.
+4. ``grader`` (GRADER): a task-specific grader script, or a verifyit-backed answer verifier,
+   prototyped with ``b.try_grader`` on its reference answer and on an empty answer. An image-less
+   task's script is a ``spec.script_verifier`` that runs on the host and writes a verdict file; a
+   container task's script is a ``spec.shell_verifier`` that runs in a fresh machine from the task
+   image and prints its reward.
 5. ``instructions``: the solver-facing prompt, checked to contain no graded answer.
-6. ``assemble``: the TaskSpec, through ``b.spec.assemble``, with ``EXECUTION``.
+6. ``assemble``: the TaskSpec, through ``b.spec.assemble``.
 7. ``controls`` (CONTROLS): fixed controls written for the assembled task, a separate step from
    the grader. They are not replayed here; ``validate`` replays them.
 
-Every model-driven step (all but ``assemble``) takes a ``guidance`` string that a program uses to
-specialize the step's prompt without copying it. A step whose model output fails a check gets the
-failure back and retries, up to ``ATTEMPTS`` requests, then fails the build.
+``build`` lowers the task with ``b.lower`` outside any step: the lowered spec names this host's
+machine backends, which no step key covers.
+
+Every model-driven step (all but ``requirements`` for non-container proposals and ``assemble``)
+takes a ``guidance`` string that a program uses to specialize the step's prompt without copying
+it. A step whose model output fails a check gets the failure back and retries, up to ``ATTEMPTS``
+requests, then fails the build.
 """
 
 import base64
@@ -29,17 +37,34 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
-from taskcompendium.environment import DockerBuild, EnvironmentFile, EnvironmentKind, EnvironmentSpec, StdoutReward
+from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec, format_conversation
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    Source,
+    TaskResource,
+    TaskSpec,
+    format_conversation,
+)
+from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.shell_verifier import ArtifactKind, StdoutReward, VerifierArtifact
 from taskcompendium.submission import PlainText, submission_instruction
 from verifyit.spec import ExactSpec, NumericSpec
 
-from taskforge.builder.sdk import DOCKER_IMAGE_REQUIREMENTS, NUMERIC_LITERALS, Build, BuildFailure, BuildOutput, Grader
+from taskforge.builder.sdk import (
+    DOCKER_IMAGE_REQUIREMENTS,
+    NUMERIC_LITERALS,
+    Build,
+    BuildFailure,
+    BuildOutput,
+    Grader,
+)
 from taskforge.builder.step import SDK_VERSION, StepRole, step
 from taskforge.llm.agent import AgentStop
 from taskforge.llm.policy import Message
 from taskforge.proposal.model import Environment
+from taskforge.sandbox.images import DockerBuild
 from taskforge.spec.controls import (
     REJECTION_CEILING,
     Control,
@@ -52,17 +77,37 @@ from taskforge.spec.controls import (
     shell_turn,
     validate_controls,
 )
-from taskforge.spec.draft import task_execution
+from taskforge.spec.draft import SCRIPT_KIND, SHELL_KIND, file, machine, session
 
 WORKDIR = "/workspace"
-GRADER_DIR = "/grader"
-GRADER_SCRIPT = f"{GRADER_DIR}/grade.py"
+WORKSPACE = "workspace"
+"""Solver-visible files live under this directory, relative to the machine root."""
+TESTS_DIR = "/tests"
+"""Where RolloutEngine installs a shell grader's private files in its verifier machine."""
+SHELL_GRADER = "grade.py"
 GRADER_TIMEOUT = 300.0
+VERIFIER_TIMEOUT = GRADER_TIMEOUT + 120.0
+"""The session's grading deadline: the grader's own timeout plus a verifier machine's start."""
+STARTUP_TIMEOUT = 600.0
+CLEANUP_TIMEOUT = 120.0
+MAX_TURNS = 64
 FULL_CREDIT = 0.99
 ATTEMPTS = 3
 RESEARCH_TURNS = 32
-EXECUTION = task_execution()
-"""Template tasks have one stage and set no deadlines or agent user."""
+TASK_MACHINE = machine(startup_timeout=STARTUP_TIMEOUT)
+"""Template machines (the task machine, and a container task's verifier machine): no network, the
+factory's limits, the image's user."""
+SESSION = session(
+    max_turns=MAX_TURNS,
+    model_turn_timeout=None,
+    command_timeout=None,
+    tool_turn_timeout=None,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=VERIFIER_TIMEOUT,
+    cleanup_timeout=CLEANUP_TIMEOUT,
+)
+"""Validation replaces the turn budget and deadlines with its own; the verifier timeout stands."""
 CONVENTION = PlainText(id="plain_text")
 """Template tasks take a plain-text final reply."""
 SUBMISSION = (
@@ -82,21 +127,38 @@ that keeps the grade exact and the task realistic.
 {proposal}
 """
 
-MACHINE_FACTS = """\
+SHELLSIM_FACTS = """\
 The task machine is ShellSim: a simulated shell with POSIX tools and a minimal `python3` shim, not \
-CPython (json, re, fractions, math, sys work; traceback does not; a compiled regex's match and \
-search take only the string). No pip, no network. The solver works in \
-/workspace through a `shell(command)` tool and ends with a final text reply. Files under {grader} \
-are private: they are installed only after the solver's final reply, then the grader runs.\
+CPython. No pip, no network. The solver works in {workdir} through a `shell(command)` tool and ends \
+with a final text reply. Private grader files are never installed in the solver's machine.\
 """
 
-GRADER_CONTRACT = """\
-A script grader is `python3 {script}`. It runs in the task machine after the solver finishes, \
-with the working directory {workdir}. Standard input is the whole conversation as a JSON list of \
-OpenAI chat messages; the solver's final reply is the `content` string of the last message whose \
-role is "assistant". The script prints exactly one number in [0, 1] (the reward) to stdout and \
-exits 0, for every candidate: a malformed, empty, or adversarial answer scores low, it never \
-crashes the script. Private data files it reads must live under {grader}/.\
+CONTAINER_FACTS = """\
+The task machine is a container started from the task image, without network. The solver works in \
+{workdir} through a `shell(command)` tool and ends with a final text reply. Private grader files are \
+never installed in the solver's machine.\
+"""
+
+SCRIPT_CONTRACT = """\
+The grader is a Python script run on the grading host under CPython 3 with the standard library \
+only, after the solver finishes. It never runs in the solver's machine. Environment variables give \
+its directories: `$VERIFYIT_WORKSPACE/answer.txt` holds the solver's final reply (the submission the \
+convention extracted); each reference file the grader reads, at `<path>` relative to the machine \
+root, is captured at `$VERIFYIT_WORKSPACE/captured/<path>` when the solver wrote it (absent \
+otherwise); the private data files are under `$VERIFYIT_TESTS_DIR/`. The script writes \
+`$VERIFYIT_LOGS_DIR/verdict.json` as `{{"status": "scored", "reward": <number in [0, 1]>, "detail": \
+{{...}}}}` and exits 0, for every candidate: a malformed, empty, or adversarial answer scores low, it \
+never crashes the script.\
+"""
+
+SHELL_CONTRACT = """\
+The grader is `python3 {tests}/{script}`, run after the solver finishes in a fresh container from the \
+task image, as the image's user, with the working directory {workdir}. {workdir} there holds a copy of \
+the solver's {workdir}. Standard input is the whole conversation as a JSON list of OpenAI chat \
+messages; the solver's final reply is the `content` string of the last message whose role is \
+"assistant". The private data files are under {tests}/. The script prints exactly one number in \
+[0, 1] (the reward) to stdout and exits 0, for every candidate: a malformed, empty, or adversarial \
+answer scores low, it never crashes the script.\
 """
 
 
@@ -108,8 +170,8 @@ class Sources:
 
 @dataclass(frozen=True)
 class Fixtures:
-    agent_files: tuple[EnvironmentFile, ...]
-    private_files: tuple[EnvironmentFile, ...]
+    agent_files: tuple[TaskResource, ...]
+    private_files: tuple[TaskResource, ...]
     facts: str
 
 
@@ -120,43 +182,44 @@ class Instructions:
 
 
 class FileDraft(BaseModel):
-    path: str = Field(description="Absolute path in the task machine.")
+    path: str = Field(description="Path relative to its root, without a leading '/' or '..'.")
     content: str = Field(description="Complete UTF-8 file content.")
     executable: bool = Field(description="Whether the file is executable.")
 
     @field_validator("path")
     @classmethod
-    def absolute(cls, path: str) -> str:
-        if not path.startswith("/") or ".." in path.split("/"):
-            raise ValueError(f"file path {path!r} must be absolute without '..'")
+    def relative(cls, path: str) -> str:
+        parts = path.split("/")
+        if path.startswith("/") or "" in parts or ".." in parts:
+            raise ValueError(f"file path {path!r} must be relative without '..'")
         return path
 
 
 class FixturesDraft(BaseModel):
     """Submit the task fixtures: solver-visible files, private reference data, and the facts they encode."""
 
-    agent_files: list[FileDraft] = Field(description=f"Solver-visible files, under {WORKDIR}/. May be empty.")
-    private_files: list[FileDraft] = Field(description=f"Grader-only data files, under {GRADER_DIR}/. May be empty.")
+    agent_files: list[FileDraft] = Field(
+        description=f"Solver-visible files, paths relative to the machine root under {WORKSPACE}/ "
+        f"({WORKSPACE}/data.csv is {WORKDIR}/data.csv). May be empty."
+    )
+    private_files: list[FileDraft] = Field(
+        description="Grader-only data files, paths relative to the grader's private directory. May be empty."
+    )
     facts: str = Field(description="The ground truth these fixtures encode, with every value the grader checks.")
 
     @field_validator("agent_files")
     @classmethod
     def visible(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, WORKDIR)
-
-    @field_validator("private_files")
-    @classmethod
-    def private(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, GRADER_DIR)
+        return _under(files, WORKSPACE)
 
 
 class DockerfileDraft(BaseModel):
     """Submit the task image: a Dockerfile and the build-context files it copies."""
 
-    dockerfile: str = Field(description="Dockerfile content; WORKDIR /workspace; the image provides sh and setsid.")
-    context_files: list[FileDraft] = Field(
-        description="Other build-context files, paths relative to the context root as /name."
+    dockerfile: str = Field(
+        description="Dockerfile content; WORKDIR /workspace; the image provides sh, setsid and python3."
     )
+    context_files: list[FileDraft] = Field(description="Other build-context files, paths relative to the context root.")
 
 
 class GraderDraft(BaseModel):
@@ -166,7 +229,9 @@ class GraderDraft(BaseModel):
         description="script: a Python grader script; exact or numeric: a generic answer check on the final reply."
     )
     script: str = Field(description="For kind=script, the grader script source; otherwise empty.")
-    private_files: list[FileDraft] = Field(description=f"Data files the script reads, under {GRADER_DIR}/.")
+    private_files: list[FileDraft] = Field(
+        description="Further data files the script reads, paths relative to the grader's private directory."
+    )
     expected: str = Field(
         description="For exact, the expected final answer. For numeric, a numeric literal string such as 42, "
         "0.125, 1/8 or 1.5e3. Otherwise empty."
@@ -175,19 +240,15 @@ class GraderDraft(BaseModel):
     answer_contract: str = Field(description="The exact output format the solver must follow, for the instruction.")
     reference_reply: str = Field(description="A complete correct final reply that follows the contract.")
     reference_files: list[FileDraft] = Field(
-        description=f"Files a correct solver leaves under {WORKDIR}/, if the grader reads any; else empty."
+        description=f"Files a correct solver leaves under {WORKSPACE}/ (relative to the machine root), if the "
+        "grader reads any; else empty. Only these paths are captured for a grader script."
     )
     secret_values: list[str] = Field(description="Graded answer strings that must not appear in the instruction.")
-
-    @field_validator("private_files")
-    @classmethod
-    def private(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, GRADER_DIR)
 
     @field_validator("reference_files")
     @classmethod
     def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, WORKDIR)
+        return _under(files, WORKSPACE)
 
 
 class InstructionsDraft(BaseModel):
@@ -211,12 +272,19 @@ class ControlDraft(BaseModel):
         "empty_or_malformed: extraction or acceptance."
     )
     final_reply: str = Field(description="The candidate's final reply.")
-    files: list[FileDraft] = Field(description=f"Files the candidate writes under {WORKDIR}/ before replying.")
+    files: list[FileDraft] = Field(
+        description=f"Files the candidate writes under {WORKSPACE}/ (relative to the machine root) before replying."
+    )
     reward_min: float | None = Field(description="Positive controls: the minimum reward, e.g. 0.99. Otherwise null.")
     reward_max: float | None = Field(
         description=f"Negative and malformed controls: the maximum reward, at most {REJECTION_CEILING}."
     )
     rationale: str = Field(description="Why this candidate must receive that grade.")
+
+    @field_validator("files")
+    @classmethod
+    def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
+        return _under(files, WORKSPACE)
 
 
 class ControlsDraft(BaseModel):
@@ -232,13 +300,25 @@ def _under(files: list[FileDraft], root: str) -> list[FileDraft]:
     return files
 
 
-def environment_file(draft: FileDraft) -> EnvironmentFile:
-    return EnvironmentFile(path=draft.path, content=draft.content.encode(), mode=0o755 if draft.executable else 0o644)
+def task_file(draft: FileDraft) -> TaskResource:
+    return file(draft.path, draft.content, mode=0o755 if draft.executable else 0o644)
 
 
-def files_text(files: Sequence[EnvironmentFile]) -> str:
-    """Files as markdown sections, for prompts."""
-    return "\n\n".join(f"### {f.path}\n```\n{f.content.decode(errors='replace')}\n```" for f in files) or "(none)"
+def files_text(files: Sequence[TaskResource], root: str) -> str:
+    """Files as markdown sections titled by their path under ``root``, for prompts."""
+    sections = (f"### {root}{f.path}\n```\n{resource_bytes(f).decode(errors='replace')}\n```" for f in files)
+    return "\n\n".join(sections) or "(none)"
+
+
+def machine_facts(container: bool) -> str:
+    """What the solver's machine is, for prompts."""
+    return (CONTAINER_FACTS if container else SHELLSIM_FACTS).format(workdir=WORKDIR)
+
+
+def grader_contract(requirements: EnvironmentRequirements) -> str:
+    if requirements.docker_image is None:
+        return SCRIPT_CONTRACT
+    return SHELL_CONTRACT.format(tests=TESTS_DIR, script=SHELL_GRADER, workdir=WORKDIR)
 
 
 def task_messages(b: Build, request: str, guidance: str) -> list[Message]:
@@ -301,67 +381,80 @@ async def sources(b: Build, guidance: str) -> Sources:
 async def fixtures(b: Build, found: Sources, guidance: str) -> Fixtures:
     """Write the solver-visible files and the private reference data the proposal's build plan calls for."""
     request = (
-        f"{MACHINE_FACTS.format(grader=GRADER_DIR)}\n\n# Research notes\n\n{found.notes or '(none)'}\n\n"
+        f"{machine_facts(b.proposal.header.environment is Environment.CONTAINER)}\n\n"
+        f"# Research notes\n\n{found.notes or '(none)'}\n\n"
         "Write the task fixtures from the proposal's Build plan. Solver-visible files go under "
-        f"{WORKDIR}/ (a reasoning task may put everything in the instruction and ship no files). "
-        f"Grader-only reference data goes under {GRADER_DIR}/. Compute every value exactly; the facts field "
+        f"{WORKSPACE}/ (a reasoning task may put everything in the instruction and ship no files). "
+        "Grader-only reference data goes in private_files. Compute every value exactly; the facts field "
         "must state every value the grader will check."
     )
 
     draft = await structured_until(b, task_messages(b, request, guidance), FixturesDraft, "submit_fixtures", accept)
-    agent_files = tuple(environment_file(f) for f in draft.agent_files)
-    private_files = tuple(environment_file(f) for f in draft.private_files)
-    for f in (*agent_files, *private_files):
-        b.emit(f.path, f.content)
+    agent_files = tuple(task_file(f) for f in draft.agent_files)
+    private_files = tuple(task_file(f) for f in draft.private_files)
+    for resource in agent_files:
+        b.emit(f"/{resource.path}", resource_bytes(resource))
+    for resource in private_files:
+        b.emit(f"private/{resource.path}", resource_bytes(resource))
     return Fixtures(agent_files=agent_files, private_files=private_files, facts=draft.facts)
 
 
 @step(StepRole.ENVIRONMENT)
-async def environment(b: Build, made: Fixtures, guidance: str) -> EnvironmentSpec:
-    """The task machine: ShellSim for reasoning and shellsim proposals, a DockerBuild for containers."""
+async def requirements(b: Build, made: Fixtures, guidance: str) -> EnvironmentRequirements:
+    """The task machine: ShellSim for reasoning and shellsim proposals, a published image for containers."""
     if b.proposal.header.environment is not Environment.CONTAINER:
-        return b.spec.environment(EnvironmentKind.SHELLSIM, files=made.agent_files, workdir=WORKDIR)
+        return b.spec.requirements(image=None, workdir=WORKDIR)
     request = (
         "Write the task image: a Dockerfile (WORKDIR /workspace, no network at run time) and any build-context "
-        f"files it copies. {DOCKER_IMAGE_REQUIREMENTS} The solver-visible files below are installed by the task, "
-        "not the image.\n\n"
-        f"{files_text(made.agent_files)}"
+        f"files it copies. {DOCKER_IMAGE_REQUIREMENTS} The image also provides python3: the grader runs in a "
+        "fresh container from it. The solver-visible files below are installed by the task, not the image.\n\n"
+        f"{files_text(made.agent_files, '/')}"
     )
 
     draft = await structured_until(b, task_messages(b, request, guidance), DockerfileDraft, "submit_image", accept)
-    context = (EnvironmentFile(path="/Dockerfile", content=draft.dockerfile.encode()),)
-    context += tuple(environment_file(f) for f in draft.context_files)
-    return b.spec.environment(
-        EnvironmentKind.DOCKER, image=DockerBuild(files=context), files=made.agent_files, workdir=WORKDIR
-    )
+    context = (file("Dockerfile", draft.dockerfile), *(task_file(f) for f in draft.context_files))
+    try:
+        build = DockerBuild(files=context)
+    except ValueError as error:
+        raise b.failure(f"image context: {error}") from error
+    image = await b.publish_image(build)
+    return b.spec.requirements(image=image, workdir=WORKDIR)
 
 
-def grader_verifier(b: Build, draft: GraderDraft, made: Fixtures) -> VerifierSpec:
-    """The VerifierSpec a grader draft describes."""
+def grader_package(b: Build, draft: GraderDraft, made: Fixtures, task_machine: EnvironmentRequirements) -> GraderPackage:
+    """The grader a draft describes: a host script for an image-less task, a shell grader in the task image."""
     if draft.kind == "exact":
         return b.spec.answer_verifier(ExactSpec(expected=(draft.expected,), ignore_case=True, ignore_whitespace=True))
     if draft.kind == "numeric":
         return b.spec.answer_verifier(
             NumericSpec(expected=draft.expected.strip(), tolerance_abs=draft.tolerance, tolerance_rel=0.0)
         )
-    files = (
-        EnvironmentFile(path=GRADER_SCRIPT, content=draft.script.encode(), mode=0o755),
-        *made.private_files,
-        *(environment_file(f) for f in draft.private_files),
-    )
+    private = (*made.private_files, *(task_file(f) for f in draft.private_files))
+    if task_machine.docker_image is None:
+        return b.spec.script_verifier(draft.script, {}, timeout=GRADER_TIMEOUT, files=private)
     return b.spec.shell_verifier(
-        argv=("python3", GRADER_SCRIPT), reward=StdoutReward(), timeout=GRADER_TIMEOUT, files=files
+        argv=("python3", f"{TESTS_DIR}/{SHELL_GRADER}"),
+        reward=StdoutReward(),
+        image=task_machine.docker_image,
+        files=(file(SHELL_GRADER, draft.script, mode=0o755), *private),
+        artifacts=(VerifierArtifact(source=WORKDIR, target=WORKDIR, kind=ArtifactKind.DIRECTORY),),
     )
+
+
+def output_paths(package: GraderPackage, reference_files: Sequence[TaskResource]) -> tuple[str, ...]:
+    """The machine files a grader script reads: the reference files' paths. Other graders need none."""
+    if package.verifier.kind != SCRIPT_KIND:
+        return ()
+    return tuple(sorted(f"/{resource.path}" for resource in reference_files))
 
 
 @step(StepRole.GRADER)
-async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: str) -> Grader:
+async def grader(b: Build, made: Fixtures, task_machine: EnvironmentRequirements, guidance: str) -> Grader:
     """Write the grader and prototype it: the reference answer gets full credit, an empty answer does not."""
     request = (
-        f"{MACHINE_FACTS.format(grader=GRADER_DIR)}\n\n"
-        f"{GRADER_CONTRACT.format(script=GRADER_SCRIPT, workdir=WORKDIR, grader=GRADER_DIR)}\n\n"
-        f"# Fixture facts\n\n{made.facts}\n\n# Solver-visible files\n\n{files_text(made.agent_files)}\n\n"
-        f"# Private files already under {GRADER_DIR}/\n\n{files_text(made.private_files)}\n\n"
+        f"{machine_facts(task_machine.docker_image is not None)}\n\n{grader_contract(task_machine)}\n\n"
+        f"# Fixture facts\n\n{made.facts}\n\n# Solver-visible files\n\n{files_text(made.agent_files, '/')}\n\n"
+        f"# Private data files already shipped with a grader script\n\n{files_text(made.private_files, '')}\n\n"
         f"{SUBMISSION}\n\n{NUMERIC_LITERALS}\n\n"
         "Write the grader from the proposal's 'Grader design and controls' section. Prefer kind=script for "
         "anything beyond one exact or numeric answer. Give partial credit only where the proposal does. The "
@@ -372,15 +465,20 @@ async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: s
         if draft.kind == "script" and not draft.script.strip():
             return "kind=script needs the script source"
         try:
-            verifier = grader_verifier(b, draft, made)
+            package = grader_package(b, draft, made, task_machine)
+            reference_files = [task_file(f) for f in draft.reference_files]
+            paths = output_paths(package, reference_files)
             reference = await b.try_grader(
-                machine,
-                verifier,
+                task_machine,
+                package,
                 AnswerType.TEXT,
                 CONVENTION,
                 "(instruction)",
                 draft.reference_reply,
-                [environment_file(f) for f in draft.reference_files],
+                files=made.agent_files,
+                workspace=reference_files,
+                output_paths=paths,
+                machine=TASK_MACHINE,
             )
         except (ValueError, BuildFailure) as error:
             return str(error)
@@ -389,20 +487,30 @@ async def grader(b: Build, made: Fixtures, machine: EnvironmentSpec, guidance: s
                 f"the reference answer was graded {reference.status} reward={reference.reward}: "
                 f"{_diagnostics(reference)}"
             )
-        empty = await b.try_grader(machine, verifier, AnswerType.TEXT, CONVENTION, "(instruction)", "")
+        empty = await b.try_grader(
+            task_machine,
+            package,
+            AnswerType.TEXT,
+            CONVENTION,
+            "(instruction)",
+            "",
+            files=made.agent_files,
+            output_paths=paths,
+            machine=TASK_MACHINE,
+        )
         if empty.status == Outcome.GRADED and (empty.reward or 0.0) > REJECTION_CEILING:
             return f"an empty answer got reward {empty.reward}; it must get at most {REJECTION_CEILING}"
         return None
 
     draft = await structured_until(b, task_messages(b, request, guidance), GraderDraft, "submit_grader", problem)
-    verifier = grader_verifier(b, draft, made)
+    package = grader_package(b, draft, made, task_machine)
     if draft.kind == "script":
-        b.emit(GRADER_SCRIPT, draft.script.encode())
+        b.emit(f"grader/{SHELL_GRADER}", draft.script.encode())
     return Grader(
-        verifier=verifier,
+        package=package,
         answer_contract=draft.answer_contract,
         reference_reply=draft.reference_reply,
-        reference_files=tuple(environment_file(f) for f in draft.reference_files),
+        reference_files=tuple(task_file(f) for f in draft.reference_files),
         secret_values=tuple(value for value in draft.secret_values if value.strip()),
     )
 
@@ -412,14 +520,18 @@ def _diagnostics(grade: GradeResult) -> str:
 
 
 @step(StepRole.INSTRUCTIONS)
-async def instructions(b: Build, made: Fixtures, graded: Grader, guidance: str) -> Instructions:
+async def instructions(
+    b: Build, made: Fixtures, task_machine: EnvironmentRequirements, graded: Grader, guidance: str
+) -> Instructions:
     """Write the solver-facing instruction around the grader's answer contract."""
     request = (
-        f"{MACHINE_FACTS.format(grader=GRADER_DIR)}\n\n# Solver-visible files\n\n{files_text(made.agent_files)}\n\n"
+        f"{machine_facts(task_machine.docker_image is not None)}\n\n"
+        f"# Solver-visible files\n\n{files_text(made.agent_files, '/')}\n\n"
         f"# Answer contract the grader enforces\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"
         "Write the solver-facing instruction from the proposal's Task section: the scenario, every input the "
         "solver needs that is not in a file, the deliverable, and the answer contract verbatim. Never include "
-        "a graded answer, the grader's existence details, or hints that give the answer away."
+        "a graded answer, the grader's existence details, or hints that give the answer away. Do not describe "
+        "the shell tool or the submission instruction: RolloutEngine adds both."
     )
 
     async def problem(draft: InstructionsDraft) -> str | None:
@@ -434,19 +546,21 @@ async def instructions(b: Build, made: Fixtures, graded: Grader, guidance: str) 
 
 
 @step(StepRole.ASSEMBLE)
-async def assemble(b: Build, machine: EnvironmentSpec, graded: Grader, text: Instructions) -> TaskSpec:
+async def assemble(
+    b: Build, made: Fixtures, task_machine: EnvironmentRequirements, graded: Grader, text: Instructions
+) -> TaskSpec:
     """The TaskSpec, checked by ``b.spec.assemble``."""
     header = b.proposal.header
     return b.spec.assemble(
         task_id=b.item_id,
         instruction=text.instruction,
         answer_type=AnswerType.TEXT,
-        environment=machine,
-        verifier=graded.verifier,
+        grader=graded.package,
         source=Source(dataset=SOURCE_DATASET, revision=b.proposal.digest, row=header.id, importer_revision=SDK_VERSION),
-        execution=EXECUTION,
+        environment=task_machine,
+        files=made.agent_files,
+        output_paths=output_paths(graded.package, graded.reference_files),
         system=text.system,
-        metadata={"proposal_id": header.id, "environment": header.environment, "verification": header.verification},
         tags=(header.environment, header.verification),
     )
 
@@ -458,9 +572,9 @@ def control_payload(draft: ControlDraft) -> Transcript:
     commands = tuple(
         (
             f"{draft.id}-write-{index}",
-            f"mkdir -p {shlex.quote(f.path.rsplit('/', 1)[0] or '/')} && "
+            f"mkdir -p {shlex.quote('/' + f.path.rsplit('/', 1)[0])} && "
             f"printf %s {shlex.quote(base64.b64encode(f.content.encode()).decode())} "
-            f"| base64 -d > {shlex.quote(f.path)}",
+            f"| base64 -d > {shlex.quote(f'/{f.path}')}",
         )
         for index, f in enumerate(draft.files)
     )
@@ -485,16 +599,15 @@ async def controls(b: Build, task: TaskSpec, graded: Grader, guidance: str) -> t
     request = (
         f"# Task conversation\n\n{format_conversation(task.context.events)}\n\n"
         f"# Answer contract\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"
-        f"# Reference reply\n\n{graded.reference_reply}\n\n# Reference files\n\n{files_text(graded.reference_files)}\n\n"
+        f"# Reference reply\n\n{graded.reference_reply}\n\n"
+        f"# Reference files\n\n{files_text(graded.reference_files, '/')}\n\n"
         "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
         "known_correct positive control with concern reference (reward_min 0.99), one plausible_wrong control "
         "with concern acceptance, one task_specific_shortcut or reward_hack control with concern shortcut, and "
         "one empty_or_malformed control with concern extraction (negative and malformed controls: reward_max at "
         f"most {REJECTION_CEILING}). Keep extraction controls few: they pin only how the answer is parsed. "
         "A negative control must be a candidate the grader scores at most "
-        f"{REJECTION_CEILING}; if the proposal's partial-credit controls would score higher, leave them out. "
-        "Do not write partial controls: this template's grader prints one reward and reports no reward "
-        "components, which a partial control needs."
+        f"{REJECTION_CEILING}; if the proposal's partial-credit controls would score higher, leave them out."
     )
 
     async def problem(draft: ControlsDraft) -> str | None:
@@ -511,9 +624,16 @@ async def controls(b: Build, task: TaskSpec, graded: Grader, guidance: str) -> t
 async def build(b: Build) -> BuildOutput:
     found = await sources(b, "")
     made = await fixtures(b, found, "")
-    machine = await environment(b, made, "")
-    graded = await grader(b, made, machine, "")
-    text = await instructions(b, made, graded, "")
-    task = await assemble(b, machine, graded, text)
+    task_machine = await requirements(b, made, "")
+    graded = await grader(b, made, task_machine, "")
+    text = await instructions(b, made, task_machine, graded, "")
+    task = await assemble(b, made, task_machine, graded, text)
     fixed = await controls(b, task, graded, "")
-    return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=fixed)
+    shell_graded = task.verifier.kind == SHELL_KIND
+    lowered = b.lower(
+        task,
+        task_machine=TASK_MACHINE,
+        verifier_machine=TASK_MACHINE if shell_graded else None,
+        session=SESSION,
+    )
+    return BuildOutput(task=task, lowered=lowered, convention=CONVENTION, controls=fixed)

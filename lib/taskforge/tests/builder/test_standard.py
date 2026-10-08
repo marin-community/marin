@@ -4,11 +4,12 @@
 import inspect
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, MachineSpec, ShellSimBuiltins
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.models import VerifierKind
+from shellbox.machine import Backend, Command, MachineSpec, ShellSimBuiltins
+from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.shell_verifier import ArtifactKind, ShellVerifierSpec
 
 from taskforge.builder.author import compile_program
 from taskforge.builder.run import item_id_for, run_build
@@ -16,14 +17,19 @@ from taskforge.builder.sdk import Build
 from taskforge.builder.step import StepCache
 from taskforge.builder.template import standard
 from taskforge.llm.agent import AgentTool
+from taskforge.proposal.model import parse
+from taskforge.sandbox.images import DockerBuild
 from taskforge.spec.controls import ControlCategory
+from tests.builder.conftest import PROPOSAL
 
-GOOD_GRADER = """import json, sys
-messages = json.load(sys.stdin)
-final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
-expected = open("/grader/key.txt").read().strip()
-print(1.0 if final.strip().endswith("ANSWER = " + expected) else 0.0)
+GOOD_GRADER = """import json, os, pathlib
+final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
+expected = pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "key.txt").read_text().strip()
+reward = float(final.endswith("ANSWER = " + expected))
+verdict = {"status": "scored", "reward": reward, "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
 """
+IMAGE = f"registry.example/taskforge-tasks/d00@sha256:{'2' * 64}"
 
 
 def file(path: str, content: str) -> dict:
@@ -82,8 +88,8 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
     submit(
         "submit_fixtures",
         {
-            "agent_files": [file("/workspace/question.txt", "What is 6 * 7?")],
-            "private_files": [file("/grader/key.txt", "42")],
+            "agent_files": [file("workspace/question.txt", "What is 6 * 7?")],
+            "private_files": [file("key.txt", "42")],
             "facts": "6 * 7 = 42",
         },
     )
@@ -113,12 +119,16 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
     assert queries == [{"query": "6 times 7"}]
     assert fake_glm.responses == type(fake_glm.responses)()
     task = draft.task
-    assert task.environment.kind == EnvironmentKind.SHELLSIM
-    assert [f.path for f in task.environment.files] == ["/workspace/question.txt"]
-    assert task.verifier.kind == VerifierKind.SHELL
-    assert {f.path: f.content.decode() for f in task.verifier.files} == {
-        standard.GRADER_SCRIPT: GOOD_GRADER,
-        "/grader/key.txt": "42",
+    assert task.environment_requirements.docker_image is None
+    assert draft.lowered.runtime.task_machine is not None
+    assert draft.lowered.runtime.task_machine.backend == Backend.SHELLSIM
+    assert draft.lowered.runtime.verifier_machine is None
+    assert [f.path for f in task.resources.worker] == ["workspace/question.txt"]
+    assert task.verifier.kind == "script"
+    assert {f.path: resource_bytes(f).decode() for f in task.resources.verifier} == {
+        "grader.py": GOOD_GRADER,
+        "config.json": "{}",
+        "key.txt": "42",
     }
     assert "42" not in json.dumps(task.context.model_dump(mode="json"))
     assert {c.category for c in draft.controls} == {
@@ -127,7 +137,7 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
         ControlCategory.PLAUSIBLE_WRONG,
         ControlCategory.TASK_SPECIFIC_SHORTCUT,
     }
-    assert {r.name for r in draft.provenance.resources} >= {"research/notes.md", standard.GRADER_SCRIPT}
+    assert {r.name for r in draft.provenance.resources} >= {"research/notes.md", "grader/grade.py"}
 
 
 async def test_grader_step_feeds_back_a_numeric_answer_that_is_not_a_literal(proposal, tmp_path, services, fake_glm):
@@ -141,16 +151,16 @@ async def test_grader_step_feeds_back_a_numeric_answer_that_is_not_a_literal(pro
     cache = StepCache(root=tmp_path / "cache", item_id=item_id_for(proposal))
     async with services(fake_glm.base_url) as s:
         b = Build(proposal, cache.item_id, s, cache, tmp_path / "scratch", 0)
-        machine = b.spec.environment(EnvironmentKind.SHELLSIM, workdir=standard.WORKDIR)
+        machine = b.spec.requirements(image=None, workdir=standard.WORKDIR)
         graded = await standard.grader(b, made, machine, "")
 
-    assert graded.verifier.kind == VerifierKind.NUMERIC_ANSWER
+    assert graded.package.verifier.kind == "numeric"
     retry = fake_glm.requests[1]["messages"][-1]["content"]
     assert "numeric value requires one finite scalar literal" in retry
 
 
 async def test_control_files_with_shell_metacharacters_in_their_paths_are_written_verbatim():
-    path = "/workspace/it's $HOME/a b.txt"
+    path = "workspace/it's $HOME/a b.txt"
     draft = standard.ControlDraft.model_validate(
         {
             **control("quoted", "positive", "known_correct", "reference", "done", 1.0, None),
@@ -163,7 +173,48 @@ async def test_control_files_with_shell_metacharacters_in_their_paths_are_writte
         for call in turn.calls:
             result = await machine.run(Command(argv=("sh", "-c", call.arguments["command"])))
             assert result.exit_code == 0, result.stderr
-        written = await machine.run(Command(argv=("cat", path)))
+        written = await machine.run(Command(argv=("cat", f"/{path}")))
     finally:
         await machine.close()
     assert written.stdout == b"x'y\n"
+
+
+class RecordingImageBuilder:
+    def __init__(self) -> None:
+        self.published: list[tuple[DockerBuild, str]] = []
+
+    async def publish(self, build: DockerBuild, repository: str) -> str:
+        self.published.append((build, repository))
+        return IMAGE
+
+
+async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(tmp_path, services, fake_glm):
+    proposal = parse(PROPOSAL.replace("environment: reasoning", "environment: container"))
+    dockerfile = "FROM python:3.12-slim\nWORKDIR /workspace\n"
+    fake_glm.stream(
+        tool_calls=(("submit_image", json.dumps({"dockerfile": dockerfile, "context_files": []})),),
+        finish="tool_calls",
+    )
+    images = RecordingImageBuilder()
+    made = standard.Fixtures(
+        agent_files=(),
+        private_files=(standard.task_file(standard.FileDraft.model_validate(file("key.txt", "42"))),),
+        facts="",
+    )
+    cache = StepCache(root=tmp_path / "cache", item_id=item_id_for(proposal))
+    async with services(fake_glm.base_url) as s:
+        b = Build(proposal, cache.item_id, replace(s, images=images), cache, tmp_path / "scratch", 0)
+        machine = await standard.requirements(b, made, "")
+        draft = standard.GraderDraft.model_validate(grader_call("print(1.0)"))
+        package = standard.grader_package(b, draft, made, machine)
+
+    assert machine.docker_image == IMAGE
+    assert [resource_bytes(f).decode() for f in images.published[0][0].files] == [dockerfile]
+    assert package.verifier.kind == "shell"
+    assert package.verifier.environment_requirements.docker_image == IMAGE
+    shell = ShellVerifierSpec.model_validate_json(package.verifier.parameters_json)
+    assert shell.argv == ("python3", "/tests/grade.py")
+    assert [(a.source, a.target, a.kind) for a in shell.artifacts] == [
+        ("/workspace", "/workspace", ArtifactKind.DIRECTORY)
+    ]
+    assert sorted(f.path for f in package.resources) == ["grade.py", "key.txt"]

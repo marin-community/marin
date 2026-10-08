@@ -55,12 +55,15 @@ ALLOWED_IMPORTS = frozenset(
         "taskforge.llm.agent",
         "taskforge.llm.policy",
         "taskforge.proposal.model",
-        "taskcompendium.environment",
-        "taskcompendium.execution",
+        "taskforge.sandbox.images",
+        "taskcompendium.grader",
         "taskcompendium.models",
+        "taskcompendium.runtime.resources",
+        "taskcompendium.shell_verifier",
         "taskcompendium.grading",
         "taskcompendium.grading_result",
         "taskcompendium.submission",
+        "rolloutengine.spec",
         "verifyit.spec",
         "pydantic",
         "__future__",
@@ -94,11 +97,13 @@ You write builder programs for Taskforge. A builder program is one Python module
 accepted task proposal into a TaskCompendium TaskSpec plus fixed controls, using only the builder \
 SDK described below. Rules:
 - Define `async def build(b: Build) -> BuildOutput` and return
-  `BuildOutput(task=..., execution=..., convention=..., controls=...)`, where `execution` is the
-  `TaskExecution` you passed to `spec.assemble` (`TaskExecution()` when the task sets no deadlines,
-  user or stages) and `convention` is the `taskcompendium.submission` convention the solver submits
-  under (`PlainText(id="plain_text")` unless the answer needs another). Reference and control
-  replies follow that convention.
+  `BuildOutput(task=..., lowered=..., convention=..., controls=...)`, where `task` is what
+  `spec.assemble` returned, `lowered` is `b.lower(task, task_machine=..., verifier_machine=...,
+  session=...)` (it calls `spec.lower` for this host: `spec.machine(...)` settings for the task
+  machine, `None` for a task without one; a verifier machine only for a `spec.shell_verifier`
+  grader; `spec.session(...)` for the turn budget and verifier timeout) and `convention` is the
+  `taskcompendium.submission` convention the solver submits under (`PlainText(id="plain_text")`
+  unless the answer needs another). Reference and control replies follow that convention.
 - Every unit of work is a memoized step: `@step(StepRole.X)` on an `async def name(b, ...) -> Output`.
   Step outputs must be JSON-serializable: dataclasses, pydantic models, tuples, str, int, float.
   Pass everything a step depends on as an argument so the memo key changes when it changes.
@@ -111,19 +116,22 @@ SDK described below. Rules:
   candidate `b.try_grader` grades is recorded, and the build fails when a control (other than the
   reference and the empty answer) is one of them. Do not share a candidate list between the
   GRADER and CONTROLS steps.
-- A partial control (ControlKind.PARTIAL) needs exact reward components, which only a grader that
-  writes a JSON reward file reports (`spec.reward_file(path, RewardFileFormat.JSON)` with one key
-  per criterion). With a stdout reward, leave partial controls out.
-- Task-specific checks belong in the grader script the task ships (a `spec.shell_verifier`, which
-  runs inside the task machine after the solver finishes, receives the conversation as JSON on
-  stdin, and prints one reward in [0, 1]); generic answer checks use `spec.answer_verifier`.
-- A shell verifier needs an executable environment: use EnvironmentKind.SHELLSIM for reasoning
-  and shellsim proposals, and EnvironmentKind.DOCKER with a DockerBuild for containers. ShellSim
-  has `sh`, coreutils, and a minimal `python3` shim, not CPython: only part of the standard library
-  exists (json, re, fractions, math, sys work; traceback does not) and some methods take fewer
-  arguments (a compiled regex's `match`/`search` take only the string, no `pos`). Keep grader
-  scripts simple, and do not catch broad exceptions around the whole grader: an unexpected error
-  should crash so `b.try_grader` shows it. It has no network and no pip.
+- Task-specific checks belong in a grader script the task ships; generic answer checks use
+  `spec.answer_verifier`. A task without an image (no task machine, or `spec.requirements(image=None)`,
+  which runs in ShellSim) uses `spec.script_verifier`: a Python script that runs on the host under
+  CPython with the standard library after the attempt, reads the final answer and the captured
+  `output_paths` from its workspace and private data from its tests directory, and writes a verdict
+  file. A task with an image (`b.publish_image(DockerBuild(...))` for containers) uses
+  `spec.shell_verifier` with `image=` that image: its command runs in a separate verifier machine
+  started from the image, with private files under /tests and the files `artifacts` copies from
+  the task machine. Neither grader runs in the solver's machine, so private files never reach it.
+  Do not catch broad exceptions around a whole grader: an unexpected error should fail so
+  `b.try_grader` shows it.
+- ShellSim, the image-less task machine, has `sh`, coreutils, and a minimal `python3` shim, not
+  CPython: only part of the standard library exists and it has no network and no pip. Solver-side
+  scripts in it stay simple.
+- The instruction describes the task, never how it is run or graded: RolloutEngine adds the shell
+  tool and the submission instruction itself.
 - The program runs with restricted builtins: `exec`, `eval`, `compile`, `open`, `globals` and
   `vars` do not exist. Compute in plain Python inside steps; run scripts in `b.machine`.
 - Use model calls (`b.llm.structured`, `b.llm.complete`, `b.llm.agent`) for content you cannot

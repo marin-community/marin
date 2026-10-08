@@ -27,7 +27,10 @@ from taskforge.builder.template import standard
         (lambda s: "import os\n" + s, "may not import 'os'"),
         (lambda s: s + "\nopen('/etc/passwd')\n", "NameError"),
         # Only reached at run time, so it is found statically.
-        (lambda s: s.replace("    return spec.environment(", "    exec('pass')\n    return spec.environment("), "exec"),
+        (
+            lambda s: s.replace("    return spec.requirements(", "    exec('pass')\n    return spec.requirements("),
+            "exec",
+        ),
         (lambda s: s.replace("async def build(", "async def run("), "async def build"),
         (lambda s: s.replace("@step(StepRole.GRADER)", "@step(StepRole.OTHER)"), "GRADER"),
     ],

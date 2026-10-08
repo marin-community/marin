@@ -4,12 +4,14 @@
 """The builder SDK: the ``Build`` context a builder program's ``build(b)`` receives.
 
 A builder program is a module that defines memoized steps (``@step(role)``) and an
-``async def build(b: Build) -> BuildOutput``. The program returns the task and its controls; it
-never marks itself complete. ``run_build`` checks the output, adds provenance, and records the
-draft. ``sdk_reference`` renders this module's public surface from its docstrings for the author.
+``async def build(b: Build) -> BuildOutput``. The program returns the task, its lowered form and
+its controls; it never marks itself complete. ``run_build`` checks the output, adds provenance, and
+records the draft. ``sdk_reference`` renders this module's public surface from its docstrings for
+the author.
 """
 
 import inspect
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -19,19 +21,24 @@ from types import ModuleType
 from typing import Any
 
 from pydantic import BaseModel
-from rolloutengine.cleanup import Cleanup
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutInterrupted, SuppliedState
 from rolloutengine.engine import ShellboxRolloutEngine
-from rolloutengine.machines import task_machine
+from rolloutengine.machines import prepare_machine
+from rolloutengine.spec import LoweredTaskSpec, TaskSessionSpec
 from shellbox.machine import Machine, MachineFactory
-from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
-from taskcompendium.execution import TaskExecution
+from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec
+from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskResource, TaskSpec
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
 from taskforge.builder import step as step_module
-from taskforge.builder.infrastructure import host_checked_factories, infrastructure_failure
+from taskforge.builder.infrastructure import (
+    BuildInfrastructureFailure,
+    InfrastructureCause,
+    host_checked_factories,
+    infrastructure_failure,
+)
 from taskforge.builder.step import (
     CURRENT_STEP,
     SDK_VERSION,
@@ -51,17 +58,26 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_complete, recorded_structured
 from taskforge.llm.structured import StructuredTool
 from taskforge.proposal.model import TaskProposal, render
+from taskforge.sandbox.factories import MachineHost
+from taskforge.sandbox.images import BUILD_LIMITS, DockerBuild, ImageBuilder, check_build_limits
 from taskforge.spec import controls as controls_module
 from taskforge.spec import draft as draft_module
 from taskforge.spec.controls import Control
+from taskforge.spec.draft import MachineSettings
 
 MACHINE_CLEANUP_TIMEOUT = 120.0
-"""Seconds ``Build.machine`` and ``Build.try_grader`` wait for a machine to close; a failed close is
-logged, not raised."""
+"""Seconds ``Build.machine`` and ``Build.try_grader`` wait for a machine to close."""
+TRY_GRADER_MACHINE = draft_module.machine(startup_timeout=600.0)
+"""The task and verifier machine settings ``Build.try_grader`` uses unless the program passes its own."""
+TRY_GRADER_VERIFIER_TIMEOUT = 600.0
+"""Seconds ``Build.try_grader`` allows one grading, verifier machine start included."""
+IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
+"""Registry repository under which ``Build.publish_image`` pushes an item's task image."""
 DOCKER_IMAGE_REQUIREMENTS = (
-    "A Docker task image (EnvironmentKind.DOCKER) must provide `sh` and `setsid` (util-linux, or busybox "
+    "A task image (`b.publish_image(DockerBuild(...))`) must provide `sh` and `setsid` (util-linux, or busybox "
     "with its setsid applet): shellbox's Docker backend starts every command under setsid and refuses an image "
-    "without it, so distroless and scratch images cannot run a task."
+    "without it, so distroless and scratch images cannot run a task. On Iris the image runs under gVisor, which "
+    "cannot switch users: leave the image's user as root."
 )
 NUMERIC_LITERALS = (
     "A numeric answer's expected value (verifyit `NumericSpec.expected`) is a literal string: an integer, "
@@ -69,9 +85,17 @@ NUMERIC_LITERALS = (
     'It is never a float or an expression (not 0.125, not "sqrt(2)").'
 )
 HOST_FAILURES = (
-    "When the host fails (no factory for the machine kind, the factory cannot schedule a machine, the machine "
-    "host is unreachable), `b.machine` and `b.try_grader` raise `BuildInfrastructureFailure`. Let it propagate: "
-    "the build is retried without a revision. A failing image build, setup or healthcheck is the program's."
+    "When the host fails (no factory for the machine backend, no image builder, the factory cannot schedule a "
+    "machine, the machine host is unreachable), `b.machine`, `b.publish_image` and `b.try_grader` raise "
+    "`BuildInfrastructureFailure`. Let it propagate: the build is retried without a revision. A failing image "
+    "build, setup command or grader is the program's."
+)
+GRADERS = (
+    "Graders: an image-less task (no task machine, or a ShellSim one) is graded by `spec.script_verifier`, a "
+    "Python script verifyit runs on the host under CPython after the attempt; it reads the text answer and the "
+    "task's `output_paths` captured from the machine. A task with an image is graded by `spec.shell_verifier` "
+    "with `image=` the task image, in a separate verifier machine. `spec.answer_verifier` checks the final "
+    "answer in process. Answer and script graders take no verifier machine; a shell grader takes one."
 )
 TRY_GRADER_SOURCE = "taskforge.try_grader"
 """``Source.dataset`` of the provisional task ``Build.try_grader`` grades against."""
@@ -88,20 +112,22 @@ class BuildFailure(Exception):
 
 @dataclass(frozen=True)
 class Grader:
-    """What a GRADER step returns: the verifier and the evidence it was prototyped on.
+    """What a GRADER step returns: the grader and the evidence it was prototyped on.
 
     Attributes:
-        verifier: The task verifier (``b.spec.shell_verifier`` or ``b.spec.answer_verifier``).
+        package: The task's grader (``spec.script_verifier``, ``spec.shell_verifier`` or
+            ``spec.answer_verifier``), passed to ``spec.assemble`` as ``grader``.
         answer_contract: The exact output format the solver must follow, for the instructions.
         reference_reply: A correct final reply, used to prototype the grader.
-        reference_files: Files a correct solver leaves in the workspace, if the grader reads any.
+        reference_files: Files a correct solver leaves in the task machine (``spec.file``, paths
+            relative to the machine root), if the grader reads any.
         secret_values: Answer strings the instructions must not contain.
     """
 
-    verifier: VerifierSpec
+    package: GraderPackage
     answer_contract: str
     reference_reply: str
-    reference_files: tuple[EnvironmentFile, ...] = ()
+    reference_files: tuple[TaskResource, ...] = ()
     secret_values: tuple[str, ...] = ()
 
 
@@ -114,26 +140,33 @@ class GradedCandidate:
     """A candidate ``Build.try_grader`` graded: its final reply and workspace files (by path)."""
 
     reply: str
-    files: tuple[EnvironmentFile, ...] = ()
+    files: tuple[TaskResource, ...] = ()
+
+
+def file_set(files: Sequence[TaskResource]) -> frozenset[tuple[str, bytes]]:
+    """``files`` as (path, content) pairs, so two file lists compare by what they install."""
+    return frozenset((resource.path, resource_bytes(resource)) for resource in files)
 
 
 @dataclass(frozen=True)
 class BuildOutput:
-    """What ``build(b)`` returns. The verifier must come from a GRADER step and the controls
+    """What ``build(b)`` returns. The grader must come from a GRADER step and the controls
     from a CONTROLS step; ``run_build`` checks both.
 
-    ``execution`` is the ``TaskExecution`` passed to ``spec.assemble`` for ``task``: deadlines,
-    the agent user, and each stage's files, setup and healthcheck. ``TaskExecution()`` sets none.
+    ``lowered`` is what ``b.lower(task, ...)`` returned for ``task``: the machine settings (backend,
+    network, limits, user, startup timeout) and the session (turn budget, deadlines, verifier
+    timeout) RolloutEngine runs it with. Validation replaces the session's turn budget and deadlines
+    with its own; the verifier timeout and machine settings stand.
 
     ``convention`` is the ``taskcompendium.submission`` convention the solver submits under, for
     example ``PlainText(id="plain_text")``: RolloutEngine appends its submission instruction to the
     task prompt and extracts the answer with it. Reference replies and control replies follow it.
     It must be compatible with the task (``submission_compatibility``); a task whose answer is the
-    machine state submits nothing through it. Like ``execution``, it is not part of the TaskSpec.
+    machine state submits nothing through it. Like ``lowered``, it is not part of the TaskSpec.
     """
 
     task: TaskSpec
-    execution: TaskExecution
+    lowered: LoweredTaskSpec
     convention: SubmissionConvention
     controls: tuple[Control, ...]
 
@@ -145,14 +178,19 @@ class BuildServices:
     Attributes:
         client: The shared GLM client.
         policy: Sampling policy for every model call in the build; part of every step key.
-        factories: Machine factories by environment kind, for ``Build.machine``.
+        host: Where the build runs; ``spec.lower`` picks machine backends for it.
+        factories: Machine factories keyed by shellbox ``Backend`` value, as
+            ``taskforge.sandbox.factories.machine_factories(host, ...)`` returns them.
+        images: Publishes task images by digest, or ``None`` when this host cannot.
         ledger: Where steps, model calls, and tool calls are recorded.
         web_tools: Web search and fetch tools (``taskforge.llm.web.web_tools``), or empty.
     """
 
     client: GlmClient
     policy: LLMPolicy
-    factories: Mapping[EnvironmentKind, MachineFactory]
+    host: MachineHost
+    factories: Mapping[str, MachineFactory]
+    images: ImageBuilder | None
     ledger: Ledger
     web_tools: tuple[AgentTool, ...] = ()
 
@@ -203,8 +241,8 @@ class Build:
         proposal: The accepted proposal being built.
         item_id: The item's file-safe id.
         llm: Model access (``complete``, ``structured``, ``agent``).
-        spec: ``taskforge.spec.draft``: ``environment``, ``file``, ``shell_verifier``,
-            ``answer_verifier``, ``assemble`` and friends.
+        spec: ``taskforge.spec.draft``: ``requirements``, ``machine``, ``session``, ``file``,
+            ``script_verifier``, ``shell_verifier``, ``answer_verifier``, ``assemble`` and friends.
         controls: ``taskforge.spec.controls``: ``Control``, ``Expectation``, ``Transcript``,
             ``Workspace``, ``reply``, ``shell_turn``.
         ledger: The build ledger.
@@ -230,7 +268,7 @@ class Build:
         self.round = round
         self.resources: list[Resource] = []
         self._services = services
-        self._factories = host_checked_factories(services.factories)
+        self._factories = host_checked_factories(services.factories, services.host)
         self._cache = cache
 
     @property
@@ -281,22 +319,77 @@ class Build:
         """The content of a blob this build or an earlier one stored."""
         return self._cache.blobs.get(blob)
 
+    async def publish_image(self, build: DockerBuild) -> str:
+        """Build ``build`` for linux/amd64, push it, and return the digest-pinned reference.
+
+        Pass the result as ``spec.requirements(image=...)``; call it inside a step so the reference
+        is memoized with the step's output.
+
+        Raises:
+            BuildFailure: the build context exceeds ``BUILD_LIMITS``.
+            BuildInfrastructureFailure: this host has no image builder.
+        """
+        images = self._services.images
+        if images is None:
+            raise BuildInfrastructureFailure(InfrastructureCause.NO_IMAGE_BUILDER, "this host cannot publish images")
+        try:
+            check_build_limits(build, BUILD_LIMITS)
+        except ValueError as error:
+            raise self.failure(f"publish_image: {error}") from error
+        return await images.publish(build, self.image_repository)
+
+    @property
+    def image_repository(self) -> str:
+        """The registry repository ``publish_image`` pushes this item's images under."""
+        name = re.sub(r"[^a-z0-9]+", "-", self.item_id.lower()).strip("-")
+        return f"{IMAGE_REPOSITORY_PREFIX}/{name}"
+
+    def lower(
+        self,
+        task: TaskSpec,
+        *,
+        task_machine: MachineSettings | None,
+        verifier_machine: MachineSettings | None,
+        session: TaskSessionSpec,
+    ) -> LoweredTaskSpec:
+        """``spec.lower`` for this host and its machine factories: what ``BuildOutput.lowered`` holds.
+
+        ``task_machine`` is the task machine's settings (``spec.machine``), ``None`` exactly when the
+        task has none; ``verifier_machine`` likewise, given only for a ``spec.shell_verifier`` grader.
+
+        Raises:
+            BuildFailure: ``spec.lower`` or RolloutEngine rejects the lowered task.
+        """
+        try:
+            return draft_module.lower(
+                task,
+                host=self._services.host,
+                task_machine=task_machine,
+                verifier_machine=verifier_machine,
+                session=session,
+                factories=self._factories,
+            )
+        except (ValueError, NotImplementedError) as error:
+            raise self.failure(f"lower: {error}") from error
+
     @asynccontextmanager
-    async def machine(self, environment: EnvironmentSpec) -> AsyncIterator[Machine]:
-        """``async with b.machine(environment) as machine``: a prepared machine (files installed,
-        setup and healthcheck run).
+    async def machine(
+        self, requirements: EnvironmentRequirements, machine: MachineSettings, files: Sequence[TaskResource] = ()
+    ) -> AsyncIterator[Machine]:
+        """``async with b.machine(requirements, machine, files) as m``: a prepared machine (``files``
+        installed relative to the root, setup commands run).
 
         It is created and closed exactly as RolloutEngine would for a task attempt. Use it to
-        prototype fixtures and graders; ``shell_tool(machine)`` gives ``llm.agent`` a shell in it.
+        prototype fixtures and graders; ``shell_tool(m)`` gives ``llm.agent`` a shell in it.
 
         Raises:
             BuildInfrastructureFailure: the host failed to create or drive the machine.
         """
-        self.check(environment.kind != EnvironmentKind.NULL, "a null environment has no machine")
-        cleanup = Cleanup(MACHINE_CLEANUP_TIMEOUT)
-        async with task_machine(environment, self._factories, cleanup) as machine:
-            assert machine is not None
-            yield machine
+        runtime = draft_module.machine_runtime(machine, requirements, self._services.host)
+        async with prepare_machine(
+            requirements, runtime, tuple(files), self._factories, cleanup_timeout=MACHINE_CLEANUP_TIMEOUT
+        ) as prepared:
+            yield prepared
 
     def shell_tool(self, machine: Machine, timeout: float = 300.0) -> AgentTool:
         """RolloutEngine's ``shell(command)`` tool over ``machine``, for ``llm.agent``."""
@@ -304,21 +397,28 @@ class Build:
 
     async def try_grader(
         self,
-        environment: EnvironmentSpec,
-        verifier: VerifierSpec,
+        requirements: EnvironmentRequirements | None,
+        grader: GraderPackage,
         answer_type: AnswerType,
         convention: SubmissionConvention,
         instruction: str,
         reply: str,
-        workspace: Sequence[EnvironmentFile] = (),
+        *,
+        files: Sequence[TaskResource] = (),
+        workspace: Sequence[TaskResource] = (),
+        output_paths: Sequence[str] = (),
+        machine: MachineSettings = TRY_GRADER_MACHINE,
     ) -> GradeResult:
         """Grade one candidate (a final ``reply`` plus ``workspace`` files) the way the engine would.
 
-        RolloutEngine prepares a machine for ``environment``, installs the ``workspace`` files at
-        their absolute paths (as root, after setup), and grades ``instruction`` and ``reply`` as a
-        two-message conversation with ``verifier`` under ``convention``: any verifier and answer type
+        RolloutEngine prepares the task machine for ``requirements`` with the agent-visible
+        ``files`` (none when ``requirements`` is ``None``), installs the ``workspace`` files relative
+        to the machine root (as root, after setup), and grades ``instruction`` and ``reply`` as a
+        two-message conversation with ``grader`` under ``convention``: any grader and answer type
         ``spec.assemble`` accepts, with a reply in the form ``convention`` extracts (the final
-        assistant text). No model is called.
+        assistant text). A script grader reads the ``output_paths`` captured from the machine. A
+        shell grader runs in its own verifier machine. ``machine`` sets both machines. No model is
+        called.
 
         This prototypes a grader while it is being written: on its reference answer, an empty
         answer, and wrong answers you invent for the purpose. Every graded candidate is recorded,
@@ -326,27 +426,27 @@ class Build:
         the empty answer): controls are written, not graded; ``validate`` replays them.
 
         Raises:
-            BuildFailure: ``spec.assemble`` rejects the task these arguments describe, or
-                ``convention`` cannot carry ``answer_type`` to ``verifier``.
+            BuildFailure: ``spec.assemble`` or ``spec.lower`` rejects the task these arguments
+                describe, or ``convention`` cannot carry ``answer_type`` to ``grader``.
             BuildInfrastructureFailure: the host failed to create or drive a grading machine.
         """
         candidate = GradedCandidate(reply=reply, files=tuple(sorted(workspace, key=lambda f: f.path)))
         self.emit(f"{GRADED_RESOURCE_PREFIX}{digest(candidate)}.json", canonical_json(candidate).encode())
-        execution = draft_module.task_execution()
         try:
             task = draft_module.assemble(
                 task_id=f"{self.item_id}.try_grader",
                 instruction=instruction,
                 answer_type=answer_type,
-                environment=environment,
-                verifier=verifier,
+                grader=grader,
                 source=Source(
                     dataset=TRY_GRADER_SOURCE,
                     revision=self.proposal.digest,
                     row=self.item_id,
                     importer_revision=SDK_VERSION,
                 ),
-                execution=execution,
+                environment=requirements,
+                files=files,
+                output_paths=output_paths,
             )
         except ValueError as error:
             raise self.failure(f"try_grader: {error}") from error
@@ -355,20 +455,28 @@ class Build:
             self.check(
                 compatibility.compatible, f"try_grader: convention {convention.id!r}: {'; '.join(compatibility.reasons)}"
             )
-        engine = ShellboxRolloutEngine(
-            _no_model,
-            self._factories,
-            max_turns=1,
-            command_timeout=MACHINE_CLEANUP_TIMEOUT,
-            cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
-            convention=convention,
+        lowered = self.lower(
+            task,
+            task_machine=None if requirements is None else machine,
+            verifier_machine=machine if grader.verifier.kind == draft_module.SHELL_KIND else None,
+            session=draft_module.session(
+                max_turns=1,
+                model_turn_timeout=None,
+                command_timeout=None,
+                tool_turn_timeout=None,
+                total_turn_timeout=None,
+                attempt_timeout=None,
+                verifier_timeout=TRY_GRADER_VERIFIER_TIMEOUT,
+                cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
+            ),
         )
+        engine = ShellboxRolloutEngine(_no_model, self._factories, convention=convention)
         state = SuppliedState(
             messages=({"role": "user", "content": instruction}, {"role": "assistant", "content": reply}),
-            files=candidate.files,
+            resources=candidate.files,
         )
         try:
-            return await engine.grade_state(task, state, execution=execution)
+            return await engine.grade_state(lowered, state)
         except RolloutInterrupted as error:
             failure = infrastructure_failure(error)
             if failure is None:
@@ -383,8 +491,8 @@ async def _no_model(request: ModelRequest) -> ModelTurn:
 SDK_EXPORTS: dict[str, object] = {
     "Build": Build,
     "BuildOutput": BuildOutput,
-    "TaskExecution": TaskExecution,
     "BuildFailure": BuildFailure,
+    "DockerBuild": DockerBuild,
     "Grader": Grader,
     "Blob": Blob,
     "Resource": Resource,
@@ -430,15 +538,27 @@ def sdk_reference() -> str:
             lines += _describe(f"b.{name}", member, "  ")
     for name in ("complete", "structured", "agent"):
         lines += _describe(f"b.llm.{name}", getattr(BuildLLM, name), "  ")
-    for name in ("Grader", "BuildOutput", "BuildFailure"):
+    for name in ("Grader", "BuildOutput", "BuildFailure", "DockerBuild"):
         lines += _describe(name, SDK_EXPORTS[name])
-    lines += ["## Machines and answers", "", f"- {DOCKER_IMAGE_REQUIREMENTS}", f"- {NUMERIC_LITERALS}"]
-    lines += [f"- {HOST_FAILURES}", ""]
+    lines += ["## Machines, graders and answers", "", f"- {GRADERS}", f"- {DOCKER_IMAGE_REQUIREMENTS}"]
+    lines += [f"- {NUMERIC_LITERALS}", f"- {HOST_FAILURES}", ""]
     lines += _module_reference("Steps", step_module, ("step", "StepRole", "Blob", "Resource"))
     lines += _module_reference(
         "Task spec helpers, available as `spec`",
         draft_module,
-        ("environment", "file", "shell_command", "shell_verifier", "reward_file", "answer_verifier", "assemble"),
+        (
+            "requirements",
+            "machine",
+            "Resources",
+            "session",
+            "lower",
+            "file",
+            "script_verifier",
+            "shell_verifier",
+            "reward_file",
+            "answer_verifier",
+            "assemble",
+        ),
     )
     lines += _module_reference(
         "Controls, available as `controls`",
@@ -467,8 +587,8 @@ def sdk_reference() -> str:
             f"- {category.name}: {', '.join(sorted(c.name for c in concerns))}"
             for category, concerns in controls_module.CONCERNS.items()
         ),
-        "Every stage needs controls with each of these concerns: "
-        f"{', '.join(sorted(c.name for c in controls_module.REQUIRED_CONCERNS_PER_STAGE))}.",
+        "A task needs controls with each of these concerns: "
+        f"{', '.join(sorted(c.name for c in controls_module.REQUIRED_CONCERNS))}.",
         f"Negative controls and graded malformed controls need reward_max <= {controls_module.REJECTION_CEILING}.",
         "",
     ]

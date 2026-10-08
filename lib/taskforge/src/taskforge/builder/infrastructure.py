@@ -11,18 +11,20 @@ traceback, because no revision of the program can fix the host.
 
 Only errors the program cannot have caused are infrastructure:
 
-* ``NO_FACTORY``: the build needs a machine kind this host has no factory for (a laptop without
+* ``NO_FACTORY``: the build needs a machine backend this host has no factory for (a laptop without
   Docker). It is deterministic on the host (``HOST_REJECTIONS``): no retry here changes it, so the
   loop abandons the item at once without retrying the build.
+* ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
+  Also deterministic on the host.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
-  schedule the sandbox). The deadline a program sets with ``environment.startup_timeout`` is
+  schedule the sandbox). The deadline a program sets with ``spec.machine(startup_timeout=...)`` is
   enforced outside the factory and stays the program's.
 * ``HOST_UNREACHABLE``: a connection to the machine host failed, or the controller answered an RPC
   with a transport, capacity or credential error.
 
 Everything else is the program's: an image it built or named that fails to build, pull or start,
-a machine spec the backend refuses (``UnsupportedMachineSpec``), and setup, healthcheck or grader
-commands that fail. Shellbox raises a bare ``RuntimeError`` for both a failed Docker build and an
+a machine spec the backend refuses (``UnsupportedMachineSpec``), and setup or grader commands that
+fail. Shellbox raises a bare ``RuntimeError`` for both a failed Docker build and an
 unreachable Docker daemon, so those stay the program's too.
 """
 
@@ -34,8 +36,9 @@ from pathlib import Path
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from shellbox.machine import Command, Machine, MachineFactory, MachineSpec, Result
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend, Command, Machine, MachineFactory, MachineSpec, Result
+
+from taskforge.sandbox.factories import MachineHost, container_backend
 
 HOST_RPC_CODES = frozenset(
     {
@@ -55,11 +58,12 @@ class InfrastructureCause(StrEnum):
     """Why the host, not the program, failed a build."""
 
     NO_FACTORY = "no_factory"
+    NO_IMAGE_BUILDER = "no_image_builder"
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     HOST_UNREACHABLE = "host_unreachable"
 
 
-HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY})
+HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY, InfrastructureCause.NO_IMAGE_BUILDER})
 """Causes that hold for as long as the host is unchanged: the item is abandoned at once, not retried."""
 
 
@@ -143,6 +147,10 @@ class HostCheckedFactory:
 
     factory: MachineFactory
 
+    @property
+    def backend(self) -> Backend:
+        return self.factory.backend
+
     async def create(self, spec: MachineSpec) -> HostCheckedMachine:
         with _host_failures():
             try:
@@ -156,20 +164,30 @@ class HostCheckedFactory:
 
 @dataclass(frozen=True)
 class AbsentFactory:
-    """The factory for a machine kind this host cannot create."""
+    """The factory for a machine backend this host cannot create."""
 
-    kind: EnvironmentKind
+    absent: Backend
+
+    @property
+    def backend(self) -> Backend:
+        return self.absent
 
     async def create(self, spec: MachineSpec) -> Machine:
-        raise BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, f"this host has no {self.kind} machine factory")
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.NO_FACTORY, f"this host has no {self.absent} machine factory"
+        )
 
 
-def host_checked_factories(
-    factories: Mapping[EnvironmentKind, MachineFactory],
-) -> dict[EnvironmentKind, MachineFactory]:
-    """``factories`` with host errors classified, and an ``AbsentFactory`` for every missing machine kind."""
-    return {
-        kind: HostCheckedFactory(factories[kind]) if kind in factories else AbsentFactory(kind)
-        for kind in EnvironmentKind
-        if kind != EnvironmentKind.NULL
-    }
+def host_backends(host: MachineHost) -> tuple[Backend, ...]:
+    """The backends ``spec.lower`` can choose on ``host``: ShellSim and the host's container backend."""
+    return (Backend.SHELLSIM, container_backend(host))
+
+
+def host_checked_factories(factories: Mapping[str, MachineFactory], host: MachineHost) -> dict[str, MachineFactory]:
+    """``factories`` with host errors classified, and an ``AbsentFactory`` for every backend of
+    ``host_backends(host)`` it lacks. Keys are ``Backend`` values, as ``machine_factories`` returns them.
+    """
+    checked: dict[str, MachineFactory] = {key: HostCheckedFactory(factory) for key, factory in factories.items()}
+    for backend in host_backends(host):
+        checked.setdefault(backend.value, AbsentFactory(backend))
+    return checked

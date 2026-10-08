@@ -5,12 +5,12 @@ import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
 from taskcompendium.submission import PlainText
 
 from taskforge.builder.author import compile_program
-from taskforge.builder.run import load_draft, run_build
+from taskforge.builder.run import DRAFT_DIR, LOWERED_FILE, load_draft, run_build
 from taskforge.builder.sdk import GRADED_RESOURCE_PREFIX, BuildFailure
 from taskforge.builder.step import CacheStatus
 
@@ -29,9 +29,12 @@ async def test_program_builds_a_runnable_task_and_records_the_draft(proposal, pr
 
     draft = await build_once(proposal, program, tmp_path, services)
 
-    assert load_draft(tmp_path / "item" / "draft") == draft
+    assert load_draft(tmp_path / "item" / DRAFT_DIR) == draft
+    assert (tmp_path / "item" / DRAFT_DIR / LOWERED_FILE).is_file()
+    assert draft.lowered.runtime.task_machine is not None
+    assert draft.lowered.runtime.task_machine.backend == Backend.SHELLSIM
     names = [r.name for r in draft.provenance.resources]
-    assert names[-1] == "grader/grade.py"
+    assert names[-1] == "grader/grader.py"
     assert [n for n in names[:-1] if n.startswith(GRADED_RESOURCE_PREFIX)] == names[:-1] and len(names) == 2
     assert draft.provenance.program_digest == program.digest
 
@@ -39,14 +42,9 @@ async def test_program_builds_a_runnable_task_and_records_the_draft(proposal, pr
         return ModelTurn({"role": "assistant", "content": "ANSWER = 42"}, (1, 2), (3,), None, "stop")
 
     engine = ShellboxRolloutEngine(
-        answer,
-        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-        max_turns=2,
-        command_timeout=30,
-        cleanup_timeout=30,
-        convention=PlainText(id="plain"),
+        answer, {Backend.SHELLSIM.value: ShellSimMachineFactory()}, convention=PlainText(id="plain")
     )
-    rollout = await engine.run(draft.task, execution=draft.execution)
+    rollout = await engine.run(draft.lowered)
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
 
 
@@ -59,7 +57,7 @@ async def test_patching_one_step_reuses_the_steps_it_does_not_affect(proposal, p
     assert again.task == first.task
     assert again.provenance.resources == first.provenance.resources
 
-    patched = program_source.replace("timeout=60,", "timeout=90,")
+    patched = program_source.replace("{}, timeout=60)", "{}, timeout=90)")
     after = await build_once(proposal, compile_program(patched, proposal.digest), tmp_path, services)
     assert statuses(after) == {
         "machine": CacheStatus.HIT,
@@ -91,7 +89,8 @@ async def test_invalidated_step_is_recomputed(proposal, program_source, tmp_path
 
 
 async def test_failed_check_names_the_step(proposal, program_source, tmp_path, services):
-    broken = program_source.replace('"ANSWER = 42")\n    b.check', '"ANSWER = 41")\n    b.check')
+    broken = program_source.replace('"ANSWER = 42", files=FILES)', '"ANSWER = 41", files=FILES)')
+    assert broken != program_source
     with pytest.raises(BuildFailure) as failure:
         await build_once(proposal, compile_program(broken, proposal.digest), tmp_path, services)
     assert failure.value.step == "grader"
@@ -100,17 +99,27 @@ async def test_failed_check_names_the_step(proposal, program_source, tmp_path, s
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
-        # The verifier is rebuilt outside the grader step.
-        ("verifier=graded.verifier,", 'verifier=spec.answer_verifier(ExactSpec(expected=("42",))),', "GRADER step"),
+        # The grader is rebuilt outside the grader step.
+        ("grader=graded.package,", 'grader=spec.answer_verifier(ExactSpec(expected=("42",))),', "GRADER step"),
         # The program adds a control outside the CONTROLS step.
         (
-            "controls=await fixed_controls(b, task))",
-            "controls=(*await fixed_controls(b, task), "
-            'control("late", K.POSITIVE, C.KNOWN_CORRECT, N.ACCEPTANCE, "42", reward_min=1.0)))',
+            "fixed = await fixed_controls(b, task)",
+            "fixed = (*await fixed_controls(b, task), "
+            'control("late", K.POSITIVE, C.KNOWN_CORRECT, N.ACCEPTANCE, "42", reward_min=1.0))',
             "CONTROLS step",
         ),
-        # The execution settings prepare a stage the task does not have.
-        ("execution=EXECUTION, convention=", 'execution=TaskExecution(stages={"extra": {}}), convention=', "execution:"),
+        # The lowered spec carries another task.
+        (
+            "lowered = b.lower(task,",
+            'lowered = b.lower(task.model_copy(update={"tags": ("other",)}),',
+            "lowered: BuildOutput.lowered",
+        ),
+        # RolloutEngine rejects the session: a command may outlast its tool turn.
+        (
+            "    command_timeout=None,\n    tool_turn_timeout=None,",
+            "    command_timeout=30,\n    tool_turn_timeout=10,",
+            "lower: The command timeout",
+        ),
         # The convention cannot carry the task's text answer.
         ('CONVENTION = PlainText(id="plain_text")', 'CONVENTION = JsonValueAnswer(id="json")', "convention 'json'"),
         # The control set lacks a shortcut control.
@@ -138,13 +147,16 @@ async def test_output_that_breaks_a_library_rule_fails_the_build(
         await build_once(proposal, program, tmp_path, services)
 
 
-PROTOTYPE = '    reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")\n'
+PROTOTYPE = (
+    "    reference = await b.try_grader("
+    'env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
+)
 
 
 def prototyping_on(program_source: str, candidate: str) -> str:
     """The test program with its grader step also grading ``candidate``."""
     extra = (
-        f'    wrong = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "{candidate}")\n'
+        f'    wrong = await b.try_grader(env, package, AnswerType.TEXT, CONVENTION, "question", "{candidate}")\n'
         '    b.check(wrong.reward == 0.0, "")\n'
     )
     assert PROTOTYPE in program_source

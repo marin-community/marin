@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import pytest
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend
 
 from taskforge.builder.sdk import BuildServices
 from taskforge.ledger.records import Ledger
@@ -17,6 +17,7 @@ from taskforge.llm.agent import AgentTool
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.proposal.model import TaskProposal, parse
+from taskforge.sandbox.factories import MachineHost
 
 PROPOSAL = """---
 id: "d00.arithmetic.products/1"
@@ -58,7 +59,7 @@ def proposal() -> TaskProposal:
 
 @pytest.fixture
 def services(ledger: Ledger) -> Callable:
-    """``async with services(base_url, web_tools=()) as s``: build services over a GLM endpoint."""
+    """``async with services(base_url, web_tools=()) as s``: laptop build services with only ShellSim."""
 
     @asynccontextmanager
     async def make(
@@ -69,7 +70,9 @@ def services(ledger: Ledger) -> Callable:
             yield BuildServices(
                 client=client,
                 policy=LLMPolicy(),
-                factories={EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+                host=MachineHost.LAPTOP,
+                factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+                images=None,
                 ledger=ledger,
                 web_tools=web_tools,
             )
@@ -78,54 +81,58 @@ def services(ledger: Ledger) -> Callable:
 
 
 GRADE = """
-import json, sys
-messages = json.load(sys.stdin)
-final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
-print(1.0 if final.strip().endswith("ANSWER = 42") else 0.0)
+import json, os, pathlib
+final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
+verdict = {"status": "scored", "reward": float(final.endswith("ANSWER = 42")), "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
 """
 
 PROGRAM = """
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, StdoutReward
-from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source, TaskSpec
+from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
 from taskcompendium.submission import PlainText
 
-EXECUTION = TaskExecution()
 CONVENTION = PlainText(id="plain_text")
+MACHINE = spec.machine(startup_timeout=60)
+SESSION = spec.session(
+    max_turns=8,
+    model_turn_timeout=None,
+    command_timeout=None,
+    tool_turn_timeout=None,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=60,
+    cleanup_timeout=30,
+)
+FILES = (spec.file("workspace/question.txt", "6 * 7"),)
 
 GRADE = GRADE_SOURCE
 
 
 @step(StepRole.ENVIRONMENT)
-async def machine(b: Build) -> EnvironmentSpec:
-    return spec.environment(EnvironmentKind.SHELLSIM, files=(spec.file("/workspace/question.txt", "6 * 7"),))
+async def machine(b: Build) -> EnvironmentRequirements:
+    return spec.requirements(image=None)
 
 
 @step(StepRole.GRADER)
-async def grader(b: Build, env: EnvironmentSpec) -> Grader:
-    verifier = spec.shell_verifier(
-        argv=("python3", "/grader/grade.py"),
-        reward=StdoutReward(),
-        timeout=60,
-        files=(spec.file("/grader/grade.py", GRADE),),
-    )
-    reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")
+async def grader(b: Build, env: EnvironmentRequirements) -> Grader:
+    package = spec.script_verifier(GRADE, {}, timeout=60)
+    reference = await b.try_grader(env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)
     b.check(reference.reward == 1.0, f"reference scored {reference.reward}")
-    b.emit("grader/grade.py", GRADE.encode())
-    return Grader(verifier=verifier, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
+    b.emit("grader/grader.py", GRADE.encode())
+    return Grader(package=package, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
 
 
 @step(StepRole.ASSEMBLE)
-async def assemble(b: Build, env: EnvironmentSpec, graded: Grader) -> TaskSpec:
+async def assemble(b: Build, env: EnvironmentRequirements, graded: Grader) -> TaskSpec:
     return spec.assemble(
         task_id=b.item_id,
         instruction="Compute the product in question.txt. " + graded.answer_contract,
         answer_type=AnswerType.TEXT,
-        environment=env,
-        verifier=graded.verifier,
+        grader=graded.package,
         source=Source(dataset="test", revision="r1", row="0", importer_revision="test"),
-        execution=EXECUTION,
+        environment=env,
+        files=FILES,
     )
 
 
@@ -158,7 +165,9 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=await fixed_controls(b, task))
+    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=None, session=SESSION)
+    fixed = await fixed_controls(b, task)
+    return BuildOutput(task=task, lowered=lowered, convention=CONVENTION, controls=fixed)
 """.replace(
     "GRADE_SOURCE", repr(GRADE)
 )
@@ -166,5 +175,5 @@ async def build(b: Build) -> BuildOutput:
 
 @pytest.fixture
 def program_source() -> str:
-    """A builder program without model calls: a ShellSim task with a script grader and four controls."""
+    """A builder program without model calls: a ShellSim task with a host-run script grader and four controls."""
     return PROGRAM

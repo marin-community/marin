@@ -13,8 +13,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rolloutengine.contracts import RolloutInterrupted
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, Machine, MachineSpec, Result, UnsupportedMachineSpec
-from taskcompendium.environment import DockerBuild, EnvironmentKind, StdoutReward
+from shellbox.machine import Backend, Command, Machine, MachineSpec, Result, UnsupportedMachineSpec
 from taskcompendium.models import AnswerType
 from taskcompendium.submission import PlainText
 
@@ -24,19 +23,25 @@ from taskforge.builder.run import item_id_for, run_build
 from taskforge.builder.sdk import Build, BuildFailure, BuildServices
 from taskforge.builder.step import StepCache
 from taskforge.ledger.records import EntryKind
+from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 
-SHELLSIM = draft.environment(EnvironmentKind.SHELLSIM)
+SHELLSIM = draft.requirements(image=None)
+DOCKER = draft.requirements(image=f"registry.example/task@sha256:{'0' * 64}")
+MACHINE = draft.machine(startup_timeout=60)
 PLAIN = PlainText(id="plain_text")
-VERIFIER = draft.shell_verifier(argv=("python3", "-c", "print(1.0)"), reward=StdoutReward(), timeout=60, files=())
-DOCKER = draft.environment(
-    EnvironmentKind.DOCKER, image=DockerBuild(files=(draft.file("/Dockerfile", "FROM scratch\n"),))
-)
+FULL_CREDIT = """import json, os, pathlib
+verdict = {"status": "scored", "reward": 1.0, "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
+GRADER = draft.script_verifier(FULL_CREDIT, {}, timeout=60)
 UNAVAILABLE = ConnectError(Code.UNAVAILABLE, "controller connection refused")
 
 
 class FailingFactory:
     """A factory whose ``create`` raises ``error``."""
+
+    backend = Backend.SHELLSIM
 
     def __init__(self, error: Exception):
         self.error = error
@@ -47,6 +52,8 @@ class FailingFactory:
 
 class StalledFactory:
     """A factory whose ``create`` never returns."""
+
+    backend = Backend.SHELLSIM
 
     async def create(self, spec: MachineSpec) -> Machine:
         await asyncio.Event().wait()
@@ -79,6 +86,8 @@ class DroppingMachine:
 class DroppingFactory:
     """A ShellSim factory whose machines lose their host before the first command."""
 
+    backend = Backend.SHELLSIM
+
     def __init__(self, error: Exception):
         self.error = error
 
@@ -109,23 +118,37 @@ def build_with(proposal, tmp_path, services) -> Callable:
     ],
 )
 async def test_host_failures_in_a_machine_are_infrastructure(build_with, factory, cause):
-    async with build_with({EnvironmentKind.SHELLSIM: factory}) as b:
+    async with build_with({Backend.SHELLSIM.value: factory}) as b:
         with pytest.raises(BuildInfrastructureFailure) as machine_failure:
-            async with b.machine(SHELLSIM) as machine:
+            async with b.machine(SHELLSIM, MACHINE) as machine:
                 await machine.run(Command(argv=("true",)))
         with pytest.raises(BuildInfrastructureFailure) as grader_failure:
-            await b.try_grader(SHELLSIM, VERIFIER, AnswerType.TEXT, PLAIN, "question", "42")
+            # Capturing the output path is a command in the task machine.
+            await b.try_grader(
+                SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42", output_paths=("/workspace/answer",)
+            )
 
     assert machine_failure.value.cause == grader_failure.value.cause == InfrastructureCause(cause)
 
 
-async def test_a_machine_kind_the_host_lacks_is_infrastructure(build_with):
-    async with build_with({EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}) as b:
-        with pytest.raises(BuildInfrastructureFailure) as failure:
-            async with b.machine(DOCKER):
+async def test_a_machine_backend_the_host_lacks_is_infrastructure(build_with):
+    async with build_with({Backend.SHELLSIM.value: ShellSimMachineFactory()}) as b:
+        with pytest.raises(BuildInfrastructureFailure) as machine_failure:
+            async with b.machine(DOCKER, MACHINE):
                 pass
+        with pytest.raises(BuildInfrastructureFailure) as grader_failure:
+            await b.try_grader(DOCKER, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
 
-    assert failure.value.cause == InfrastructureCause.NO_FACTORY
+    assert machine_failure.value.cause == grader_failure.value.cause == InfrastructureCause.NO_FACTORY
+
+
+async def test_a_host_without_an_image_builder_is_infrastructure(build_with):
+    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\n"),))
+    async with build_with({Backend.SHELLSIM.value: ShellSimMachineFactory()}) as b:
+        with pytest.raises(BuildInfrastructureFailure) as failure:
+            await b.publish_image(build)
+
+    assert failure.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
 
 
 @pytest.mark.parametrize(
@@ -139,35 +162,38 @@ async def test_a_machine_kind_the_host_lacks_is_infrastructure(build_with):
     ],
 )
 async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(build_with, error):
-    async with build_with({EnvironmentKind.SHELLSIM: FailingFactory(error)}) as b:
+    async with build_with({Backend.SHELLSIM.value: FailingFactory(error)}) as b:
         with pytest.raises(type(error)):
-            async with b.machine(SHELLSIM):
+            async with b.machine(SHELLSIM, MACHINE):
                 pass
         with pytest.raises(RolloutInterrupted) as interrupted:
-            await b.try_grader(SHELLSIM, VERIFIER, AnswerType.TEXT, PLAIN, "question", "42")
+            await b.try_grader(SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
 
     assert interrupted.value.__cause__ is error
 
 
 async def test_the_programs_own_startup_deadline_stays_the_programs_failure(build_with):
-    environment = draft.environment(EnvironmentKind.SHELLSIM, startup_timeout=0.05)
-    async with build_with({EnvironmentKind.SHELLSIM: StalledFactory()}) as b:
+    async with build_with({Backend.SHELLSIM.value: StalledFactory()}) as b:
         with pytest.raises(TimeoutError):
-            async with b.machine(environment):
+            async with b.machine(SHELLSIM, draft.machine(startup_timeout=0.05)):
                 pass
 
 
 async def build_on(factory, source, proposal, tmp_path, services):
     async with services() as s:
-        machines: BuildServices = dataclasses.replace(s, factories={EnvironmentKind.SHELLSIM: factory})
+        machines: BuildServices = dataclasses.replace(s, factories={Backend.SHELLSIM.value: factory})
         program = compile_program(source, proposal.digest)
         return await run_build(program, proposal, tmp_path / "item", tmp_path / "cache", machines)
 
 
-PROTOTYPE = '    reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")\n'
+PROTOTYPE = (
+    "    reference = await b.try_grader("
+    'env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
+)
 WRAPPED = (
     "    try:\n"
-    '        reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")\n'
+    "        reference = await b.try_grader("
+    'env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
     "    except Exception as error:\n"
     '        raise b.failure(f"the grader did not run: {error}") from error\n'
 )

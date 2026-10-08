@@ -61,7 +61,9 @@ async def test_authored_program_builds_a_task_its_positive_control_passes(
         services = BuildServices(
             client=client,
             policy=LLMPolicy(),
+            host=MachineHost.LAPTOP,
             factories=factories,
+            images=None,
             ledger=JsonlLedger(run_dir / "ledger"),
             web_tools=web_tools(http, parallel_key.value),
         )
@@ -76,14 +78,8 @@ async def test_authored_program_builds_a_task_its_positive_control_passes(
     # Replay the positive control's whole transcript (shell turns included) through RolloutEngine.
     positive = next(c for c in draft.controls if c.kind == ControlKind.POSITIVE)
     turns = control_turns(positive)
-    engine = ShellboxRolloutEngine(
-        scripted(turns),
-        factories,
-        max_turns=len(turns),
-        command_timeout=60,
-        cleanup_timeout=60,
-        convention=draft.convention,
-    )
-    rollout = await engine.run(draft.task, execution=draft.execution)
+    engine = ShellboxRolloutEngine(scripted(turns), factories, convention=draft.convention)
+    session = draft.lowered.session.model_copy(update={"max_turns": len(turns), "command_timeout": 60})
+    rollout = await engine.run(draft.lowered.model_copy(update={"session": session}))
     assert rollout.grade.status == Outcome.GRADED
     assert positive.expect.reward_min is not None and rollout.grade.reward >= positive.expect.reward_min
