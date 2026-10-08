@@ -12,7 +12,7 @@ mode checks only the requested field names.
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from verifyit.grade import InvalidTask, Reward, read_output, scored
+from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.modes.extract import unwrap_fence
 from verifyit.spec import XmlElementsSpec
 
@@ -35,13 +35,15 @@ def document_names(root: ET.Element) -> set[str]:
     return names
 
 
-def grade(spec: XmlElementsSpec, tests_dir: Path, workspace: Path) -> Reward:
+def validate_xml_elements(spec: XmlElementsSpec) -> None:
+    empty_output_policy(spec)
     if not spec.required and not spec.any_of:
         raise InvalidTask("xml-elements expects required or any_of names")
 
-    text = read_output(spec, workspace)
-    if text is None:
-        return scored(0.0, reason="no_output")
+
+def grade_xml_candidate(spec: XmlElementsSpec, text: str) -> Reward:
+    """Score answer text, optionally fenced, by the element and attribute names it carries."""
+    validate_xml_elements(spec)
     try:
         root = ET.fromstring(unwrap_fence(text).strip())
     except ET.ParseError as error:
@@ -54,3 +56,11 @@ def grade(spec: XmlElementsSpec, tests_dir: Path, workspace: Path) -> Reward:
     if spec.any_of and names.isdisjoint(spec.any_of):
         return scored(0.0, reason="no_expected_element", expected=list(spec.any_of[:MAX_REPORTED_NAMES]))
     return scored(1.0, reason="names_present", names=len(names))
+
+
+def grade(spec: XmlElementsSpec, tests_dir: Path, workspace: Path) -> Reward:
+    validate_xml_elements(spec)
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    return grade_xml_candidate(spec, text)
