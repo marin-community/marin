@@ -88,7 +88,9 @@ class GraderRuntime:
         python = str(self.bin_dir / "python")
         lock = str(self.recipe.context / LOCK_FILE)
         # Running from the parent keeps uv from reading the settings of a project in the working directory.
-        subprocess.run(["uv", "venv", "--no-project", "--python", self.python, str(self.root)], check=True, cwd=self.parent)
+        subprocess.run(
+            ["uv", "venv", "--no-project", "--python", self.python, str(self.root)], check=True, cwd=self.parent
+        )
         subprocess.run(["uv", "pip", "sync", "--python", python, "--require-hashes", lock], check=True, cwd=self.parent)
         # The Dockerfile copies each package into the image's runtime directory and puts that on sys.path.
         runtime = self.root / RUNTIME_DIRECTORY
@@ -141,5 +143,7 @@ class LocalGraderMachines:
         if Backend.LOCAL not in environment.compatible_backends:
             raise ValueError("Only environments that declare the local backend grade in the worker")
         self.runtime.ensure_built()
-        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, env=self.runtime.variables)
+        spec = MachineSpec(
+            HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, env=self.runtime.variables
+        )
         return _local_factory(self.runtime.bin_dir), spec
