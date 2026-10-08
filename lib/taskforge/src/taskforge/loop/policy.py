@@ -4,9 +4,10 @@
 """Every bound of one run, stated in the run's ``policy.json``; no field has a default.
 
 ``POLICY`` reads and writes a ``LoopPolicy`` as JSON. Every field of ``LoopPolicy``, of its
-``ValidationPolicy`` and of that policy's ``band``, ``sampling`` and ``deadlines`` is required and an
-unknown key is an error, so a run config states each bound. A ``RetryBackoff`` is written as its
-four fields (``initial``, ``maximum``, ``factor``, ``jitter``), all required.
+``ValidationPolicy`` and of that policy's ``band``, ``sampling`` and ``deadlines``, and of the
+``band_rules`` and each of their ``BandRule``s, is required and an unknown key is an error, so a run
+config states each bound. A ``RetryBackoff`` is written as its four fields (``initial``, ``maximum``,
+``factor``, ``jitter``), all required; a ``BandChoice`` as its value (``accept`` or ``reject``).
 """
 
 import dataclasses
@@ -18,6 +19,7 @@ from pydantic import PlainSerializer, PlainValidator, TypeAdapter
 
 from taskforge.canonical import digest
 from taskforge.llm.policy import LLMPolicy
+from taskforge.review.rules import BandRule, BandRules
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, RetryBackoff
@@ -42,7 +44,11 @@ class LoopPolicy:
         output_token_budget: Output tokens of the item's ``LLM_CALL`` ledger entries (triage, author,
             build steps; not validation trials); an item over it is rejected for budget before its
             next authoring.
-        validation: The policy of every validation round.
+        band_rules: Per band kind (too easy, too hard), the review ``Repair`` decisions a solve rate
+            outside the band may trigger, then whether a task still outside it is accepted (labelled
+            with where it fell) or rejected. Taskforge's own policies reject after one repair.
+        validation: The policy of every validation round, including the adversary's verifier
+            submission budget and the submission count up to which a claimed shortcut is repaired.
     """
 
     proposals_per_idea: int
@@ -54,6 +60,7 @@ class LoopPolicy:
     max_build_retries: int
     retry_backoff: RetryBackoff
     output_token_budget: int
+    band_rules: BandRules
     validation: ValidationPolicy
 
     def __post_init__(self) -> None:
@@ -117,7 +124,12 @@ _VALIDATION_JSON = _strict_dataclass(
     },
 )
 _LOOP_JSON = _strict_dataclass(
-    LoopPolicy, {RetryBackoff: _strict_dataclass(RetryBackoff, {}), ValidationPolicy: _VALIDATION_JSON}
+    LoopPolicy,
+    {
+        RetryBackoff: _strict_dataclass(RetryBackoff, {}),
+        BandRules: _strict_dataclass(BandRules, {BandRule: _strict_dataclass(BandRule, {})}),
+        ValidationPolicy: _VALIDATION_JSON,
+    },
 )
 
 POLICY: TypeAdapter[LoopPolicy] = TypeAdapter(_LOOP_JSON)

@@ -10,7 +10,9 @@ proposals re-proposes the idea, up to ``max_idea_reproposals``, then the idea is
 building with bounded revisions, control replay, solver and adversary trials, the calibration summary
 and review's decision. A ``Repair`` starts the next round: the author revises the condemned program
 with the repair brief as ``Revision.failure`` and the build recomputes the steps the repair invalidates.
-A ``Retry`` re-enters validation after a backoff, re-running only unsettled trials. A build the machine
+A ``Retry`` re-enters validation after a backoff, re-running only unsettled trials. A solve rate
+outside the band gets the repairs ``policy.band_rules`` allows its kind, then that rule's choice
+accepts the task (``ACCEPTED``, labelled with its band) or rejects it. A build the machine
 host failed (``BuildInfrastructureFailure``) spends no revision and reaches no author: it records
 ``BUILD_INFRASTRUCTURE`` and rebuilds the same program after the same backoff. Either kind of retry,
 spent, ends the item ``ABANDONED`` with its causes. A host failure no retry changes (``HOST_REJECTIONS``:
@@ -98,7 +100,7 @@ from taskforge.triage.checks import Check, CheckContext
 from taskforge.triage.program import RubricProgram, evaluate
 from taskforge.triage.verdict import ModelCall, TriageDecision, Verdict
 from taskforge.validate.adversary import run_adversaries
-from taskforge.validate.calibration import Finding, gave_up, solved, summarize, write_summary
+from taskforge.validate.calibration import CalibrationSummary, Finding, gave_up, solved, summarize, write_summary
 from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
@@ -677,7 +679,7 @@ def _decide(item: _Item, state: ItemState) -> None:
     assert state.task_digest is not None
     evidence_dir = item.evidence_dir(state.round, state.task_digest)
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    history = ItemHistory(state.repairs_used, policy.max_repairs, state.prior_band_findings)
+    history = ItemHistory(state.repairs_used, policy.max_repairs, state.band_repairs)
     decision: Decision
     notes: tuple[Finding, ...] = ()
     if draft.task.stages:
@@ -685,7 +687,7 @@ def _decide(item: _Item, state: ItemState) -> None:
     else:
         summary = summarize(load_validation(draft, evidence_dir), policy.validation)
         write_summary(evidence_dir / CALIBRATION_FILE, summary)
-        decision = decide(draft, summary, history)
+        decision = decide(draft, summary, history, policy.band_rules)
         notes = summary.notes
     write_decision(evidence_dir / DECISION_FILE, decision)
     attrs = _decision_attrs(decision, state, policy)
@@ -697,8 +699,8 @@ def _decide(item: _Item, state: ItemState) -> None:
 def _decision_attrs(decision: Decision, state: ItemState, policy: LoopPolicy) -> dict[str, str]:
     counts = {"repairs_used": str(state.repairs_used), "retries_used": str(state.validation_retries)}
     match decision:
-        case Accept():
-            return {"decision": DecisionKind.ACCEPT, **counts}
+        case Accept(summary=summary, band=band):
+            return {"decision": DecisionKind.ACCEPT, "band": band, **_pass_rate(summary), **counts}
         case Reject(kind=kind, reasons=reasons):
             return {"decision": DecisionKind.REJECT, "kind": kind, "reasons": _clip("; ".join(reasons)), **counts}
         case Repair(brief=brief, invalidate=invalidate):
@@ -722,6 +724,16 @@ def _decision_attrs(decision: Decision, state: ItemState, policy: LoopPolicy) ->
                 **counts,
                 "retries_used": str(retries),
             }
+
+
+def _pass_rate(summary: CalibrationSummary) -> dict[str, str]:
+    """The synthesis pass rate an accepted task is labelled with, as ``DECIDED`` attrs."""
+    assert summary.solve_rate is not None, "an accepted summary has graded solver trials"
+    return {
+        "solved": str(summary.solver.solved),
+        "graded": str(summary.solver.graded),
+        "solve_rate": f"{summary.solve_rate:.3f}",
+    }
 
 
 def _close(item: _Item, state: ItemState) -> None:

@@ -74,7 +74,7 @@ def test_a_recorded_log_folds_through_repair_and_retry(tmp_path):
     assert (state.phase, state.round, state.revision) == (Phase.BUILD, 1, RevisionKind.REPAIR)
     assert state.program_digest is None and state.repaired_task_digest == "task1" and state.repair_round == 0
     assert state.invalidate == ("grader", "controls") and state.repairs_used == 1
-    assert state.prior_band_findings == frozenset({FindingKind.TOO_EASY})
+    assert state.band_repairs == {FindingKind.TOO_EASY: 1}
     assert not state.solved and not state.adversaries_run
 
     log.add(EventKind.AUTHORED, at_round=1, input_hash="prog2", revises="r", revision="repair")
@@ -101,6 +101,34 @@ def test_a_recorded_log_folds_through_repair_and_retry(tmp_path):
 
     assert (state.phase, state.not_before, state.validation_retries) == (Phase.CONTROLS, 1234.5, 1)
     assert state.invalidate == ("grader", "controls") and state.task_digest == "task2"
+
+
+def accepted_log(tmp_path, band: str) -> Log:
+    log = built_log(tmp_path).add(
+        EventKind.CONTROLS_REPLAYED, input_hash="task1", met="4", violated="0", ungraded="0", passed="true"
+    )
+    log.add(EventKind.SOLVED).add(EventKind.ADVERSARIES_RUN)
+    return log.add(
+        EventKind.DECIDED,
+        input_hash="task1",
+        decision="accept",
+        band=band,
+        solved="8",
+        graded="8",
+        solve_rate="1.000",
+        repairs_used="0",
+        retries_used="0",
+        notes="",
+    )
+
+
+@pytest.mark.parametrize(
+    ("band", "reason"), [("in_band", "calibrated"), ("too_easy", "accepted outside the band: too_easy")]
+)
+def test_an_accept_closes_accepted_with_where_the_task_fell(tmp_path, band, reason):
+    closing = derive_state(accepted_log(tmp_path, band).entries()).closing
+
+    assert closing is not None and (closing.terminal, closing.reason) == (Terminal.ACCEPTED, reason)
 
 
 def test_an_abandoned_item_re_enters_validation_with_a_fresh_retry_count(tmp_path):
