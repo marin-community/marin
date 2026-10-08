@@ -63,6 +63,8 @@ def machines_identity(backend: VerificationBackend, worker_image: str, controlle
     return {
         "backend": backend.value,
         "worker_image": worker_image,
+        # Local graders run in bubblewrap sandboxes on the worker; recorded so a backend change reverifies.
+        "local_backend": "bubblewrap",
         "network": NetworkPolicy.DENY.value,
         "controller": controller,
     }
@@ -287,6 +289,12 @@ def _full_steps(
 @click.option("--concurrent-sources", type=click.IntRange(min=10), default=10, show_default=True)
 @click.option("--worker-image", required=True, help="Zephyr worker image; it carries the grading code.")
 @click.option(
+    "--container-profile",
+    default="CONTAINER_PROFILE_PRIVILEGED",
+    show_default=True,
+    help="Iris container profile of the Zephyr workers; local graders need a privileged pod to build sandboxes.",
+)
+@click.option(
     "--verification-backend",
     type=click.Choice([backend.value for backend in VerificationBackend]),
     default=VerificationBackend.IRIS.value,
@@ -316,6 +324,7 @@ def main(
     normalized_shards: int,
     concurrent_sources: int,
     worker_image: str,
+    container_profile: str,
     verification_backend: str,
     controller_url: str | None,
     seed: int,
@@ -339,7 +348,7 @@ def main(
             review_cache=review_cache,
             review_concurrency=review_concurrency,
         )
-    worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image)
+    worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image, container_profile=container_profile)
     config = _pipeline_config(
         SourceProcessingMode(mode),
         review,

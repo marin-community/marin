@@ -5,7 +5,7 @@
 
 A declaration states needs, never a backend. ``placement`` decides: a digest-pinned image runs as-is
 in a sandbox; packages the worker image lacks need an image built for them; everything else runs as a
-locked-down subprocess of the Zephyr worker, in a uv environment built from the declared packages.
+bubblewrap sandbox on the Zephyr worker, in a uv environment built from the declared packages.
 ``images.build`` builds whatever a declaration needs.
 """
 
@@ -85,7 +85,7 @@ class Placement(StrEnum):
     BUILT_IMAGE = "built_image"
     """A sandbox of the image built for packages the worker image lacks."""
     WORKER = "worker"
-    """A locked-down subprocess of the Zephyr worker, in a uv environment built from the lock."""
+    """A bubblewrap sandbox on the Zephyr worker, in a uv environment built from the lock."""
 
 
 def placement(environment: Environment) -> Placement:

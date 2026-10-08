@@ -127,8 +127,9 @@ A declaration's `grader` states what its scripts need, and the pipeline places
 it ([environment.py](environment.py)). A digest-pinned `image` runs in a sandbox
 of that image. `apt` packages that the worker image lacks (`WORKER_IMAGE_APT`)
 run in a sandbox of an image built for the environment. Every other environment,
-including `GRADER_PACKAGES`, runs as a locked-down subprocess of the Zephyr
-worker, in a uv environment the worker builds once from the environment's lock
+including `GRADER_PACKAGES`, runs in a bubblewrap sandbox on the Zephyr
+worker (which needs the privileged container profile, `--container-profile`),
+in a uv environment the worker builds once from the environment's lock
 ([environment_runtime.py](environment_runtime.py)).
 `--verification-backend` selects how sandbox graders run. `iris`, the default,
 schedules each grader machine as an Iris task; inside an Iris job the driver uses

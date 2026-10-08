@@ -81,7 +81,7 @@ a backend; the pipeline places each environment:
 |---|---|---|
 | `image` set | A sandbox of that image | `docker_image=image`, `compatible_backends=(gvisor, docker)` |
 | `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `docker_image=<built digest>`, `compatible_backends=(gvisor, docker)` |
-| Anything else | A locked-down subprocess of the Zephyr worker | `compatible_backends=(local,)`, `packages_lock=<lock URL>` |
+| Anything else | A bubblewrap sandbox on the Zephyr worker | `compatible_backends=(local,)`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
 stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
@@ -226,8 +226,9 @@ build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
 has no artifact raises `MissingEnvironmentArtifact` with the `--identity`
 command that builds it.
 
-Local graders run as locked-down subprocesses of the Zephyr worker. On first
-use, each worker downloads the environment's lock from its artifact and builds a
+Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
+private root, so the worker pods need Iris's privileged container profile
+(`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
 uv environment under `/tmp/task-curation-env-<identity>`, with the NLTK data and
 `verifyit`; concurrent graders on one host build it once.
 `--verification-backend` is where sandbox graders run: `iris` (the default) or

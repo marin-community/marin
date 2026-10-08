@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run environments that declare ``Backend.LOCAL`` as locked-down subprocesses of the Zephyr worker.
+"""Run environments that declare ``Backend.LOCAL`` in bubblewrap sandboxes on the Zephyr worker.
 
 A local environment carries the storage URL of its built hash lock (``packages_lock``). The worker
 builds a uv virtual environment from it once, with the NLTK data the environment's artifact names and
@@ -137,16 +137,9 @@ def local_runtime(lock_url: str) -> LocalRuntime:
     return LocalRuntime(lock_url, built.lock_sha256, tuple(built.data))
 
 
-OWNED_ROOTS = ("/tests", "/logs", "/output", "/solution", "/controls", "/setup_files")
-"""Directories grading stages hidden tests, verdicts, captures, oracles, controls and TaskTrove setup files in;
-emptied per machine."""
-SHARED_ROOTS = (DEFAULT_WORKSPACE,)
-"""The grading workspace, which an Iris task also runs from, so it is written to but never emptied."""
-
-
 @cache
 def _local_factory(bin_dir: Path) -> LocalMachineFactory:
-    return LocalMachineFactory(OWNED_ROOTS, shared_roots=SHARED_ROOTS, bin_dirs=(bin_dir,))
+    return LocalMachineFactory(bin_dirs=(bin_dir,))
 
 
 @dataclass(frozen=True)
@@ -157,7 +150,7 @@ class LocalGraderMachines:
         return {"backend": Backend.LOCAL.value, "python": PYTHON_VERSION}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """A locked-down host machine with the environment's packages; ``memory_mb`` is not enforced."""
+        """A bubblewrap sandbox with the environment's packages; ``memory_mb`` is not enforced."""
         if Backend.LOCAL not in environment.compatible_backends:
             raise ValueError("Only environments that declare the local backend grade in the worker")
         assert environment.packages_lock is not None

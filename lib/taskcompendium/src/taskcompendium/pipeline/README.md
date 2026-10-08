@@ -77,7 +77,7 @@ cannot convert.
    submission, which the grader then grades in its own environment. Graders
    that run outside the process get their machines from the campaign's
    `GradingMachines`, which routes each environment by its
-   `compatible_backends`: a `local` environment to a locked-down host machine
+   `compatible_backends`: a `local` environment to a bubblewrap sandbox on the worker
    with the Python environment built from its `packages_lock`, and an image
    environment to a sandbox of that image. Every grading machine has network
    access denied. Without controls the stage is skipped and sandbox graders
