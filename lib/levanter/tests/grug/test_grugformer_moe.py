@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
 import importlib.util
 import os
@@ -41,6 +42,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _accepted_assignments,
     _gather_dispatch_rows,
     _RaggedDotExpertMlp,
+    _RoutingWeightGradient,
     _transport_buffer,
     _TransportBufferSite,
     _unpermute_from_global_expert,
@@ -51,7 +53,6 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
-    RoutingWeightGradient,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     moe_mlp,
@@ -619,7 +620,7 @@ def test_portable_expert_mlp_backward_ignores_rows_past_the_active_count():
     x_unspecified = x.at[7:].set(jnp.nan)
     cotangent_unspecified = cotangent.at[7:].set(jnp.nan)
 
-    expert_mlp = _RaggedDotExpertMlp(jax.nn.silu)
+    expert_mlp = _RaggedDotExpertMlp(jax.nn.silu, routing_weight_gradient=_RoutingWeightGradient.EXACT)
 
     def run(x, cotangent):
         out, residuals = expert_mlp.forward(x, w13, w2, physical_group_sizes, active_group_sizes)
@@ -1694,19 +1695,37 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
         np.testing.assert_array_equal(returned[s], expected)
 
 
+def _force_routing_weight_gradient(
+    monkeypatch: pytest.MonkeyPatch, routing_weight_gradient: _RoutingWeightGradient
+) -> None:
+    """Make the ragged backend run the expert MLP it selects with ``routing_weight_gradient``.
+
+    The backend takes the routing-weight gradient from the expert MLP it selects, and off SM100 that
+    is always the portable one, whose own gradient is EXACT.
+    """
+    select_expert_mlp = ep_ragged_all_to_all._select_expert_mlp
+    monkeypatch.setattr(
+        ep_ragged_all_to_all,
+        "_select_expert_mlp",
+        lambda activation_fn, dtype: dataclasses.replace(
+            select_expert_mlp(activation_fn, dtype), routing_weight_gradient=routing_weight_gradient
+        ),
+    )
+
+
 @pytest.mark.parametrize(
     ("implementation", "routing_weight_gradient"),
     [
-        ("ring", RoutingWeightGradient.EXACT),
-        ("ragged_all_to_all", RoutingWeightGradient.EXACT),
-        ("ragged_all_to_all", RoutingWeightGradient.EXPERT_SIDE),
+        ("ring", _RoutingWeightGradient.EXACT),
+        ("ragged_all_to_all", _RoutingWeightGradient.EXACT),
+        ("ragged_all_to_all", _RoutingWeightGradient.EXPERT_SIDE),
     ],
     ids=["ring", "ragged", "ragged_expert_side"],
 )
 @pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
 def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     implementation: MoeImplementation,
-    routing_weight_gradient: RoutingWeightGradient,
+    routing_weight_gradient: _RoutingWeightGradient,
     padded: bool,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1719,6 +1738,8 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
     if platform == "tpu":
         monkeypatch.setenv("RAGGED_DOT_IMPL", "megablox")
+    # The ring backend differentiates the combine weights exactly and ignores this.
+    _force_routing_weight_gradient(monkeypatch, routing_weight_gradient)
 
     tokens = len(jax.devices()) * 8
     gpu_runtime = platform == "gpu"
@@ -1806,7 +1827,6 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
             mesh=mesh,
             report_capacity_overflow=True,
             capacity_factor=2.0,
-            routing_weight_gradient=routing_weight_gradient,
         )
 
     with jax.set_mesh(mesh):
@@ -1832,7 +1852,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         assert relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
     actual_weight_gradient = np.asarray(actual_gradients[3], dtype=np.float32)
     expected_weight_gradient = np.asarray(expected_gradients[3])
-    if routing_weight_gradient == RoutingWeightGradient.EXPERT_SIDE:
+    if routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE:
         # The edge assignments are outside EXPERT_SIDE's contract; compare every other weight.
         inside = np.ones(expected_weight_gradient.shape, dtype=bool)
         inside[edge_assignments] = False
@@ -1849,13 +1869,14 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
 
 @pytest.mark.parametrize(
     ("routing_weight_gradient", "row_dot_transports"),
-    [(RoutingWeightGradient.EXACT, 0), (RoutingWeightGradient.EXPERT_SIDE, 2)],
+    [(_RoutingWeightGradient.EXACT, 0), (_RoutingWeightGradient.EXPERT_SIDE, 2)],
 )
-def test_ragged_backward_takes_the_routing_weight_gradient_where_selected(
-    routing_weight_gradient: RoutingWeightGradient, row_dot_transports: int
+def test_ragged_backward_takes_the_routing_weight_gradient_of_its_expert_mlp(
+    routing_weight_gradient: _RoutingWeightGradient, row_dot_transports: int, monkeypatch: pytest.MonkeyPatch
 ):
     # EXPERT_SIDE sends each expert row's <h, dh> back in a [rows, 1] float32 transport, one per expert
     # chunk (two here); EXACT differentiates the combine over the kept expert outputs instead.
+    _force_routing_weight_gradient(monkeypatch, routing_weight_gradient)
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
     tokens, hidden_dim, intermediate_dim, num_experts, topk = 16, 32, 64, 4, 2
 
@@ -1871,7 +1892,6 @@ def test_ragged_backward_takes_the_routing_weight_gradient_where_selected(
             w_down,
             implementation="ragged_all_to_all",
             mesh=mesh,
-            routing_weight_gradient=routing_weight_gradient,
         )
         return jnp.sum(out)
 
@@ -1889,22 +1909,6 @@ def test_ragged_backward_takes_the_routing_weight_gradient_where_selected(
         return eqn.invars[0].aval.shape[-1:] == (1,) and eqn.invars[0].aval.dtype == jnp.float32
 
     assert _count_jaxpr_primitives(jaxpr, "ragged_all_to_all", is_row_dot) == row_dot_transports
-
-
-def test_expert_side_routing_weight_gradient_needs_the_ragged_backend():
-    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
-        key=jax.random.key(33), tokens=8, hidden_dim=8, intermediate_dim=8, num_experts=4, topk=2
-    )
-    with pytest.raises(ValueError, match="needs the ragged_all_to_all implementation"):
-        moe_mlp(
-            x,
-            selected_experts,
-            combine_weights,
-            w_up_gate,
-            w_down,
-            implementation="ring",
-            routing_weight_gradient=RoutingWeightGradient.EXPERT_SIDE,
-        )
 
 
 def _filled_transport_buffer(fill: float):
@@ -1970,9 +1974,9 @@ def _unwritten_rows_routings(
     return routings
 
 
-@pytest.mark.parametrize("routing_weight_gradient", list(RoutingWeightGradient), ids=lambda g: str(g))
+@pytest.mark.parametrize("routing_weight_gradient", list(_RoutingWeightGradient), ids=lambda g: str(g))
 def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
-    routing_weight_gradient: RoutingWeightGradient, monkeypatch: pytest.MonkeyPatch
+    routing_weight_gradient: _RoutingWeightGradient, monkeypatch: pytest.MonkeyPatch
 ):
     # The transport buffers start with unspecified contents, and every consumer must read only the
     # rows a collective wrote. Filling them with NaN instead of zero must change no output or
@@ -1982,6 +1986,7 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
     mesh = _make_ep_mesh_or_none()
     if mesh is None or jax.devices()[0].platform != "gpu":
         pytest.skip("requires an even number of >=2 GPUs")
+    _force_routing_weight_gradient(monkeypatch, routing_weight_gradient)
 
     tokens = len(jax.devices()) * 8
     hidden_dim, intermediate_dim, topk = 16, 24, 2
@@ -2018,7 +2023,6 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
             mesh=mesh,
             report_capacity_overflow=True,
             capacity_factor=0.5,
-            routing_weight_gradient=routing_weight_gradient,
         )
 
     def loss(x, w_up_gate, w_down, combine_weights, routing):

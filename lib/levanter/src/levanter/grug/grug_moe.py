@@ -50,7 +50,7 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import RoutingWeightGradient, _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -356,7 +356,6 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
-    routing_weight_gradient: RoutingWeightGradient = eqx.field(static=True, default=RoutingWeightGradient.EXACT)
 
     @staticmethod
     def init(
@@ -373,7 +372,6 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
-        routing_weight_gradient: RoutingWeightGradient = RoutingWeightGradient.EXACT,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -397,7 +395,6 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
-            routing_weight_gradient=routing_weight_gradient,
         )
 
     @named_call
@@ -427,7 +424,6 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
-            routing_weight_gradient=self.routing_weight_gradient,
         )
 
 
@@ -448,7 +444,6 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
-    routing_weight_gradient: RoutingWeightGradient = RoutingWeightGradient.EXACT,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -459,16 +454,15 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
-    `routing_weight_gradient` selects how `implementation="ragged_all_to_all"`
-    differentiates the combine weights on an expert axis of size two or more;
-    every other path differentiates them exactly. `EXACT` keeps the expert
-    outputs for the backward. `EXPERT_SIDE` skips their return transport and,
-    with the QuACK expert MLP on SM100, keeps no expert outputs; the portable
-    `ragged_dot` expert MLP still keeps them. Its combine-weight gradient is zero or inexact
-    wherever `w * dout` rounds to zero in the cotangent dtype: at a zero weight,
-    and in float16 also for a normal weight times a small output cotangent.
-    Choose it only for positive combine weights with bfloat16 or float32
-    cotangents, whose exponent range keeps such products far from underflow.
+    With `implementation="ragged_all_to_all"` on an expert axis of size two or
+    more, SiLU experts with bfloat16 or float32 tokens on an SM100 GPU with
+    QuACK installed take the combine-weight gradient on the expert side, from
+    the expert MLP's own backward, so the backward keeps neither the expert
+    outputs nor their return transport. That gradient is zero at a zero weight,
+    and zero or inexact wherever `|w * dout|` falls below the cotangent dtype's
+    smallest normal number, 2^-126, which only output cotangents near underflow
+    reach. Every other path, float16 included, differentiates the combine
+    weights exactly.
 
     Set `report_capacity_overflow=True` to also return sender and receiver
     capacity drops plus padding-skipped assignment counts.
@@ -481,11 +475,6 @@ def moe_mlp(
     fixed pooled-wave implementation.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
-    if routing_weight_gradient != RoutingWeightGradient.EXACT and resolved_implementation != "ragged_all_to_all":
-        raise ValueError(
-            f"routing_weight_gradient={routing_weight_gradient!s} needs the ragged_all_to_all implementation, "
-            f"got {resolved_implementation!r}"
-        )
 
     if mesh is None:
         mesh = _current_mesh()
@@ -578,7 +567,7 @@ def moe_mlp(
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = partial(_moe_mlp_ep_ragged_a2a_local, routing_weight_gradient=routing_weight_gradient)
+            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":
@@ -713,7 +702,6 @@ __all__ = [
     "MoeImplementation",
     "PspecAxis",
     "QBRoutedMoE",
-    "RoutingWeightGradient",
     "moe_mlp",
     "moe_routing_stats",
     "moe_routing_stats_local",

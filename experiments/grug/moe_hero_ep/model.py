@@ -52,7 +52,6 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
-    RoutingWeightGradient,
     moe_routing_stats_local,
     qb_beta_topk_shard,
     qb_topk_physical_count,
@@ -117,10 +116,13 @@ OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
 LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
-# The routed experts' combined output, before the latent up projection. The ragged backend's
-# backward reads neither the expert down projection nor the return transport, so saving this
-# value leaves the recompute only the dispatch and the gate/up projection. At the hero shapes it
-# is 402 MB per layer, 18 GiB of HBM across 48 layers.
+# The routed experts' combined output, before the latent up projection. At the hero shapes it is
+# 402 MB per layer, 18 GiB of HBM across 48 layers. With the QuACK expert MLP, the ragged backend
+# takes the routing-weight gradient on the expert side, so its backward reads neither the expert
+# down projection nor the return transport, and saving this value leaves the recompute only the
+# dispatch and the gate/up projection. The routing weights are positive renormalized sigmoids and
+# the cotangents bf16, so that gradient loses precision only where an output cotangent element is
+# below 2^-126 / w.
 MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
 
 
@@ -1003,14 +1005,6 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
-                # The routing weights are renormalized sigmoids, so positive, and the cotangents bf16,
-                # with fp32's exponent range: w * dout stays clear of underflow, and the expert-side
-                # gradient saves the backward the expert outputs and their return transport.
-                routing_weight_gradient=(
-                    RoutingWeightGradient.EXPERT_SIDE
-                    if resolve_moe_implementation(cfg.moe_implementation) == "ragged_all_to_all"
-                    else RoutingWeightGradient.EXACT
-                ),
                 pspecs=MoEExpertMlpPspecs(expert=_EXPERT_WEIGHT_AXES),
             ),
             cfg=cfg,

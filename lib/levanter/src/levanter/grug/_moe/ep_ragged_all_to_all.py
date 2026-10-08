@@ -69,6 +69,17 @@ RAGGED_REQUIRED_XLA_FLAGS = (
 )
 
 
+class _RoutingWeightGradient(StrEnum):
+    """How the ragged expert-parallel backend differentiates the combine weights."""
+
+    # <dout, y> for each assignment, read from the expert outputs, which the backward keeps.
+    EXACT = auto()
+    # <h, dh> / w for each expert row, from the expert MLP's own backward, where dh is the cotangent
+    # of the activation h and the row's output cotangent is w * dout. The backward needs no return
+    # transport. `_select_expert_mlp` says where it is inexact.
+    EXPERT_SIDE = auto()
+
+
 class _ExpertMlp(Protocol):
     """Runs the expert MLP over a receiver buffer laid out expert-major, with its own backward.
 
@@ -79,9 +90,14 @@ class _ExpertMlp(Protocol):
     the weight gradients, and leave their own output rows past the active count unspecified.
 
     ``backward`` also returns each row's ``<y, dy>`` in fp32, the gradient of a per-row scale
-    applied to the output. The routed-expert backward turns it into the routing-weight
-    gradient, so it never needs the output ``y`` itself.
+    applied to the output. With an EXPERT_SIDE ``routing_weight_gradient``, the routed-expert
+    backward turns it into the routing-weight gradient, so it never needs the returned outputs.
     """
+
+    @property
+    def routing_weight_gradient(self) -> _RoutingWeightGradient:
+        """The routing-weight gradient the routed-expert backward takes with this expert MLP."""
+        ...
 
     def forward(
         self,
@@ -107,6 +123,7 @@ class _RaggedDotExpertMlp:
     """
 
     activation_fn: Callable[[jax.Array], jax.Array]
+    routing_weight_gradient: _RoutingWeightGradient
 
     def _apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
@@ -141,6 +158,8 @@ class _CuteExpertMlp:
     The grouped kernels are driven by segment boundaries, so they take the active sizes and
     leave trailing rows unspecified. SwiGLU is fused into the gate/up GEMM.
     """
+
+    routing_weight_gradient: _RoutingWeightGradient
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
@@ -187,16 +206,33 @@ def _quack_grouped_gemm_available() -> bool:
     return True
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
-    """Pick the fastest expert-MLP kernel this process can actually run.
+def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype) -> _ExpertMlp:
+    """Pick the fastest expert-MLP kernel this process can actually run, and its routing-weight gradient.
 
     QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
     activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
     portable `ragged_dot` path, which computes the same function.
+
+    ``dtype`` is the tokens' dtype, which the expert outputs and their cotangents share. The
+    expert-side gradient divides ``<h, dh>`` by ``w``, and ``dh`` comes from the row cotangent
+    ``w * dout`` in that dtype. So the gradient is zero at ``w = 0``, and zero or inexact wherever
+    ``|w * dout|`` falls below the dtype's smallest normal number: 2^-126 in bfloat16 and float32,
+    which only output cotangents near underflow reach, and 2^-14 in float16, which ordinary
+    magnitudes reach.
+
+    QuACK's backward already holds ``h`` and ``dh`` and keeps no expert outputs, so with the
+    expert-side gradient the routed-expert backward keeps neither the outputs nor their return
+    transport. Every bfloat16 or float32 SiLU caller of this backend on an SM100 GPU with QuACK
+    installed takes it, and float16 takes the exact gradient. The portable path keeps its outputs
+    ``y`` for the row dot, so the expert-side gradient would save it only the returned ``[TK, H]``
+    buffer and the return transport. It takes the exact gradient, which holds for every weight and
+    dtype.
     """
     if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
-        return _CuteExpertMlp()
-    return _RaggedDotExpertMlp(activation_fn)
+        if dtype == jnp.float16:
+            return _CuteExpertMlp(routing_weight_gradient=_RoutingWeightGradient.EXACT)
+        return _CuteExpertMlp(routing_weight_gradient=_RoutingWeightGradient.EXPERT_SIDE)
+    return _RaggedDotExpertMlp(activation_fn, routing_weight_gradient=_RoutingWeightGradient.EXACT)
 
 
 def _unpermute_from_global_expert(
@@ -310,20 +346,6 @@ def _transport_buffer(
     return jax.lax.broadcast(marker.astype(dtype), (rows, hidden_dim))
 
 
-class RoutingWeightGradient(StrEnum):
-    """How the ragged expert-parallel backend differentiates the combine weights."""
-
-    # <dout, y> for each assignment, read from the expert outputs, which the backward keeps.
-    EXACT = auto()
-    # <h, dh> / w for each expert row, from the expert MLP's own backward, where dh is the cotangent
-    # of the activation h and the row's output cotangent is w * dout. The backward needs no return
-    # transport and, with the QuACK expert MLP, no expert outputs; the portable ragged_dot expert MLP
-    # keeps its outputs for the row dot. The gradient is zero or inexact wherever w * dout rounds to
-    # zero in the cotangent dtype: at w = 0, and in float16 also for normal weights times small output
-    # cotangents.
-    EXPERT_SIDE = auto()
-
-
 def _accepted_assignments(
     flat_selected: Int[Array, "TK"],
     sorted_indices: Int[Array, "TK"],
@@ -371,7 +393,6 @@ class _ExpertLayout:
     chunk_experts: int
     chunk_capacity: int
     expert_mlp: _ExpertMlp
-    weight_gradient: RoutingWeightGradient
 
     @property
     def chunks(self) -> int:
@@ -460,10 +481,10 @@ def _routed_experts_forward(
                 # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
                 # of every chunk at the same time, and the chunk buffers are all live at once,
                 # which is the memory the chunks exist to save. The barrier waits for the previous
-                # chunk's backward inputs rather than its return transport: the backward does not
-                # need the return, so a recompute for the backward drops it and must not be held
-                # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
-                # slower in a rematted four-GPU layer scan.)
+                # chunk's backward inputs rather than its return transport: with the expert-side
+                # gradient the backward does not need the return, so a recompute for the backward
+                # drops it and must not be held to it. (Dispatching chunk c+1 during chunk c's MLP
+                # measured 3 ms per layer slower in a rematted four-GPU layer scan.)
                 source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
             x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
@@ -505,16 +526,14 @@ def _routed_experts(
 
     ``weights`` must be zero for every assignment that ``routing.accepted`` marks as dropped.
 
-    ``layout.weight_gradient`` selects the routing-weight gradient `RoutingWeightGradient`. EXACT
-    keeps the returned expert outputs ``y`` for the backward and differentiates the combine. With
+    ``layout.expert_mlp.routing_weight_gradient`` selects the routing-weight gradient. EXACT keeps
+    the returned expert outputs ``y`` for the backward and differentiates the combine. With
     EXPERT_SIDE, each output row is ``y = h @ W2`` and its cotangent there is ``dy = w * dout``, so
     ``<dout, y> = <h, dh> / w`` with ``dh = dy @ W2^T``, which the expert MLP backward computes
     anyway. That backward reads neither the return transport nor the combined output. With the QuACK
     expert MLP it does not read ``y`` either, and when the combined output is saved for the backward,
-    a recompute for the backward runs only the dispatch and the gate/up projection; the portable
-    ``ragged_dot`` expert MLP keeps ``y`` among its residuals for the row dot. But where
-    ``w * dout`` rounds to zero in the cotangent dtype, the row's cotangent carries no information,
-    and the weight gradient is zero or inexact.
+    a recompute for the backward runs only the dispatch and the gate/up projection. The gradient is
+    only as precise as ``dy`` in the cotangent dtype; `_select_expert_mlp` says where that falls short.
     """
     out, _residuals, _returned = _routed_experts_forward(
         sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
@@ -526,14 +545,14 @@ def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing,
     out, chunk_residuals, returned = _routed_experts_forward(
         sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
     )
-    if layout.weight_gradient == RoutingWeightGradient.EXPERT_SIDE:
+    if layout.expert_mlp.routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE:
         returned = None
     return out, (weights, routing, chunk_residuals, returned)
 
 
 def _routed_experts_bwd(layout, residuals, out_cotangent):
     weights, routing, chunk_residuals, returned = residuals
-    expert_side = layout.weight_gradient == RoutingWeightGradient.EXPERT_SIDE
+    expert_side = layout.expert_mlp.routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE
     assignments = routing.sorted_indices.shape[0]
     hidden_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
@@ -645,7 +664,6 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
-    routing_weight_gradient: RoutingWeightGradient,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -719,8 +737,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         ep_size=ep_size,
         chunk_experts=chunk_experts,
         chunk_capacity=chunk_capacity,
-        expert_mlp=_select_expert_mlp(activation_fn),
-        weight_gradient=routing_weight_gradient,
+        expert_mlp=_select_expert_mlp(activation_fn, x_local.dtype),
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.
