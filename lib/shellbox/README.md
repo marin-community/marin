@@ -20,15 +20,16 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. QEMU and ShellSim have Harbor environment adapters. The three new backends expose the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. The other backends expose only the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
 | Local gVisor | Docker image, registry image, Dockerfile, prepared OCI image | allow or deny | Docker daemon with `runsc` registered; Skopeo for image preparation |
 | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
 | Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: no network. Neither reaches the cluster | Iris controller and workers with sandbox profile support; `ALLOW` needs a Kubernetes cluster |
+| Local | `HostImage()`: the host's own programs and files | Host network; with Landlock ABI 4 (Linux 6.7), `DENY` refuses TCP | Trusted commands only; a root process to run commands as other users |
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its `CONTAINER_PROFILE_SANDBOX` job profile, which runs the job under gVisor with no cluster environment, credentials, or workspace bundle, and the `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. `NetworkPolicy.ALLOW` submits the job with `EGRESS_POLICY_INTERNET`, which reaches public addresses but not private, carrier-grade NAT or link-local ones, so not the controller, other pods or the metadata server. On Docker worker clusters such as `marin` it needs the host egress filter that worker bootstrap installs. `NetworkPolicy.DENY` submits `EGRESS_POLICY_NONE`, which leaves only DNS on Kubernetes and no network on Docker workers. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them. The Iris controller scans for expired jobs about once a minute, so an Iris sandbox can outlive `job_ttl` by a minute or more. A command or transfer on an Iris sandbox that was killed, expired, or preempted raises `MachineTerminated`. When the controller's exec pool is full it refuses an exec with `RESOURCE_EXHAUSTED` before running it; the machine retries that refusal with backoff for up to Iris's 30-minute RPC retry budget. Other exec RPC errors are not retried, because the command may already have run.
 
@@ -87,14 +88,17 @@ these settings to its resource flags. Storage limits require a Docker storage
 driver that supports `--storage-opt size`, and GPU allocation requires a GPU
 runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
 It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
-memory settings. Backends reject resource overrides that they cannot apply.
+memory settings. Backends reject resource overrides that they cannot apply, except that the local backend ignores
+`memory_mb`.
 
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
 control process as root and uses `su` for other execution users. Numeric UIDs
-require `getent` and a matching guest account.
+require `getent` and a matching guest account. The local backend runs other users only from a root process.
 An empty Docker `MachineSpec.workdir` retains the image's working directory.
+Docker, gVisor, Iris and local machines create a nonempty `workdir` when the machine starts, so
+commands can run there even when the image lacks it.
 
 To prepare a registry image, use a standard image reference without `https://`:
 
@@ -145,6 +149,42 @@ The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libr
 Re-stage bundles built with an earlier prototype when updating this package; the guest and host serial protocols must match.
 
 With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
+
+## Local backend
+
+`LocalMachineFactory` runs each command as a subprocess of the calling process, on the host's own filesystem. It starts no container or VM, and it needs no extra. Use it only for trusted commands, such as vendored grader scripts on an ephemeral worker. Each command runs under the kernel restrictions described below. They are best effort: a kernel that refuses a restriction leaves that access open, and the restrictions do not make the host safe for untrusted code.
+
+```python
+from pathlib import Path
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.machine import Command, HostImage, MachineSpec
+
+factory = LocalMachineFactory(("/tests", "/app", "/logs"), bin_dirs=(Path("/opt/grader-venv/bin"),))
+machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+try:
+    result = await machine.run(Command(("python3", "/tests/grade.py")))
+finally:
+    await machine.close()
+```
+
+- One local machine exists per host at a time. `create` waits for an exclusive `flock` on `lock_path`, which defaults to `/tmp/shellbox-local-machine.lock`, so processes that share the path take turns. It then deletes each owned root, recreates it empty, and creates `MachineSpec.workdir`. The workdir must lie in an owned root; an empty workdir or `/` runs commands in `/`. Because `create` deletes the owned roots, the factory refuses an owned root that holds the calling process's working directory, `sys.prefix`, or interpreter. An Iris task, for example, runs from its bundle and venv in `/app`, so a local machine in an Iris task cannot own `/app`.
+- `shared_roots` are directories the machine may also write and upload into but never empties, such as a workspace the host process runs from. `create` makes them if missing; `close` removes only the machine's uploads there, so files commands wrote to a shared root remain for the next machine.
+- `close` removes the owned roots, uploads under `/tmp`, and the machine's `HOME`, then releases the lock. It does not stop background processes that a command left running, and it does not remove files that commands wrote elsewhere.
+- `upload` accepts targets in an owned root or under `/tmp`. Other targets raise `UnsupportedMachineSpec`. `download` of a missing path raises `RuntimeError`, as the container backends do.
+- Commands never inherit the host environment, which can hold cluster credentials. Each command gets `PATH` with `bin_dirs` ahead of the standard system directories, a per-machine `HOME`, `LANG=C.UTF-8`, and the host's `PYTHONHASHSEED` if set, then `MachineSpec.env` and `Command.env`.
+- `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. A timeout kills the command's process group. Output beyond `output_limit_bytes` is discarded while the command runs.
+- `memory_mb` is ignored: an address-space limit breaks NumPy and SymPy allocations. CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
+- `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group and no supplementary groups. A user without a host account raises `UnsupportedMachineSpec`.
+
+Each command starts as a launcher in the calling process's interpreter, `sys.executable -I -S`. The launcher applies the restrictions below, switches to the command's account, and execs `/bin/sh`, which runs the command. The account therefore needs no access to the calling process's interpreter. The command's child processes inherit every restriction.
+
+- Resource limits: no core files, files of at most 1 GiB, and, for a command with a timeout, at most the timeout multiplied by the usable CPUs plus 5 seconds of CPU time per process. The CPU limit stops only a process that escapes the timeout's kill. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256. The kernel does not apply `RLIMIT_NPROC` to root.
+- `no_new_privs`: setuid programs and file capabilities cannot raise the command's privileges.
+- Landlock filesystem rules (Linux 5.13 or later): the command may create, write, and delete files only in the owned roots, its `HOME`, `/tmp`, and `/dev/shm`, and may also write `/dev/null`, `/dev/zero`, and `/dev/full`. It may read and execute files only in those paths, in `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/dev`, `/proc`, `/sys`, and `/run/systemd/resolve`, and in each of `bin_dirs`. For a `bin_dirs` entry inside a venv, the rule covers the venv and the Python installation that its `python3` links to. Other file access fails with `EACCES`. Landlock also stops the command from reading the environment or memory of processes outside the command, such as `/proc/<pid>/environ`.
+- Landlock network rules (ABI 4, Linux 6.7): under `NetworkPolicy.DENY`, TCP bind and connect fail with `EACCES`.
+- Landlock scopes (ABI 6, Linux 6.12): the command cannot signal processes outside the command or connect to their abstract Unix sockets.
+
+`LocalMachineFactory.lockdown` reports which kernel restrictions the host allows, and the factory logs it when it is created. A kernel without Landlock, or a seccomp filter that refuses Landlock, leaves the filesystem and network open. Docker 29's default seccomp profile allows Landlock. The backend does not limit memory. Under `NetworkPolicy.DENY`, commands can still send UDP traffic, such as DNS queries, and connect to Unix sockets by path. Commands can also read and change files that other host processes keep in `/tmp` or `/dev/shm`.
 
 ## ShellSim backend
 

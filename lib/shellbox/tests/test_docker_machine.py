@@ -155,7 +155,8 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
                 async with asyncio.timeout(10):
                     while True:
                         observed = await machine.run(Command(("cat", "child.pid")))
-                        if observed.exit_code == 0:
+                        # The shell creates child.pid before echo writes the pid into it.
+                        if observed.exit_code == 0 and observed.stdout.strip():
                             break
                 child = int(observed.stdout)
                 if interruption == "cancel":
@@ -190,6 +191,19 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
     asyncio.run(scenario())
 
 
+@pytest.mark.docker
+def test_docker_commands_run_in_a_working_directory_the_image_lacks():
+    async def scenario():
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/work/nested"))
+        try:
+            return await machine.run(Command(("pwd",)))
+        finally:
+            await machine.close()
+
+    result = asyncio.run(scenario())
+    assert (result.exit_code, result.stdout) == (0, b"/work/nested\n")
+
+
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
 def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeypatch, interruption):
     containers = set()
@@ -205,7 +219,7 @@ def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeyp
                 if interruption == "timeout":
                     raise TimeoutError("Docker exec startup timed out")
                 await asyncio.Future()
-            elif args[:3] == ("exec", "--user", "0"):
+            elif args[:3] == ("exec", "--user", "0") and "stop-command" in args:
                 return DockerCommandResult(1, b"", b"Command PID is not available")
             elif args[:2] == ("rm", "-f"):
                 containers.remove(args[2])
