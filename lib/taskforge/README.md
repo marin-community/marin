@@ -62,10 +62,13 @@ content-addressed cache and does not record to the ledger.
 
 ## Decisions
 
-Execution is RolloutEngine's. `ShellboxRolloutEngine` creates one shellbox `Machine` per attempt
-from the caller's `MachineFactory` for the task's `EnvironmentKind`, installs files, runs setup
-and healthchecks, drives the shell tool, grades and closes. It grades the state an agent left when
-the agent deadline expires, and bounds every cleanup action by its `cleanup_timeout`. Taskforge supplies the model callable
+Execution is RolloutEngine's. `ShellboxRolloutEngine.run` takes a `LoweredTaskSpec`: a
+TaskCompendium `TaskSpec` (schema 0.22) with the `TaskRuntimeSpec` and `TaskSessionSpec` that say how
+it runs. Each attempt creates a shellbox `Machine` from the caller's `MachineFactory` named by the
+task machine's `MachineRuntimeSpec.backend`, installs the task's resources, runs its setup commands,
+drives the shell tool, grades (on a separate verifier machine when one is lowered) and closes. It
+grades the state an agent left when the `total_turn_timeout` expires, and bounds every cleanup
+action by the lowered `cleanup_timeout`. Taskforge supplies the model callable
 (`llm.rollout_model.GlmRolloutModel`).
 
 The agent loop is Taskforge's own: `llm.agent.run_agent` over `GlmClient`, with the shell tool
