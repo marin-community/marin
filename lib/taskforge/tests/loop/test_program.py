@@ -231,7 +231,7 @@ async def test_a_repair_that_rebuilds_the_same_task_is_a_failed_revision_and_the
     repair = load_decision(evidence_dir(loop, item_id, 0) / DECISION_FILE)
     assert isinstance(repair, Repair)
     assert [finding.kind for finding in repair.brief.findings] == [FindingKind.SHORTCUT_PASSED]
-    assert "The shortcut adversary 0 found an accepted submission" in repair.brief.failure
+    assert "The shortcut adversary 1 of 1 found an accepted submission" in repair.brief.failure
     assert repair.brief.failure in last_user_turn(fake_glm, 3)
 
     (noop,) = events_of(loop, item_id, EventKind.BUILD_FAILED)
