@@ -19,8 +19,8 @@ from pathlib import Path
 import pytest
 from rolloutengine.contracts import GenerationLimitReached, ModelRequest, RolloutContractError, RolloutData
 from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.environment import EnvironmentKind, ExitCodeReward
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskcompendium.submission import PlainText
@@ -30,21 +30,27 @@ from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_tokens
-from taskforge.spec.draft import assemble, environment, file, shell_verifier, task_execution
+from taskforge.sandbox.factories import MachineHost
+from taskforge.spec.draft import assemble, file, lower, machine, requirements, script_verifier, session
 
 POLICY = LLMPolicy(max_continuations=0)
-EXECUTION = task_execution()
+FACTORIES = {"shellsim": ShellSimMachineFactory()}
 CONTEXT_ERROR = "This model's maximum context length is 262144 tokens. However, you requested 300000 tokens."
-# ShellSim cannot expand a command substitution inside a test argument, so assign it first.
-COUNT_CHECK = 'v=$(tr -d " \\n" < /workspace/count.txt)\n[ "$v" = 15 ]\n'
+OUTPUT_CHECK = """import json, os, pathlib
+config = json.loads(pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "config.json").read_text())
+output = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "captured", config["path"])
+words = config["words"]
+reward = float(output.is_file() and (words is None or output.read_text().split() == words))
+verdict = {"status": "scored", "reward": reward, "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
+"""Rewards 1 when the captured output file exists and, unless ``words`` is null, holds exactly those words."""
 PUZZLE_1 = "List, ascending and one per line, every prime p below 1000 such that p + 2 and p + 6 are both prime.\n"
 PUZZLE_2 = (
     "List, ascending and one per line, every three-digit number whose digits are strictly increasing "
     "from left to right and sum to 20.\n"
 )
-PUZZLE_1_CHECK = (
-    'v=$(tr "\\n" " " < /workspace/answer1.txt)\n[ "$v" = "5 11 17 41 101 107 191 227 311 347 461 641 821 857 881 " ]\n'
-)
+PUZZLE_1_ANSWER = "5 11 17 41 101 107 191 227 311 347 461 641 821 857 881".split()
 
 
 @pytest.fixture
@@ -113,27 +119,40 @@ def shell_task():
         "rollout-model-shell",
         "Create /workspace/done.txt.",
         AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        shell_verifier(
-            ("sh", "/grader/check.sh"),
-            ExitCodeReward(),
-            timeout=30,
-            files=(file("/grader/check.sh", "test -f /workspace/done.txt\n"),),
-        ),
+        output_check("workspace/done.txt", None),
         Source(dataset="taskforge-tests", revision="1", row="0", importer_revision="1"),
-        execution=EXECUTION,
+        environment=requirements(image=None),
+        output_paths=("/workspace/done.txt",),
     )
 
 
-def rollout_engine(model: GlmRolloutModel, max_turns: int = 6) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(
-        model,
-        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+def output_check(path: str, words: list[str] | None):
+    return script_verifier(OUTPUT_CHECK, {"path": path, "words": words}, timeout=30)
+
+
+def shellsim(task: TaskSpec, max_turns: int = 6) -> LoweredTaskSpec:
+    limits = session(
         max_turns=max_turns,
+        model_turn_timeout=None,
         command_timeout=30,
+        tool_turn_timeout=60,
+        total_turn_timeout=None,
+        attempt_timeout=None,
+        verifier_timeout=30,
         cleanup_timeout=30,
-        convention=PlainText(id="plain"),
     )
+    return lower(
+        task,
+        host=MachineHost.LAPTOP,
+        task_machine=machine(startup_timeout=30),
+        verifier_machine=None,
+        session=limits,
+        factories=FACTORIES,
+    )
+
+
+def rollout_engine(model: GlmRolloutModel) -> ShellboxRolloutEngine:
+    return ShellboxRolloutEngine(model, FACTORIES, convention=PlainText(id="plain"))
 
 
 @pytest.fixture
@@ -156,9 +175,7 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
     )
     fake_glm.responses.append(token_stream([1, 2, 3, 4, 5, 6, 7], [8, 9], content="Done."))
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(
-        shell_task(), execution=EXECUTION
-    )
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
 
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
     assert rollout.prompt_token_ids == (1, 2, 3)
@@ -175,9 +192,7 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
 async def test_length_cut_turn_is_graded_with_length_stop(fake_glm, fake_client):
     fake_glm.responses.append(token_stream([1, 2], [3, 4], content="I will", finish="length"))
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(
-        shell_task(), execution=EXECUTION
-    )
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -190,9 +205,7 @@ async def test_tool_call_cut_at_the_budget_ends_the_rollout_with_length_unexecut
     fake_glm.responses.append(token_stream([1, 2], [3, 4, 5], tool_call=("shell", command), finish="tool_calls"))
     policy = LLMPolicy(max_tokens=3, max_continuations=0)
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy, call_ledger())).run(
-        shell_task(), execution=EXECUTION
-    )
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy, call_ledger())).run(shellsim(shell_task()))
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -238,7 +251,7 @@ async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake
     fake_glm.responses.append(token_stream([1, 2, 3, *canonical, observation, 9], [10], content="Done."))
 
     with pytest.raises(RolloutContractError, match=r"index 5 of the 11-token prefix it served \[23482, 16"):
-        await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shell_task(), execution=EXECUTION)
+        await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
 
 
 async def test_a_continued_completion_has_no_exact_tokens(fake_glm, fake_client):
@@ -270,15 +283,10 @@ def live_task():
         "Then, in a separate call, write the number of lines of that file to /workspace/count.txt. "
         "Then show both files with cat, and say when you are done.",
         AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        shell_verifier(
-            ("sh", "/grader/check.sh"),
-            ExitCodeReward(),
-            timeout=30,
-            files=(file("/grader/check.sh", COUNT_CHECK),),
-        ),
+        output_check("workspace/count.txt", ["15"]),
         Source(dataset="taskforge-tests", revision="1", row="live", importer_revision="1"),
-        execution=EXECUTION,
+        environment=requirements(image=None),
+        output_paths=("/workspace/primes.txt", "/workspace/count.txt"),
     )
 
 
@@ -327,8 +335,9 @@ async def live_rollouts(glm_settings, task: TaskSpec, count: int, max_turns: int
     ledger = ListLedger()
     started = time.monotonic()
     async with GlmClient(endpoint) as client:
-        engine = rollout_engine(GlmRolloutModel(client, POLICY, call_ledger(ledger)), max_turns=max_turns)
-        rollouts = await asyncio.gather(*(engine.run(task, execution=EXECUTION) for _ in range(count)))
+        engine = rollout_engine(GlmRolloutModel(client, POLICY, call_ledger(ledger)))
+        lowered = shellsim(task, max_turns)
+        rollouts = await asyncio.gather(*(engine.run(lowered) for _ in range(count)))
     calls = [entry for entry in ledger.entries if entry.kind == EntryKind.LLM_CALL]
     assert len(calls) == sum(len(rollout.steps) for rollout in rollouts)
     assert all(entry.cause is None and entry.tokens_out for entry in calls)
@@ -370,21 +379,11 @@ def reasoning_task():
         "files prefixed by the file name. Then run it with sh.\n"
         "Say when you are done.",
         AnswerType.FILE,
-        environment(
-            EnvironmentKind.SHELLSIM,
-            files=(
-                file("/workspace/puzzle1.txt", PUZZLE_1),
-                file("/workspace/puzzle2.txt", PUZZLE_2),
-            ),
-        ),
-        shell_verifier(
-            ("sh", "/grader/check.sh"),
-            ExitCodeReward(),
-            timeout=30,
-            files=(file("/grader/check.sh", PUZZLE_1_CHECK),),
-        ),
+        output_check("workspace/answer1.txt", PUZZLE_1_ANSWER),
         Source(dataset="taskforge-tests", revision="1", row="reasoning", importer_revision="1"),
-        execution=EXECUTION,
+        environment=requirements(image=None),
+        files=(file("workspace/puzzle1.txt", PUZZLE_1), file("workspace/puzzle2.txt", PUZZLE_2)),
+        output_paths=("/workspace/answer1.txt", "/workspace/answer2.txt", "/workspace/report.sh"),
     )
 
 

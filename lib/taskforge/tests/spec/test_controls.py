@@ -4,11 +4,8 @@
 from dataclasses import replace
 
 import pytest
-from taskcompendium.environment import EnvironmentKind, ExitCodeReward, RewardFileFormat
-from taskcompendium.execution import StageExecution
-from taskcompendium.grading import verifier_descriptor
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AnswerType, Source, StageRewardStrategy, TaskSpec
+from taskcompendium.models import AnswerType, AssistantToolCalls, Source, TaskSpec
 from verifyit.spec import ExactSpec
 
 from taskforge.spec.controls import (
@@ -25,25 +22,17 @@ from taskforge.spec.controls import (
     shell_turn,
     validate_controls,
 )
-from taskforge.spec.draft import (
-    assemble,
-    environment,
-    file,
-    reward_file,
-    shell_verifier,
-    stage,
-    staged,
-    task_execution,
-)
+from taskforge.spec.draft import answer_verifier, assemble, file, requirements, script_verifier
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
-NO_EXECUTION = task_execution()
 GRADED_ONE = Expectation(Outcome.GRADED, reward_min=1.0)
 GRADED_ZERO = Expectation(Outcome.GRADED, reward_max=0.0)
-
-
-def file_check(path: str = "/workspace/answer"):
-    return shell_verifier(("sh", "-c", f'[ "$(cat {path})" = 12 ]'), ExitCodeReward(), timeout=5)
+GRADER = """import json, os, pathlib
+answer = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "captured/workspace/answer")
+reward = float(answer.is_file() and answer.read_text().strip() == "12")
+verdict = {"status": "scored", "reward": reward, "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
 
 
 def file_task() -> TaskSpec:
@@ -51,29 +40,10 @@ def file_task() -> TaskSpec:
         "file",
         "Write 12 to /workspace/answer.",
         AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        file_check(),
+        script_verifier(GRADER, {}, timeout=20),
         SOURCE,
-        execution=NO_EXECUTION,
-    )
-
-
-def rubric_task() -> TaskSpec:
-    """A file task whose grader writes per-criterion components to a JSON reward file."""
-    script = (
-        "format=0; value=0; [ -f /workspace/answer ] && format=1; "
-        '[ "$(cat /workspace/answer)" = 12 ] && value=1; mkdir -p /logs; '
-        'echo "{\\"reward\\": $(( (format + value) * 50 ))e-2, \\"format\\": $format, \\"value\\": $value}"'
-        " > /logs/reward.json"
-    )
-    return assemble(
-        "rubric",
-        "Write 12 to /workspace/answer.",
-        AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        shell_verifier(("sh", "-c", script), reward_file("/logs/reward.json", RewardFileFormat.JSON), timeout=5),
-        SOURCE,
-        execution=NO_EXECUTION,
+        environment=requirements(image=None),
+        output_paths=("/workspace/answer",),
     )
 
 
@@ -82,10 +52,9 @@ def answer_task() -> TaskSpec:
         "answer",
         "What is six plus six?",
         AnswerType.TEXT,
-        environment(EnvironmentKind.NULL),
-        verifier_descriptor(ExactSpec(expected=("12",))),
+        answer_verifier(ExactSpec(expected=("12",))),
         SOURCE,
-        execution=NO_EXECUTION,
+        environment=None,
     )
 
 
@@ -94,82 +63,51 @@ def control(
     kind: ControlKind,
     category: ControlCategory,
     concern: ControlConcern,
-    payload,
+    payload: Transcript | Workspace,
     expect: Expectation,
-    **fields,
 ) -> Control:
-    return Control(identifier, kind, category, concern, "builder", payload, expect, **fields)
+    return Control(identifier, kind, category, concern, "builder", payload, expect)
 
 
-def file_controls(stage_index: int = 0) -> list[Control]:
-    def write(value: str) -> Transcript:
-        return Transcript((shell_turn((f"s{stage_index}", f"echo {value} > /workspace/answer")), reply("Done.")))
+def write(value: str) -> Transcript:
+    return Transcript((shell_turn(("s", f"echo {value} > /workspace/answer")), reply("Done.")))
 
-    prefix = f"s{stage_index}-"
+
+def file_controls() -> list[Control]:
     return [
         control(
-            prefix + "gold",
+            "gold",
             ControlKind.POSITIVE,
             ControlCategory.KNOWN_CORRECT,
             ControlConcern.REFERENCE,
             write("12"),
             GRADED_ONE,
-            stage=stage_index,
         ),
         control(
-            prefix + "empty",
+            "empty",
             ControlKind.MALFORMED,
             ControlCategory.EMPTY_OR_MALFORMED,
             ControlConcern.EXTRACTION,
             Workspace(()),
             GRADED_ZERO,
-            stage=stage_index,
         ),
         control(
-            prefix + "off-by-one",
+            "off-by-one",
             ControlKind.NEGATIVE,
             ControlCategory.PLAUSIBLE_WRONG,
             ControlConcern.ACCEPTANCE,
             write("13"),
             GRADED_ZERO,
-            stage=stage_index,
         ),
         control(
-            prefix + "fake-file",
+            "fake-file",
             ControlKind.NEGATIVE,
             ControlCategory.REWARD_HACK,
             ControlConcern.SHORTCUT,
-            Workspace((file("/workspace/answer", "12 \n"),)),
+            Workspace((file("workspace/answer", "12 apples\n"),)),
             GRADED_ZERO,
-            stage=stage_index,
         ),
     ]
-
-
-HALF = control(
-    "half",
-    ControlKind.PARTIAL,
-    ControlCategory.CRITERION_MUTATION,
-    ControlConcern.ACCEPTANCE,
-    Workspace((file("/workspace/answer", "1"),)),
-    Expectation(Outcome.GRADED, reward_min=0.4, reward_max=0.6, components={"format": 1.0, "value": 0.0}),
-    partial_credit_reason="Right file, wrong value: the rubric awards the format criterion only.",
-)
-
-
-def test_complete_control_set_validates_and_round_trips_through_json():
-    controls = [*file_controls(), HALF]
-    validate_controls(rubric_task(), controls)
-
-    restored = parse_controls(controls_json(controls))
-
-    assert restored == tuple(controls)
-    validate_controls(rubric_task(), restored)
-
-
-def test_partial_control_needs_a_grader_that_reports_components():
-    with pytest.raises(ValueError, match="only a JSON reward file reports"):
-        validate_controls(file_task(), [*file_controls(), HALF])
 
 
 def answer_controls() -> list[Control]:
@@ -217,8 +155,26 @@ def answer_controls() -> list[Control]:
     ]
 
 
+def test_complete_control_set_validates_and_round_trips_through_json():
+    controls = file_controls()
+    validate_controls(file_task(), controls)
+
+    restored = parse_controls(controls_json(controls))
+
+    assert restored == tuple(controls)
+    assert restored[3].payload == Workspace((file("workspace/answer", "12 apples\n"),))
+    validate_controls(file_task(), restored)
+
+
 def test_answer_task_controls_with_a_submission_failure_validate():
     validate_controls(answer_task(), answer_controls())
+
+
+def test_a_script_graded_task_may_expect_a_submission_failure():
+    gold, empty, wrong, hack = file_controls()
+    failure = replace(empty, payload=Transcript((reply(""),)), expect=Expectation(Outcome.SUBMISSION_FAILURE))
+
+    validate_controls(file_task(), [gold, failure, wrong, hack])
 
 
 @pytest.mark.parametrize(
@@ -229,7 +185,7 @@ def test_answer_task_controls_with_a_submission_failure_validate():
         ("wrong", ControlConcern.EXTRACTION, "concern: acceptance"),
     ],
 )
-def test_stage_coverage_cannot_rest_on_extraction_controls(relabeled, concern, message):
+def test_coverage_cannot_rest_on_extraction_controls(relabeled, concern, message):
     """Every category is present, but relabeling one control leaves a required concern uncovered."""
     controls = [replace(item, concern=concern) if item.id == relabeled else item for item in answer_controls()]
     with pytest.raises(ValueError, match=message):
@@ -239,33 +195,22 @@ def test_stage_coverage_cannot_rest_on_extraction_controls(relabeled, concern, m
 @pytest.mark.parametrize(
     "dropped,message",
     [
-        ("s0-gold", "known_correct"),
-        ("s0-fake-file", "task_specific_shortcut or reward_hack"),
-        ("s0-empty", "empty_or_malformed"),
+        ("gold", "known_correct"),
+        ("fake-file", "task_specific_shortcut or reward_hack"),
+        ("empty", "empty_or_malformed"),
+        ("off-by-one", "plausible_wrong"),
     ],
 )
 def test_each_required_category_is_enforced(dropped, message):
     controls = [item for item in file_controls() if item.id != dropped]
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match=f"Controls lack {message}"):
         validate_controls(file_task(), controls)
 
 
-def test_every_stage_needs_its_own_controls():
-    task = assemble(
-        "staged",
-        "Write 12 to /workspace/answer.",
-        AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        staged(StageRewardStrategy.FINAL),
-        SOURCE,
-        execution=task_execution(stages={"one": StageExecution(), "two": StageExecution()}),
-        stages=(stage("one", file_check()), stage("two", file_check("/workspace/b"), instruction="Again.")),
-    )
-    with pytest.raises(ValueError, match="Stage 1 lacks"):
-        validate_controls(task, file_controls(0))
-    validate_controls(task, [*file_controls(0), *file_controls(1)])
-    with pytest.raises(ValueError, match="names stage 2"):
-        validate_controls(task, [*file_controls(0), *file_controls(1), *file_controls(2)])
+def test_control_ids_are_unique():
+    gold, *rest = file_controls()
+    with pytest.raises(ValueError, match="unique"):
+        validate_controls(file_task(), [gold, replace(rest[0], id="gold"), *rest[1:]])
 
 
 @pytest.mark.parametrize(
@@ -327,18 +272,24 @@ def test_every_stage_needs_its_own_controls():
             Expectation(Outcome.GRADED, reward_min=0.0),
             "above 0.2",
         ),
-        (
-            ControlKind.PARTIAL,
-            ControlCategory.CRITERION_MUTATION,
-            ControlConcern.ACCEPTANCE,
-            Expectation(Outcome.GRADED, reward_min=0.4, reward_max=0.6),
-            "reward components",
-        ),
     ],
 )
 def test_control_labels_must_match_their_expected_grade(kind, category, concern, expect, message):
     with pytest.raises(ValueError, match=message):
         control("c", kind, category, concern, Transcript((reply("x"),)), expect)
+
+
+@pytest.mark.parametrize("identifier", ["", "../escape", "has space"])
+def test_control_ids_are_portable_names(identifier):
+    with pytest.raises(ValueError, match="safe portable name"):
+        control(
+            identifier,
+            ControlKind.POSITIVE,
+            ControlCategory.KNOWN_CORRECT,
+            ControlConcern.REFERENCE,
+            Transcript((reply("12"),)),
+            GRADED_ONE,
+        )
 
 
 @pytest.mark.parametrize(
@@ -364,19 +315,33 @@ def test_transcript_ends_with_its_only_text_reply():
 
 def test_replay_mismatches_with_the_task_are_rejected():
     gold, empty, wrong, hack = file_controls()
-    shell_on_answer_task = replace(gold, payload=Transcript((shell_turn(("c", "ls")), reply("12"))))
-    answer = [item for item in answer_controls() if item.id != "empty"]
-    failure_on_shell = replace(empty, payload=Transcript((reply(""),)), expect=Expectation(Outcome.SUBMISSION_FAILURE))
+    answer = [item for item in answer_controls() if item.id != "gold"]
+    shell_on_answer_task = replace(answer_controls()[0], payload=Transcript((shell_turn(("c", "ls")), reply("12"))))
+    workspace_on_answer_task = replace(answer[0], payload=Workspace(()), expect=GRADED_ZERO)
     unfinished = replace(wrong, payload=Transcript((shell_turn(("x", "echo 13 > /workspace/answer")),)))
 
     with pytest.raises(ValueError, match="without a machine"):
         validate_controls(answer_task(), [shell_on_answer_task, *answer])
-    with pytest.raises(ValueError, match="requires an executable"):
-        validate_controls(answer_task(), [empty, *answer])
-    with pytest.raises(ValueError, match="submission failure from a shell verifier"):
-        validate_controls(file_task(), [gold, failure_on_shell, wrong, hack])
+    with pytest.raises(ValueError, match="requires a task machine"):
+        validate_controls(answer_task(), [answer_controls()[0], workspace_on_answer_task, *answer[1:]])
     with pytest.raises(ValueError, match="does not end with a reply"):
         validate_controls(file_task(), [gold, empty, unfinished, hack])
+
+
+@pytest.mark.parametrize(
+    "call,message",
+    [
+        ({"call_id": "c", "name": "shell", "arguments": {"command": 1}}, "one string command"),
+        ({"call_id": "c", "name": "shell", "arguments": {"command": "ls", "timeout": 1}}, "one string command"),
+        ({"call_id": "c", "name": "browse", "arguments": {}}, "does not offer"),
+        ({"call_id": "c", "name": "submit_answer", "arguments": {"answer": "12"}}, "submits before its final turn"),
+    ],
+)
+def test_transcript_calls_are_checked_against_the_tasks_tools(call, message):
+    gold, *rest = file_controls()
+    payload = Transcript((AssistantToolCalls.model_validate({"calls": [call]}), reply("12")))
+    with pytest.raises(ValueError, match=message):
+        validate_controls(file_task(), [replace(gold, payload=payload), *rest])
 
 
 @pytest.mark.parametrize(
@@ -386,12 +351,15 @@ def test_replay_mismatches_with_the_task_are_rejected():
         (GRADED_ZERO, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0), True),
         (GRADED_ZERO, GradeResult(Outcome.GRADED, 1.0), False),
         (GRADED_ONE, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0), False),
+        (GRADED_ONE, GradeResult(Outcome.GRADED, 1.0), True),
+        (GRADED_ONE, GradeResult(Outcome.INFRA_ERROR, None), False),
         (
             Expectation(Outcome.GRADED, reward_min=0.0, reward_max=0.0),
             GradeResult(Outcome.SUBMISSION_FAILURE, 0.0),
             False,
         ),
         (Expectation(Outcome.SUBMISSION_FAILURE), GradeResult(Outcome.GRADED, 0.0), False),
+        (Expectation(Outcome.SUBMISSION_FAILURE), GradeResult(Outcome.SUBMISSION_FAILURE, 0.0), True),
     ],
 )
 def test_a_no_credit_expectation_is_met_by_a_zero_grade_or_a_submission_failure(expect, grade, met):

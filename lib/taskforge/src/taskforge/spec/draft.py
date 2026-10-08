@@ -1,79 +1,84 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble a TaskCompendium ``TaskSpec`` from builder outputs.
+"""Assemble a TaskCompendium ``TaskSpec`` from builder outputs and lower it for RolloutEngine.
 
 These helpers own the serialized details a builder should not repeat: verifier
-``parameters_json``, stage contexts, and the capability requirements of
-executable environments. ``assemble`` adds the checks TaskSpec itself does not
-make and returns a spec that survives a JSON round trip.
+``parameters_json``, resource groups, and the capability requirements of a task
+machine. ``assemble`` adds the checks TaskSpec itself does not make and returns
+a spec that survives a JSON round trip.
 
-A task's execution settings are not part of the ``TaskSpec`` (TaskCompendium
-0.24): deadlines, the agent user and each stage's working files, setup and
-healthcheck live in a ``TaskExecution`` that travels beside the task.
-``assemble`` checks the ``TaskExecution`` against the task; the builder returns
-both (``BuildOutput.execution``), and validation passes both to RolloutEngine.
+A ``TaskSpec`` holds the semantic task only. How it runs (machine backend,
+limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
+``lower`` alone builds one, choosing each machine's backend for the host. A
+lowered spec is therefore bound to the host whose factories it names.
 
-Only ``_presentation`` builds the environment and the presentation (system
-prompt, concrete tools), and only ``task_execution`` builds a ``TaskExecution``,
-so moving either out of the ``TaskSpec`` or renaming it is a single-site change.
+Only ``_presentation`` builds the presented context and concrete tools, and
+only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a single-site
+change.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from pydantic import JsonValue
-from taskcompendium.environment import (
-    DockerBuild,
-    EnvironmentCommand,
-    EnvironmentFile,
-    EnvironmentKind,
-    EnvironmentSpec,
+from rolloutengine.lowering import SHELLBOX_SESSION, lower_task
+from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from shellbox.machine import Backend, MachineFactory, NetworkPolicy
+from taskcompendium.grader import GraderPackage, script_package
+from taskcompendium.grading import validate_verifier, verifier_descriptor
+from taskcompendium.grading_contract import supports_candidate_mode
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    FunctionDefinition,
+    ResourceGroups,
+    Source,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
+    VerifierSpec,
+)
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.shell_verifier import (
     ExitCodeReward,
     FileReward,
-    HealthcheckSpec,
-    RegistryImage,
     RewardFile,
     RewardFileFormat,
     ShellVerifierSpec,
     StdoutReward,
     VerifierArtifact,
+    VerifierCommand,
 )
-from taskcompendium.execution import StageExecution, TaskExecution
-from taskcompendium.grading import validate_verifier, verifier_descriptor
-from taskcompendium.models import (
-    FILESYSTEM_CAPABILITY,
-    SHELL_CAPABILITY,
-    AnswerType,
-    ConversationInput,
-    EnvironmentRequirements,
-    FunctionDefinition,
-    Source,
-    StageRewardStrategy,
-    StageVerifierSpec,
-    TaskSpec,
-    TaskStage,
-    TextMessage,
-    VerifierKind,
-    VerifierSpec,
-)
-from verifyit.candidate import CandidateSpec
-from verifyit.spec import Mode
+from verifyit.spec import Mode, Spec, mode_of
+
+from taskforge.sandbox.factories import MachineHost, container_backend
+
+SHELL_CAPABILITY = "shell"
+FILESYSTEM_CAPABILITY = "filesystem"
 
 type Reward = StdoutReward | ExitCodeReward | FileReward
 
 TEXT_ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER})
 ANSWER_TYPES_BY_KIND: dict[str, frozenset[AnswerType]] = {
-    VerifierKind.EXACT_ANSWER: TEXT_ANSWER_TYPES | {AnswerType.JSON},
-    VerifierKind.NUMERIC_ANSWER: TEXT_ANSWER_TYPES,
-    VerifierKind.MCQ_ANSWER: TEXT_ANSWER_TYPES,
+    Mode.EXACT: TEXT_ANSWER_TYPES | {AnswerType.JSON},
+    Mode.NUMERIC: TEXT_ANSWER_TYPES,
+    Mode.MCQ: TEXT_ANSWER_TYPES,
     Mode.STRUCTURED_EXACT: frozenset({AnswerType.JSON}),
-    VerifierKind.PREDICTED_ACTION: frozenset({AnswerType.NATIVE_ACTION}),
+    Mode.PREDICTED_ACTION: frozenset({AnswerType.NATIVE_ACTION}),
 }
-"""The answer types each answer verifier can grade (TaskCompendium's submission envelopes)."""
+"""The answer types each candidate-mode answer grader can grade (TaskCompendium's submission envelopes)."""
 MACHINE_ANSWER_TYPES = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
-DEFAULT_REWARD = "reward"
-"""The one reward component every graded result reports."""
+SCRIPT_ANSWER_TYPES = TEXT_ANSWER_TYPES | {AnswerType.FILE, AnswerType.WORKSPACE_STATE}
+"""The answer types a host-run script grader reads: the extracted text answer or captured output files."""
+SCRIPT_KIND = Mode.SCRIPT.value
+SHELL_KIND = "shell"
+SKIPPED_KIND = "skipped"
+PRIVATE_ROOTS = (PurePosixPath("/tests"), PurePosixPath("/logs/verifier"))
+"""Where RolloutEngine installs private grader files and writes grader logs; no submission may land there."""
 
 
 @dataclass(frozen=True)
@@ -87,71 +92,97 @@ class Resources:
 
 
 @dataclass(frozen=True)
+class MachineSettings:
+    """A ``MachineRuntimeSpec`` without its backend; ``lower`` picks the backend for this host."""
+
+    network: NetworkPolicy
+    resources: Resources
+    user: str | None
+    startup_timeout: float | None
+    cleanup_timeout: float | None
+
+
+@dataclass(frozen=True)
 class _Presentation:
-    """The TaskSpec fields that describe the environment and how the task is presented."""
+    """The TaskSpec fields that describe how the task is presented."""
 
     context: ConversationInput
     final_tools: tuple[FunctionDefinition, ...]
-    environment: EnvironmentSpec
 
 
-def file(path: str, content: str, mode: int = 0o644) -> EnvironmentFile:
-    """A UTF-8 text file at an absolute machine path."""
-    return EnvironmentFile(path=path, content=content.encode(), mode=mode)
+def file(path: str, content: str, mode: int = 0o644) -> TaskResource:
+    """A UTF-8 text file at ``path`` relative to the machine root.
+
+    ``"workspace/numbers.txt"`` lands at ``/workspace/numbers.txt``; an absolute
+    path fails TaskResource validation.
+    """
+    return TaskResource(path=path, source=inline_resource(path, content.encode()).source, mode=f"{mode:o}")
 
 
-def shell_command(script: str, timeout: float, user: str | None = None, cwd: str | None = None) -> EnvironmentCommand:
-    """Run ``script`` with ``sh -c``."""
-    return EnvironmentCommand(argv=("sh", "-c", script), timeout=timeout, user=user, cwd=cwd)
+def requirements(
+    *, image: str | None, setup: Sequence[str] = (), workdir: str = "/workspace", env: Mapping[str, str] | None = None
+) -> EnvironmentRequirements:
+    """The task machine's contents, all visible to the agent.
 
-
-def environment(
-    kind: EnvironmentKind,
-    image: RegistryImage | DockerBuild | None = None,
-    files: Sequence[EnvironmentFile] = (),
-    setup: Sequence[EnvironmentCommand] = (),
-    healthcheck: HealthcheckSpec | None = None,
-    workdir: str = "/workspace",
-    network: bool = False,
-    resources: Resources | None = None,
-    env: Mapping[str, str] | None = None,
-    startup_timeout: float | None = None,
-) -> EnvironmentSpec:
-    """The machine the agent works in; everything here is visible to the agent."""
-    resources = resources or Resources()
-    return EnvironmentSpec(
-        kind=kind,
-        image=image,
-        workdir=workdir,
-        files=tuple(files),
-        env=dict(env or {}),
-        setup=tuple(setup),
-        healthcheck=healthcheck,
-        startup_timeout=startup_timeout,
-        network=network,
-        memory_mb=resources.memory_mb,
-        cpus=resources.cpus,
-        storage_mb=resources.storage_mb,
-        gpus=resources.gpus,
+    ``image`` is a digest-pinned registry reference (an ``ImageBuilder`` output)
+    or ``None`` for ShellSim's built-in filesystem. ``setup`` commands run with
+    ``sh -c`` as user ``0`` under the machine's startup timeout; a builder that
+    needs a readiness check puts a wait loop there. Agent-visible files go to
+    ``assemble(files=)``.
+    """
+    return EnvironmentRequirements(
+        capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY),
+        docker_image=image,
+        working_directory=workdir,
+        setup_commands=tuple(setup),
+        environment_variables=dict(env or {}),
     )
 
 
-def task_execution(
+def machine(
     *,
-    attempt_timeout: float | None = None,
-    agent_timeout: float | None = None,
-    agent_user: str | None = None,
-    stages: Mapping[str, StageExecution] | None = None,
-) -> TaskExecution:
-    """The deadlines, agent user and stage preparation one execution of a task runs with.
+    startup_timeout: float | None,
+    network: bool = False,
+    resources: Resources = Resources(),
+    user: str | None = None,
+    cleanup_timeout: float | None = None,
+) -> MachineSettings:
+    """Deployment settings for the task machine or a shell grader's machine.
 
-    Every Taskforge ``TaskExecution`` is built here.
+    ``user`` is the user model commands (or the shell grader) run as; ``None``
+    keeps the image's user.
     """
-    return TaskExecution(
+    return MachineSettings(
+        network=NetworkPolicy.ALLOW if network else NetworkPolicy.DENY,
+        resources=resources,
+        user=user,
+        startup_timeout=startup_timeout,
+        cleanup_timeout=cleanup_timeout,
+    )
+
+
+def session(
+    *,
+    max_turns: int,
+    model_turn_timeout: float | None,
+    command_timeout: float | None,
+    tool_turn_timeout: float | None,
+    total_turn_timeout: float | None,
+    attempt_timeout: float | None,
+    verifier_timeout: float | None,
+    cleanup_timeout: float,
+) -> TaskSessionSpec:
+    """The turn budget and deadlines of one attempt in RolloutEngine's shellbox session."""
+    return TaskSessionSpec(
+        task_session=SHELLBOX_SESSION,
+        max_turns=max_turns,
+        model_turn_timeout=model_turn_timeout,
+        command_timeout=command_timeout,
+        tool_turn_timeout=tool_turn_timeout,
+        total_turn_timeout=total_turn_timeout,
         attempt_timeout=attempt_timeout,
-        agent_timeout=agent_timeout,
-        agent_user=agent_user,
-        stages=dict(stages or {}),
+        verifier_timeout=verifier_timeout,
+        cleanup_timeout=cleanup_timeout,
     )
 
 
@@ -165,160 +196,170 @@ def reward_file(
 def shell_verifier(
     argv: Sequence[str],
     reward: Reward,
-    timeout: float,
-    files: Sequence[EnvironmentFile] = (),
-    user: str | None = None,
-    grading_environment: EnvironmentSpec | None = None,
-    collect: Sequence[EnvironmentCommand] = (),
+    *,
+    image: str,
+    files: Sequence[TaskResource] = (),
+    collect: Sequence[VerifierCommand] = (),
     artifacts: Sequence[VerifierArtifact] = (),
     env: Mapping[str, str] | None = None,
-) -> VerifierSpec:
-    """A task-specific grader script.
+) -> GraderPackage:
+    """A grader command run in a separate verifier machine started from ``image``.
 
-    ``files`` are private: the engine installs them only after the final model
-    response. With ``grading_environment`` the script runs in a fresh machine
-    that receives ``artifacts`` copied from the agent's machine.
+    For a Docker task ``image`` is the task image. ``files`` are private and
+    installed under ``/tests`` after the final model response. ``collect``
+    commands run in the task machine and ``artifacts`` are copied from it into
+    the verifier machine; an artifact a control may delete needs an explicit
+    kind, not ``AUTO``. The deadline is the session's ``verifier_timeout`` and
+    the user is the verifier machine's.
     """
-    parameters = ShellVerifierSpec(
-        argv=tuple(argv),
-        timeout=timeout,
-        env=dict(env or {}),
-        user=user,
-        reward=reward,
-        collect=tuple(collect),
-        artifacts=tuple(artifacts),
-    )
-    return VerifierSpec(
-        kind=VerifierKind.SHELL,
+    parameters = ShellVerifierSpec(argv=tuple(argv), reward=reward, collect=tuple(collect), artifacts=tuple(artifacts))
+    verifier = VerifierSpec(
+        kind=SHELL_KIND,
         parameters_json=parameters.model_dump_json(),
-        files=tuple(files),
-        environment=grading_environment,
+        environment_requirements=EnvironmentRequirements(docker_image=image, environment_variables=dict(env or {})),
     )
+    return GraderPackage(verifier, tuple(files))
 
 
-def answer_verifier(spec: CandidateSpec) -> VerifierSpec:
-    """A generic verifyit answer grader; the build SDK's name for ``verifier_descriptor``.
+def script_verifier(script: str, config: Mapping[str, JsonValue], *, timeout: float) -> GraderPackage:
+    """A Python grader that verifyit's ``script`` mode runs on the host after the attempt.
 
-    Only verifyit's candidate modes (exact, numeric, mcq, predicted_action,
-    structured_exact) grade a final answer without a private runtime; RolloutEngine refuses the
-    other modes on a task without an application-supplied session.
+    ``script`` is ``grader.py`` and ``config`` its private ``config.json``. The
+    grader reads captured output under ``$VERIFYIT_WORKSPACE`` (the text answer at
+    ``answer.txt``, output paths under ``captured/``), its inputs under
+    ``$VERIFYIT_TESTS_DIR``, writes ``$VERIFYIT_LOGS_DIR/verdict.json`` and exits 0.
+    It runs under the host's ``python3`` with the standard library only.
     """
-    return verifier_descriptor(spec)
+    return script_package(script.encode(), dict(config), timeout=timeout)
 
 
-def emits_reward_components(verifier: VerifierSpec) -> bool:
-    """Whether RolloutEngine can report named reward components for ``verifier``.
+def answer_verifier(spec: Spec) -> GraderPackage:
+    """A verifyit candidate-mode grader of the final answer, graded in process.
 
-    Only a shell grader whose reward files are all JSON reports one component
-    per numeric key; every other grader reports just ``reward``.
+    Raises:
+        ValueError: ``spec``'s mode is not a candidate mode (exact, numeric, mcq,
+            predicted_action, structured_exact).
     """
-    if verifier.kind != VerifierKind.SHELL:
-        return False
-    reward = ShellVerifierSpec.model_validate_json(verifier.parameters_json).reward
-    return isinstance(reward, FileReward) and all(item.format == RewardFileFormat.JSON for item in reward.files)
-
-
-def staged(strategy: StageRewardStrategy) -> VerifierSpec:
-    """The task-level verifier of a staged task: reduce stage grades with ``strategy``."""
-    return VerifierSpec(kind=VerifierKind.STAGED, parameters_json=StageVerifierSpec(strategy=strategy).model_dump_json())
-
-
-def stage(
-    name: str,
-    verifier: VerifierSpec,
-    instruction: str | None = None,
-    minimum_rewards: Mapping[str, float] | None = None,
-) -> TaskStage:
-    """One stage on the shared task machine.
-
-    The first stage uses the task instruction and takes no ``instruction``; every
-    later stage needs one. The task stops after a stage whose rewards fall below
-    any of its ``minimum_rewards``. The stage's working files, setup, healthcheck,
-    deadline and user are a ``StageExecution`` in ``TaskExecution.stages[name]``.
-    """
-    return TaskStage(
-        name=name,
-        context=None if instruction is None else _conversation(instruction),
-        verifier=verifier,
-        minimum_rewards=dict(minimum_rewards or {}),
-    )
+    mode = mode_of(spec).value
+    if not supports_candidate_mode(mode):
+        raise ValueError(f"{mode!r} is not a candidate-mode answer grader")
+    return GraderPackage(verifier_descriptor(spec))
 
 
 def assemble(
     task_id: str,
     instruction: str,
     answer_type: AnswerType,
-    environment: EnvironmentSpec,
-    verifier: VerifierSpec,
+    grader: GraderPackage,
     source: Source,
     *,
-    execution: TaskExecution,
+    environment: EnvironmentRequirements | None,
+    files: Sequence[TaskResource] = (),
+    output_paths: Sequence[str] = (),
     system: str | None = None,
-    stages: Sequence[TaskStage] = (),
     final_tools: Sequence[FunctionDefinition] = (),
-    metadata: Mapping[str, JsonValue] | None = None,
     tags: Sequence[str] = (),
 ) -> TaskSpec:
     """Build a TaskSpec and reject one that RolloutEngine could not grade as intended.
 
-    ``execution`` holds the deadlines, agent user and stage preparation the task
-    runs with. It is checked here but not stored in the TaskSpec: keep it beside
-    the task and pass both to RolloutEngine.
+    ``environment`` is the task machine (``requirements(...)``) or ``None`` for a
+    task without one. ``files`` are the agent-visible files installed relative to
+    the machine root; the grader's files stay private.
 
     Raises:
-        ValueError: TaskSpec validation failed, ``execution`` does not name
-            exactly the task's stages, a grader does not fit the answer type or
-            environment, a private grader file is agent-visible, or a stage gates
-            on a reward component its grader never reports.
+        ValueError: TaskSpec validation failed, files or output paths were given
+            without a task machine, the grader is invalid or does not fit the
+            answer type or task machine, an output path lies in a private
+            grading root, or private grader content is agent-visible.
     """
-    executable = environment.kind != EnvironmentKind.NULL
-    presentation = _presentation(instruction, system, environment, final_tools)
+    if environment is None and (files or output_paths):
+        raise ValueError("Files and output paths require a task machine")
+    if environment is not None and SHELL_CAPABILITY not in environment.capabilities:
+        raise ValueError(f"A task machine needs the {SHELL_CAPABILITY!r} capability")
+    presentation = _presentation(instruction, system, final_tools)
     spec = TaskSpec(
         id=task_id,
         context=presentation.context,
-        environment_requirements=EnvironmentRequirements(
-            capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY) if executable else ()
-        ),
+        environment_requirements=environment or EnvironmentRequirements(),
         final_tools=presentation.final_tools,
+        output_paths=tuple(output_paths),
         answer_type=answer_type,
-        verifier=verifier,
-        environment=presentation.environment,
-        stages=tuple(stages),
+        verifier=grader.verifier,
         source=source,
-        metadata=dict(metadata or {}),
+        resources=ResourceGroups(worker=tuple(files), verifier=grader.resources),
         tags=tuple(tags),
     )
-    check_execution(spec, execution)
-    stage_graders = tuple(item.verifier for item in spec.stages)
-    for grader in (spec.verifier, *stage_graders):
-        validate_verifier(grader)
-    for grader in stage_graders or (spec.verifier,):
-        _check_grader(spec, execution, grader)
-    for item in spec.stages:
-        named = sorted(set(item.minimum_rewards) - {DEFAULT_REWARD})
-        if named and not emits_reward_components(item.verifier):
-            raise ValueError(f"Stage {item.name!r} gates on {named}, but its grader reports only {DEFAULT_REWARD!r}")
+    _validate_grader(spec.verifier)
+    _check_grader(spec)
+    for path in spec.output_paths:
+        candidate = PurePosixPath(path)
+        if not candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(f"Output path {path!r} must be absolute and normalized")
+        if any(candidate.is_relative_to(root) for root in PRIVATE_ROOTS):
+            raise ValueError(f"Output path {path!r} overlaps private grading files")
+    visible = {resource_bytes(item) for item in spec.resources.all + spec.resources.worker}
+    leaked = sorted(item.path for item in spec.resources.verifier if resource_bytes(item) in visible)
+    if leaked:
+        raise ValueError(f"Private verifier file content is also agent-visible: {leaked}")
     restored = TaskSpec.model_validate_json(spec.model_dump_json())
     if restored != spec:
         raise ValueError(f"Task {task_id!r} does not survive a JSON round trip")
     return restored
 
 
-def check_execution(task: TaskSpec, execution: TaskExecution) -> None:
-    """Raise ``ValueError`` unless ``execution`` prepares exactly the stages ``task`` has."""
-    names = [item.name for item in task.stages]
-    if sorted(execution.stages) != sorted(names):
-        raise ValueError(f"Execution stages {sorted(execution.stages)} do not match the task's stages {sorted(names)}")
+def lower(
+    task: TaskSpec,
+    *,
+    host: MachineHost,
+    task_machine: MachineSettings | None,
+    verifier_machine: MachineSettings | None,
+    session: TaskSessionSpec,
+    factories: Mapping[str, MachineFactory],
+) -> LoweredTaskSpec:
+    """The ``LoweredTaskSpec`` that runs ``task`` on ``host``'s ``factories``.
 
+    Every Taskforge ``LoweredTaskSpec`` is built here. Each machine's backend is
+    ShellSim when its requirements name no image, else the host's container
+    backend. Script and answer graders run in process, so only a shell grader
+    takes a verifier machine.
 
-def _presentation(
-    instruction: str, system: str | None, environment: EnvironmentSpec, final_tools: Sequence[FunctionDefinition]
-) -> _Presentation:
-    return _Presentation(
-        context=_conversation(instruction, system),
-        final_tools=tuple(final_tools),
-        environment=environment,
+    Raises:
+        ValueError: A machine is given where the task has none or missing where it
+            has one, or RolloutEngine rejects the lowered spec.
+        NotImplementedError: RolloutEngine cannot run the lowered spec.
+    """
+    if (task_machine is None) != (SHELL_CAPABILITY not in task.environment_requirements.capabilities):
+        raise ValueError("A task machine is given exactly when the task has the shell capability")
+    if (verifier_machine is None) != (task.verifier.kind != SHELL_KIND):
+        raise ValueError("A verifier machine is given exactly when the task has a shell grader")
+    runtime = TaskRuntimeSpec(
+        task_machine=_machine_runtime(task_machine, task.environment_requirements, host),
+        verifier_machine=_machine_runtime(verifier_machine, task.verifier.environment_requirements, host),
     )
+    return lower_task(task, runtime, session, factories=factories, sessions={})
+
+
+def _machine_runtime(
+    settings: MachineSettings | None, requirements: EnvironmentRequirements, host: MachineHost
+) -> MachineRuntimeSpec | None:
+    if settings is None:
+        return None
+    backend = Backend.SHELLSIM if requirements.docker_image is None else container_backend(host)
+    return MachineRuntimeSpec(
+        backend=backend.value,
+        network=settings.network,
+        cpus=settings.resources.cpus,
+        memory_mb=settings.resources.memory_mb,
+        storage_mb=settings.resources.storage_mb,
+        gpus=settings.resources.gpus,
+        user=settings.user,
+        startup_timeout=settings.startup_timeout,
+        cleanup_timeout=settings.cleanup_timeout,
+    )
+
+
+def _presentation(instruction: str, system: str | None, final_tools: Sequence[FunctionDefinition]) -> _Presentation:
+    return _Presentation(context=_conversation(instruction, system), final_tools=tuple(final_tools))
 
 
 def _conversation(instruction: str, system: str | None = None) -> ConversationInput:
@@ -326,35 +367,37 @@ def _conversation(instruction: str, system: str | None = None) -> ConversationIn
     return ConversationInput(events=(*system_events, TextMessage(role="user", content=instruction)))
 
 
-def _agent_visible_files(spec: TaskSpec, execution: TaskExecution) -> tuple[EnvironmentFile, ...]:
-    environment = spec.environment
-    build = environment.image.files if isinstance(environment.image, DockerBuild) else ()
-    return (*environment.files, *build, *(item for stage in execution.stages.values() for item in stage.workdir_files))
-
-
-def _check_grader(spec: TaskSpec, execution: TaskExecution, grader: VerifierSpec) -> None:
-    if grader.kind == VerifierKind.SKIPPED:
+def _validate_grader(verifier: VerifierSpec) -> None:
+    if verifier.kind == SHELL_KIND:
+        ShellVerifierSpec.model_validate_json(verifier.parameters_json)
         return
-    if grader.kind == VerifierKind.SHELL:
-        _check_shell_grader(spec, execution, grader)
+    if verifier.kind == SKIPPED_KIND:
+        if not isinstance(json.loads(verifier.parameters_json).get("reason"), str):
+            raise ValueError("A skipped grader needs a reason")
         return
-    if spec.answer_type in MACHINE_ANSWER_TYPES:
-        raise ValueError(f"A {spec.answer_type.value!r} answer requires a shell verifier, not {grader.kind!r}")
-    allowed = ANSWER_TYPES_BY_KIND.get(grader.kind)
-    if allowed is not None and spec.answer_type not in allowed:
-        names = " or ".join(sorted(answer_type.value for answer_type in allowed))
-        raise ValueError(f"A {grader.kind!r} verifier requires a {names} answer, not {spec.answer_type.value!r}")
+    validate_verifier(verifier)
 
 
-def _check_shell_grader(spec: TaskSpec, execution: TaskExecution, grader: VerifierSpec) -> None:
-    environment = spec.environment
-    if environment.kind == EnvironmentKind.NULL:
-        raise ValueError("A shell verifier requires an executable task environment")
-    visible = {item.content for item in _agent_visible_files(spec, execution)}
-    leaked = sorted(item.path for item in grader.files if item.content in visible)
-    if leaked:
-        raise ValueError(f"Private verifier file content is also agent-visible: {leaked}")
-    if grader.environment is None:
-        shadowed = sorted({item.path for item in grader.files} & {item.path for item in environment.files})
-        if shadowed:
-            raise ValueError(f"Private verifier files overwrite agent environment files: {shadowed}")
+def _check_grader(spec: TaskSpec) -> None:
+    kind = spec.verifier.kind
+    answer_type = spec.answer_type
+    if kind == SKIPPED_KIND:
+        return
+    if kind == SHELL_KIND:
+        if spec.environment_requirements.docker_image is None:
+            raise ValueError("A shell verifier requires an image-backed task machine")
+        return
+    if kind == SCRIPT_KIND:
+        if answer_type not in SCRIPT_ANSWER_TYPES:
+            raise ValueError(f"A script verifier cannot grade a {answer_type.value!r} answer")
+        if answer_type in MACHINE_ANSWER_TYPES and not spec.output_paths:
+            raise ValueError(f"A script verifier grading a {answer_type.value!r} answer needs output paths")
+        return
+    if answer_type in MACHINE_ANSWER_TYPES:
+        raise ValueError(f"A {answer_type.value!r} answer requires a script or shell verifier, not {kind!r}")
+    allowed = ANSWER_TYPES_BY_KIND.get(kind)
+    if allowed is None:
+        raise ValueError(f"Taskforge does not grade {kind!r} verifiers")
+    if answer_type not in allowed:
+        names = " or ".join(sorted(item.value for item in allowed))
+        raise ValueError(f"A {kind!r} verifier requires a {names} answer, not {answer_type.value!r}")
