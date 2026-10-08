@@ -441,9 +441,13 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
     )
 
 
+_DCMHA_BOUND = 0.5
+"""Largest change any static entry or second dynamic factor can make (``tanh``-bounded)."""
+
+
 class Dcmha(eqx.Module):
-    """DCMHA parameters: static ``[H, H]`` pre- and post-softmax mixes (identity init; separate leaves, since a
-    stacked 4-D leaf would be sharded like an expert weight) and, per side, a
+    """DCMHA parameters: static ``[H, H]`` pre- and post-softmax mixes ``I + 0.5 tanh(delta)`` (``delta`` zero-init;
+    separate leaves, since a stacked 4-D leaf would be sharded like an expert weight) and, per side, a
     ``GELU(x W_a) W_b`` network giving each token's low-rank factors and gates (the second factors and the gates
     are zero-init, so the layer starts as plain attention). Trained with Adam (``.dcmha.``)."""
 
@@ -466,13 +470,15 @@ def dcmha_weights(p: Dcmha, x: jax.Array, heads: int, rank: int) -> DcmhaWeights
     def side(a, b1, b2, bg):
         hidden = jax.nn.gelu(xf @ a)
         shape = (*x.shape[:2], 2, heads)
+        # Bounded factors, so two stacked compositions cannot drive the attention output to overflow.
         return (
-            (hidden @ b1).reshape(*shape, rank),
-            (hidden @ b2).reshape(*shape, rank),
+            jnp.tanh(hidden @ b1).reshape(*shape, rank),
+            (_DCMHA_BOUND * jnp.tanh(hidden @ b2)).reshape(*shape, rank),
             (hidden @ bg).reshape(shape),
         )
 
-    static = jnp.stack([p.static_pre, p.static_post])
+    eye = jnp.eye(heads, dtype=jnp.float32)
+    static = jnp.stack([eye + _DCMHA_BOUND * jnp.tanh(p.static_pre), eye + _DCMHA_BOUND * jnp.tanh(p.static_post)])
     return DcmhaWeights(static, *side(p.q_a, p.q_b1, p.q_b2, p.q_bg), *side(p.k_a, p.k_b1, p.k_b2, p.k_bg))
 
 
@@ -519,8 +525,8 @@ def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> D
     a = lambda k: random.normal(k, (d, hidden)) / math.sqrt(d)  # noqa: E731
     b1 = lambda k: random.normal(k, (hidden, width)) / math.sqrt(hidden)  # noqa: E731
     return Dcmha(
-        static_pre=jnp.eye(heads, dtype=jnp.float32),
-        static_post=jnp.eye(heads, dtype=jnp.float32),
+        static_pre=jnp.zeros((heads, heads), jnp.float32),
+        static_post=jnp.zeros((heads, heads), jnp.float32),
         q_a=a(ka),
         q_b1=b1(kb),
         q_b2=jnp.zeros((hidden, width)),
