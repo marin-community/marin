@@ -1,17 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fakes at the loop's I/O boundaries: a proposal source, a rubric, a rollout model and a tokenizer.
+"""Fakes at the loop's I/O boundaries: a proposal source, a rubric, a solver model and a tokenizer.
 
 The author is the real ``build.author.author`` against the ``fake_glm`` router, which serves scripted
 ``submit_build_program`` calls; the builder programs it returns make no model call and build a ShellSim
-task whose shell grader gives full credit only to ``ANSWER = 42``. Validation runs on ShellSim through
-RolloutEngine. ``Loop`` assembles a run root and its ``LoopServices`` for one test.
+task whose shell grader gives full credit only to ``ANSWER = 42`` (a lenient program's grader to any
+``ANSWER = <int>``). Validation runs on ShellSim through RolloutEngine. The adversary is the real agent
+loop against the same router: ``adversary_turns`` queues its turns after the author's, and every
+``submit`` it makes is graded by the task's real verifier. ``Loop`` assembles a run root and its
+``LoopServices`` for one test.
 """
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -34,12 +37,13 @@ from taskforge.loop.policy import LoopPolicy
 from taskforge.loop.program import LEDGER_DIR, LoopServices
 from taskforge.proposal.model import TaskProposal, parse, render
 from taskforge.proposal.source import ProposalBatch, SlotFailure, SlotProposal
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.triage.checks import CheckContext, CheckResult
 from taskforge.triage.program import Repair as TriageRepair
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision, Verdict
-from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole
+from taskforge.validate.adversary import NO_SHORTCUT_LINE, SUBMIT_TOOL_NAME, AdversaryContext
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
@@ -86,6 +90,13 @@ import json, sys
 messages = json.load(sys.stdin)
 final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
 print(1.0 if final.strip().endswith("ANSWER = 42") else 0.0)
+"""
+
+LENIENT_GRADE = """
+import json, re, sys
+messages = json.load(sys.stdin)
+final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
+print(1.0 if re.search(r"ANSWER = -?[0-9]+$", final.strip()) else 0.0)
 """
 
 PROGRAM = """
@@ -159,13 +170,16 @@ async def fixed_controls(b: Build, task: TaskSpec) -> tuple[controls.Control, ..
         for c in (
             control("gold", K.POSITIVE, C.KNOWN_CORRECT, N.REFERENCE, "ANSWER = 42", stage, reward_min=1.0),
             control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, N.EXTRACTION, "", stage, reward_max=0.0),
-            control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE, "ANSWER = 41", stage, reward_max=0.0),
-            control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT, "ANSWER = 13", stage, reward_max=0.0),
+            control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE, WRONG_REPLY, stage, reward_max=0.0),
+            control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT, SUM_REPLY, stage, reward_max=0.0),
         )
     )
 
 
 K, C, N = controls.ControlKind, controls.ControlCategory, controls.ControlConcern
+# The lenient grader accepts any ANSWER line, so its negative controls carry none.
+WRONG_REPLY = "The product is 41." if LENIENT else "ANSWER = 41"
+SUM_REPLY = "The sum is 13." if LENIENT else "ANSWER = 13"
 
 
 async def build(b: Build) -> BuildOutput:
@@ -176,13 +190,18 @@ async def build(b: Build) -> BuildOutput:
 """
 
 
-def program(grader_timeout: int = 60, staged: bool = False) -> str:
-    """A builder program without model calls; a different ``grader_timeout`` builds a different task."""
+def program(grader_timeout: int = 60, staged: bool = False, lenient: bool = False) -> str:
+    """A builder program without model calls; a different ``grader_timeout`` builds a different task.
+
+    A ``lenient`` program's grader accepts any ``ANSWER = <int>`` line; its negative controls end on no
+    such line, so they hold under it.
+    """
     names = ("one", "two") if staged else ()
     return (
-        PROGRAM.replace("GRADE_SOURCE", repr(GRADE))
+        PROGRAM.replace("GRADE_SOURCE", repr(LENIENT_GRADE if lenient else GRADE))
         .replace("GRADER_TIMEOUT", str(grader_timeout))
         .replace("STAGE_NAMES", repr(names))
+        .replace("LENIENT", repr(lenient))
     )
 
 
@@ -193,6 +212,37 @@ def proposal(slot: int = 1, note: str = "") -> TaskProposal:
 def submit(fake_glm, source: str) -> None:
     """Queue one ``submit_build_program`` reply on the fake router."""
     fake_glm.stream(tool_calls=((SUBMIT_TOOL, json.dumps({"source": source, "notes": "n"})),), finish="tool_calls")
+
+
+type AdversaryTurn = str | tuple[str, str] | tuple[str, str, list[str]]
+
+
+def adversary_turns(fake_glm, *turns: AdversaryTurn) -> None:
+    """Queue one adversary agent loop on the fake router, one streamed reply per turn.
+
+    ``("shell", command)`` and ``("submit", reply, files)`` are tool-call turns; a ``str`` is the final
+    text reply that ends the loop. With no turns the adversary replies ``NO_SHORTCUT`` at once.
+    """
+    for turn in turns or (NO_SHORTCUT_LINE,):
+        match turn:
+            case str(text):
+                fake_glm.stream(content=text)
+            case ("shell", command):
+                fake_glm.stream(tool_calls=(("shell", json.dumps({"command": command})),), finish="tool_calls")
+            case (name, reply, files):
+                assert name == SUBMIT_TOOL_NAME, turn
+                arguments = json.dumps({"reply": reply, "files": files})
+                fake_glm.stream(tool_calls=((SUBMIT_TOOL_NAME, arguments),), finish="tool_calls")
+            case _:
+                raise ValueError(f"not an adversary turn: {turn!r}")
+
+
+def authored(fake_glm) -> int:
+    """Requests the router served to the author (each offers ``submit_build_program``)."""
+    return sum(
+        any(tool["function"]["name"] == SUBMIT_TOOL for tool in request.get("tools", ()))
+        for request in fake_glm.requests
+    )
 
 
 def model_call(completion_tokens: int = 0) -> ModelCall:
@@ -272,57 +322,23 @@ def describe_idea(idea: str) -> dict[str, object]:
     return {"idea": idea, "kind": "test"}
 
 
-ROLE_REPLIES = {
-    AdversaryRole.SHORTCUT: SENTINEL_REPLIES[AdversaryRole.SHORTCUT],
-    AdversaryRole.LEAK: SENTINEL_REPLIES[AdversaryRole.LEAK],
-    AdversaryRole.AMBIGUITY: WRONG,
-}
-
-
-READ_QUESTION = {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-        {
-            "id": "c1",
-            "type": "function",
-            "function": {"name": "shell", "arguments": json.dumps({"command": "cat /workspace/question.txt"})},
-        }
-    ],
-}
-
-
 @dataclass
 class RolloutFake:
-    """Replies with one text turn: solver trials cycle through ``solver``; a role's trials reply ``roles[role]``.
+    """The solver's model: one text turn per trial, cycling through ``solver``.
 
-    A role in ``reads`` first runs ``cat`` on the question file, then replies. ``error`` makes every call
-    raise it instead; a role request first awaits ``before_role``. Token ids extend each request's served
-    prefix.
+    ``error`` makes every call raise it instead. Token ids extend each request's served prefix.
     """
 
     solver: tuple[str, ...] = (CORRECT, WRONG)
-    roles: dict[AdversaryRole, str] = field(default_factory=lambda: dict(ROLE_REPLIES))
-    reads: frozenset[AdversaryRole] = frozenset()
     error: Callable[[], BaseException] | None = None
-    before_role: Callable[[], Awaitable[None]] | None = None
     calls: int = 0
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         if self.error is not None:
             raise self.error()
-        system = next((m["content"] for m in request.messages if m["role"] == "system"), "")
-        role = next((role for role in AdversaryRole if SENTINEL_REPLIES[role] in system), None)
-        if role is None:
-            reply = self.solver[self.calls % len(self.solver)]
-            self.calls += 1
-        else:
-            if self.before_role is not None:
-                await self.before_role()
-            reply = self.roles[role]
+        reply = self.solver[self.calls % len(self.solver)]
+        self.calls += 1
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
-        if role in self.reads and request.messages[-1]["role"] != "tool":
-            return ModelTurn(READ_QUESTION, prompt, (21,), (-0.5,), "tool_calls")
         return ModelTurn({"role": "assistant", "content": reply}, prompt, (20,), (-0.5,), "stop")
 
 
@@ -352,16 +368,12 @@ class TemplateTokenizer:
         return render_ids(messages)
 
 
-class Crash(BaseException):
-    """Stands in for the process dying mid-phase: not an ``Exception``, so no FAILED event is written."""
-
-
 def validation_policy() -> ValidationPolicy:
     return ValidationPolicy(
         k=4,
         adversary_k=1,
-        adversary_output_tokens=32768,
-        roles=tuple(AdversaryRole),
+        adversary_submissions=4,
+        adversary_repair_submissions=2,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
         deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
@@ -382,14 +394,22 @@ def loop_policy(**changes: Any) -> LoopPolicy:
         max_build_retries=1,
         retry_backoff=FAST,
         output_token_budget=1_000_000,
+        band_rules=BandRules(BandRule(1, BandChoice.REJECT), BandRule(1, BandChoice.REJECT)),
         validation=validation_policy(),
     )
     return replace(policy, **changes)
 
 
+def no_context(proposal: TaskProposal) -> str:
+    return ""
+
+
 @dataclass
 class Loop:
-    """A run root under ``root`` with the fakes a test drives; ``services()`` opens its ``LoopServices``."""
+    """A run root under ``root`` with the fakes a test drives; ``services()`` opens its ``LoopServices``.
+
+    ``context`` is the consumer's adversary context; by default there is none.
+    """
 
     root: Path
     fake_glm: Any
@@ -397,6 +417,7 @@ class Loop:
     source: FakeSource = field(default_factory=lambda: FakeSource([]))
     model: RolloutFake = field(default_factory=RolloutFake)
     tokenizer: TemplateTokenizer = field(default_factory=TemplateTokenizer)
+    context: AdversaryContext = no_context
 
     @asynccontextmanager
     async def services(self, width: int = 8) -> AsyncIterator[LoopServices]:
@@ -426,6 +447,7 @@ class Loop:
                     conventions=(CONVENTION,),
                 ),
                 rollout_models=lambda _: self.model,
+                adversary_context=self.context,
                 tokenize=self.tokenizer,
                 ledger=ledger,
                 root=self.root,
@@ -443,6 +465,8 @@ class Programs:
     source: Callable[..., str] = program
     proposal: Callable[..., TaskProposal] = proposal
     submit: Callable[[Any, str], None] = submit
+    adversary_turns: Callable[..., None] = adversary_turns
+    authored: Callable[[Any], int] = authored
     model_call: Callable[..., ModelCall] = model_call
     policy: Callable[..., LoopPolicy] = loop_policy
 
@@ -460,8 +484,3 @@ def loop(tmp_path, fake_glm) -> Loop:
 @pytest.fixture
 def unavailable() -> Callable[[], BaseException]:
     return lambda: GlmUnavailable("router drained", ())
-
-
-@pytest.fixture
-def crash() -> Callable[[], BaseException]:
-    return Crash
