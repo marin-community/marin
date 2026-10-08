@@ -462,6 +462,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                 else 'printf "%s\\n" "$victim" > "$file"' if tampering == "forge" else ":"
             )
             environment = {"PATH": "/tmp/candidate-bin:/usr/bin:/bin"} if tampering == "path" else {}
+            # The deadline includes provider probes before the guest command starts.
             candidate = Command(
                 (
                     "sh",
@@ -472,7 +473,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                     "sleep 3600 & echo $! > /tmp/candidate-child.pid; wait",
                 ),
                 user="nobody",
-                timeout=1,
+                timeout=5,
                 env=environment,
             )
             result = await machine.run(candidate)
