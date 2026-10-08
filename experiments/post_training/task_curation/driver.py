@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.sources import all_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
 IRIS_SCHEDULING_TIMEOUT = 600
+IRIS_MACHINE_CPUS = 4
 IRIS_JOB_TTL = 1800
 
 
@@ -82,7 +83,11 @@ class IrisMachines:
             job_ttl=IRIS_JOB_TTL,
             secret_env=None,
         )
-        return factory, MachineSpec(RegistryImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
+        # Kueue packs each pod onto the fullest node that still fits it; a larger CPU request fills a
+        # node after fewer machines, so grading spreads across nodes instead of queueing behind one.
+        return factory, MachineSpec(
+            RegistryImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb, cpus=IRIS_MACHINE_CPUS
+        )
 
 
 @dataclass(frozen=True)
