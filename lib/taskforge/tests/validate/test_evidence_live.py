@@ -29,7 +29,7 @@ from shellbox.machine import Backend
 from taskcompendium.models import TextMessage
 from taskcompendium.submission import PlainText
 
-from taskforge.builder.run import TaskDraft, load_draft
+from taskforge.builder.run import LOWERED_FILE, PROVENANCE_FILE, TaskDraft, load_draft
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
@@ -303,8 +303,13 @@ async def test_a_validation_round_on_shellsim(client, evidence_dir, file_task, f
 
 
 def newest_built_draft(build_evidence: Path) -> Path | None:
-    drafts = sorted(build_evidence.glob("*/*/draft/convention.json"))
-    return drafts[-1].parent if drafts else None
+    """The newest complete draft in the current format; ``run_build`` writes the provenance file last."""
+    drafts = [
+        path.parent
+        for path in sorted(build_evidence.glob(f"*/*/draft/{PROVENANCE_FILE}"))
+        if (path.parent / LOWERED_FILE).is_file()
+    ]
+    return drafts[-1] if drafts else None
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
