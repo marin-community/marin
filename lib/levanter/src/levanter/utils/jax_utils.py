@@ -73,13 +73,6 @@ def local_cpu_mesh(axis_type: AxisType = AxisType.Auto):
         yield mesh
 
 
-def is_rocm_backend() -> bool:
-    """Whether the default JAX backend is an AMD GPU."""
-    if jax.default_backend() != "gpu":
-        return False
-    return "rocm" in jax.devices()[0].client.platform_version.lower()
-
-
 def is_inside_jit():
     """Returns True if we're currently inside a jit"""
     return isinstance(jnp.zeros(()), jax.core.Tracer)
