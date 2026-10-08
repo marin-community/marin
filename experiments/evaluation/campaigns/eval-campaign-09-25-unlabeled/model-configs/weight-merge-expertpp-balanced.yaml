@@ -3,8 +3,8 @@
 name: weight-merge-expertpp-balanced
 location: s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/expertpp-balanced
 # Object-store checkpoint revision identifies the committed producer recipe.
-revision: 898396d3d568f5cc33246ad006fb11ccfd9c6411
-identity: weight-merge-expertpp-balanced-898396d3d568f5cc33246ad006fb11ccfd9c6411
+revision: 9520d9c443876d93f10d7f824ff6459ffc3b84ef
+identity: weight-merge-expertpp-balanced-9520d9c443876d93f10d7f824ff6459ffc3b84ef
 tokenizer: open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
 tokenizer_revision: fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab
 apply_chat_template: true

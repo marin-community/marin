@@ -3,8 +3,8 @@
 name: weight-merge-ota-ffg-d010
 location: s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/ota-ffg-d010
 # Object-store checkpoint revision identifies the committed producer recipe.
-revision: 898396d3d568f5cc33246ad006fb11ccfd9c6411
-identity: weight-merge-ota-ffg-d010-898396d3d568f5cc33246ad006fb11ccfd9c6411
+revision: 9520d9c443876d93f10d7f824ff6459ffc3b84ef
+identity: weight-merge-ota-ffg-d010-9520d9c443876d93f10d7f824ff6459ffc3b84ef
 tokenizer: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
 tokenizer_revision: 50fe2f488aee7730bbccc721024b35229075602e
 apply_chat_template: true
