@@ -148,8 +148,12 @@ or on a package the order does not name.
 - `loop.policy.LoopPolicy`: every bound of a run (proposals per idea, idea re-proposals, triage
   repairs, build revisions, review repairs, validation retries, build host-failure retries
   (`max_build_retries`) and their shared backoff, the output-token
-  budget, the `ValidationPolicy`), with no defaults. `loop.policy.POLICY` reads and writes it as the
-  run's `policy.json`; a missing or unknown key is an error.
+  budget, the `band_rules`, the `ValidationPolicy`), with no defaults. `band_rules` is a
+  `review.rules.BandRules`: per band kind a `BandRule(repairs, then: BandChoice)` that review's
+  `decide` applies, so the consumer chooses whether a task still outside the band is accepted or
+  rejected. The `ValidationPolicy`'s `adversary_submissions` and `adversary_repair_submissions` reach
+  validation and calibration through it. `loop.policy.POLICY` reads and writes it as the
+  run's `policy.json`; a missing or unknown key is an error at any depth.
 - `loop.events`: `record_event(ledger, item_id, round, kind, seq, input_hash, **attrs)` writes one
   `EntryKind.EVENT` row with `attrs["seq"]` and `attrs["schema"] = EVENT_SCHEMA`.
   `derive_state(entries) -> ItemState` folds a proposal item's events (phase, round, digests,
@@ -158,16 +162,23 @@ or on a package the order does not name.
   `is_trial_step(step)` requires the `/`, so a build step named `solver` still counts). A build the machine host failed is a `BUILD_INFRASTRUCTURE` event
   (`cause`, an `InfrastructureCause`); `build_host_failures(entries) -> Counter[InfrastructureCause]`
   counts an item's over every launch, and an `ABANDONED` terminal carries `causes`
-  (`cause:count` pairs) for the retries it spent. `ADVERSARIES_RUN` counts each role's give-ups
-  (`<role>_sentinel`, by `calibration.gave_up`), and `DECIDED` names the kinds of the noted adversary
-  passes in `notes`.
+  (`cause:count` pairs) for the retries it spent. `ADVERSARIES_RUN` counts per role the graded
+  trials, the passing ones, their verifier submissions and their `SHORTCUT` claims
+  (`<role>_graded`, `<role>_passes`, `<role>_submissions`, `<role>_claimed`) and records
+  `context_digest`, the sha256 of the consumer's adversary context (`""` without one). `DECIDED`
+  names the kinds of the noted adversary passes in `notes`; an accept also carries `band` (a
+  `review.decision.BandOutcome`) and the synthesis pass rate (`solved`, `graded`, `solve_rate`), and
+  its `TERMINAL` reason is `calibrated` or `accepted outside the band: <band>`. `ItemState.band_repairs`
+  counts the review repairs each band kind has triggered.
 - `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
   `run_item(proposal, origin, policy, services) -> Terminal`: one idea's proposals, and one proposal
   carried to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `origin` is a `loop.events.ProposalOrigin`
   (`GENERATED` for a proposal from a `run_idea` batch, `SUPPLIED` for one handed to the loop
   directly), recorded on `OPENED`. `LoopServices[IdeaT]` holds what a run's items share, including
   the `slots` semaphore that bounds model- and sandbox-bound phases across items, `rollout_models`,
-  the `validate.solver.ModelFactory` each validation trial's model comes from, and `describe_idea:
+  the `validate.solver.ModelFactory` each solver trial's model comes from, `adversary_context` (a
+  `validate.adversary.AdversaryContext`: the consumer's section of the adversary brief for an item's
+  proposal, `""` for none; adversary trials run their agent loop on `client`), and `describe_idea:
   Callable[[IdeaT], Mapping[str, object]]`, the JSON record `run_idea` writes once to
   `items/idea--<id>/idea.json`. `run_idea` keeps each batch under
   `items/idea--<id>/batches/<reproposal>/`: `plan/{request,completions}.json` and
@@ -360,12 +371,16 @@ the brief again, so the author cannot spend the repair budget returning the same
 output-token budget sums the item's `LLM_CALL` entries (triage, authoring, build steps) and is
 checked before each authoring. Validation trials record their model calls too, under steps
 `solver/<index>` and `adversary/<role>/<index>`, but the budget leaves them out
-(`loop.events.UNBUDGETED_TRIALS`): `k`, the roles and the deadlines bound them instead. The
+(`loop.events.UNBUDGETED_TRIALS`): `k`, `adversary_k`, the verifier submission budget and the
+deadlines bound them instead. The
 exclusion keys on the `<kind>/` prefix, since a build step records its calls under its bare function
 name, which cannot contain `/`. A `Retry` waits out the backoff without holding a slot; spent
 retries end the item `ABANDONED`, never rejected, and the next launch re-enters it at the control
 replay with a fresh retry budget. An unhandled exception records `FAILED` and propagates to the queue. A triage verdict is final for its
-proposal digest within a run.
+proposal digest within a run. Review's band choice reaches the loop as `LoopPolicy.band_rules` and
+the loop records where an accepted task fell (`DECIDED.band`, the pass rate, and the `TERMINAL`
+reason), so a log tells a calibrated acceptance from a consumer's acceptance outside the band
+without opening `decision.json`.
 
 ## Testing
 
