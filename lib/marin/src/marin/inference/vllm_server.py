@@ -65,6 +65,7 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
+_RUNAI_STREAMER_LOAD_FORMAT = "runai_streamer"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
 _NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
@@ -678,7 +679,7 @@ def _maybe_enable_streaming(model: InferenceModelConfig) -> InferenceModelConfig
     # Default to the non-sharded streamer for maximum compatibility.
     # `runai_streamer_sharded` only works for checkpoints that are already sharded
     # into `model-rank-*-part-*.safetensors`.
-    engine_kwargs["load_format"] = "runai_streamer"
+    engine_kwargs["load_format"] = _RUNAI_STREAMER_LOAD_FORMAT
     return dataclasses.replace(model, engine_kwargs=engine_kwargs)
 
 
@@ -785,7 +786,11 @@ class VllmEnvironment:
             if arg.partition("=")[0] == "--load-format":
                 load_format = arg.partition("=")[2] if "=" in arg else self.extra_cli_args[index + 1]
         has_loader_config = any(arg.partition("=")[0] == "--model-loader-extra-config" for arg in self.extra_cli_args)
-        if _is_object_store_path(self.model_name_or_path) and load_format == "runai_streamer" and not has_loader_config:
+        if (
+            _is_object_store_path(self.model_name_or_path)
+            and load_format == _RUNAI_STREAMER_LOAD_FORMAT
+            and not has_loader_config
+        ):
             # Divide object-store reads across ranks, matching MarinSkyRL's loader.
             self.extra_cli_args.extend(("--model-loader-extra-config", '{"distributed":true}'))
         # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
