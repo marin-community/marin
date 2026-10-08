@@ -21,7 +21,7 @@ serve:
   - '{"distributed":true}'
   - --enable-return-routed-experts
   - --middleware
-  - experiments.weight_merging.record_requests.RecordRequests
+  - experiments.weight_merging.record_requests.DurableRecordRequests
 agent:
   agent_kwargs:
     thinking_format: chat-template

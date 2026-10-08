@@ -57,7 +57,7 @@ def main() -> None:
             *config.engine.extra_args,
             "--enable-return-routed-experts",
             "--middleware",
-            "experiments.weight_merging.record_requests.RecordRequests",
+            "experiments.weight_merging.record_requests.DurableRecordRequests",
         ),
     )
     os.environ.update(config.iris.worker_environment.env_vars)
