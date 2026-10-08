@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small tasks shared by the unit and live validate tests, with a control set for two of them.
+"""Small lowered tasks shared by the unit and live validate tests, with a control set for two of them.
 
-``math_task`` is a null-environment numeric task graded by verifyit through TaskCompendium's
-registry; ``json_task`` is a null-environment task with a JSON answer. ``file_task`` is a ShellSim
-task whose private ``ShellVerifierSpec`` script checks a file the agent must create.
+``math_task`` is a null-environment numeric task graded in process by verifyit; ``json_task`` is a
+null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose private ``script``
+grader runs on the host and checks the captured file the agent must create. Each is lowered for a
+laptop with the ShellSim factory (``lowered``); ``relower`` lowers a variant the same way.
 """
 
 import asyncio
@@ -17,14 +18,14 @@ from typing import Any
 
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, Machine, MachineSpec, Result
-from taskcompendium.environment import EnvironmentKind, StdoutReward
-from taskcompendium.execution import TaskExecution
-from taskcompendium.grading import numeric_answer, structured_exact
+from shellbox.machine import Backend, Command, Machine, MachineSpec, MachineTerminated, Result
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
+from verifyit.spec import NumericSpec, StructuredExactSpec
 
+from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import (
     Control,
     ControlCategory,
@@ -36,57 +37,116 @@ from taskforge.spec.controls import (
     reply,
     shell_turn,
 )
-from taskforge.spec.draft import assemble, environment, file, shell_verifier
+from taskforge.spec.draft import (
+    SHELL_CAPABILITY,
+    answer_verifier,
+    assemble,
+    file,
+    lower,
+    machine,
+    requirements,
+    script_verifier,
+    session,
+)
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
-CHECK_SCRIPT = 'v=$(tr -d " \\n" < /workspace/sum.txt)\n' f'if [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
+FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory()}
+SESSION = session(
+    max_turns=4,
+    model_turn_timeout=None,
+    command_timeout=10,
+    tool_turn_timeout=20,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=30,
+    cleanup_timeout=10,
+)
+SHELLSIM = machine(startup_timeout=30)
+SUM_GRADER = """import json, os, pathlib
+workspace = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"])
+expected = json.loads(pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "config.json").read_text())["expected"]
+answer = workspace / "captured/workspace/sum.txt"
+got = answer.read_text().strip() if answer.is_file() else None
+verdict = {"status": "scored", "reward": float(got == expected), "detail": {"got": got}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
+"""Rewards 1 when the captured ``/workspace/sum.txt`` holds ``config["expected"]``."""
 
 
 def source(row: str) -> Source:
     return Source(dataset="taskforge-validate-tests", revision="1", row=row, importer_revision="1")
 
 
+def lowered(task: TaskSpec) -> LoweredTaskSpec:
+    """``task`` lowered for a laptop: a ShellSim task machine when it has one, no verifier machine."""
+    has_machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
+    return lower(
+        task,
+        host=MachineHost.LAPTOP,
+        task_machine=SHELLSIM if has_machine else None,
+        verifier_machine=None,
+        session=SESSION,
+        factories=FACTORIES,
+    )
+
+
 @pytest.fixture
-def math_task() -> TaskSpec:
-    return assemble(
+def relower() -> Callable[[TaskSpec], LoweredTaskSpec]:
+    return lowered
+
+
+@pytest.fixture
+def math_task() -> LoweredTaskSpec:
+    task = assemble(
         "validate-math",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
         AnswerType.NUMBER,
-        environment(EnvironmentKind.NULL),
-        numeric_answer(MATH_ANSWER, tolerance_abs=0, tolerance_rel=0),
+        answer_verifier(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
         source("math"),
-        execution=TaskExecution(),
+        environment=None,
     )
+    return lowered(task)
 
 
 @pytest.fixture
-def json_task() -> TaskSpec:
-    return assemble(
+def json_task() -> LoweredTaskSpec:
+    task = assemble(
         "validate-json",
         "Report the sum of 12, 7, 30 and 11 as a JSON object whose only key is sum.",
         AnswerType.JSON,
-        environment(EnvironmentKind.NULL),
-        structured_exact({"sum": NUMBERS_SUM}),
+        answer_verifier(StructuredExactSpec(expected={"sum": NUMBERS_SUM})),
         source("json"),
-        execution=TaskExecution(),
+        environment=None,
     )
+    return lowered(task)
 
 
-@pytest.fixture
-def file_task() -> TaskSpec:
+def file_task_spec(grader_script: str = SUM_GRADER, setup: tuple[str, ...] = (), grader_timeout: float = 30) -> TaskSpec:
     return assemble(
         "validate-file",
         "The file /workspace/numbers.txt holds one integer per line. Use the shell tool to write their sum, "
         "as a single integer, to /workspace/sum.txt. Say when you are done.",
         AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM, files=(file("/workspace/numbers.txt", NUMBERS),)),
-        shell_verifier(
-            ("sh", "/grader/check.sh"), StdoutReward(), timeout=30, files=(file("/grader/check.sh", CHECK_SCRIPT),)
-        ),
+        script_verifier(grader_script, {"expected": str(NUMBERS_SUM)}, timeout=grader_timeout),
         source("file"),
-        execution=TaskExecution(),
+        environment=requirements(image=None, setup=setup),
+        files=(file("workspace/numbers.txt", NUMBERS),),
+        output_paths=("/workspace/sum.txt",),
+    )
+
+
+@pytest.fixture
+def file_task() -> LoweredTaskSpec:
+    return lowered(file_task_spec())
+
+
+@pytest.fixture
+def file_task_with() -> Callable[..., LoweredTaskSpec]:
+    """``file_task`` with another grader script, setup commands or grader timeout."""
+    return lambda grader_script=SUM_GRADER, setup=(), grader_timeout=30: lowered(
+        file_task_spec(grader_script, tuple(setup), grader_timeout)
     )
 
 
@@ -165,7 +225,7 @@ def file_controls() -> tuple[Control, ...]:
             ControlKind.POSITIVE,
             ControlCategory.KNOWN_CORRECT,
             ControlConcern.ACCEPTANCE,
-            Workspace((file("/workspace/sum.txt", f"{NUMBERS_SUM}\n"),)),
+            Workspace((file("workspace/sum.txt", f"{NUMBERS_SUM}\n"),)),
             CORRECT,
         ),
         control(
@@ -173,7 +233,7 @@ def file_controls() -> tuple[Control, ...]:
             ControlKind.NEGATIVE,
             ControlCategory.REWARD_HACK,
             ControlConcern.SHORTCUT,
-            Transcript((shell_turn(("c1", "mkdir -p /grader && echo 'echo 1' > /grader/check.sh")), reply("Done."))),
+            Transcript((shell_turn(("c1", "mkdir -p /tests && echo 'print(1)' > /tests/grader.py")), reply("Done."))),
             WRONG,
         ),
         control(
@@ -191,13 +251,13 @@ def assistant_text(content: str) -> dict[str, Any]:
     return {"role": "assistant", "content": content}
 
 
-def assistant_shell(command: str) -> dict[str, Any]:
+def assistant_shell(command: str, call_id: str = "c1") -> dict[str, Any]:
     return {
         "role": "assistant",
         "content": "",
         "tool_calls": [
             {
-                "id": "c1",
+                "id": call_id,
                 "type": "function",
                 "function": {"name": "shell", "arguments": json.dumps({"command": command})},
             }
@@ -248,6 +308,10 @@ class FlakyFactory:
     delay: float = 0.0
     creates: int = 0
 
+    @property
+    def backend(self) -> Backend:
+        return Backend.SHELLSIM
+
     async def create(self, spec: MachineSpec) -> Machine:
         self.creates += 1
         failing = self.creates <= self.failures
@@ -259,16 +323,16 @@ class FlakyFactory:
 
 @dataclass
 class FaultyMachine:
-    """A ShellSim machine whose ``close`` raises when ``close_error`` is set and whose ``failing_argv``
-    command exits 1."""
+    """A ShellSim machine whose ``close`` raises when ``close_error`` is set and whose commands raise
+    ``MachineTerminated`` when ``terminated`` is set, as a killed sandbox's do."""
 
     machine: Machine
     close_error: bool
-    failing_argv: tuple[str, ...] | None
+    terminated: bool
 
     async def run(self, command: Command) -> Result:
-        if command.argv == self.failing_argv:
-            return Result(1, b"", b"", False, False, ExitReason.EXITED)
+        if self.terminated:
+            raise MachineTerminated("sandbox task was killed")
         return await self.machine.run(command)
 
     async def upload(self, source: Path, target: str) -> None:
@@ -276,9 +340,6 @@ class FaultyMachine:
 
     async def download(self, source: str, target: Path) -> None:
         await self.machine.download(source, target)
-
-    async def open_shell(self):
-        return await self.machine.open_shell()
 
     async def close(self) -> None:
         await self.machine.close()
@@ -289,10 +350,14 @@ class FaultyMachine:
 @dataclass
 class FaultyFactory:
     close_error: bool = False
-    failing_argv: tuple[str, ...] | None = None
+    terminated: bool = False
+
+    @property
+    def backend(self) -> Backend:
+        return Backend.SHELLSIM
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return FaultyMachine(await ShellSimMachineFactory().create(spec), self.close_error, self.failing_argv)
+        return FaultyMachine(await ShellSimMachineFactory().create(spec), self.close_error, self.terminated)
 
 
 @dataclass(frozen=True)
@@ -304,7 +369,7 @@ class Fakes:
     flaky_factory: type[FlakyFactory] = FlakyFactory
     faulty_factory: type[FaultyFactory] = FaultyFactory
     text: Callable[[str], dict[str, Any]] = assistant_text
-    shell: Callable[[str], dict[str, Any]] = assistant_shell
+    shell: Callable[..., dict[str, Any]] = assistant_shell
 
 
 @pytest.fixture

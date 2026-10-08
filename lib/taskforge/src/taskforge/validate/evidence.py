@@ -27,8 +27,8 @@ class RewardStats:
     """Statistics over graded outcomes only.
 
     ``solved`` counts grades that pass: ``GradeResult.passed`` when the grader reports it, else a
-    reward at the grader's ``score_max``. ``timed_out`` counts the graded trials the agent deadline
-    ended; they are included in ``graded``, ``mean_reward`` and ``solved``.
+    reward at the grader's ``score_max``. ``timed_out`` counts the graded trials the total-turn
+    deadline ended; they are included in ``graded``, ``mean_reward`` and ``solved``.
     """
 
     graded: int

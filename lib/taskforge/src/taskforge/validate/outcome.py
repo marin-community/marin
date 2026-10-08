@@ -5,7 +5,7 @@
 
 ``Graded`` holds a rollout whose grade is a judgment of the submission: ``GRADED``, or
 ``SUBMISSION_FAILURE`` (the model ended without a valid submission, which scores zero). An agent that runs
-out of ``TaskExecution.agent_timeout`` is a budget stop like running out of turns, so it is
+out of ``TaskSessionSpec.total_turn_timeout`` is a budget stop like running out of turns, so it is
 ``Graded`` too (``classify.trial_outcome``). Everything else is ``Ungraded``: task setup,
 infrastructure, grader and contract failures that say nothing about the submission. Statistics use graded outcomes
 only; ungraded ones make the evidence incomplete.
@@ -14,7 +14,7 @@ only; ungraded ones make the evidence incomplete.
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, RolloutData
+from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
 
@@ -31,23 +31,26 @@ class Cause(StrEnum):
     MACHINE_START = "machine_start"
     """Machine creation or file install raised."""
     MACHINE_START_TIMEOUT = "machine_start_timeout"
+    MACHINE_TERMINATED = "machine_terminated"
+    """The machine ended under the engine: killed, expired, preempted or lost with its host
+    (shellbox ``MachineTerminated``)."""
     MACHINE_UNSUPPORTED = "machine_unsupported"
     """The factories cannot provide what the task asks for (``task_refusals`` or ``UnsupportedMachineSpec``)."""
     SUBMISSION_UNSUPPORTED = "submission_unsupported"
     """No configured submission convention can carry the task's answer (``trials.task_convention``)."""
     TASK_SETUP = "task_setup"
-    """The task's own setup failed: a setup command exited non-zero or timed out, a healthcheck never
-    passed, or the environment lacks the capabilities the task requires. A task defect, not flakiness."""
+    """The task's own setup failed: a setup command exited non-zero or timed out, or the environment
+    lacks the capabilities the task requires. A task defect, not flakiness."""
     SESSION_PREPARE = "session_prepare"
     ATTEMPT_TIMEOUT = "attempt_timeout"
-    """``TaskExecution.attempt_timeout`` expired."""
+    """``TaskSessionSpec.attempt_timeout`` expired."""
     AGENT_TIMEOUT = "agent_timeout"
-    """``TaskExecution.agent_timeout`` expired before the first response, so there was nothing to
-    grade. A deadline after that is a ``Graded`` trial with ``timed_out`` set."""
-    CLEANUP = "cleanup"
-    """Removing a stage's private grader files failed before the next stage could run."""
+    """``TaskSessionSpec.total_turn_timeout`` expired before the first response, so there was nothing
+    to grade. A deadline after that is a ``Graded`` trial with ``timed_out`` set."""
     MODEL_UNAVAILABLE = "model_unavailable"
     """``GlmClient`` spent its attempts or its infrastructure hold."""
+    MODEL_TIMEOUT = "model_timeout"
+    """One model call outlived ``TaskSessionSpec.model_turn_timeout``."""
     MODEL_REJECTED = "model_rejected"
     """The server rejected a request in a way a retry cannot fix."""
     TOOL_EXECUTION = "tool_execution"
@@ -79,10 +82,11 @@ RETRYABLE = frozenset(
     {
         Cause.MACHINE_START,
         Cause.MACHINE_START_TIMEOUT,
+        Cause.MACHINE_TERMINATED,
         Cause.SESSION_PREPARE,
         Cause.ATTEMPT_TIMEOUT,
-        Cause.CLEANUP,
         Cause.MODEL_UNAVAILABLE,
+        Cause.MODEL_TIMEOUT,
         Cause.TOOL_EXECUTION,
         Cause.GRADER_RAISED,
         Cause.GRADER_TIMEOUT,
@@ -107,8 +111,8 @@ class Graded:
 
     @property
     def timed_out(self) -> bool:
-        """Whether the agent deadline ended the trial; the grade is of the state the agent left."""
-        return self.rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON
+        """Whether the total-turn deadline ended the trial; the grade is of the state the agent left."""
+        return self.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
 
     @property
     def reward(self) -> float:

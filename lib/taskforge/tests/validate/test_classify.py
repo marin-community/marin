@@ -3,37 +3,39 @@
 
 """Failures produced by a real ShellboxRolloutEngine run map to the right Cause."""
 
+
 import pytest
-from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, GenerationLimitReached, ModelRequest, ModelTurn
+from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, GenerationLimitReached, ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
-from shellbox.machine import UnsupportedMachineSpec
-from taskcompendium.environment import EnvironmentKind, ExitCodeReward, HealthcheckSpec, StdoutReward
-from taskcompendium.execution import StageExecution, TaskExecution
-from taskcompendium.grading import skipped_verifier
+from shellbox.machine import Backend, UnsupportedMachineSpec
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, StageRewardStrategy
+from taskcompendium.models import VerifierSpec
 from taskcompendium.submission import PlainText
 
 from taskforge.llm.client import GlmRequestRejected, GlmUnavailable
-from taskforge.spec.draft import assemble, environment, file, shell_command, shell_verifier, stage, staged
 from taskforge.validate.classify import trial_outcome
 from taskforge.validate.outcome import Cause, Graded, Ungraded
 
+INVALID_REWARD_GRADER = """import json, os, pathlib
+verdict = {"status": "scored", "reward": "not-a-number", "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
+FAILING_GRADER = "raise SystemExit(3)\n"
+HANGING_GRADER = "import time\ntime.sleep(60)\n"
+
 
 def engine(model, factory=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(
-        model,
-        {} if factory is None else {EnvironmentKind.SHELLSIM: factory},
-        max_turns=4,
-        command_timeout=10,
-        cleanup_timeout=10,
-        convention=PlainText(id="plain"),
-    )
+    factories = {} if factory is None else {Backend.SHELLSIM.value: factory}
+    return ShellboxRolloutEngine(model, factories, convention=PlainText(id="plain"))
 
 
-async def outcome_of(task, model, factory=None, execution=TaskExecution()):
+def with_session(lowered, **limits):
+    return lowered.model_copy(update={"session": lowered.session.model_copy(update=limits)})
+
+
+async def outcome_of(lowered, model, factory=None):
     try:
-        result = await engine(model, factory).run(task, execution=execution)
+        result = await engine(model, factory).run(lowered)
     except Exception as error:
         return trial_outcome(error)
     return trial_outcome(result)
@@ -54,9 +56,9 @@ async def test_machine_start_failures(file_task, fakes, error, cause, retryable)
 
 
 async def test_machine_start_past_startup_timeout_is_a_start_timeout(file_task, fakes):
-    task = file_task.model_copy(
-        update={"environment": file_task.environment.model_copy(update={"startup_timeout": 0.01})}
-    )
+    assert file_task.runtime.task_machine is not None
+    task_machine = file_task.runtime.task_machine.model_copy(update={"startup_timeout": 0.01})
+    task = file_task.model_copy(update={"runtime": file_task.runtime.model_copy(update={"task_machine": task_machine})})
     outcome = await outcome_of(
         task, fakes.script_model([]), fakes.flaky_factory(failures=0, error=RuntimeError, delay=1)
     )
@@ -95,79 +97,91 @@ async def test_changed_token_prefix_is_a_contract_failure(file_task, fakes):
     assert isinstance(outcome, Ungraded) and outcome.cause is Cause.TOKEN_CONTRACT
 
 
-@pytest.mark.parametrize(
-    "setup,healthcheck",
-    [
-        ((shell_command("exit 3", timeout=10),), None),
-        (
-            (),
-            HealthcheckSpec(
-                command=shell_command("exit 1", 10), interval=0, start_period=0, start_interval=0, retries=2
-            ),
-        ),
-    ],
-)
-async def test_failing_task_setup_is_a_non_retryable_task_defect(file_task, fakes, setup, healthcheck):
-    environment = file_task.environment.model_copy(update={"setup": setup, "healthcheck": healthcheck})
-    task = file_task.model_copy(update={"environment": environment})
+async def test_failing_task_setup_is_a_non_retryable_task_defect(file_task_with, fakes):
+    task = file_task_with(setup=("exit 3",))
 
     outcome = await outcome_of(task, fakes.script_model([]), fakes.flaky_factory(0, RuntimeError))
 
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.TASK_SETUP, False)
 
 
-async def test_agent_timeout_before_the_first_response_is_an_ungraded_agent_timeout(math_task, fakes):
-    outcome = await outcome_of(
-        math_task, fakes.script_model([fakes.text("395")], hang_from=0), execution=TaskExecution(agent_timeout=0.01)
-    )
+async def test_turn_deadline_before_the_first_response_is_an_ungraded_agent_timeout(math_task, fakes):
+    task = with_session(math_task, total_turn_timeout=0.01)
+
+    outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
 
     assert isinstance(outcome, Ungraded)
     assert (outcome.cause, outcome.retryable) == (Cause.AGENT_TIMEOUT, False)
-    assert outcome.rollout is not None and outcome.rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON
+    assert outcome.rollout is not None and outcome.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
 
 
-async def test_agent_timeout_after_work_keeps_the_engine_grade_and_records_the_timeout(file_task, fakes):
+async def test_turn_deadline_after_work_keeps_the_engine_grade_and_records_the_timeout(file_task, fakes):
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
 
     outcome = await outcome_of(
-        file_task, model, fakes.flaky_factory(0, RuntimeError), execution=TaskExecution(agent_timeout=1)
+        with_session(file_task, total_turn_timeout=1), model, fakes.flaky_factory(0, RuntimeError)
     )
 
     assert isinstance(outcome, Graded) and outcome.timed_out
-    assert (outcome.reward, outcome.rollout.stop_reason) == (1.0, AGENT_TIMEOUT_STOP_REASON)
+    assert (outcome.reward, outcome.rollout.stop_reason) == (1.0, TOTAL_TURN_TIMEOUT_STOP_REASON)
 
 
 async def test_attempt_timeout(math_task, fakes):
-    outcome = await outcome_of(
-        math_task, fakes.script_model([fakes.text("395")], hang_from=0), execution=TaskExecution(attempt_timeout=0.01)
-    )
+    task = with_session(math_task, attempt_timeout=0.01)
+
+    outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
 
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.ATTEMPT_TIMEOUT, True)
 
 
+async def test_a_model_call_past_its_deadline_is_a_retryable_model_timeout(math_task, fakes):
+    task = with_session(math_task, model_turn_timeout=0.01)
+
+    outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
+
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.MODEL_TIMEOUT, True)
+
+
+async def test_a_machine_terminated_under_a_tool_turn_is_retryable(file_task, fakes):
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
+
+    outcome = await outcome_of(file_task, model, fakes.faulty_factory(terminated=True))
+
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.MACHINE_TERMINATED, True)
+
+
 @pytest.mark.parametrize(
-    "script,cause",
+    "script,detail",
     [
-        ("echo not-a-number\n", Cause.GRADER_INVALID_REWARD),
-        ("exit 3\n", Cause.GRADER_EXECUTION),
+        (INVALID_REWARD_GRADER, "grader reward must be a finite number in [0, 1]"),
+        (FAILING_GRADER, "declared verdict producer did not complete successfully"),
     ],
 )
-async def test_grader_failures_keep_the_rollout(file_task, fakes, script, cause):
-    task = file_task.model_copy(
-        update={
-            "verifier": shell_verifier(
-                ("sh", "/grader/check.sh"), StdoutReward(), 10, files=(file("/grader/check.sh", script),)
-            )
-        }
-    )
-    outcome = await outcome_of(task, fakes.script_model([fakes.text("done")]), fakes.flaky_factory(0, RuntimeError))
+async def test_script_grader_failures_are_infrastructure_grades_that_keep_the_rollout(
+    file_task_with, fakes, script, detail
+):
+    # A host-run script grader's failures carry no GradingFailure, so they share GRADER_INFRA.
+    model = fakes.script_model([fakes.text("done")])
 
-    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (cause, False)
+    outcome = await outcome_of(file_task_with(grader_script=script), model, fakes.flaky_factory(0, RuntimeError))
+
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.GRADER_INFRA, False)
+    assert outcome.detail == detail
     assert outcome.rollout is not None and outcome.rollout.grade.status == Outcome.INFRA_ERROR
 
 
-async def test_skipped_verifier(math_task, fakes):
-    task = math_task.model_copy(update={"verifier": skipped_verifier("no reference answer")})
+async def test_a_grader_past_the_verifier_deadline_is_a_retryable_grader_timeout(file_task_with, fakes):
+    # verifyit's own limit (1 s) outlasts the engine's verifier deadline (0.5 s), so the engine's expires first.
+    task = with_session(file_task_with(grader_script=HANGING_GRADER, grader_timeout=1), verifier_timeout=0.5)
+
+    outcome = await outcome_of(task, fakes.script_model([fakes.text("done")]), fakes.flaky_factory(0, RuntimeError))
+
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.GRADER_TIMEOUT, True)
+
+
+async def test_skipped_verifier(math_task, relower, fakes):
+    skipped = VerifierSpec(kind="skipped", parameters_json='{"reason": "no reference answer"}')
+    task = relower(math_task.task.model_copy(update={"verifier": skipped}))
     outcome = await outcome_of(task, fakes.script_model([fakes.text("395")]))
 
     assert isinstance(outcome, Ungraded) and outcome.cause is Cause.VERIFIER_SKIPPED
@@ -193,24 +207,3 @@ async def test_model_failure_after_a_turn_is_ungraded_even_though_the_engine_gra
 
     assert isinstance(outcome, Ungraded) and outcome.cause is Cause.MODEL_UNAVAILABLE
     assert outcome.rollout is not None and outcome.rollout.grade.reward == 1.0
-
-
-async def test_a_stage_whose_working_directory_cannot_be_found_is_a_task_defect(file_task, fakes):
-    execution = TaskExecution(stages={"only": StageExecution(workdir_files=(file("/notes.txt", "n\n"),))})
-    grader = shell_verifier(("sh", "-c", "test -f /workspace/sum.txt"), ExitCodeReward(), timeout=5)
-    task = assemble(
-        "staged",
-        "Write the sum to /workspace/sum.txt.",
-        AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        staged(StageRewardStrategy.FINAL),
-        file_task.source,
-        execution=execution,
-        stages=(stage("only", grader),),
-    )
-
-    outcome = await outcome_of(
-        task, fakes.script_model([]), fakes.faulty_factory(failing_argv=("pwd",)), execution=execution
-    )
-
-    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.TASK_SETUP, False)

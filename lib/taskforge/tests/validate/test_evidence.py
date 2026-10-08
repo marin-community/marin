@@ -3,7 +3,7 @@
 
 from collections import Counter
 
-from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, RolloutData
+from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.validate.evidence import Complete, Evidence, Incomplete, RewardStats
@@ -29,7 +29,7 @@ def test_statistics_use_graded_outcomes_only_and_ungraded_ones_make_evidence_inc
         {
             TrialKind.SOLVER: (
                 graded(1.0),
-                graded(0.5, stop_reason=AGENT_TIMEOUT_STOP_REASON),
+                graded(0.5, stop_reason=TOTAL_TURN_TIMEOUT_STOP_REASON),
                 graded(None, Outcome.SUBMISSION_FAILURE),
                 ungraded(Cause.MACHINE_START),
                 ungraded(Cause.UNCLASSIFIED),

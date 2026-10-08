@@ -8,20 +8,18 @@ import json
 from dataclasses import dataclass
 
 from rigging.timing import ExponentialBackoff
-from rolloutengine.contracts import AGENT_TIMEOUT_STOP_REASON, ModelRequest, ModelTurn, RolloutContractError
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import TaskExecution
+from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, ModelRequest, ModelTurn, RolloutContractError
+from shellbox.machine import Backend
 from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText, SubmissionConvention
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.llm.client import GlmRequestRejected
 from taskforge.sandbox.factories import SHELLSIM
-from taskforge.spec.draft import shell_command
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 
-EXECUTION = TaskExecution()
-DEADLINES = Deadlines(agent_timeout=30, attempt_timeout=60)
+DEADLINES = Deadlines(total_turn_timeout=30, attempt_timeout=60)
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
 
 
 PLAIN = PlainText(id="plain")
@@ -30,10 +28,12 @@ JSON_VALUE = JsonValueAnswer(id="json-value")
 
 def settings(factory, capabilities=None, conventions: tuple[SubmissionConvention, ...] = (PLAIN,)) -> EngineSettings:
     return EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: factory},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM} if capabilities is None else capabilities,
+        factories={SHELLSIM_BACKEND: factory},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM} if capabilities is None else capabilities,
         max_turns=4,
         command_timeout=10,
+        tool_turn_timeout=20,
+        model_turn_timeout=30,
         cleanup_timeout=10,
         conventions=conventions,
     )
@@ -70,7 +70,7 @@ async def test_failed_starts_are_retried_and_every_attempt_is_recorded(tmp_path,
     factory = fakes.flaky_factory(failures=2, error=lambda: RuntimeError("broker refused"))
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
 
-    outcomes = await run_trials(file_task, EXECUTION, plan(tmp_path), settings(factory), model)
+    outcomes = await run_trials(file_task, plan(tmp_path), settings(factory), model)
 
     assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0, 1.0, 1.0]
     entries = ledger(tmp_path)
@@ -89,7 +89,7 @@ async def test_a_re_entered_trial_numbers_attempts_after_the_ones_on_disk(tmp_pa
     factory = fakes.flaky_factory(failures=1, error=lambda: RuntimeError("broker refused"))
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
 
-    outcomes = await run_trials(file_task, EXECUTION, plan(tmp_path, k=1, first_attempt=2), settings(factory), model)
+    outcomes = await run_trials(file_task, plan(tmp_path, k=1, first_attempt=2), settings(factory), model)
 
     assert isinstance(outcomes[0], Graded)
     assert earlier.read_bytes() == b"earlier attempt"
@@ -104,9 +104,7 @@ async def test_a_re_entered_trial_numbers_attempts_after_the_ones_on_disk(tmp_pa
 async def test_retries_stop_at_the_cap(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=100, error=lambda: RuntimeError("broker down"))
 
-    outcomes = await run_trials(
-        file_task, EXECUTION, plan(tmp_path, k=1, max_retries=2), settings(factory), fakes.script_model([])
-    )
+    outcomes = await run_trials(file_task, plan(tmp_path, k=1, max_retries=2), settings(factory), fakes.script_model([]))
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.MACHINE_START
     assert factory.creates == 3
@@ -116,18 +114,17 @@ async def test_non_retryable_failure_is_not_retried(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=0, error=RuntimeError)
     model = fakes.raising_model(lambda: GlmRequestRejected(400, "invalid tools"))
 
-    outcomes = await run_trials(file_task, EXECUTION, plan(tmp_path), settings(factory), model)
+    outcomes = await run_trials(file_task, plan(tmp_path), settings(factory), model)
 
     assert all(isinstance(o, Ungraded) and o.cause is Cause.MODEL_REJECTED for o in outcomes)
     assert [e.cause for e in ledger(tmp_path)] == [Cause.MODEL_REJECTED] * 3
 
 
-async def test_a_failing_setup_command_is_a_task_defect_and_is_not_retried(tmp_path, file_task, fakes):
-    environment = file_task.environment.model_copy(update={"setup": (shell_command("exit 3", timeout=10),)})
-    task = file_task.model_copy(update={"environment": environment})
+async def test_a_failing_setup_command_is_a_task_defect_and_is_not_retried(tmp_path, file_task_with, fakes):
+    task = file_task_with(setup=("exit 3",))
     factory = fakes.flaky_factory(failures=0, error=RuntimeError)
 
-    outcomes = await run_trials(task, EXECUTION, plan(tmp_path), settings(factory), fakes.script_model([]))
+    outcomes = await run_trials(task, plan(tmp_path), settings(factory), fakes.script_model([]))
 
     assert all(isinstance(o, Ungraded) and (o.cause, o.retryable) == (Cause.TASK_SETUP, False) for o in outcomes)
     assert factory.creates == 3
@@ -136,9 +133,7 @@ async def test_a_failing_setup_command_is_a_task_defect_and_is_not_retried(tmp_p
 async def test_a_task_the_factories_refuse_never_starts_a_machine(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=0, error=RuntimeError)
 
-    outcomes = await run_trials(
-        file_task, EXECUTION, plan(tmp_path), settings(factory, capabilities={}), fakes.script_model([])
-    )
+    outcomes = await run_trials(file_task, plan(tmp_path), settings(factory, capabilities={}), fakes.script_model([]))
 
     assert all(isinstance(o, Ungraded) and o.cause is Cause.MACHINE_UNSUPPORTED for o in outcomes)
     assert all(isinstance(o, Ungraded) and "no_factory" in o.detail for o in outcomes)
@@ -150,37 +145,34 @@ async def test_trials_run_concurrently(tmp_path, math_task, fakes):
     # Every model call waits until all 20 trials are in flight, so serial trials would never finish.
     model = fakes.script_model([fakes.text("395")], barrier=asyncio.Barrier(20))
 
-    outcomes = await run_trials(
-        math_task, EXECUTION, plan(tmp_path, k=20), settings(fakes.flaky_factory(0, RuntimeError)), model
-    )
+    outcomes = await run_trials(math_task, plan(tmp_path, k=20), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0] * 20
 
 
-async def test_validation_deadlines_replace_the_builders_agent_deadline(tmp_path, file_task, fakes):
-    # The builder allows an hour; validation's agent deadline ends the trial after the first shell turn.
+async def test_validation_deadlines_replace_the_builders_turn_deadline(tmp_path, file_task, fakes):
+    # The builder allows an hour; validation's total-turn deadline ends the trial after the first shell turn.
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
-    deadlines = Deadlines(agent_timeout=0.5, attempt_timeout=30)
+    deadlines = Deadlines(total_turn_timeout=0.5, attempt_timeout=30)
+    builder = file_task.model_copy(update={"session": file_task.session.model_copy(update={"total_turn_timeout": 3600})})
 
     outcomes = await run_trials(
-        file_task,
-        TaskExecution(agent_timeout=3600),
+        builder,
         plan(tmp_path, k=1, deadlines=deadlines),
         settings(fakes.flaky_factory(0, RuntimeError)),
         model,
     )
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].timed_out
-    assert (outcomes[0].reward, outcomes[0].rollout.stop_reason) == (1.0, AGENT_TIMEOUT_STOP_REASON)
+    assert (outcomes[0].reward, outcomes[0].rollout.stop_reason) == (1.0, TOTAL_TURN_TIMEOUT_STOP_REASON)
 
 
 async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadlines(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=0, error=RuntimeError, delay=5)
-    deadlines = Deadlines(agent_timeout=0.1, attempt_timeout=0.2)
+    deadlines = Deadlines(total_turn_timeout=0.1, attempt_timeout=0.2)
 
     outcomes = await run_trials(
         file_task,
-        EXECUTION,
         plan(tmp_path, k=1, max_retries=0, deadlines=deadlines),
         settings(factory),
         fakes.script_model([]),
@@ -192,10 +184,11 @@ async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadli
 async def test_the_ledger_input_hash_covers_the_deadlines(tmp_path, math_task, fakes):
     model = fakes.script_model([fakes.text("395")])
     factory = fakes.flaky_factory(0, RuntimeError)
-    short, long = Deadlines(agent_timeout=30, attempt_timeout=60), Deadlines(agent_timeout=60, attempt_timeout=120)
+    short = Deadlines(total_turn_timeout=30, attempt_timeout=60)
+    long = Deadlines(total_turn_timeout=60, attempt_timeout=120)
 
     for deadlines in (short, short, long):
-        await run_trials(math_task, EXECUTION, plan(tmp_path, k=1, deadlines=deadlines), settings(factory), model)
+        await run_trials(math_task, plan(tmp_path, k=1, deadlines=deadlines), settings(factory), model)
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
@@ -207,7 +200,6 @@ async def test_each_task_runs_under_the_first_convention_that_carries_its_answer
 
     outcomes = await run_trials(
         json_task,
-        EXECUTION,
         plan(tmp_path, k=1),
         settings(fakes.flaky_factory(0, RuntimeError), None, conventions),
         model,
@@ -220,9 +212,7 @@ async def test_each_task_runs_under_the_first_convention_that_carries_its_answer
 async def test_a_task_no_convention_carries_is_not_started(tmp_path, json_task, fakes):
     model = fakes.script_model([fakes.text('{"sum": 60}')])
 
-    outcomes = await run_trials(
-        json_task, EXECUTION, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), model
-    )
+    outcomes = await run_trials(json_task, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert all(
         isinstance(o, Ungraded) and (o.cause, o.retryable) == (Cause.SUBMISSION_UNSUPPORTED, False) for o in outcomes
@@ -236,7 +226,7 @@ async def test_a_machine_state_task_runs_under_any_convention(tmp_path, file_tas
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
     factory = fakes.flaky_factory(0, RuntimeError)
 
-    outcomes = await run_trials(file_task, EXECUTION, plan(tmp_path, k=1), settings(factory, None, (JSON_VALUE,)), model)
+    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(factory, None, (JSON_VALUE,)), model)
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
 
@@ -246,7 +236,7 @@ async def test_the_ledger_input_hash_covers_the_convention(tmp_path, math_task, 
     factory = fakes.flaky_factory(0, RuntimeError)
 
     for conventions in ((PLAIN,), (PLAIN,), (JsonAnswer(id="json"),)):
-        await run_trials(math_task, EXECUTION, plan(tmp_path, k=1), settings(factory, None, conventions), model)
+        await run_trials(math_task, plan(tmp_path, k=1), settings(factory, None, conventions), model)
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
@@ -285,7 +275,7 @@ async def test_a_sampled_token_contract_break_is_retried_and_each_attempt_keeps_
     model = ContractBreakingModel(fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done."), broken=2)
     trial_plan = plan(tmp_path, k=1, max_retries=0, token_contract_retries=2)
 
-    outcomes = await run_trials(file_task, EXECUTION, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
+    outcomes = await run_trials(file_task, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
     records = attempt_records(tmp_path)
@@ -297,7 +287,7 @@ async def test_token_contract_retries_stop_at_their_cap(tmp_path, file_task, fak
     model = ContractBreakingModel(fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done."), broken=100)
     trial_plan = plan(tmp_path, k=1, max_retries=5, token_contract_retries=1)
 
-    outcomes = await run_trials(file_task, EXECUTION, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
+    outcomes = await run_trials(file_task, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.TOKEN_CONTRACT
     assert model.breaks == 2
@@ -306,10 +296,31 @@ async def test_token_contract_retries_stop_at_their_cap(tmp_path, file_task, fak
 async def test_the_evidence_counts_failed_cleanup_actions(tmp_path, file_task, fakes):
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
 
-    outcomes = await run_trials(
-        file_task, EXECUTION, plan(tmp_path, k=1), settings(fakes.faulty_factory(close_error=True)), model
-    )
+    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.faulty_factory(close_error=True)), model)
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
     assert [record["cleanup_errors"] for record in attempt_records(tmp_path)] == [1]
     assert [entry.attrs["cleanup_errors"] for entry in ledger(tmp_path)] == ["1"]
+
+
+async def test_engine_settings_replace_the_builders_turn_budget(tmp_path, file_task, fakes):
+    # The builder allows one turn; validation's four let the agent write the file on its second.
+    model = fakes.script_model(
+        [fakes.shell("true", "c0"), fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")]
+    )
+    builder = file_task.model_copy(update={"session": file_task.session.model_copy(update={"max_turns": 1})})
+
+    outcomes = await run_trials(builder, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+
+
+async def test_the_attempt_file_keeps_the_turn_count_but_not_the_steps(tmp_path, file_task, fakes):
+    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
+
+    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
+
+    assert isinstance(outcomes[0], Graded) and len(outcomes[0].rollout.steps) == 2
+    (record,) = attempt_records(tmp_path)
+    assert (record["turns"], record["rollout"]["steps"]) == (2, [])
+    assert record["rollout"]["messages"] == json.loads(json.dumps(outcomes[0].rollout.messages))

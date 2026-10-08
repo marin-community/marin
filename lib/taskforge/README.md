@@ -91,12 +91,15 @@ modules, each of which keeps its types beside the code that checks their invaria
 - `triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict`: structural checks run
   first, and a fatal failure or a null proposal rejects without a model call. The rubric scores
   independent samples, and the decision is ACCEPT or REJECT by strict majority, otherwise REPAIR.
-- `validate.trials.run_trials(task, execution, plan, settings, model)`: runs k trials through
-  `ShellboxRolloutEngine`. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+- `validate.trials.run_trials(lowered, plan, settings, model)`: runs k trials of a
+  `LoweredTaskSpec` through `ShellboxRolloutEngine`. `TrialPlan.deadlines` (`total_turn_timeout`,
+  `attempt_timeout`) and `EngineSettings` (turn, command, tool-turn, model-turn and cleanup limits)
+  replace the builder's session values, and `task_digest(lowered, convention)` hashes what runs.
+  Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
   `validate.classify.classify` is the only failure classifier. `TrialPlan.first_attempt` numbers
   each trial's first attempt file and ledger step, so a re-entered trial continues after the
   attempts on disk.
-- `validate.controls.replay(task, execution, controls, plan, settings, tokenize)`: replays each
+- `validate.controls.replay(lowered, controls, plan, settings, tokenize)`: replays each
   control as one `CONTROL` trial named by its id. `ControlPlan.first_attempts` maps a control id
   to its first attempt number (0 when absent), with the same re-entry contract as a trial.
 

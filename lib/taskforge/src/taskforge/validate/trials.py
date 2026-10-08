@@ -21,9 +21,15 @@ sampling noise, so a ``TOKEN_CONTRACT`` attempt is retried on its own budget,
 ``token_contract_retries``; each attempt's record keeps the traceback naming the divergent ids. A
 control replays fixed turns, so its plan has no such budget.
 
-Validation owns its trials' deadlines: ``TrialPlan.deadlines`` replaces the agent and attempt
-deadlines of the builder's ``TaskExecution`` (``Deadlines.apply``), so every trial is bounded
-whatever the builder set, and the ledger's ``input_hash`` covers the effective execution.
+Validation owns its trials' deadlines and engine limits: ``TrialPlan.deadlines`` replaces the
+total-turn and attempt deadlines of the builder's ``TaskSessionSpec`` (``Deadlines.apply``) and
+``EngineSettings.apply`` its turn, command, tool-turn, model-turn and cleanup limits, so every trial
+is bounded whatever the builder set, and the ledger's ``input_hash`` covers the effective
+``LoweredTaskSpec`` (``task_digest``). The builder's verifier deadline and machine settings stand.
+
+The attempt file holds the ``RolloutData`` without its ``steps``: each step repeats the whole
+conversation and its token prefix, so they would multiply the file's size. ``turns`` keeps their
+count.
 
 The submission convention is chosen per task (``task_convention``) from
 ``EngineSettings.conventions``: it is presentation, not part of the task, and it changes the
@@ -49,9 +55,8 @@ from typing import Any
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import MachineFactory
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import TaskExecution
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
@@ -70,19 +75,24 @@ CLEANUP_ERROR_COUNT = "cleanup_error_count"
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """Everything ``ShellboxRolloutEngine`` takes except the model, what the factories can run, and the
-    submission conventions tasks may be presented with.
+    """The machine factories ``ShellboxRolloutEngine`` runs on, what they can run, the session limits
+    validation imposes on every trial, and the submission conventions tasks may be presented with.
 
-    ``cleanup_timeout`` bounds each cleanup action (closing a session or machine, removing a stage
-    grader); the engine records a cleanup that fails or overruns in ``grade.diagnostics``.
-    ``conventions`` is in preference order; each task runs under the first that can carry its answer
-    (``task_convention``).
+    ``factories`` and ``capabilities`` are keyed by shellbox ``Backend`` value, as
+    ``machine_factories`` and ``factory_capabilities`` return them. ``command_timeout`` bounds one
+    shell command and ``tool_turn_timeout`` one tool turn, so the first must be shorter.
+    ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each cleanup action
+    (closing a session or machine); the engine records a cleanup that fails or overruns in
+    ``grade.diagnostics``. ``conventions`` is in preference order; each task runs under the first that
+    can carry its answer (``task_convention``).
     """
 
-    factories: Mapping[EnvironmentKind, MachineFactory]
-    capabilities: Mapping[EnvironmentKind, FactoryCapabilities]
+    factories: Mapping[str, MachineFactory]
+    capabilities: Mapping[str, FactoryCapabilities]
     max_turns: int
     command_timeout: float
+    tool_turn_timeout: float
+    model_turn_timeout: float
     cleanup_timeout: float
     conventions: tuple[SubmissionConvention, ...]
 
@@ -90,16 +100,28 @@ class EngineSettings:
         ids = [convention.id for convention in self.conventions]
         if not ids or len(set(ids)) != len(ids):
             raise ValueError(f"EngineSettings needs at least one convention and unique convention ids, got {ids}")
+        if self.max_turns < 1:
+            raise ValueError("EngineSettings needs max_turns >= 1")
+        if not 0 < self.command_timeout < self.tool_turn_timeout:
+            raise ValueError("EngineSettings needs 0 < command_timeout < tool_turn_timeout")
+        if self.model_turn_timeout <= 0 or self.cleanup_timeout <= 0:
+            raise ValueError("EngineSettings needs positive model_turn_timeout and cleanup_timeout")
+
+    def apply(self, lowered: LoweredTaskSpec) -> LoweredTaskSpec:
+        """``lowered`` with these session limits in place of the builder's."""
+        session = lowered.session.model_copy(
+            update={
+                "max_turns": self.max_turns,
+                "command_timeout": self.command_timeout,
+                "tool_turn_timeout": self.tool_turn_timeout,
+                "model_turn_timeout": self.model_turn_timeout,
+                "cleanup_timeout": self.cleanup_timeout,
+            }
+        )
+        return lowered.model_copy(update={"session": session})
 
     def engine(self, model: RolloutModel, convention: SubmissionConvention) -> ShellboxRolloutEngine:
-        return ShellboxRolloutEngine(
-            model,
-            self.factories,
-            max_turns=self.max_turns,
-            command_timeout=self.command_timeout,
-            cleanup_timeout=self.cleanup_timeout,
-            convention=convention,
-        )
+        return ShellboxRolloutEngine(model, self.factories, convention=convention)
 
 
 class ConventionUnavailable(ValueError):
@@ -128,28 +150,28 @@ def task_convention(task: TaskSpec, conventions: Sequence[SubmissionConvention])
 
 @dataclass(frozen=True)
 class Deadlines:
-    """The agent and attempt deadlines, in seconds, that validation imposes on every trial.
+    """The total-turn and attempt deadlines, in seconds, that validation imposes on every trial.
 
-    They are a property of the validation run, not of the task, so they live beside the
-    ``TaskExecution`` a builder returns rather than in it or in the ``TaskSpec``.
+    ``total_turn_timeout`` bounds the model's turns together: when it expires the engine grades the
+    state the agent left (stop reason ``total_turn_timeout``), or reports no grade when no turn had
+    completed (``Cause.AGENT_TIMEOUT``). ``attempt_timeout`` bounds the whole attempt, machine start
+    and grading included. They are a property of the validation run, not of the task, so they
+    replace the builder's ``TaskSessionSpec`` values rather than living in the ``TaskSpec``.
     """
 
-    agent_timeout: float
+    total_turn_timeout: float
     attempt_timeout: float
 
     def __post_init__(self) -> None:
-        if not 0 < self.agent_timeout < self.attempt_timeout:
-            raise ValueError("Deadlines need 0 < agent_timeout < attempt_timeout")
+        if not 0 < self.total_turn_timeout < self.attempt_timeout:
+            raise ValueError("Deadlines need 0 < total_turn_timeout < attempt_timeout")
 
-    def apply(self, execution: TaskExecution) -> TaskExecution:
-        """``execution`` with these deadlines in place of its own, including every stage's agent deadline."""
-        stages = {
-            name: stage.model_copy(update={"agent_timeout": self.agent_timeout})
-            for name, stage in execution.stages.items()
-        }
-        return execution.model_copy(
-            update={"agent_timeout": self.agent_timeout, "attempt_timeout": self.attempt_timeout, "stages": stages}
+    def apply(self, lowered: LoweredTaskSpec) -> LoweredTaskSpec:
+        """``lowered`` with these deadlines in place of its session's own."""
+        session = lowered.session.model_copy(
+            update={"total_turn_timeout": self.total_turn_timeout, "attempt_timeout": self.attempt_timeout}
         )
+        return lowered.model_copy(update={"session": session})
 
 
 @dataclass(frozen=True)
@@ -182,43 +204,36 @@ class TrialPlan:
 
 
 async def run_trials(
-    task: TaskSpec, execution: TaskExecution, plan: TrialPlan, settings: EngineSettings, model: RolloutModel
+    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel
 ) -> list[Outcome]:
-    """Run ``plan.k`` trials of ``task`` with ``execution`` under ``plan.deadlines`` concurrently; return
-    one final outcome per trial, in order."""
+    """Run ``plan.k`` trials of ``lowered`` under ``plan.deadlines`` and ``settings`` concurrently;
+    return one final outcome per trial, in order."""
     async with asyncio.TaskGroup() as group:
-        trials = [
-            group.create_task(run_trial(task, execution, plan, settings, model, str(index))) for index in range(plan.k)
-        ]
+        trials = [group.create_task(run_trial(lowered, plan, settings, model, str(index))) for index in range(plan.k)]
     return [trial.result() for trial in trials]
 
 
 async def run_trial(
-    task: TaskSpec,
-    execution: TaskExecution,
-    plan: TrialPlan,
-    settings: EngineSettings,
-    model: RolloutModel,
-    trial: str,
+    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel, trial: str
 ) -> Outcome:
-    """Run one trial of ``task`` with ``execution`` under ``plan.deadlines`` and its ``task_convention``,
+    """Run one trial of ``lowered`` under ``plan.deadlines``, ``settings`` and its ``task_convention``,
     attempting it again after a backoff while it fails for a retryable cause or, within
     ``plan.token_contract_retries``, a broken token contract."""
-    execution = plan.deadlines.apply(execution)
+    lowered = settings.apply(plan.deadlines.apply(lowered))
     try:
-        convention = task_convention(task, settings.conventions)
+        convention = task_convention(lowered.task, settings.conventions)
     except ConventionUnavailable as error:
-        return _refuse(task, execution, None, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None))
-    refusals = task_refusals(task, execution, settings.capabilities)
+        return _refuse(lowered, None, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None))
+    refusals = task_refusals(lowered, settings.capabilities)
     if refusals:
         outcome = Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None)
-        return _refuse(task, execution, convention, plan, trial, outcome)
+        return _refuse(lowered, convention, plan, trial, outcome)
     engine = settings.engine(model, convention)
     backoff = copy.copy(plan.retry_backoff)
     retries = contract_retries = 0
     attempt = plan.first_attempt
     while True:
-        outcome = await _attempt(engine, task, execution, convention, plan, trial, attempt)
+        outcome = await _attempt(engine, lowered, convention, plan, trial, attempt)
         if isinstance(outcome, Graded):
             return outcome
         if outcome.retryable and retries < plan.max_retries:
@@ -235,32 +250,29 @@ def refusal_detail(refusals: Sequence[Refusal]) -> str:
     return "; ".join(f"{refusal.where}: {refusal.reason}: {refusal.detail}" for refusal in refusals)
 
 
-def task_digest(task: TaskSpec, execution: TaskExecution, convention: SubmissionConvention | None) -> str:
-    """The sha256 of the task, the execution settings it runs with, and the convention it is presented
-    with (``None`` when no convention can carry it)."""
+def task_digest(lowered: LoweredTaskSpec, convention: SubmissionConvention | None) -> str:
+    """The sha256 of the lowered task as it runs (after ``Deadlines.apply`` and ``EngineSettings.apply``)
+    and the convention it is presented with (``None`` when no convention can carry it)."""
     presented = "null" if convention is None else f"{type(convention).__name__} {convention.model_dump_json()}"
-    payload = f"{task.model_dump_json()}\n{execution.model_dump_json()}\n{presented}"
-    return sha256_hex(payload.encode())
+    return sha256_hex(f"{lowered.model_dump_json()}\n{presented}".encode())
 
 
 def _refuse(
-    task: TaskSpec,
-    execution: TaskExecution,
+    lowered: LoweredTaskSpec,
     convention: SubmissionConvention | None,
     plan: TrialPlan,
     trial: str,
     outcome: Ungraded,
 ) -> Ungraded:
     """Record ``outcome`` as the only attempt of a trial that is not started."""
-    with _attempt_span(task, execution, convention, plan, trial, plan.first_attempt) as fields:
+    with _attempt_span(lowered, convention, plan, trial, plan.first_attempt) as fields:
         _record(fields, outcome, plan, trial, plan.first_attempt)
     return outcome
 
 
 @contextmanager
 def _attempt_span(
-    task: TaskSpec,
-    execution: TaskExecution,
+    lowered: LoweredTaskSpec,
     convention: SubmissionConvention | None,
     plan: TrialPlan,
     trial: str,
@@ -272,23 +284,22 @@ def _attempt_span(
         item_id=plan.item_id,
         round=plan.round,
         step=f"{plan.kind}/{trial}/{attempt}",
-        input_hash=task_digest(task, execution, convention),
+        input_hash=task_digest(lowered, convention),
     ) as fields:
         yield fields
 
 
 async def _attempt(
     engine: ShellboxRolloutEngine,
-    task: TaskSpec,
-    execution: TaskExecution,
+    lowered: LoweredTaskSpec,
     convention: SubmissionConvention,
     plan: TrialPlan,
     trial: str,
     attempt: int,
 ) -> Outcome:
-    with _attempt_span(task, execution, convention, plan, trial, attempt) as fields:
+    with _attempt_span(lowered, convention, plan, trial, attempt) as fields:
         try:
-            result: RolloutData | Exception = await engine.run(task, execution=execution)
+            result: RolloutData | Exception = await engine.run(lowered)
         except Exception as error:
             result = error
         outcome = trial_outcome(result)
@@ -331,7 +342,8 @@ def _attributes(outcome: Outcome) -> dict[str, str]:
 
 
 def outcome_json(outcome: Outcome) -> bytes:
-    """The evidence record of one attempt."""
+    """The evidence record of one attempt: the outcome and the ``RolloutData`` without its ``steps``,
+    whose count is ``turns``."""
     record: dict[str, Any] = (
         {"outcome": "graded", "reward": outcome.reward, "timed_out": outcome.timed_out}
         if isinstance(outcome, Graded)
@@ -343,7 +355,9 @@ def outcome_json(outcome: Outcome) -> bytes:
         }
     )
     record["cleanup_errors"] = cleanup_errors(outcome)
-    record["rollout"] = None if outcome.rollout is None else dataclasses.asdict(outcome.rollout)
+    rollout = outcome.rollout
+    record["turns"] = None if rollout is None else len(rollout.steps)
+    record["rollout"] = None if rollout is None else dataclasses.asdict(dataclasses.replace(rollout, steps=()))
     return json.dumps(record, indent=1).encode()
 
 

@@ -6,8 +6,8 @@
 A control runs as an ordinary trial whose model is a ``ScriptedModel``: it answers each request
 with the control's next assistant turn. A workspace control is delivered the way an agent would
 leave it: one scripted shell call per file (``workspace_turn``: decode the bytes into the path and
-set its mode, run by the shell tool as the execution's ``agent_user``, after environment setup and
-the healthcheck), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
+set its mode, run by the shell tool as the task machine's ``MachineRuntimeSpec.user``, after the
+setup commands), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
 machine state. Grading is the engine's, unchanged.
 
 The engine accepts a turn only with exact token ids, so the scripted model gets them from the
@@ -25,8 +25,6 @@ whole conversation, most of which the server's prefix cache already holds from t
 A typical control (one to three turns) costs two to six such requests. The response ids lack the
 stop token a sampled turn ends with; the next turn's prompt supplies it as an observation token.
 Responses carry no log probabilities.
-
-Staged tasks are not replayed yet: a control for stage ``n`` needs the earlier stages passed first.
 """
 
 import asyncio
@@ -41,9 +39,9 @@ from typing import Any, Protocol
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
-from taskcompendium.environment import EnvironmentFile
-from taskcompendium.execution import TaskExecution
-from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
+from rolloutengine.spec import LoweredTaskSpec
+from taskcompendium.models import AssistantToolCalls, TaskResource, TaskSpec, TextMessage
+from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.ledger.records import Ledger
 from taskforge.llm.client import GlmClient
@@ -54,6 +52,8 @@ from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
 WORKSPACE_REPLY = "The workspace is ready for grading."
+DEFAULT_FILE_MODE = "644"
+"""The mode a workspace file without one gets, as RolloutEngine installs a resource without one."""
 NO_GENERATION_PROMPT: dict[str, object] = {"add_generation_prompt": False}
 
 
@@ -193,12 +193,17 @@ class ControlPlan:
         )
 
 
-def workspace_turn(index: int, file: EnvironmentFile) -> AssistantToolCalls:
-    """One shell call that writes ``file`` as the agent would: its parent made, its bytes, its mode."""
-    path = shlex.quote(file.path)
-    directory = shlex.quote(str(PurePosixPath(file.path).parent))
-    data = shlex.quote(base64.b64encode(file.content).decode())
-    command = f"mkdir -p {directory} && printf %s {data} | base64 -d > {path} && chmod {file.mode:o} {path}"
+def workspace_turn(index: int, file: TaskResource) -> AssistantToolCalls:
+    """One shell call that writes ``file`` as the agent would: its parent made, its bytes, its mode.
+
+    ``file.path`` is relative to the machine root, as a task's own resources are.
+    """
+    target = PurePosixPath("/", file.path)
+    path = shlex.quote(str(target))
+    directory = shlex.quote(str(target.parent))
+    data = shlex.quote(base64.b64encode(resource_bytes(file)).decode())
+    mode = file.mode or DEFAULT_FILE_MODE
+    command = f"mkdir -p {directory} && printf %s {data} | base64 -d > {path} && chmod {mode} {path}"
     return shell_turn((f"workspace-{index}", command))
 
 
@@ -214,12 +219,10 @@ def check_replayable(task: TaskSpec, controls: Sequence[Control], max_turns: int
     """Refuse a control set that cannot be replayed against ``task`` within ``max_turns`` turns.
 
     Raises:
-        ValueError: ``controls`` is not a valid control set for ``task`` (``validate_controls``), ``task``
-            is staged, or a control needs more than ``max_turns`` turns.
+        ValueError: ``controls`` is not a valid control set for ``task`` (``validate_controls``) or a
+            control needs more than ``max_turns`` turns.
     """
     validate_controls(task, controls)
-    if task.stages:
-        raise ValueError("Control replay does not support staged tasks")
     too_long = [control.id for control in controls if len(control_turns(control)) > max_turns]
     if too_long:
         raise ValueError(f"Controls {too_long} need more than max_turns={max_turns} turns")
@@ -234,20 +237,19 @@ def context_assistant_turns(task: TaskSpec) -> int:
 
 
 async def replay(
-    task: TaskSpec,
-    execution: TaskExecution,
+    lowered: LoweredTaskSpec,
     controls: Sequence[Control],
     plan: ControlPlan,
     settings: EngineSettings,
     tokenize: Tokenize,
 ) -> list[ControlOutcome]:
-    """Replay every control concurrently as a ``CONTROL`` trial of ``task`` with ``execution``,
-    named by its id.
+    """Replay every control concurrently as a ``CONTROL`` trial of ``lowered``, named by its id.
 
     Raises:
         ValueError: ``check_replayable`` refuses ``controls``, or ``plan.first_attempts`` names a control not
             in ``controls``.
     """
+    task = lowered.task
     check_replayable(task, controls, settings.max_turns)
     unknown = sorted(set(plan.first_attempts) - {control.id for control in controls})
     if unknown:
@@ -257,8 +259,7 @@ async def replay(
         runs = [
             group.create_task(
                 run_trial(
-                    task,
-                    execution,
+                    lowered,
                     plan.trial_plan(control.id),
                     settings,
                     ScriptedModel(control_turns(control), context_turns, tokenize),

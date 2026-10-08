@@ -4,28 +4,30 @@
 """The one classifier from trial failures to ``Cause``, and the trial outcome built on it.
 
 A failure is either an exception (a ``RolloutInterrupted`` from the engine with the original error
-as its ``__cause__``, a ``RolloutContractError``, a ``GlmClient`` error, a shellbox error) or a
+as its ``__cause__``, a ``RolloutContractError``, a ``GlmClient`` error, a shellbox error such as
+``MachineTerminated``) or a
 rollout the engine returned without a usable grade. A recognized original error wins over the
 interrupted operation, so a ``GlmUnavailable`` during ``MODEL`` is ``MODEL_UNAVAILABLE``. Anything
 no rule matches is ``UNCLASSIFIED``, which ``Evidence`` counts like any other cause.
 
 Task setup failures are told apart from machine failures only by their message text
 (``_matches_rolloutengine_setup_message``), because the engine raises a bare ``RuntimeError`` or
-``TimeoutError`` for both.
+``TimeoutError`` for both. A machine that ended under the engine is typed (``MachineTerminated``)
+and is ``MACHINE_TERMINATED`` whichever operation it interrupted.
 """
 
 import traceback
 
 from rolloutengine.contracts import (
-    AGENT_TIMEOUT_STOP_REASON,
     LENGTH_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
     RolloutContractError,
     RolloutData,
     RolloutInterrupted,
     RolloutOperation,
 )
-from shellbox.machine import UnsupportedMachineSpec
+from shellbox.machine import MachineTerminated, UnsupportedMachineSpec
 from taskcompendium.grading_result import GradingFailure
 from taskcompendium.grading_result import Outcome as GradeStatus
 
@@ -39,13 +41,8 @@ GRADING_FAILURES = {
     GradingFailure.INVALID_REWARD: Cause.GRADER_INVALID_REWARD,
     GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
 }
-ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = (
-    "Environment setup command ",
-    "Environment healthcheck failed",
-    "Task stage ",
-    "Cannot find the stage working directory",
-)
-"""Message prefixes of the setup, healthcheck and stage-setup errors RolloutEngine raises."""
+ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ",)
+"""Message prefixes of the errors RolloutEngine raises when a task's setup command fails or times out."""
 
 
 def classify(failure: BaseException | RolloutData) -> Cause:
@@ -62,7 +59,7 @@ def classify(failure: BaseException | RolloutData) -> Cause:
 def trial_outcome(result: RolloutData | Exception) -> Outcome:
     """The outcome of one engine run: what ``ShellboxRolloutEngine.run`` returned or raised.
 
-    An agent deadline is a normal ending: RolloutEngine grades the state the agent left, and the
+    A total-turn deadline is a normal ending: RolloutEngine grades the state the agent left, and the
     trial is ``Graded`` with that grade and ``timed_out`` set, so timed-out trials stay in the
     denominator. A deadline that expired before the first response leaves nothing to grade
     (``UNAVAILABLE``), which is ``Ungraded(AGENT_TIMEOUT)``.
@@ -89,15 +86,17 @@ def _exception_cause(error: BaseException) -> Cause:
         return Cause.MODEL_REJECTED
     if isinstance(error, UnsupportedMachineSpec):
         return Cause.MACHINE_UNSUPPORTED
+    if isinstance(error, MachineTerminated):
+        return Cause.MACHINE_TERMINATED
     if isinstance(error, RolloutInterrupted):
         return _interruption_cause(error)
     return Cause.UNCLASSIFIED
 
 
 def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
-    """Whether ``error`` is a task setup, healthcheck or stage-setup failure from RolloutEngine.
+    """Whether ``error`` is a task setup failure from RolloutEngine.
 
-    RolloutEngine's environment setup and its default shell task session raise these as a bare
+    RolloutEngine's environment setup raises these as a bare
     ``RuntimeError`` or ``TimeoutError``, the same types as machine failures, so this matches
     message prefixes. Replace it with the typed errors requested in #9782 once #9799 (rolloutengine
     typed setup failures) lands.
@@ -115,8 +114,6 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
     operation = error.operation
     if operation is RolloutOperation.ATTEMPT:
         return Cause.ATTEMPT_TIMEOUT
-    if operation is RolloutOperation.CLEANUP:
-        return Cause.CLEANUP
     original = error.__cause__
     if original is not None:
         cause = _exception_cause(original)
@@ -129,10 +126,12 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
         return Cause.MACHINE_START_TIMEOUT if timed_out else Cause.MACHINE_START
     if operation is RolloutOperation.PREPARE:
         return Cause.SESSION_PREPARE
+    if operation is RolloutOperation.MODEL and timed_out:
+        return Cause.MODEL_TIMEOUT
     if operation is RolloutOperation.ADVANCE:
         return Cause.TOOL_EXECUTION
     if operation is RolloutOperation.GRADE:
-        return Cause.GRADER_RAISED
+        return Cause.GRADER_TIMEOUT if timed_out else Cause.GRADER_RAISED
     return Cause.UNCLASSIFIED
 
 
@@ -146,7 +145,7 @@ def _grade_cause(rollout: RolloutData) -> Cause:
         return Cause.VERIFIER_SKIPPED
     if grade.status is GradeStatus.INVALID_TASK:
         return Cause.INVALID_TASK
-    if rollout.stop_reason == AGENT_TIMEOUT_STOP_REASON:
+    if rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
         return Cause.AGENT_TIMEOUT
     if rollout.stop_reason == LENGTH_STOP_REASON and not rollout.steps:
         return Cause.GENERATION_LIMIT

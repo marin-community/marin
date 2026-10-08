@@ -8,8 +8,7 @@ from dataclasses import dataclass, replace
 
 import pytest
 from rigging.timing import ExponentialBackoff
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import TaskExecution
+from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
 from taskcompendium.submission import PlainText
 
@@ -18,14 +17,11 @@ from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
-from taskforge.spec.draft import shell_command
 from taskforge.validate.controls import ControlPlan, ControlVerdict, ServerTokenizer, replay
 from taskforge.validate.outcome import Cause, Graded, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings
 
 ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
-
-EXECUTION = TaskExecution()
 
 
 def render(messages) -> tuple[int, ...]:
@@ -54,10 +50,12 @@ class ReorderingTokenizer(TemplateTokenizer):
 
 def settings(factory, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
-        factories={EnvironmentKind.SHELLSIM: factory},
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+        factories={Backend.SHELLSIM.value: factory},
+        capabilities={Backend.SHELLSIM.value: SHELLSIM},
         max_turns=max_turns,
         command_timeout=10,
+        tool_turn_timeout=20,
+        model_turn_timeout=30,
         cleanup_timeout=10,
         conventions=(PlainText(id="plain"),),
     )
@@ -67,7 +65,7 @@ def plan(tmp_path, first_attempts: dict[str, int] | None = None) -> ControlPlan:
     return ControlPlan(
         item_id="item",
         round=0,
-        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=1,
         retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
         evidence_dir=tmp_path,
@@ -79,7 +77,6 @@ def plan(tmp_path, first_attempts: dict[str, int] | None = None) -> ControlPlan:
 async def test_transcript_and_workspace_controls_meet_their_expectations(tmp_path, file_task, file_controls, fakes):
     outcomes = await replay(
         file_task,
-        EXECUTION,
         file_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
@@ -94,16 +91,12 @@ async def test_transcript_and_workspace_controls_meet_their_expectations(tmp_pat
     )
 
 
-async def test_workspace_files_land_after_environment_setup(tmp_path, file_task, file_controls, fakes):
+async def test_workspace_files_land_after_environment_setup(tmp_path, file_task_with, file_controls, fakes):
     # A setup step that clears the output path must not erase a workspace control's file.
-    environment = file_task.environment.model_copy(
-        update={"setup": (shell_command("rm -f /workspace/sum.txt", timeout=10),)}
-    )
-    task = file_task.model_copy(update={"environment": environment})
+    task = file_task_with(setup=("rm -f /workspace/sum.txt",))
 
     outcomes = await replay(
         task,
-        EXECUTION,
         file_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
@@ -118,7 +111,6 @@ async def test_workspace_files_land_after_environment_setup(tmp_path, file_task,
 async def test_math_controls(tmp_path, math_task, math_controls, fakes):
     outcomes = await replay(
         math_task,
-        EXECUTION,
         math_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
@@ -140,7 +132,6 @@ async def test_wrong_expectation_is_violated(tmp_path, math_task, math_controls,
 
     outcomes = await replay(
         math_task,
-        EXECUTION,
         controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
@@ -153,7 +144,7 @@ async def test_wrong_expectation_is_violated(tmp_path, math_task, math_controls,
 async def test_a_retried_control_replays_from_its_first_turn(tmp_path, file_task, file_controls, fakes):
     factory = fakes.flaky_factory(failures=1, error=lambda: RuntimeError("broker refused"))
 
-    outcomes = await replay(file_task, EXECUTION, file_controls, plan(tmp_path), settings(factory), TemplateTokenizer())
+    outcomes = await replay(file_task, file_controls, plan(tmp_path), settings(factory), TemplateTokenizer())
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
     assert factory.creates == len(file_controls) + 1
@@ -167,7 +158,6 @@ async def test_a_re_entered_control_numbers_attempts_after_the_ones_on_disk(tmp_
 
     outcomes = await replay(
         file_task,
-        EXECUTION,
         file_controls,
         plan(tmp_path, first_attempts={"correct": 2}),
         settings(fakes.flaky_factory(0, RuntimeError)),
@@ -186,7 +176,6 @@ async def test_a_control_longer_than_max_turns_is_refused(tmp_path, file_task, f
     with pytest.raises(ValueError, match="max_turns"):
         await replay(
             file_task,
-            EXECUTION,
             file_controls,
             plan(tmp_path),
             settings(fakes.flaky_factory(0, RuntimeError), max_turns=1),
@@ -199,7 +188,6 @@ async def test_a_rendering_that_does_not_extend_the_prompt_is_ungraded_and_not_r
 ):
     outcomes = await replay(
         math_task,
-        EXECUTION,
         math_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),

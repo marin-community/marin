@@ -18,11 +18,9 @@ from pathlib import Path
 
 import pytest
 from rigging.timing import ExponentialBackoff
+from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import MachineFactory, UnsupportedMachineSpec
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import TaskExecution
-from taskcompendium.models import TaskSpec
+from shellbox.machine import Backend, MachineFactory, UnsupportedMachineSpec
 from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
@@ -44,17 +42,19 @@ POLICY = LLMPolicy(max_continuations=0)
 K = 3
 LIVE_TIMEOUT = 1800
 RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
-EXECUTION = TaskExecution()
-DEADLINES = Deadlines(agent_timeout=900, attempt_timeout=1200)
+DEADLINES = Deadlines(total_turn_timeout=900, attempt_timeout=1200)
+SHELLSIM_BACKEND = Backend.SHELLSIM.value
 TOKEN_CONTRACT_RETRIES = 2
 
 
-def settings(factories: dict[EnvironmentKind, MachineFactory]) -> EngineSettings:
+def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
     return EngineSettings(
         factories=factories,
-        capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM},
         max_turns=12,
         command_timeout=60,
+        tool_turn_timeout=120,
+        model_turn_timeout=600,
         cleanup_timeout=60,
         conventions=(PlainText(id="plain"),),
     )
@@ -175,16 +175,17 @@ async def client(glm_settings):
 async def solver_trials(
     client: GlmClient,
     evidence_dir: Path,
-    task: TaskSpec,
+    lowered: LoweredTaskSpec,
     check: str,
     purpose: str,
-    factories: dict[EnvironmentKind, MachineFactory],
+    factories: dict[str, MachineFactory],
 ) -> tuple[list[Outcome], Path]:
     directory = check_dir(evidence_dir, check)
-    trial_plan = plan(directory, TrialKind.SOLVER, task.id)
-    model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, task.id, 0, str(TrialKind.SOLVER)))
+    item_id = lowered.task.id
+    trial_plan = plan(directory, TrialKind.SOLVER, item_id)
+    model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, item_id, 0, str(TrialKind.SOLVER)))
     started = time.monotonic()
-    outcomes = await run_trials(task, EXECUTION, trial_plan, settings(factories), model)
+    outcomes = await run_trials(lowered, trial_plan, settings(factories), model)
     evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     write_summary(
         directory,
@@ -217,8 +218,8 @@ async def test_shellsim_file_task_trials(client, evidence_dir, file_task):
         evidence_dir,
         file_task,
         "b_shellsim_trials",
-        "ShellSim task, k=3: shell tool calls execute, private ShellVerifierSpec script grades /workspace/sum.txt",
-        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        "ShellSim task, k=3: shell tool calls execute, a host-run script grader checks the captured /workspace/sum.txt",
+        {SHELLSIM_BACKEND: ShellSimMachineFactory()},
     )
     assert all(isinstance(o, Graded) for o in outcomes), directory
     assert all(shell_commands(o) for o in outcomes), "every trial should run shell commands"
@@ -227,18 +228,19 @@ async def test_shellsim_file_task_trials(client, evidence_dir, file_task):
 async def replay_controls(
     client: GlmClient,
     evidence_dir: Path,
-    task: TaskSpec,
+    lowered: LoweredTaskSpec,
     controls: tuple[Control, ...],
     check: str,
-    factories: dict[EnvironmentKind, MachineFactory],
+    factories: dict[str, MachineFactory],
 ) -> list[ControlOutcome]:
     directory = check_dir(evidence_dir, check)
+    item_id = lowered.task.id
     started = time.monotonic()
     tokenizer = CountingTokenizer(ServerTokenizer(client, POLICY))
-    outcomes = await replay(task, EXECUTION, controls, control_plan(directory, task.id), settings(factories), tokenizer)
+    outcomes = await replay(lowered, controls, control_plan(directory, item_id), settings(factories), tokenizer)
     write_summary(
         directory,
-        f"control replay on {task.id}: scripted turns tokenized through the server, graded by the engine",
+        f"control replay on {item_id}: scripted turns tokenized through the server, graded by the engine",
         time.monotonic() - started,
         {"controls": control_summary(outcomes), "tokenize_requests": tokenizer.calls},
     )
@@ -275,7 +277,7 @@ async def test_control_replay_shellsim(client, evidence_dir, file_task, file_con
         file_task,
         file_controls,
         "c_controls_shellsim",
-        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        {SHELLSIM_BACKEND: ShellSimMachineFactory()},
     )
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
 
@@ -289,7 +291,7 @@ async def test_forced_machine_failure_is_classified_and_retried(client, evidence
         file_task,
         "d_forced_failure",
         "forced machine-start failure on the first 2 creates; k=3 trials classify MACHINE_START and retry",
-        {EnvironmentKind.SHELLSIM: factory},
+        {SHELLSIM_BACKEND: factory},
     )
     assert all(isinstance(o, Graded) for o in outcomes), directory
     attempt_causes = [e["cause"] for e in ledger_summary(directory) if e["kind"] is EntryKind.TRIAL]
@@ -306,7 +308,7 @@ async def test_unsupported_machine_is_not_retried(client, evidence_dir, file_tas
         file_task,
         "d_forced_unsupported",
         "forced UnsupportedMachineSpec: classified MACHINE_UNSUPPORTED, not retried, evidence incomplete",
-        {EnvironmentKind.SHELLSIM: factory},
+        {SHELLSIM_BACKEND: factory},
     )
     assert all(isinstance(o, Ungraded) and o.cause is Cause.MACHINE_UNSUPPORTED for o in outcomes)
     assert factory.creates == K
