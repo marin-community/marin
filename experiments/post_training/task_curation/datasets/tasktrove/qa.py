@@ -23,8 +23,9 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 MCQA_REWRITE_REASON = "Replace the source's answer-file wrapper with a request for one option letter"
@@ -191,7 +192,7 @@ def pipelines() -> list[RlDataPipeline]:
                 intended_use=IntendedUse.TRAIN,
                 rubric=OPENQA_RUBRIC,
                 atlas_id=f"Task Trove:{config}",
-                grader=LOCAL_GRADER,
+                grader=GRADER_PACKAGES,
             )
             for name, config in openqa
         ),

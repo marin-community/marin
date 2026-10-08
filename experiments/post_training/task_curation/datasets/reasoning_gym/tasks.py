@@ -4,12 +4,12 @@
 """Reasoning Gym puzzles from two sources, each graded by the puzzle task's own scorer.
 
 ``reasoning_gym_generated`` generates entries with the pinned ``reasoning_gym`` wheel, the release
-the grader image installs, in ``GENERATOR_PARTS`` parts that workers generate in parallel; a sample
+the grader packages pin, in ``GENERATOR_PARTS`` parts that workers generate in parallel; a sample
 generates only its sampled rows. Its grader
 (``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
 Python values, and rows whose entry a fresh dataset does not reproduce are rejected.
 ``tasktrove-reasoning-gym`` keeps the TaskTrove archive's ``tests/test.sh``, which thresholds the
-scorer's reward at 0.5. Both run in the grader image (``images.recipes.GRADER``).
+scorer's reward at 0.5. Both run with the grader packages (``GRADER_PACKAGES``).
 The Nemotron Ultra ``reasoning_gym`` component is declared with the other Ultra components.
 """
 
@@ -55,12 +55,13 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import ANSWER_FILE_DELIVERY, tasktrove_source
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
-# The grader image's requirements.lock pins this wheel by the same hash, so the grader regenerates
+# The grader lock (``datasets/grader.lock``) pins this wheel by the same hash, so the grader regenerates
 # entries with the code that generated them.
 GENERATOR_VERSION = "0.1.25"
 GENERATOR_ARCHIVE = f"reasoning_gym-{GENERATOR_VERSION}-py3-none-any.whl"
@@ -75,7 +76,7 @@ EXCLUDED_GENERATORS = (
     (
         "figlet_font",
         "Picks fonts by position in pyfiglet's font directory listing, whose order differs between the generating "
-        "worker and the grader image",
+        "worker and the grader's environment",
     ),
 )
 PYTHON_HASH_SEED = 0
@@ -300,7 +301,7 @@ def reply_instruction(instruction: str) -> str:
 
 
 def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    """A reply task graded by the archive's ``tests/test.sh`` with the grader image's reasoning-gym release."""
+    """A reply task graded by the archive's ``tests/test.sh`` with the grader packages' reasoning-gym release."""
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and entry data are required")
@@ -360,7 +361,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=GENERATED_RUBRIC,
             controls=GENERATED_CONTROLS,
             atlas_id="MarinSkyRL:reasoning_gym",
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
         ),
         RlDataPipeline(
             name="tasktrove-reasoning-gym",
@@ -372,6 +373,6 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{TASKTROVE_CONFIG}",
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
         ),
     ]

@@ -190,7 +190,7 @@ def test_row_converts_to_declared_grader(name):
     mode, output_paths, agent_image = EXPECTED[name]
     assert grader_name(task) == mode
     assert task.output_paths == output_paths
-    assert task.environment_requirements.docker_image == (agent_image.reference if agent_image is not None else None)
+    assert task.environment_requirements.docker_image == (agent_image.image if agent_image is not None else None)
     grader_environment = task.grader.environment if isinstance(task.grader, VerifyitGrader) else None
     assert grader_environment == (
         fixture_context(PIPELINES[name]).grader_environment if agent_image is not None else None

@@ -4,7 +4,7 @@
 """Score a generated Reasoning Gym reply against its regenerated entry and print the reward.
 
 ``/tests/config.json`` holds the row's contract: the recorded entry and the generation that produced
-it. The script regenerates the entry with the grader image's ``reasoning_gym`` and the seeds and JSON
+it. The script regenerates the entry with the grader packages' ``reasoning_gym`` and the seeds and JSON
 encoding of ``generate.py`` (shipped beside it), exits nonzero when the regenerated entry or the
 generator configuration differs from the recorded one, and otherwise scores the text after the reply's
 last ``Answer:`` marker, or the whole reply, with the task's own scorer. The scorer sees the

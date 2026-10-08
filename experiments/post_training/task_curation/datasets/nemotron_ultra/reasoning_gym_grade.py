@@ -4,7 +4,7 @@
 """Score a Nemotron Ultra Reasoning Gym reply with the puzzle task's own scorer and print the reward.
 
 The candidate is the final answer's last ``<answer>`` block, else its last boxed answer, else the whole
-final answer. The grader image's ``reasoning_gym`` scores it against the row's question, answer and
+final answer. The grader packages' ``reasoning_gym`` scores it against the row's question, answer and
 metadata; the metadata's ``source_dataset`` names the task.
 """
 

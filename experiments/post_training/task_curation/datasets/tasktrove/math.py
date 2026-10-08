@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove math sources, graded by each archive's own SymPy scorer in the grader image.
+"""TaskTrove math sources, graded by each archive's own SymPy scorer with the grader packages.
 
 An archive ships the scorer (``tests/verifier.py``), its runner (``tests/test.sh``) and the typed
 reference (``tests/verifier_data.json``). Only scorer and runner revisions seen before are
-accepted; the runner runs as archived in the grader image (``images.recipes.GRADER``), which pins
+accepted; the runner runs as archived with the grader packages (``GRADER_PACKAGES``), which pin
 the SymPy and ANTLR versions the scorers parse LaTeX with. The gym scorer turns any exception, a
-missing package included, into reward 0, so the golden control is what shows the image runs it. The
+missing package included, into reward 0, so the golden control is what shows the environment runs it. The
 solver gets a conversation task: the prompt's answer-file delivery is rewritten to ask for the
 answer in the reply, which the runtime writes to ``/app/answer.txt`` for the scorer.
 """
@@ -42,8 +42,9 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import MathType
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -242,7 +243,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=source.rubric,
             controls=MATH_CONTROLS,
             atlas_id=f"Task Trove:{source.config}",
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
         )
         for source in SOURCES
     ]

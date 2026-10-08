@@ -8,8 +8,8 @@ with the vendored NeMo Gym scorer it calls from ``scorers/`` (calendar, format, 
 multiple-choice, structured-output, competitive-code, RDKit chemistry or single-step tool-action) and
 the row's grading contract as ``/tests/config.json``. Scripts that score the chat conversation also ship
 ``conversation.py``, which reads its final reply. Reasoning Gym rows are scored by the puzzle task's
-own scorer in the grader image's ``reasoning_gym``. Every script runs in the grader image
-(``images.recipes.GRADER``). The math components grade the final answer in process with the verifyit
+own scorer in the grader packages' ``reasoning_gym``. Every script runs with the grader packages
+(``GRADER_PACKAGES``). The math components grade the final answer in process with the verifyit
 math comparator, in place of NeMo Gym's ``math_with_judge`` verifier. Components whose NeMo Gym agent
 needs a model judge, a live environment or a Lean toolchain keep their row as a ``NoGrader`` contract.
 """

@@ -5,7 +5,7 @@
 
 The archive's verifier (``tests/verifier.py``, run by ``tests/test.sh``) accepts any schedule that
 meets the final event constraints. It needs only the Python standard library (the source ran it in
-``python:3.11-slim``), so it runs as archived in the grader image (``images.recipes.GRADER``). The
+``python:3.11-slim``), so it runs as archived with the grader packages (``GRADER_PACKAGES``). The
 archive asks for the calendar in ``/app/answer.txt``; the task asks for it in the reply, which the
 runtime writes to that file for the verifier. A source witness (``solution/answer.json``) is the
 golden control; an archive whose witness is not a nonempty JSON list of events is a source defect.
@@ -37,8 +37,9 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
@@ -165,7 +166,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=rubric,
             controls=Controls(golden=calendar_golden),
             atlas_id=f"Task Trove:{config}",
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
         )
         for name, config, rubric in sources
     ]

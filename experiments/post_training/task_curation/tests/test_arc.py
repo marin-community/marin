@@ -14,14 +14,13 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, R
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_ENVIRONMENT,
-    FIXTURE_GRADER_IMAGE,
     convert_row,
     converted_task,
     tasktrove_row,
 )
 
 PIPELINES = {pipeline.name: pipeline for pipeline in arc.pipelines()}
-# The Nemotron Ultra declarations that use convert_ultra_arc name the grader image.
+# The Nemotron Ultra declarations that use convert_ultra_arc name the grader packages.
 ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]
 ARCHIVE_FILES = {
@@ -87,7 +86,7 @@ def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
         None,
         StdoutReward(),
     )
-    assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
+    assert grader.environment == FIXTURE_GRADER_ENVIRONMENT
     assert (task.answer_type, task.output_paths) == (AnswerType.FILE, output_paths)
     assert {resource.path for resource in task.resources.verifier} == SHIPPED
     assert grader_config(task) == config

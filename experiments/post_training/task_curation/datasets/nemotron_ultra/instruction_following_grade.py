@@ -3,7 +3,7 @@
 
 """Score a Nemotron Ultra instruction-following reply with the vendored NeMo Gym scorer and print the reward.
 
-The scorer checks every instruction in the row's ``instruction_id_list`` with the grader image's
+The scorer checks every instruction in the row's ``instruction_id_list`` with the grader packages'
 ``verifiable_instructions`` registry.
 """
 

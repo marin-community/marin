@@ -20,12 +20,12 @@ RlDataPipeline(
     source=HfSource("HuggingFaceH4/MATH-500", "6e4ed1a2...", ("test.jsonl",), SourceFormat.JSONL),
     convert=convert_math500,             # (RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection
     version="1",                         # bump when conversion changes outside the hashed files
-    environment=ShellSim(),              # or AgentImage("repo@sha256:...") for agentic tasks
+    environment=ShellSim(),              # or Environment(image="repo@sha256:...") for agentic tasks
     intended_use=IntendedUse.EVAL,
     rubric=MATH500_RUBRIC,               # optional model review; one criterion per paragraph
     controls=MATH_CONTROLS,              # optional grader verification
     atlas_id="MarinSkyRL:math500",       # join key into atlas_catalog.json
-    grader=None,                         # LOCAL_GRADER or SANDBOX_GRADER when a grade script needs the grader recipe
+    grader=None,                         # GRADER_PACKAGES, or another Environment, when a grade script needs packages
     ships=(),                            # directories whose files the converter packages into tasks
     resource_budget_bytes=1_000_000,     # tasks carrying more resource bytes are deferred
 )
@@ -55,7 +55,7 @@ RlDataPipeline(
   - a `VerifyitGrader` with no environment, graded in process;
   - a `ScriptGrader` or `VerifyitGrader` with
     `environment=required_grader_environment(context)`, graded in a fresh
-    machine of the grader image. A dataset-specific script is a `<name>_grade.py`
+    machine of the grader's environment. A dataset-specific script is a `<name>_grade.py`
     file next to the declaration, and vendored upstream scorers live under
     `datasets/<family>/scorers/` and are listed in `ships`. The converter ships
     the script as `/tests/grade.py`, the row's hidden data as
@@ -63,9 +63,10 @@ RlDataPipeline(
     `/tests`; the script prints its reward as the last nonempty stdout line
     (`StdoutReward`) and exits nonzero when it cannot score;
   - `NoGrader`, when no runnable grader exists. Such rows never reach `final/`.
-- **Environment.** `ShellSim()` for conversation tasks; an `AgentImage` pinned
-  by digest when the agent works in a container. Agent images are separate from
-  the grader image, which [images/](images/README.md) builds from a recipe.
+- **Environment.** `ShellSim()` for conversation tasks; `Environment(image=...)`
+  pinned by digest when the agent works in a container. The grader's
+  environment is separate: an `Environment` stating packages, which
+  [images/](images/README.md) builds.
 - **Resource budget.** A task whose decoded resources exceed
   `resource_budget_bytes` is deferred with reason `resources_over_budget`, and
   the manifest counts it.
@@ -73,10 +74,10 @@ RlDataPipeline(
   `unreviewed`.
 - **Controls.** `Controls(golden)` grades one submission per sampled task: the
   known-correct `golden(task)`, which must score 1, or an empty submission,
-  which must score 0, when the task has no golden. Sandbox graders grade the
-  empty submission in their own image, so it also shows the grader runs.
-  Without controls,
-  verification is skipped and sandbox-graded rows stay out of `final/`. Rows
+  which must score 0, when the task has no golden. Graders that run in a
+  machine grade the empty submission in a fresh machine of their environment,
+  so it also shows the grader runs. Without controls, verification is skipped
+  and rows those graders grade stay out of `final/`. Rows
   graded by an LLM judge are never sampled and reach `final/` without controls.
 
 To add a dataset, copy the closest declaration, set its source, converter,
@@ -87,11 +88,11 @@ the module's `pipelines()` to [sources.py](sources.py).
 
 Each declaration becomes one cached artifact, `data/rl/<name>-<hash>`. The hash
 covers the source pins, auxiliary inputs, `version`, every `*.py` file in the
-converter module's directory, every file below `ships`, the digest of the built
-grader image, the agent image, the resource budget, the rubric, the controls
-code, and the review and verification settings. A declaration with a
-`grader` needs that image's artifact first; building its source without
-one raises `MissingImageArtifact` with the build command (see
+converter module's directory, every file below `ships`, the grader's built
+environment, the agent image, the resource budget, the rubric, the controls
+code, and the review and verification settings. A declaration whose `grader`
+names no image needs that environment's artifact first; building its source
+without one raises `MissingEnvironmentArtifact` with the build command (see
 [images/](images/README.md)). Downloads are
 shared artifacts, `task-curation/download/<hash>`, keyed by the pinned files.
 
@@ -122,12 +123,13 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --mode sample --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-A declaration's `grader` is `LOCAL_GRADER` or `SANDBOX_GRADER`: both name the
-grader recipe, and the isolation says where its scripts run. Local graders only
-parse model text; they run as locked-down subprocesses of the Zephyr worker, in
-a uv environment the worker builds once from the recipe's `requirements.lock`
-(`grader_environment.py`). Sandbox graders execute model programs; they run in
-a fresh machine of the built image.
+A declaration's `grader` states what its scripts need, and the pipeline places
+it ([environment.py](environment.py)). A digest-pinned `image` runs in a sandbox
+of that image. `apt` packages that the worker image lacks (`WORKER_IMAGE_APT`)
+run in a sandbox of an image built for the environment. Every other environment,
+including `GRADER_PACKAGES`, runs as a locked-down subprocess of the Zephyr
+worker, in a uv environment the worker builds once from the environment's lock
+([environment_runtime.py](environment_runtime.py)).
 `--verification-backend` selects how sandbox graders run. `iris`, the default,
 schedules each grader machine as an Iris task; inside an Iris job the driver uses
 the job's controller, and elsewhere it requires `--controller-url`. `gvisor` runs

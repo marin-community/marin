@@ -12,6 +12,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from marin.execution.lazy import run
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
+from taskcompendium.convert.environment import IMAGE_BACKENDS
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
@@ -23,18 +26,28 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import VerificationBackend, campaign_machines
-from experiments.post_training.task_curation.images.build import MissingImageArtifact, image_artifact
+from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.images.build import (
+    MissingEnvironmentArtifact,
+    built_environment,
+    environment_artifact,
+)
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
-    GraderEnvironment,
-    GraderIsolation,
     UrlSource,
     download_source,
     download_step,
+    environment_requirements,
     source_recipe,
     source_step,
 )
-from experiments.post_training.task_curation.tests.image_builds import REPOSITORY, install_fake_docker, tracked_recipe
+from experiments.post_training.task_curation.tests.image_builds import (
+    REPOSITORY,
+    install_fake_build_tools,
+    tracked_lock,
+)
+
+AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
 CONVERTER_MODULE = """
 from taskcompendium.convert.answers import exact_answer_task
@@ -148,30 +161,84 @@ def test_declarations_ship_only_existing_directories(tmp_path):
 
 
 @pytest.fixture
-def grader_recipe(tmp_path, monkeypatch):
+def grader_lock(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    install_fake_docker(tmp_path, monkeypatch)
-    return tracked_recipe(tmp_path)
+    install_fake_build_tools(tmp_path, monkeypatch)
+    return tracked_lock(tmp_path)
 
 
-def test_a_rebuilt_grader_image_renames_the_artifact(grader_recipe, config):
-    pipeline = replace(math500(), grader=GraderEnvironment(grader_recipe, GraderIsolation.SANDBOX))
-    (first,) = run(image_artifact(grader_recipe, REPOSITORY))
+def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
+    grader = Environment(lock=grader_lock)
+    pipeline = replace(math500(), grader=grader)
+    run(environment_artifact(grader, REPOSITORY))
     original = source_step(pipeline, config, CampaignRuntime())
-    assert image_artifact(grader_recipe).name in [dep.name for dep in original.deps]
-    (grader_recipe.context / "requirements.lock").write_text("numpy==2.3.4\n")
-    (second,) = run(image_artifact(grader_recipe, REPOSITORY))
-    assert second.image != first.image
+    assert environment_artifact(grader).name in [dep.name for dep in original.deps]
+    grader_lock.write_text("numpy==2.3.4\n")
+    run(environment_artifact(grader, REPOSITORY))
     assert step_name(pipeline, config) != original.name
 
 
-def test_a_grader_image_without_a_built_artifact_names_the_build_command(grader_recipe, config):
-    pipeline = replace(math500(), grader=GraderEnvironment(grader_recipe, GraderIsolation.SANDBOX))
+def test_a_grader_environment_without_a_built_artifact_names_the_build_command(grader_lock, config):
+    pipeline = replace(math500(), grader=Environment(lock=grader_lock))
     with pytest.raises(
-        MissingImageArtifact,
-        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --recipe fixture"),
+        MissingEnvironmentArtifact,
+        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --identity "),
     ):
         source_step(pipeline, config, CampaignRuntime())
+
+
+def test_an_environment_image_runs_as_declared_in_a_sandbox():
+    requirements = environment_requirements(Environment(image=AGENT_IMAGE))
+    assert (requirements.docker_image, requirements.compatible_backends) == (AGENT_IMAGE, IMAGE_BACKENDS)
+    assert requirements.packages_lock is None
+
+
+def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_lock):
+    environment = Environment(lock=grader_lock, apt=("build-essential", "jq"))
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    requirements = environment_requirements(environment, built_environment(environment))
+    assert built.image is not None and built.image.startswith(f"{REPOSITORY}@sha256:")
+    assert (requirements.docker_image, requirements.compatible_backends) == (built.image, IMAGE_BACKENDS)
+    assert requirements.packages_lock is None
+
+
+@pytest.mark.parametrize(
+    "declare",
+    [
+        pytest.param(lambda lock: Environment(lock=lock, apt=("build-essential", "git")), id="worker-image-apt"),
+        pytest.param(lambda lock: Environment(lock=lock), id="lock-only"),
+        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",)), id="pypi-only"),
+    ],
+)
+def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(grader_lock, declare):
+    environment = declare(grader_lock)
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    requirements = environment_requirements(environment, built_environment(environment))
+    assert requirements.compatible_backends == (Backend.LOCAL,)
+    assert requirements.docker_image is None
+    assert requirements.packages_lock == built.lock_url
+    assert hashlib.sha256(StoragePath(requirements.packages_lock).read_bytes()).hexdigest() == built.lock_sha256
+
+
+@pytest.mark.parametrize(
+    "declare",
+    [
+        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",), lock=lock), id="pypi-and-lock"),
+        pytest.param(lambda lock: Environment(pypi=("numpy>=2",)), id="unpinned-pypi"),
+        pytest.param(lambda lock: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
+        pytest.param(lambda lock: Environment(image=AGENT_IMAGE, lock=lock), id="image-with-packages"),
+        pytest.param(lambda lock: Environment(lock=lock, data=("punkt_tab",)), id="data-without-a-downloader"),
+        pytest.param(lambda lock: Environment(lock=lock, apt=("jq; rm -rf /",)), id="apt-not-a-package-name"),
+    ],
+)
+def test_environment_declarations_reject_contradictory_or_unpinned_needs(grader_lock, declare):
+    with pytest.raises(ValueError):
+        declare(grader_lock)
+
+
+def test_an_agent_environment_must_name_its_image(grader_lock):
+    with pytest.raises(ValueError, match="agent environment's image"):
+        replace(math500(), environment=Environment(lock=grader_lock))
 
 
 def test_rubric_paragraphs_become_review_criteria():

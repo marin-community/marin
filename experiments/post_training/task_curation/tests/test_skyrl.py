@@ -29,7 +29,6 @@ from taskcompendium.runtime.task_grading import grade_task
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
 from experiments.post_training.task_curation.pipeline import source_files
 from experiments.post_training.task_curation.tests.conversion import (
-    FIXTURE_GRADER_IMAGE,
     convert_row,
     converted_task,
     fixture_context,
@@ -260,7 +259,7 @@ def test_code_task_golden_control_replays_the_known_solution(name):
     task = converted_task(PIPELINES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
+    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
     final_prompt = task.context.events[-1]
     assert isinstance(final_prompt, TextMessage) and final_prompt.role == "user"
     golden = code.reference_solution(task)
@@ -295,7 +294,7 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
 def test_ifeval_task_gives_the_scorer_skyrl_constraints(name, constraints):
     task = converted_task(PIPELINES[name], ROWS[name])
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment.docker_image == FIXTURE_GRADER_IMAGE
+    assert task.grader.environment == fixture_context(PIPELINES[name]).grader_environment
     assert grader_config(task)["constraints"] == constraints
 
 

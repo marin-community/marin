@@ -20,7 +20,9 @@ Building the catalog performs no downloads, inference or job submission.
 | Package | Responsibility |
 |---|---|
 | `experiments/post_training/task_curation/datasets/` | Dataset declarations, converters, rubrics, controls, `*_grade.py` grader scripts and vendored `scorers/` |
-| `experiments/post_training/task_curation/images/` | The grader image recipe and `build.py`, which builds it and records it as an artifact |
+| `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
+| `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
+| `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The catalog, `all_pipelines()` |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
@@ -43,13 +45,13 @@ An `RlDataPipeline` has these fields:
 | `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion changes outside the hashed files. |
-| `environment` | `ShellSim()` for conversation tasks, or an `AgentImage` pinned by digest for agentic tasks. |
+| `environment` | `ShellSim()` for conversation tasks, or `Environment(image=...)` naming the digest-pinned image an agent works in. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
 | `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
-| `grader` | `LOCAL_GRADER` when grade scripts only parse model text and run in the worker, `SANDBOX_GRADER` when they execute model programs in a fresh machine of the built grader image; the converter reads the resulting environment as `ConversionContext.grader_environment`. |
+| `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
 | `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
 
@@ -58,9 +60,38 @@ declaration of the family in a loop.
 
 `convert`, `select`, `decode`, `read` and `parts` each receive a `ConversionContext` with
 two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, the
-built grader image's environment or `None` when the declaration names no
-`grader`. `required_grader_environment(context)` returns the environment or
-raises.
+`EnvironmentRequirements` of the declared `grader` as the pipeline placed it, or
+`None` when the declaration names no `grader`.
+`required_grader_environment(context)` returns the environment or raises.
+
+## Environments
+
+An `Environment` states what a machine must provide. A declaration never names
+a backend; the pipeline places each environment:
+
+| Field | Meaning |
+|---|---|
+| `pypi` | Exact `name==version` pins, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`. |
+| `lock` | A uv-compiled requirements lock with hashes, used verbatim. It excludes `pypi`. |
+| `apt` | Debian package names. |
+| `data` | Downloads; only `nltk:<package>` is supported. |
+| `image` | A digest-pinned image used as-is. It excludes every other field. |
+
+| Declaration | Placement | Recorded `EnvironmentRequirements` |
+|---|---|---|
+| `image` set | A sandbox of that image | `docker_image=image`, `compatible_backends=(gvisor, docker)` |
+| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `docker_image=<built digest>`, `compatible_backends=(gvisor, docker)` |
+| Anything else | A locked-down subprocess of the Zephyr worker | `compatible_backends=(local,)`, `packages_lock=<lock URL>` |
+
+`WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
+stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
+An environment that needs only those runs in the worker. `GRADER_PACKAGES`, the
+lock every grade script in the catalog imports with the NLTK `punkt_tab` and
+`wordnet` data, runs in the worker. The TaskTrove competitive-programming
+sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
+C++ submissions; the worker image provides it, so they also run in the worker.
+An agent environment must name its image, because converters record the
+agent's requirements on each task.
 
 ## Graders and controls
 
@@ -68,8 +99,8 @@ A task's grader is one of four kinds:
 
 - `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
   in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader image.
-- `ScriptGrader` runs a command in a fresh machine of the grader image. Archived
+  in a fresh machine of the grader's environment.
+- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
 - `SessionGrader` marks a task graded by its registered interactive session.
@@ -87,7 +118,7 @@ package:
   under `/tests`, so the script imports them as upstream does;
 - `script_package` adds the row's hidden data as `/tests/config.json` (sorted
   keys) and grades with `ScriptGrader(argv=("python3", "/tests/grade.py"),
-  cwd="/", reward=StdoutReward())` in the grader image.
+  cwd="/", reward=StdoutReward())` in the grader's environment.
 
 The script puts `/tests` on its import path, reads `config.json` and the reply
 at `/app/answer.txt` (or the conversation at `/tests/conversation.json`), and
@@ -95,7 +126,7 @@ prints the reward, fractional when the scorer is, as its last nonempty stdout
 line. The runtime keeps the first 16 KiB of stdout, so the script keeps its
 output below that. It exits nonzero when it cannot import its scorer or a
 dependency, which the runtime reports as an infrastructure error, never a zero
-reward. The grader image supplies third-party dependencies only; scorer code
+reward. The grader's environment supplies third-party dependencies only; scorer code
 always ships with the task.
 
 Conversion preserves the source's grading semantics. It does not repair
@@ -105,7 +136,7 @@ Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
 when the declaration has no `golden` or it returns `None` because the task has no
 known answer, an empty submission, which shows that the grader runs. A grader that
-runs in a machine grades the empty submission in a fresh machine of its image,
+runs in a machine grades the empty submission in a fresh machine of its environment,
 staged as for a rollout whose agent replied with empty text and wrote nothing: an
 empty answer file where the grader reads one, a conversation ending in the empty
 reply, and an empty workspace. The empty control passes when the grader runs and
@@ -121,7 +152,7 @@ scores the empty reply directly. A golden is a `Reply`, `WorkspaceFiles`, or an
 `OracleCommand`, such as a TaskTrove `solution/solve.sh`,
 run with the task's worker and oracle files in a fresh machine of the task's agent
 image, whose tools and directories the oracle expects. A task without an agent
-image, such as a conversation task, runs its oracle in the grader image. The
+image, such as a conversation task, runs its oracle in the grader's machine. The
 oracle's output is then graded like any other submission. In-process numeric,
 MCQ, exact and action graders are also checked per task during preparation.
 
@@ -172,23 +203,33 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-Build the grader image first, with the same `MARIN_PREFIX`:
+Build the declared environments first, with the same `MARIN_PREFIX`:
 
 ```bash
-uv run python -m experiments.post_training.task_curation.images --recipe grader
+uv run python -m experiments.post_training.task_curation.images --all
+uv run python -m experiments.post_training.task_curation.images --identity IDENTITY_PREFIX
 ```
 
-The build pushes `ghcr.io/marin-community/iris-task:task-curation-grader-<identity>` and
-records the pushed digest in the artifact `images/grader-<identity>`. It needs a
-`docker login` for ghcr.io and, for a CoreWeave `MARIN_PREFIX`, the
-`CW_KEY_ID` and `CW_KEY_SECRET` pair in the environment. The
-identity hashes every file in the recipe's context and package directories with
-its mode, the digest-pinned base image and the platform, so a rerun with an
-unchanged recipe does nothing. A source whose declaration names the recipe
-raises `MissingImageArtifact` until the artifact exists.
+Each environment without an `image` becomes the artifact
+`images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`.
+The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, Python
+3.12, the platform, the digest-pinned base image, the files of `verifyit`
+(which every built environment puts on the grader's import path) and the
+placement, so a rerun with an unchanged declaration does nothing. An
+environment placed in a built image also gets a generated Dockerfile: the
+pinned `iris-task` base, `apt-get install` of `apt`, `uv pip sync
+--require-hashes` of the lock, the NLTK data and `verifyit`. The build pushes it
+as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
+records the digest. An image build needs a `docker login` for ghcr.io; every
+build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
+`CW_KEY_SECRET` pair in the environment. Planning a source whose environment
+has no artifact raises `MissingEnvironmentArtifact` with the `--identity`
+command that builds it.
 
-Local graders run as locked-down subprocesses of the Zephyr worker, in a uv
-environment the worker builds once from the grader recipe's `requirements.lock`.
+Local graders run as locked-down subprocesses of the Zephyr worker. On first
+use, each worker downloads the environment's lock from its artifact and builds a
+uv environment under `/tmp/task-curation-env-<identity>`, with the NLTK data and
+`verifyit`; concurrent graders on one host build it once.
 `--verification-backend` is where sandbox graders run: `iris` (the default) or
 `gvisor`. Iris schedules each grader machine on the controller of the enclosing
 Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
@@ -222,7 +263,7 @@ Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader` or
 join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
 `raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
 every `*.py` file in the converter module's directory, every file below `ships`,
-the built grader image digest, the agent image, the resource budget, rubric,
+the grader's built environment (its identity and any built image digest), the agent image, the resource budget, rubric,
 controls and pipeline settings, so changing any of them produces a new artifact.
 The manifest counts rows deferred for `resources_over_budget` with the other
 normalization reasons.

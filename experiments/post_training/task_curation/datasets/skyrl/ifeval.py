@@ -25,8 +25,9 @@ from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -190,7 +191,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
             controls=CONTROLS,
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:nemotron_if",
         ),
@@ -208,7 +209,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
             controls=CONTROLS,
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:rlvr_ifeval",
         ),

@@ -24,9 +24,10 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, Normali
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"
@@ -93,6 +94,6 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
             atlas_id=f"Task Trove:{CONFIG}",
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
         )
     ]

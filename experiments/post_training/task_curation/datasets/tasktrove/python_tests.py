@@ -5,9 +5,9 @@
 
 Each source ships one pytest file and, usually, a ``solution/solution.py`` oracle. The agent writes
 the Python files its instruction names; unitsyn's agent writes the fixed solution file instead. The
-hidden tests run in the grader image (``images.recipes.GRADER``). The sources differ only by
+hidden tests run with the grader packages (``GRADER_PACKAGES``). The sources differ only by
 configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies;
-the grader image installs the same packages, so a submission that imports one there grades here.
+the grader packages include the same ones, so a submission that imports one there grades here.
 """
 
 from dataclasses import dataclass
@@ -22,16 +22,18 @@ from taskcompendium.convert.tasktrove_python_unit_tests import convert as conver
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
-from experiments.post_training.task_curation.pipeline import SANDBOX_GRADER, AgentImage, RlDataPipeline
+from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
 
-AGENT_IMAGE = AgentImage(
-    "ghcr.io/marin-community/iris-task@sha256:d15747080ff81dbbec4a1dcbc7cd651d3b935054d4b67e4b55dc517e1b2cfc56"
+AGENT_IMAGE = Environment(
+    image="ghcr.io/marin-community/iris-task@sha256:d15747080ff81dbbec4a1dcbc7cd651d3b935054d4b67e4b55dc517e1b2cfc56"
 )
 """The Python image the agent writes its implementation in."""
-STACK_PYTEST_AGENT_IMAGE = AgentImage(
-    "ghcr.io/marin-community/iris-task@sha256:97528e23c249c993641b0b5c6e7d05a978588f4be276f0fe61b1f3c3bcc6c622"
+STACK_PYTEST_AGENT_IMAGE = Environment(
+    image="ghcr.io/marin-community/iris-task@sha256:97528e23c249c993641b0b5c6e7d05a978588f4be276f0fe61b1f3c3bcc6c622"
 )
 """The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
 
@@ -172,7 +174,7 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_python_task(
         row,
         convert=convert_unit_tests,
-        environment=AGENT_IMAGE.requirements(),
+        environment=environment_requirements(AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
     )
 
@@ -182,7 +184,7 @@ def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_python_task(
         row,
         convert=convert_unit_tests,
-        environment=STACK_PYTEST_AGENT_IMAGE.requirements(),
+        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
     )
 
@@ -192,7 +194,7 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=AGENT_IMAGE.requirements(),
+        environment=environment_requirements(AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -202,7 +204,7 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
 class PythonTestsSource:
     config: str
     convert: Converter
-    image: AgentImage
+    image: Environment
     rubric: str
 
 
@@ -255,7 +257,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=source.rubric,
             controls=PYTHON_TESTS_CONTROLS,
             atlas_id=f"Task Trove:{source.config}",
-            grader=SANDBOX_GRADER,
+            grader=GRADER_PACKAGES,
         )
         for name, source in SOURCES.items()
     ]

@@ -3,8 +3,8 @@
 
 """ARC-AGI grid puzzles: two TaskTrove Nemotron Gym configs and the Nemotron Ultra NVARC converter.
 
-Every ARC task is graded by ``arc_grade.py`` with the vendored NVARC scorer from ``scorers/``, in the
-grader image (``images.recipes.GRADER``). An inductive submission is a ``transform(grid)`` program,
+Every ARC task is graded by ``arc_grade.py`` with the vendored NVARC scorer from ``scorers/``, with the
+grader packages (``GRADER_PACKAGES``). An inductive submission is a ``transform(grid)`` program,
 which the script runs on the hidden test input as an unprivileged user; a transductive submission is
 the output grid. TaskTrove tasks ask for a file (``/app/solution.py`` or ``/app/answer.txt``); Ultra
 NVARC rows ask for a reply.
@@ -41,10 +41,11 @@ from taskcompendium.pipeline.models import (
     WorkspaceFiles,
 )
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, SANDBOX_GRADER, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
 TRANSDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-transductive-v3"
@@ -242,7 +243,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_INDUCTIVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{INDUCTIVE_CONFIG}",
-            grader=SANDBOX_GRADER,
+            grader=GRADER_PACKAGES,
             ships=ARC_SHIPS,
         ),
         RlDataPipeline(
@@ -255,7 +256,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{TRANSDUCTIVE_CONFIG}",
-            grader=LOCAL_GRADER,
+            grader=GRADER_PACKAGES,
             ships=ARC_SHIPS,
         ),
     ]

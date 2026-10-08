@@ -43,7 +43,7 @@ from experiments.post_training.task_curation.campaign import (
     require_matching_sample,
     run_campaign,
 )
-from experiments.post_training.task_curation.grader_environment import LocalGraderMachines
+from experiments.post_training.task_curation.environment_runtime import LocalGraderMachines
 from experiments.post_training.task_curation.pipeline import RlDataArtifact, RlDataPipeline, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
 
@@ -70,7 +70,7 @@ def machines_identity(backend: VerificationBackend, worker_image: str, controlle
 
 @dataclass(frozen=True)
 class IrisMachines:
-    """Schedule each grader image as a task on the Iris controller at ``controller_url``."""
+    """Schedule each sandbox image as a task on the Iris controller at ``controller_url``."""
 
     worker_image: str
     controller_url: str
@@ -95,7 +95,7 @@ class IrisMachines:
 
 @dataclass(frozen=True)
 class GvisorMachines:
-    """Run each grader image under gVisor on the local Docker daemon."""
+    """Run each sandbox image under gVisor on the local Docker daemon."""
 
     worker_image: str
 
