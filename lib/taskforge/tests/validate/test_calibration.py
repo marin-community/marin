@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""summarize: band findings over complete evidence, decisive findings regardless, and adversary passes tiered by
-coded transcript signals into repairs (with controls), notes and no defect."""
+"""summarize: band findings over complete evidence, decisive findings regardless, and adversary trials tiered by
+their verifier submissions into repairs (with the accepted candidate as a control), notes and no defect.
+
+Adversary trials run for real against ``fake_glm`` (scripted agent turns) on ShellSim with the task's grader."""
 
 from collections import Counter
 
@@ -11,15 +13,15 @@ from rigging.timing import ExponentialBackoff
 from taskcompendium.environment import EnvironmentKind, StdoutReward
 from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import AnswerType, TaskSpec, TextMessage
+from taskcompendium.models import AnswerType, TaskSpec
 from taskcompendium.submission import PlainText
 
 from taskforge.build.step import StepRole
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.sandbox.factories import SHELLSIM
-from taskforge.spec.controls import REJECTION_CEILING, ControlKind, Transcript
+from taskforge.spec.controls import REJECTION_CEILING, ControlKind, Transcript, reply
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.adversary import AdversaryRole, ClaimKind, run_adversaries
 from taskforge.validate.calibration import (
     DECISIVE,
     AdversarySignals,
@@ -30,24 +32,25 @@ from taskforge.validate.calibration import (
     TaskFacts,
     compare,
     consumed_inputs,
-    gave_up,
     honest_submissions,
     load_summary,
     summarize,
     task_facts,
     tier_of,
     write_summary,
-    written_inputs,
 )
-from taskforge.validate.controls import control_outcome
+from taskforge.validate.controls import control_outcome, workspace_turn
 from taskforge.validate.evidence import Complete, Incomplete
-from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
+from taskforge.validate.outcome import Cause, Outcome, TrialKind, Ungraded
 from taskforge.validate.run import ValidationEvidence
+from taskforge.validate.submissions import AdversaryTrial
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
 DIGEST = "ab" * 32
 UNAVAILABLE = Ungraded(Cause.MODEL_UNAVAILABLE, "router drained", None)
 SETUP_FAILED = Ungraded(Cause.TASK_SETUP, "setup command exited 3", None)
+PLAIN = PlainText(id="plain")
+SHORTCUT = AdversaryRole.SHORTCUT
 NUMBERS = "/workspace/numbers.txt"
 SUM = "/workspace/sum.txt"
 RECOMPUTING_CHECK = (
@@ -58,8 +61,8 @@ RECOMPUTING_CHECK = (
 LENIENT_FILE_CHECK = "if grep -q 60 /workspace/sum.txt; then echo 1; else echo 0; fi\n"
 LENIENT_TEXT_CHECK = "if grep -q 395; then echo 1; else echo 0; fi\n"
 ACCEPT_ALL = "echo 1\n"
-READ_THEN_ANSWER = (f"head -c 200 {NUMBERS}", f"echo 60 > {SUM}")
 SOLVE = f"awk '{{s+=$1}} END{{print s}}' {NUMBERS} > {SUM}"
+HEDGE = "394 or 395 or 396"
 
 
 def graded_by(task: TaskSpec, script: str) -> TaskSpec:
@@ -125,6 +128,32 @@ def trial(tmp_path, fakes):
 
 
 @pytest.fixture
+def adversary(tmp_path, rounds, fakes, fake_glm, glm_client, turns):
+    """Runs one adversary trial of ``task`` with scripted agent turns (see ``conftest.adversary_turns``)."""
+    count = 0
+
+    async def run(task: TaskSpec, *script) -> AdversaryTrial:
+        nonlocal count
+        count += 1
+        turns(fake_glm, *script)
+        settings = EngineSettings(
+            factories={EnvironmentKind.SHELLSIM: fakes.flaky_factory(0, RuntimeError)},
+            capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+            max_turns=8,
+            command_timeout=10,
+            cleanup_timeout=10,
+            conventions=(PLAIN,),
+        )
+        site = rounds.site(tmp_path / f"adversary-{count}")
+        trials = await run_adversaries(
+            rounds.draft(task, (), PLAIN), rounds.policy(adversary_k=1), site, settings, glm_client, ""
+        )
+        return trials[SHORTCUT][0]
+
+    return run
+
+
+@pytest.fixture
 def answer(trial, math_task):
     """Runs the math task once with a scripted final reply and returns the outcome."""
 
@@ -138,19 +167,30 @@ def evidence(facts: TaskFacts, controls=(), solver=(), adversaries=None) -> Vali
     return ValidationEvidence(DIGEST, tuple(controls), tuple(solver), adversaries or {}, facts)
 
 
+def failed(outcome: Ungraded) -> AdversaryTrial:
+    """An adversary trial that never ran its agent loop."""
+    return AdversaryTrial(outcome, "brief", ())
+
+
 def signals(**changes) -> AdversarySignals:
-    """A passing adversary that read the input, wrote nothing, ran a shell command and did not give up."""
+    """An adversary that read the input, passed with its one file-backed submission and reported no shortcut."""
     base = {
-        "passed": True,
-        "gave_up": False,
+        "submissions": 1,
+        "passes": 1,
+        "budget_spent": False,
+        "first_pass": 1,
+        "exploit": 1,
+        "claim": ClaimKind.NO_SHORTCUT,
+        "why": "",
         "stop_reason": "stop",
-        "budget_exhausted": False,
+        "exhausted": False,
         "output_tokens": 100,
-        "turns": 2,
+        "turns": 3,
         "shell_calls": 1,
         "inputs_consumed": (NUMBERS,),
-        "inputs_written": (),
-        "submission": None,
+        "protected_supplied": (),
+        "fileless_passes": (),
+        "mismatches": (),
         "comparison": Comparison.UNAVAILABLE,
     }
     return AdversarySignals(**(base | changes))
@@ -179,7 +219,7 @@ async def test_band_findings_need_complete_evidence_with_k_graded_solver_trials(
 async def test_decisive_findings_are_reported_when_other_trials_are_ungraded(answer, rounds, math_controls, math_facts):
     correct = next(c for c in math_controls if c.kind is ControlKind.POSITIVE)
     violated = control_outcome(correct, await answer("391"))
-    adversaries = {AdversaryRole.LEAK: (SETUP_FAILED, SETUP_FAILED)}
+    adversaries = {SHORTCUT: (failed(SETUP_FAILED), failed(SETUP_FAILED))}
 
     summary = summarize(evidence(math_facts, (violated,), (UNAVAILABLE,), adversaries), rounds.policy(k=3))
 
@@ -188,59 +228,37 @@ async def test_decisive_findings_are_reported_when_other_trials_are_ungraded(ans
     violation, defect = summary.findings
     assert violation.roles == (StepRole.GRADER, StepRole.CONTROLS) and "control/correct" in violation.detail
     assert defect.roles == (StepRole.ENVIRONMENT, StepRole.FIXTURES)
-    assert "adversary/leak/0" in defect.detail and "adversary/leak/1" in defect.detail
+    assert "adversary/shortcut/0" in defect.detail and "adversary/shortcut/1" in defect.detail
     assert summary.controls_violated == ("correct",)
     assert summary.status == Incomplete(Counter({Cause.MODEL_UNAVAILABLE: 1, Cause.TASK_SETUP: 2}))
     assert summary.assessments == () and summary.notes == ()
 
 
-async def test_gave_up_reads_the_last_line(answer, trial, file_task):
-    shortcut = AdversaryRole.SHORTCUT
-    exact = await answer("NO_SHORTCUT_FOUND")
-    explained = await answer("I checked the grader and found nothing.\n\nNO_SHORTCUT_FOUND\n")
-    mid_sentence = await answer("I would reply NO_SHORTCUT_FOUND, but here is 395.")
-    tool_calls_last = await trial(file_task, "ls /workspace", reply=None, max_turns=1)
-
-    assert gave_up(shortcut, exact.rollout) and gave_up(shortcut, explained.rollout)
-    assert not gave_up(AdversaryRole.LEAK, exact.rollout)
-    assert not gave_up(shortcut, mid_sentence.rollout)
-    assert tool_calls_last.rollout is not None and not gave_up(shortcut, tool_calls_last.rollout)
-
-
 @pytest.mark.parametrize(
-    ("command", "consumed", "written"),
+    ("command", "consumed"),
     [
-        (f"cat {NUMBERS}", True, False),
-        (f"head -c 200 {NUMBERS}", True, False),
-        (f"od -c {NUMBERS}", True, False),
-        (f"awk '{{s+=$1}} END{{print s}}' {NUMBERS} > {SUM}", True, False),
-        (f"tr '\\n' '+' < {NUMBERS}", True, False),
-        (f"while read n; do s=$((s+n)); done < {NUMBERS}; echo $s > {SUM}", True, False),
-        (f"printf '%s' \"$(awk '{{s+=$1}} END{{print s}}' {NUMBERS})\" > {SUM}", True, False),
-        (f"LC_ALL=C sort -n {NUMBERS}", True, False),
-        (f"wc -l {NUMBERS}", False, False),
-        (f"ls -la {NUMBERS}", False, False),
-        (f"stat {NUMBERS}", False, False),
-        (f"cp {NUMBERS} {NUMBERS}.bak", False, False),
-        (f"cat {NUMBERS}.bak", False, False),
-        (f"seq -5000 15000 >> {SUM}", False, False),
-        (f"printf '0\\n' > {NUMBERS}", False, True),
-        (f"echo 60 > {NUMBERS}", False, True),
-        (f"echo 0 | tee {NUMBERS}", False, True),
-        (f"sed -i s/12/0/ {NUMBERS}", True, True),
-        (f"rm -f {NUMBERS}", False, True),
-        (f"mv /tmp/zeros {NUMBERS}", False, True),
-        # dd names the path in a non-metadata segment, so it also counts as read; row 1 fires first either way.
-        (f"dd if=/dev/zero of={NUMBERS} count=0", True, True),
+        (f"cat {NUMBERS}", True),
+        (f"head -c 200 {NUMBERS}", True),
+        (f"od -c {NUMBERS}", True),
+        (f"awk '{{s+=$1}} END{{print s}}' {NUMBERS} > {SUM}", True),
+        (f"tr '\\n' '+' < {NUMBERS}", True),
+        (f"while read n; do s=$((s+n)); done < {NUMBERS}; echo $s > {SUM}", True),
+        (f"printf '%s' \"$(awk '{{s+=$1}} END{{print s}}' {NUMBERS})\" > {SUM}", True),
+        (f"LC_ALL=C sort -n {NUMBERS}", True),
+        (f"sed -i s/12/0/ {NUMBERS}", True),
+        (f"wc -l {NUMBERS}", False),
+        (f"ls -la {NUMBERS}", False),
+        (f"stat {NUMBERS}", False),
+        (f"cp {NUMBERS} {NUMBERS}.bak", False),
+        (f"cat {NUMBERS}.bak", False),
+        (f"seq -5000 15000 >> {SUM}", False),
+        (f"printf '0\\n' > {NUMBERS}", False),
+        (f"echo 60 > {NUMBERS}", False),
+        (f"rm -f {NUMBERS}", False),
     ],
 )
-def test_command_signals_read_the_transcript(command, consumed, written):
+def test_command_signals_read_the_transcript(command, consumed):
     assert consumed_inputs([command], [NUMBERS]) == ((NUMBERS,) if consumed else ())
-    assert written_inputs([command], [NUMBERS, "/grader/check.sh"]) == ((NUMBERS,) if written else ())
-
-
-def test_a_grader_file_write_is_a_protected_write():
-    assert written_inputs(["echo 'echo 1' > /grader/check.sh"], [NUMBERS, "/grader/check.sh"]) == ("/grader/check.sh",)
 
 
 @pytest.mark.parametrize(
@@ -274,73 +292,87 @@ async def test_honest_submissions_come_from_solved_solver_trials_and_positive_tr
     assert honest_submissions(evidence(file_facts, files)) == ("Done.",)
 
 
-def test_task_facts_name_inputs_then_grader_files(file_task, math_task, file_facts, math_facts):
-    assert task_facts(file_task) == file_facts
-    assert task_facts(math_task) == math_facts
+def test_task_facts_name_inputs_grader_files_and_uniqueness(file_task, math_task, file_facts, math_facts):
+    assert task_facts(file_task) == file_facts and not file_facts.unique_answer
+    assert task_facts(math_task) == math_facts and math_facts.unique_answer
 
 
-FILE_FACTS = TaskFacts(True, (NUMBERS,), (NUMBERS, "/grader/check.sh"))
-TEXT_FACTS = TaskFacts(False, (), ())
-TEXT_INPUT_FACTS = TaskFacts(False, ("/data/q.txt",), ("/data/q.txt",))
-SHORTCUT, LEAK, AMBIGUITY = AdversaryRole.SHORTCUT, AdversaryRole.LEAK, AdversaryRole.AMBIGUITY
-REPAIR_SHORTCUT = (DefectTier.REPAIR, FindingKind.SHORTCUT_PASSED)
-NOTED_SHORTCUT = (DefectTier.NOTED, FindingKind.SHORTCUT_PASSED)
+FILE_FACTS = TaskFacts(True, False, (NUMBERS,), (NUMBERS, "/grader/check.sh"))
+TEXT_FACTS = TaskFacts(False, False, (), ())
+UNIQUE_TEXT_FACTS = TaskFacts(False, True, (), ())
+TEXT_INPUT_FACTS = TaskFacts(False, False, ("/data/q.txt",), ("/data/q.txt",))
+CLAIMED = {"claim": ClaimKind.SHORTCUT, "why": "the grader accepts a hedge"}
+NO_CLAIM = {"claim": ClaimKind.NONE}
 NO_READ: tuple[str, ...] = ()
+REPAIR, NOTED, NONE = DefectTier.REPAIR, DefectTier.NOTED, DefectTier.NONE
 
 
 @pytest.mark.parametrize(
-    ("role", "changes", "facts", "expected"),
+    ("changes", "facts", "expected"),
     [
-        (SHORTCUT, {"passed": False}, FILE_FACTS, (DefectTier.NONE, None, "0")),
-        (SHORTCUT, {"passed": False, "inputs_written": (NUMBERS,)}, FILE_FACTS, (DefectTier.NONE, None, "0")),
-        (LEAK, {"inputs_written": (NUMBERS,)}, FILE_FACTS, (*REPAIR_SHORTCUT, "1")),
-        # A write beats a consumed input and an ambiguity give-up.
-        (AMBIGUITY, {"inputs_written": (NUMBERS,), "gave_up": True}, FILE_FACTS, (*REPAIR_SHORTCUT, "1")),
-        # A shell-less pass on a machine-graded task beats an ambiguity give-up.
+        ({"passes": 0, "first_pass": None, "exploit": None}, FILE_FACTS, (NONE, "0", None)),
+        # A rejected claim is counted, not believed.
+        ({"passes": 0, "first_pass": None, "exploit": None, **CLAIMED}, FILE_FACTS, (NONE, "0", None)),
+        # A supplied protected file beats a late claim and a fileless pass.
+        ({"protected_supplied": (3,), "fileless_passes": (2,), "exploit": 9, **CLAIMED}, FILE_FACTS, (REPAIR, "1", 3)),
+        ({"fileless_passes": (2, 4)}, FILE_FACTS, (REPAIR, "2", 2)),
+        # Fileless passes are the norm on a text task.
+        ({"fileless_passes": (1,)}, TEXT_FACTS, (NONE, "10", None)),
+        # No input read beats the audit guard.
+        ({"inputs_consumed": NO_READ, "comparison": Comparison.MATCH, **CLAIMED}, TEXT_INPUT_FACTS, (REPAIR, "3", 1)),
+        # The audit guard beats a unique-answer mismatch on an earlier probe.
         (
-            AMBIGUITY,
-            {"shell_calls": 0, "gave_up": True, "inputs_consumed": NO_READ},
-            FILE_FACTS,
-            (*REPAIR_SHORTCUT, "2"),
+            {"comparison": Comparison.MATCH, "mismatches": (1,), "exploit": 2, **CLAIMED},
+            UNIQUE_TEXT_FACTS,
+            (NONE, "4", 2),
         ),
-        (SHORTCUT, {"shell_calls": 0, "inputs_consumed": NO_READ}, TEXT_FACTS, (*NOTED_SHORTCUT, "7")),
-        (AMBIGUITY, {"gave_up": True}, FILE_FACTS, (DefectTier.NONE, None, "3")),
-        (SHORTCUT, {"gave_up": True}, FILE_FACTS, (*NOTED_SHORTCUT, "7")),
-        (SHORTCUT, {"inputs_consumed": NO_READ}, FILE_FACTS, (*REPAIR_SHORTCUT, "4")),
-        # The leak role is forbidden from reading the inputs, so its no-read pass is a leak.
-        (LEAK, {"inputs_consumed": NO_READ}, FILE_FACTS, (DefectTier.REPAIR, FindingKind.LEAK_PASSED, "4")),
-        # No input read comes before the comparison.
-        (
-            AMBIGUITY,
-            {"inputs_consumed": NO_READ, "comparison": Comparison.MATCH},
-            TEXT_INPUT_FACTS,
-            (*REPAIR_SHORTCUT, "4"),
-        ),
-        (SHORTCUT, {"inputs_consumed": NO_READ, "comparison": Comparison.MISMATCH}, TEXT_FACTS, (*REPAIR_SHORTCUT, "5")),
-        (LEAK, {"comparison": Comparison.MISMATCH}, TEXT_FACTS, (DefectTier.REPAIR, FindingKind.LEAK_PASSED, "5")),
-        (AMBIGUITY, {"comparison": Comparison.MISMATCH}, TEXT_FACTS, (DefectTier.REPAIR, FindingKind.AMBIGUOUS, "5")),
-        (AMBIGUITY, {"comparison": Comparison.MATCH}, TEXT_FACTS, (DefectTier.NONE, None, "6")),
-        (SHORTCUT, {"comparison": Comparison.MATCH}, TEXT_FACTS, (*NOTED_SHORTCUT, "7")),
-        (LEAK, {}, FILE_FACTS, (DefectTier.NOTED, FindingKind.LEAK_PASSED, "7")),
-        (AMBIGUITY, {}, FILE_FACTS, (DefectTier.NOTED, FindingKind.AMBIGUOUS, "7")),
+        # A unique-answer mismatch is a repair whatever the claim, before any count rule.
+        ({"mismatches": (2,), "comparison": Comparison.MISMATCH, "exploit": 7}, UNIQUE_TEXT_FACTS, (REPAIR, "5", 2)),
+        ({"exploit": 2, **CLAIMED}, TEXT_FACTS, (REPAIR, "6", 2)),
+        ({"exploit": 3, **CLAIMED}, TEXT_FACTS, (NOTED, "7", 3)),
+        ({"exploit": 2, **NO_CLAIM}, TEXT_FACTS, (NOTED, "8", 2)),
+        ({"mismatches": (1,), "comparison": Comparison.MISMATCH}, TEXT_FACTS, (NOTED, "9", 1)),
+        ({}, FILE_FACTS, (NONE, "10", None)),
     ],
 )
-def test_tier_table(role, changes, facts, expected):
-    ruling = tier_of(role, signals(**changes), facts)
+def test_tier_table(changes, facts, expected, rounds):
+    ruling = tier_of(signals(**changes), facts, rounds.policy(adversary_submissions=10, adversary_repair_submissions=2))
 
-    assert (ruling.tier, ruling.kind, ruling.rule) == expected and ruling.reason
-
-
-def test_a_failed_pass_records_why_it_failed():
-    assert tier_of(SHORTCUT, signals(passed=False, gave_up=True), FILE_FACTS).reason == "gave up"
-    assert tier_of(SHORTCUT, signals(passed=False, budget_exhausted=True), FILE_FACTS).reason == "budget exhausted"
-    assert tier_of(SHORTCUT, signals(passed=False), FILE_FACTS).reason == "rejected"
+    assert (ruling.tier, ruling.rule, ruling.subject) == expected and ruling.reason
+    assert (ruling.kind is None) == (ruling.tier is NONE)
 
 
-async def test_a_hedged_text_pass_is_a_repair_with_its_transcript_control(trial, lenient_text_task, rounds):
-    hedge = await trial(lenient_text_task, reply="394 or 395 or 396")
+def test_a_zero_threshold_never_repairs_by_count(rounds):
+    ruling = tier_of(
+        signals(exploit=1, **CLAIMED), TEXT_FACTS, rounds.policy(adversary_submissions=4, adversary_repair_submissions=0)
+    )
+
+    assert (ruling.tier, ruling.rule) == (NOTED, "7")
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"submissions": 0}, "no verifier submission"),
+        ({"submissions": 3}, "all 3 submissions rejected"),
+        ({"submissions": 4, "budget_spent": True}, "4 submissions, budget spent, none accepted"),
+        (
+            {"submissions": 1, **CLAIMED},
+            "all 1 submissions rejected; claimed a shortcut without an accepted submission",
+        ),
+    ],
+)
+def test_a_trial_without_an_accepted_submission_records_why(changes, reason, rounds):
+    rejected = signals(passes=0, first_pass=None, exploit=None, **changes)
+
+    assert tier_of(rejected, FILE_FACTS, rounds.policy()).reason == reason
+
+
+async def test_a_claimed_shortcut_within_the_threshold_is_a_repair_with_its_candidate_control(
+    adversary, trial, lenient_text_task, rounds
+):
+    hedge = await adversary(lenient_text_task, ("submit", HEDGE), "SHORTCUT: the grader accepts a hedge")
     honest = await trial(lenient_text_task, reply="395")
-    assert isinstance(hedge, Graded) and hedge.reward == 1.0
 
     summary = summarize(
         evidence(task_facts(lenient_text_task), solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
@@ -348,170 +380,183 @@ async def test_a_hedged_text_pass_is_a_repair_with_its_transcript_control(trial,
     )
 
     (finding,) = [f for f in summary.findings if f.kind in DECISIVE]
-    assert finding.kind is FindingKind.SHORTCUT_PASSED
+    assert finding.kind is FindingKind.SHORTCUT_PASSED and finding.roles == (StepRole.GRADER, StepRole.CONTROLS)
     (control,) = finding.new_controls
-    assert control.payload == Transcript((TextMessage(role="assistant", content="394 or 395 or 396"),))
+    assert control.payload == Transcript((reply(HEDGE),))
     assert control.expect.status is GradeStatus.GRADED and control.expect.reward_max == REJECTION_CEILING
+    assert control.author == "adversary/shortcut/0#1"
     (assessment,) = summary.assessments
-    assert (assessment.tier, assessment.rule) == (DefectTier.REPAIR, "5")
-    assert assessment.signals.comparison is Comparison.MISMATCH
+    assert (assessment.tier, assessment.rule, assessment.subject) == (REPAIR, "6", 1)
+    assert assessment.signals.why == "the grader accepts a hedge" and "the grader accepts a hedge" in finding.detail
 
 
-async def test_a_tampering_pass_is_a_repair(trial, file_task, file_facts, rounds):
-    task = graded_by(file_task, RECOMPUTING_CHECK)
-    tamper = await trial(task, f"printf '0\\n' > {NUMBERS} && echo 0 > {SUM}")
-    assert isinstance(tamper, Graded) and tamper.reward == 1.0
-
-    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (tamper,)}), rounds.policy(adversary_k=1))
-
-    (finding,) = summary.findings
-    assert finding.kind is FindingKind.SHORTCUT_PASSED and len(finding.new_controls) == 1
-    (assessment,) = summary.assessments
-    assert (assessment.tier, assessment.rule) == (DefectTier.REPAIR, "1")
-    assert assessment.signals.inputs_written == (NUMBERS,)
-
-
-async def test_a_pass_that_never_read_the_inputs_is_a_repair(trial, file_task, file_facts, rounds):
-    flood = await trial(graded_by(file_task, LENIENT_FILE_CHECK), f"seq 0 100 > {SUM}")
-
-    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (flood,)}), rounds.policy(adversary_k=1))
-
-    (finding,) = summary.findings
-    assert finding.kind is FindingKind.SHORTCUT_PASSED and len(finding.new_controls) == 1
-    assert finding.roles == (StepRole.GRADER, StepRole.CONTROLS)
-    (assessment,) = summary.assessments
-    assert (assessment.tier, assessment.rule) == (DefectTier.REPAIR, "4")
-
-
-async def test_a_leak_pass_that_never_read_the_inputs_condemns_where_it_leaked(trial, file_task, file_facts, rounds):
-    key = file("/workspace/.cache/expected", "60\n")
-    leaky = file_task.model_copy(
-        update={"environment": file_task.environment.model_copy(update={"files": (*file_task.environment.files, key)})}
-    )
-    leaked = await trial(leaky, f"cp {key.path} {SUM}")
-    assert isinstance(leaked, Graded) and leaked.reward == 1.0
-
-    summary = summarize(evidence(file_facts, adversaries={LEAK: (leaked,)}), rounds.policy(adversary_k=1))
-
-    (finding,) = summary.findings
-    assert finding.kind is FindingKind.LEAK_PASSED and len(finding.new_controls) == 1
-    assert {StepRole.FIXTURES, StepRole.ENVIRONMENT, StepRole.INSTRUCTIONS} <= set(finding.roles)
-    assert {StepRole.GRADER, StepRole.CONTROLS} <= set(finding.roles)
-    (assessment,) = summary.assessments
-    assert (assessment.tier, assessment.rule) == (DefectTier.REPAIR, "4")
-
-
-async def test_a_pass_that_submitted_an_honest_answer_ships_no_control(trial, lenient_text_task, rounds):
-    honest = await trial(lenient_text_task, reply="395")
-    leaked = await trial(lenient_text_task, reply="395")
-    facts = TaskFacts(False, ("/data/q.txt",), ("/data/q.txt",))
+async def test_a_shortcut_above_the_threshold_is_a_note(adversary, trial, lenient_text_task, rounds):
+    probes = [("submit", guess) for guess in ("391", "392", "393")]
+    late = await adversary(lenient_text_task, *probes, ("submit", HEDGE), "SHORTCUT: the grader accepts a hedge")
+    honest, wrong = await trial(lenient_text_task, reply="395"), await trial(lenient_text_task, reply="391")
 
     summary = summarize(
-        evidence(facts, solver=(honest,), adversaries={LEAK: (leaked,)}), rounds.policy(k=1, adversary_k=1)
-    )
-
-    (finding,) = [f for f in summary.findings if f.kind in DECISIVE]
-    assert finding.kind is FindingKind.LEAK_PASSED and finding.new_controls == ()
-    assert "not rendered as a control: it submitted an honest answer" in finding.detail
-    assert summary.assessments[0].signals.comparison is Comparison.MATCH
-
-
-async def test_a_shortcut_that_read_the_inputs_is_noted_not_a_finding(trial, file_task, file_facts, rounds):
-    honest = await trial(file_task, f"echo 60 > {SUM}")
-    wrong = await trial(file_task, f"echo 59 > {SUM}")
-    read = await trial(file_task, *READ_THEN_ANSWER)
-    assert isinstance(read, Graded) and read.reward == 1.0
-
-    summary = summarize(
-        evidence(file_facts, solver=(honest, wrong, wrong), adversaries={SHORTCUT: (read,)}),
+        evidence(task_facts(lenient_text_task), solver=(honest, wrong, wrong), adversaries={SHORTCUT: (late,)}),
         rounds.policy(k=3, adversary_k=1),
     )
 
     assert summary.findings == () and summary.calibrated
     (note,) = summary.notes
     assert note.kind is FindingKind.SHORTCUT_PASSED and note.new_controls == ()
-    assert note.detail.startswith("The shortcut adversary 0 was graded as passing. Tier noted (row 7): ")
-    assert f'inputs_consumed=["{NUMBERS}"]' in note.detail
-    assert summary.roles[SHORTCUT].tiers == {DefectTier.REPAIR: 0, DefectTier.NOTED: 1, DefectTier.NONE: 0}
+    assert note.detail.startswith("The shortcut adversary 0 found an accepted submission. Tier noted (row 7): ")
+    (assessment,) = summary.assessments
+    assert (assessment.signals.first_pass, assessment.signals.exploit, assessment.signals.submissions) == (4, 4, 4)
+    assert assessment.signals.budget_spent
 
 
-async def test_an_untouched_workspace_pass_is_a_repair(trial, file_task, file_facts, rounds):
-    untouched = await trial(graded_by(file_task, ACCEPT_ALL), reply="No reading changes the answer.")
+async def test_a_mismatch_on_a_single_answer_grader_is_a_repair_whatever_the_claim(
+    adversary, trial, lenient_text_task, rounds
+):
+    hedge = await adversary(lenient_text_task, ("submit", HEDGE), "NO_SHORTCUT")
+    honest = await trial(lenient_text_task, reply="395")
 
-    summary = summarize(evidence(file_facts, adversaries={AMBIGUITY: (untouched,)}), rounds.policy(adversary_k=1))
+    summary = summarize(
+        evidence(UNIQUE_TEXT_FACTS, solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
+        rounds.policy(k=1, adversary_k=1),
+    )
+
+    (assessment,) = summary.assessments
+    assert (assessment.tier, assessment.rule) == (REPAIR, "5")
+    assert [c.payload for f in summary.decisive for c in f.new_controls] == [Transcript((reply(HEDGE),))]
+
+
+async def test_a_mismatch_on_a_many_answer_grader_reported_as_no_shortcut_is_a_note(
+    adversary, trial, lenient_text_task, rounds
+):
+    hedge = await adversary(lenient_text_task, ("submit", HEDGE), "NO_SHORTCUT")
+    honest = await trial(lenient_text_task, reply="395")
+
+    summary = summarize(
+        evidence(task_facts(lenient_text_task), solver=(honest,), adversaries={SHORTCUT: (hedge,)}),
+        rounds.policy(k=1, adversary_k=1),
+    )
+
+    assert summary.decisive == ()
+    assert [(a.tier, a.rule) for a in summary.assessments] == [(NOTED, "9")]
+
+
+async def test_a_supplied_protected_file_is_a_repair(adversary, file_task, file_facts, rounds):
+    tamper = await adversary(
+        graded_by(file_task, RECOMPUTING_CHECK),
+        ("shell", f"printf '0\\n' > {NUMBERS} && echo 0 > {SUM}"),
+        ("submit", "Done.", (NUMBERS, SUM)),
+        "NO_SHORTCUT",
+    )
+    assert tamper.submissions[0].passed
+
+    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (tamper,)}), rounds.policy(adversary_k=1))
 
     (finding,) = summary.findings
-    assert finding.kind is FindingKind.SHORTCUT_PASSED
     (control,) = finding.new_controls
-    assert control.payload == Transcript((TextMessage(role="assistant", content="No reading changes the answer."),))
-    assert summary.assessments[0].rule == "2"
+    files = tamper.submissions[0].candidate.files
+    assert control.payload == Transcript((workspace_turn(0, files[0]), workspace_turn(1, files[1]), reply("Done.")))
+    (assessment,) = summary.assessments
+    assert (assessment.tier, assessment.rule, assessment.signals.protected_supplied) == (REPAIR, "1", (1,))
 
 
-async def test_ambiguity_passes(trial, lenient_text_task, file_task, file_facts, rounds):
+async def test_a_fileless_pass_on_a_machine_task_is_a_repair(adversary, file_task, file_facts, rounds):
+    untouched = await adversary(graded_by(file_task, ACCEPT_ALL), ("submit", "Done."), "NO_SHORTCUT")
+
+    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (untouched,)}), rounds.policy(adversary_k=1))
+
+    (finding,) = summary.findings
+    assert [c.payload for c in finding.new_controls] == [Transcript((reply("Done."),))]
+    assert [(a.tier, a.rule) for a in summary.assessments] == [(REPAIR, "2")]
+
+
+async def test_a_pass_without_reading_the_inputs_is_a_repair(adversary, file_task, file_facts, rounds):
+    flood = await adversary(
+        graded_by(file_task, LENIENT_FILE_CHECK),
+        ("shell", f"seq 0 100 > {SUM}"),
+        ("submit", "Done.", (SUM,)),
+        "NO_SHORTCUT",
+    )
+
+    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (flood,)}), rounds.policy(adversary_k=1))
+
+    (finding,) = summary.findings
+    assert finding.kind is FindingKind.SHORTCUT_PASSED and len(finding.new_controls) == 1
+    assert [(a.tier, a.rule, a.subject) for a in summary.assessments] == [(REPAIR, "3", 1)]
+
+
+async def test_an_honest_probe_with_no_shortcut_claim_is_no_defect(adversary, file_task, file_facts, rounds):
+    probe = await adversary(file_task, ("shell", SOLVE), ("submit", "Done.", (SUM,)), "NO_SHORTCUT")
+
+    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: (probe,)}), rounds.policy(adversary_k=1))
+
+    assert summary.findings == () and summary.notes == ()
+    assert [(a.tier, a.rule) for a in summary.assessments] == [(NONE, "10")]
+    assert summary.roles[SHORTCUT].claims[ClaimKind.NO_SHORTCUT] == 1 and summary.roles[SHORTCUT].passes == 1
+
+
+async def test_a_claimed_shortcut_that_is_the_honest_answer_is_a_failed_audit(
+    adversary, trial, lenient_text_task, rounds
+):
+    audit = await adversary(lenient_text_task, ("submit", "395"), "SHORTCUT: I answered without checking")
     honest = await trial(lenient_text_task, reply="395")
-    same = await trial(lenient_text_task, reply="Under the stated reading the answer is 395.")
-    different = await trial(lenient_text_task, reply="Reading 17 * 23 + 4 as concatenation: 3950")
-    gave_up_after_solving = await trial(lenient_text_task, reply="395\nNO_AMBIGUITY_FOUND")
-    text = summarize(
-        evidence(
-            task_facts(lenient_text_task),
-            solver=(honest,),
-            adversaries={AMBIGUITY: (same, different, gave_up_after_solving)},
-        ),
-        rounds.policy(k=1, adversary_k=3),
-    )
-    machine = summarize(
-        evidence(file_facts, adversaries={AMBIGUITY: (await trial(file_task, SOLVE),)}), rounds.policy(adversary_k=1)
+
+    summary = summarize(
+        evidence(task_facts(lenient_text_task), solver=(honest,), adversaries={SHORTCUT: (audit,)}),
+        rounds.policy(k=1, adversary_k=1),
     )
 
-    assert [(a.tier, a.rule) for a in text.assessments] == [
-        (DefectTier.NONE, "6"),
-        (DefectTier.REPAIR, "5"),
-        (DefectTier.NONE, "3"),
-    ]
-    (ambiguous,) = text.decisive
-    assert ambiguous.kind is FindingKind.AMBIGUOUS and ambiguous.new_controls == ()
-    assert ambiguous.roles == (StepRole.INSTRUCTIONS,)
-    assert text.roles[AMBIGUITY].gave_up == 1 and text.notes == ()
-    assert machine.findings == () and [n.kind for n in machine.notes] == [FindingKind.AMBIGUOUS]
-    assert [(a.tier, a.rule) for a in machine.assessments] == [(DefectTier.NOTED, "7")]
+    assert summary.decisive == () and summary.notes == ()
+    assert [(a.tier, a.rule) for a in summary.assessments] == [(NONE, "4")]
+    assert summary.roles[SHORTCUT].failed_audits == 1
 
 
-async def test_role_stats_count_give_ups_exhaustion_tokens_and_tiers(trial, file_task, file_facts, rounds):
-    gave_up_ = await trial(file_task, "ls /workspace", reply="Nothing to exploit.\nNO_SHORTCUT_FOUND")
-    exhausted = await trial(file_task, *(["ls /workspace"] * 3), reply=None, max_turns=3)
-    read = await trial(file_task, *READ_THEN_ANSWER)
-    outcomes = (gave_up_, exhausted, read, UNAVAILABLE)
+async def test_role_stats_count_submissions_claims_budget_and_tiers(adversary, file_task, file_facts, rounds):
+    rejected = [("submit", "Done.")] * 4
+    spent = await adversary(file_task, *rejected, "NO_SHORTCUT")
+    probe = await adversary(file_task, ("shell", SOLVE), ("submit", "Done.", (SUM,)), "Solved it.")
+    trials = (spent, probe, failed(UNAVAILABLE))
 
-    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: outcomes}), rounds.policy(adversary_k=4))
+    summary = summarize(evidence(file_facts, adversaries={SHORTCUT: trials}), rounds.policy(adversary_k=3))
 
-    tokens = sum(o.rollout.loss_mask.count(1) for o in outcomes if o.rollout is not None)
-    assert tokens == 2 + 3 + 3
+    tokens = sum(
+        step.turn.metadata["usage"]["completion_tokens"]
+        for t in trials
+        if t.outcome.rollout
+        for step in t.outcome.rollout.steps
+    )
     assert summary.roles == {
         SHORTCUT: RoleStats(
-            required=4,
-            graded=3,
+            required=3,
+            graded=2,
             passes=1,
-            gave_up=1,
-            exhausted=1,
+            submissions=5,
+            budget_spent=1,
+            claims={ClaimKind.SHORTCUT: 0, ClaimKind.NO_SHORTCUT: 1, ClaimKind.NONE: 1},
+            failed_audits=0,
+            exhausted=0,
             output_tokens=tokens,
-            tiers={DefectTier.REPAIR: 0, DefectTier.NOTED: 1, DefectTier.NONE: 2},
+            tiers={REPAIR: 0, NOTED: 1, NONE: 1},
         )
     }
-    assert [a.reason for a in summary.assessments][:2] == ["gave up", "budget exhausted"]
+    assert summary.assessments[0].reason == "4 submissions, budget spent, none accepted"
 
 
-async def test_a_summary_reads_back_from_calibration_json(tmp_path, trial, file_task, file_controls, file_facts, rounds):
+async def test_a_summary_reads_back_from_calibration_json(
+    tmp_path, adversary, trial, file_task, file_controls, file_facts, rounds
+):
     correct = next(c for c in file_controls if c.kind is ControlKind.POSITIVE)
-    flood = await trial(graded_by(file_task, LENIENT_FILE_CHECK), f"seq 0 100 > {SUM}")
+    flood = await adversary(
+        graded_by(file_task, LENIENT_FILE_CHECK), ("shell", f"seq 0 100 > {SUM}"), ("submit", "Done.", (SUM,)), "x"
+    )
+    probe = await adversary(file_task, ("shell", SOLVE), ("submit", "Done.", (SUM,)), "Solved.")
     summary = summarize(
         evidence(
             file_facts,
             (control_outcome(correct, await trial(file_task, f"echo 59 > {SUM}")),),
             (await trial(file_task, SOLVE), UNAVAILABLE),
-            {SHORTCUT: (flood, await trial(file_task, *READ_THEN_ANSWER)), LEAK: (UNAVAILABLE, UNAVAILABLE)},
+            {SHORTCUT: (flood, probe, failed(UNAVAILABLE))},
         ),
-        rounds.policy(k=2, adversary_k=2),
+        rounds.policy(k=2, adversary_k=3),
     )
     assert summary.notes and summary.assessments and summary.decisive
     path = tmp_path / "calibration.json"

@@ -26,8 +26,8 @@ from taskforge.build.run import TaskDraft
 from taskforge.canonical import digest
 from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import Control, validate_controls
-from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole, role_preamble
-from taskforge.validate.attempts import trial_files
+from taskforge.validate.adversary import SUBMIT_DESCRIPTION, AdversaryRole, adversary_brief
+from taskforge.validate.attempts import load_adversary_attempt, trial_files
 from taskforge.validate.calibration import CalibrationBand, TaskFacts, task_facts
 from taskforge.validate.controls import (
     ControlOutcome,
@@ -40,6 +40,7 @@ from taskforge.validate.controls import (
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Outcome, TrialKind
 from taskforge.validate.solver import ValidationSite, draft_settings
+from taskforge.validate.submissions import NO_SHORTCUT_LINE, SHORTCUT_PREFIX, AdversaryTrial
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, run_trial, task_digest
 
 
@@ -50,11 +51,12 @@ class ValidationPolicy:
     Attributes:
         k: Solver trials.
         adversary_k: Trials per adversary role.
-        adversary_output_tokens: Served response tokens, reasoning included, each adversary attempt may spend
-            before it ends with stop reason ``length``.
-        roles: The adversary roles to run.
+        adversary_submissions: Verifier calls each adversary attempt may make; at least 1.
+        adversary_repair_submissions: A claimed shortcut accepted within this many verifier calls is a repair, one
+            accepted later a note; ``0 <= adversary_repair_submissions <= adversary_submissions``.
         band: Solve rates that count as calibrated.
-        sampling: The solver's and adversaries' sampling; ``max_continuations`` must be 0.
+        sampling: The solver's and adversaries' sampling; ``max_continuations`` must be 0. The adversary's agent
+            loop runs under it too.
         deadlines: The agent and attempt deadlines validation imposes on every trial.
         max_retries: Per-trial retries of ``RETRYABLE`` causes.
         token_contract_retries: Per-trial retries of ``TOKEN_CONTRACT``.
@@ -63,8 +65,8 @@ class ValidationPolicy:
 
     k: int
     adversary_k: int
-    adversary_output_tokens: int
-    roles: tuple[AdversaryRole, ...]
+    adversary_submissions: int
+    adversary_repair_submissions: int
     band: CalibrationBand
     sampling: LLMPolicy
     deadlines: Deadlines
@@ -75,10 +77,13 @@ class ValidationPolicy:
     def __post_init__(self) -> None:
         if self.k < 1 or self.adversary_k < 1:
             raise ValueError("A validation policy needs k >= 1 and adversary_k >= 1")
-        if self.adversary_output_tokens < 1:
-            raise ValueError(f"adversary_output_tokens must be >= 1, got {self.adversary_output_tokens}")
-        if len(set(self.roles)) != len(self.roles):
-            raise ValueError(f"Adversary roles repeat: {self.roles}")
+        if self.adversary_submissions < 1:
+            raise ValueError(f"adversary_submissions must be >= 1, got {self.adversary_submissions}")
+        if not 0 <= self.adversary_repair_submissions <= self.adversary_submissions:
+            raise ValueError(
+                "adversary_repair_submissions must be in [0, adversary_submissions], "
+                f"got {self.adversary_repair_submissions} of {self.adversary_submissions}"
+            )
         if self.sampling.max_continuations != 0:
             raise ValueError("Validation rollouts cannot continue on length; set sampling.max_continuations=0")
         if self.max_retries < 0 or self.token_contract_retries < 0:
@@ -86,21 +91,22 @@ class ValidationPolicy:
 
     @property
     def digest(self) -> str:
-        """The canonical digest of every field, the role preambles and the sentinel replies."""
+        """The canonical digest of every field, the adversary brief, its verdict lines and the submit tool."""
         return digest(
             {
                 "k": self.k,
                 "adversary_k": self.adversary_k,
-                "adversary_output_tokens": self.adversary_output_tokens,
-                "roles": self.roles,
+                "adversary_submissions": self.adversary_submissions,
+                "adversary_repair_submissions": self.adversary_repair_submissions,
                 "band": self.band,
                 "sampling": self.sampling,
                 "deadlines": self.deadlines,
                 "max_retries": self.max_retries,
                 "token_contract_retries": self.token_contract_retries,
                 "retry_backoff": self.retry_backoff,
-                "preambles": {str(role): role_preamble(role, self.adversary_output_tokens) for role in self.roles},
-                "sentinels": {str(role): reply for role, reply in SENTINEL_REPLIES.items()},
+                "brief": adversary_brief(self.adversary_submissions, ""),
+                "claims": [NO_SHORTCUT_LINE, SHORTCUT_PREFIX],
+                "submit": SUBMIT_DESCRIPTION,
             }
         )
 
@@ -115,7 +121,7 @@ class ValidationEvidence:
     task_digest: str
     controls: tuple[ControlOutcome, ...]
     solver: tuple[Outcome, ...]
-    adversaries: Mapping[AdversaryRole, tuple[Outcome, ...]]
+    adversaries: Mapping[AdversaryRole, tuple[AdversaryTrial, ...]]
     facts: TaskFacts
 
     def trial_evidence(self) -> Evidence:
@@ -124,7 +130,7 @@ class ValidationEvidence:
             {
                 TrialKind.CONTROL: tuple(c.outcome for c in self.controls),
                 TrialKind.SOLVER: self.solver,
-                TrialKind.ADVERSARY: tuple(o for outcomes in self.adversaries.values() for o in outcomes),
+                TrialKind.ADVERSARY: tuple(t.outcome for trials in self.adversaries.values() for t in trials),
             }
         )
 
@@ -184,8 +190,9 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
     """A round's evidence from its attempt files, each trial's last attempt, with ``task_facts(draft.task)``.
 
     Controls pair by id with ``draft.controls``; solver trials order by index; adversary trials group
-    by role directory, in ``AdversaryRole`` order. Indices must run from 0 without a gap, so every
-    outcome keeps the trial name it ran under.
+    by role directory, in ``AdversaryRole`` order, each read with its submissions and system turn
+    (``load_adversary_attempt``). Indices must run from 0 without a gap, so every outcome keeps the
+    trial name it ran under.
 
     Raises:
         ValueError: a control of ``draft`` has no attempt file, or a solver or adversary index below the
@@ -196,11 +203,11 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
     if missing:
         raise ValueError(f"Controls {missing} have no attempt under {evidence_dir}")
     solver = {int(name): _last(files.last) for name, files in trial_files(evidence_dir, TrialKind.SOLVER).items()}
-    adversaries: dict[AdversaryRole, dict[int, Outcome]] = {}
+    adversaries: dict[AdversaryRole, dict[int, AdversaryTrial]] = {}
     for name, files in trial_files(evidence_dir, TrialKind.ADVERSARY).items():
         role, index = name.split("/")
-        assert files.last is not None
-        adversaries.setdefault(AdversaryRole(role), {})[int(index)] = files.last
+        assert files.last_path is not None
+        adversaries.setdefault(AdversaryRole(role), {})[int(index)] = load_adversary_attempt(files.last_path)
     return ValidationEvidence(
         task_digest=task_digest(draft.task, draft.execution, draft.convention),
         controls=tuple(control_outcome(c, _last(controls[c.id].last)) for c in draft.controls),
@@ -214,7 +221,7 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
     )
 
 
-def _by_index(prefix: str, trials: Mapping[int, Outcome], evidence_dir: Path) -> tuple[Outcome, ...]:
+def _by_index[T](prefix: str, trials: Mapping[int, T], evidence_dir: Path) -> tuple[T, ...]:
     missing = [f"{prefix}/{index}" for index in range(max(trials, default=-1) + 1) if index not in trials]
     if missing:
         raise ValueError(f"Trials {missing} have no attempt under {evidence_dir}")

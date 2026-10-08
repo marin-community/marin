@@ -8,16 +8,20 @@ registry; ``json_task`` is a null-environment task with a JSON answer. ``file_ta
 task whose private ``ShellVerifierSpec`` script checks a file the agent must create. ``rounds`` builds
 validation-round inputs: a ``TaskDraft`` around a task, a ``ValidationPolicy``, a ``ValidationSite`` and a
 ``ValidationEvidence``; ``file_facts`` and ``math_facts`` are the ``TaskFacts`` of the file and math tasks.
+
+Adversaries talk to ``fake_glm``: ``adversary_turns(fake_glm, *turns)`` queues their agent turns and
+``glm_client`` is a ``GlmClient`` on the fake that spends one attempt per request.
 """
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
+from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, Machine, MachineSpec, Result
@@ -30,6 +34,7 @@ from taskcompendium.submission import SubmissionConvention
 
 from taskforge.build.run import Provenance, TaskDraft
 from taskforge.ledger.jsonl import JsonlLedger
+from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import (
     Control,
@@ -43,18 +48,19 @@ from taskforge.spec.controls import (
     shell_turn,
 )
 from taskforge.spec.draft import assemble, environment, file, shell_verifier
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.adversary import SUBMIT_TOOL_NAME, AdversaryRole
 from taskforge.validate.calibration import CalibrationBand, TaskFacts
 from taskforge.validate.controls import ControlOutcome
 from taskforge.validate.outcome import Outcome as TrialOutcome
 from taskforge.validate.run import ValidationEvidence, ValidationPolicy
 from taskforge.validate.solver import ValidationSite
+from taskforge.validate.submissions import AdversaryTrial
 from taskforge.validate.trials import Deadlines, RetryBackoff
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
-CHECK_SCRIPT = 'v=$(tr -d " \\n" < /workspace/sum.txt)\n' f'if [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
+CHECK_SCRIPT = f'v=$(tr -d " \\n" < /workspace/sum.txt)\nif [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
 
 
 def source(row: str) -> Source:
@@ -346,16 +352,18 @@ def validation_policy(
     adversary_k: int = 2,
     max_retries: int = 0,
     token_contract_retries: int = 0,
-    adversary_output_tokens: int = 32768,
+    adversary_submissions: int = 4,
+    adversary_repair_submissions: int = 2,
+    agent_timeout: float = 30,
 ) -> ValidationPolicy:
     return ValidationPolicy(
         k=k,
         adversary_k=adversary_k,
-        adversary_output_tokens=adversary_output_tokens,
-        roles=tuple(AdversaryRole),
+        adversary_submissions=adversary_submissions,
+        adversary_repair_submissions=adversary_repair_submissions,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
-        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        deadlines=Deadlines(agent_timeout=agent_timeout, attempt_timeout=60),
         max_retries=max_retries,
         token_contract_retries=token_contract_retries,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1),
@@ -370,7 +378,7 @@ def round_evidence(
     task_digest: str,
     controls: tuple[ControlOutcome, ...],
     solver: tuple[TrialOutcome, ...],
-    adversaries: dict[AdversaryRole, tuple[TrialOutcome, ...]],
+    adversaries: dict[AdversaryRole, tuple[AdversaryTrial, ...]],
     facts: TaskFacts,
 ) -> ValidationEvidence:
     return ValidationEvidence(task_digest, tuple(controls), tuple(solver), adversaries, facts)
@@ -394,10 +402,43 @@ def rounds() -> Rounds:
 @pytest.fixture
 def file_facts() -> TaskFacts:
     """The ``TaskFacts`` of ``file_task``."""
-    return TaskFacts(True, ("/workspace/numbers.txt",), ("/workspace/numbers.txt", "/grader/check.sh"))
+    return TaskFacts(True, False, ("/workspace/numbers.txt",), ("/workspace/numbers.txt", "/grader/check.sh"))
 
 
 @pytest.fixture
 def math_facts() -> TaskFacts:
     """The ``TaskFacts`` of ``math_task``."""
-    return TaskFacts(False, (), ())
+    return TaskFacts(False, True, (), ())
+
+
+type AdversaryTurn = tuple[str, str] | tuple[str, str, tuple[str, ...]] | str
+
+
+def adversary_turns(fake_glm, *turns: AdversaryTurn) -> None:
+    """Queue adversary agent turns on ``fake_glm``: ``("shell", command)``, ``("submit", reply)`` or
+    ``("submit", reply, files)`` as one tool call each, and a ``str`` as the final text reply."""
+    for turn in turns:
+        if isinstance(turn, str):
+            fake_glm.stream(content=turn)
+            continue
+        if turn[0] == "shell":
+            arguments: dict[str, object] = {"command": turn[1]}
+        else:
+            assert turn[0] == SUBMIT_TOOL_NAME
+            arguments = {"reply": turn[1], **({"files": list(turn[2])} if len(turn) > 2 else {})}
+        fake_glm.stream(tool_calls=((turn[0], json.dumps(arguments)),), finish="tool_calls")
+
+
+@pytest.fixture
+def turns() -> Callable[..., None]:
+    """``adversary_turns``, for test modules (which cannot import the conftest)."""
+    return adversary_turns
+
+
+@pytest.fixture
+async def glm_client(fake_glm) -> AsyncIterator[GlmClient]:
+    """A ``GlmClient`` on ``fake_glm`` that spends one attempt per request, so a failed status is ``GlmUnavailable``."""
+    endpoint = GlmEndpoint(base_url=fake_glm.base_url, token="test-token", pool=Pool.HIGH)
+    backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
+    async with GlmClient(endpoint, max_attempts=1, backoff=backoff) as client:
+        yield client

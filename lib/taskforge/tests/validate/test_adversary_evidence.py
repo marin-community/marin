@@ -1,134 +1,140 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The adversary tiers over the fifteen recorded live rounds of the file task, re-summarized offline.
+"""The recorded live adversary rounds, read offline.
 
-Each round under ``.evidence/validate/e_evidence_round-<ts>/evidence-776baa368c39/`` ran the file task
-(``tests/validate/conftest.py``) against GLM-5.3 with preambles that did not forbid the adversaries from
-solving. Its grader admits no shortcut, so no adversary pass in them is a task defect: the shortcut role
-read the input and submitted the sum, the ambiguity role solved under a cosmetic reading. Summarized under
-the coded tiers, none is a defect to repair. ``.evidence`` is local, so the test skips where the rounds
-are absent.
+``.evidence/validate/e_evidence_round-<ts>/evidence-776baa368c39/`` holds eighteen rounds of the file task
+(``tests/validate/conftest.py``) against GLM-5.3 under the retired role protocol (shortcut, leak and ambiguity
+roles, one final reply graded once). Their attempt files carry no submission record, so only the one transcript
+regex the submission protocol keeps, the input-read rule (``consumed_inputs``), is pinned on them. Their
+``calibration.json`` files hold the retired summary shape and are never rewritten.
+
+``g_adversary_round-<ts>/`` and ``h_built_adversary_round-<ts>/`` hold rounds under the submission protocol
+(``test_evidence_live``); their invariants are checked here. ``.evidence`` is local, so each test skips where its
+rounds are absent.
 """
 
 import json
-from collections import Counter
 from pathlib import Path
 
+import pydantic
 import pytest
 from taskcompendium.submission import PlainText
 
-from taskforge.validate.adversary import AdversaryRole
-from taskforge.validate.calibration import Comparison, DefectTier, FindingKind, summarize
+from taskforge.validate.adversary import AdversaryRole, adversary_brief
+from taskforge.validate.attempts import load_adversary_attempt, load_outcome, trial_files
+from taskforge.validate.calibration import (
+    DefectTier,
+    consumed_inputs,
+    load_summary,
+    shell_commands,
+    solved,
+    summarize,
+)
+from taskforge.validate.outcome import Graded, TrialKind
 from taskforge.validate.run import load_validation
+from taskforge.validate.submissions import passing
 from taskforge.validate.trials import task_digest
 
 EVIDENCE_ROOT = Path(__file__).resolve().parents[2] / ".evidence" / "validate"
 EVIDENCE_DIR = "evidence-776baa368c39"
 PLAIN = PlainText(id="plain")
 NUMBERS = "/workspace/numbers.txt"
-SHORTCUT, LEAK, AMBIGUITY = AdversaryRole.SHORTCUT, AdversaryRole.LEAK, AdversaryRole.AMBIGUITY
-NOTED, NONE = DefectTier.NOTED, DefectTier.NONE
+LIVE_SUBMISSIONS = 10
 
-ROUNDS: dict[str, dict[AdversaryRole, dict[int, DefectTier]]] = {
-    "20261006T213322Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {1: NOTED}},
-    "20261006T213459Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {0: NOTED, 1: NOTED}},
-    "20261006T213512Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {1: NOTED}},
-    "20261006T213552Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {1: NOTED}},
-    "20261006T213610Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {0: NOTED, 1: NOTED}},
-    "20261006T213621Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {0: NOTED}},
-    "20261006T213708Z": {SHORTCUT: {0: NOTED}, AMBIGUITY: {0: NONE}},
-    "20261006T213730Z": {SHORTCUT: {0: NOTED, 1: NOTED}, AMBIGUITY: {1: NONE}},
-    "20261006T213745Z": {SHORTCUT: {}, AMBIGUITY: {0: NOTED, 1: NONE}},
-    "20261006T213917Z": {SHORTCUT: {}, AMBIGUITY: {0: NONE, 1: NOTED}},
-    "20261006T214000Z": {SHORTCUT: {0: NOTED}, AMBIGUITY: {0: NOTED}},
-    "20261006T214011Z": {SHORTCUT: {}, AMBIGUITY: {1: NONE}},
-    "20261006T214418Z": {SHORTCUT: {1: NOTED}, AMBIGUITY: {}},
-    "20261006T231003Z": {SHORTCUT: {}, AMBIGUITY: {0: NOTED}},
-    "20261007T001329Z": {SHORTCUT: {1: NOTED}, AMBIGUITY: {0: NONE, 1: NOTED}},
+OLD_ROUNDS = (
+    "20261006T213322Z",
+    "20261006T213459Z",
+    "20261006T213512Z",
+    "20261006T213552Z",
+    "20261006T213610Z",
+    "20261006T213621Z",
+    "20261006T213708Z",
+    "20261006T213730Z",
+    "20261006T213745Z",
+    "20261006T213917Z",
+    "20261006T214000Z",
+    "20261006T214011Z",
+    "20261006T214418Z",
+    "20261006T231003Z",
+    "20261007T001329Z",
+    "20261007T183819Z",
+    "20261007T184028Z",
+    "20261007T184144Z",
+)
+"""Fifteen rounds whose preambles let the roles solve, then three whose preambles forbade it."""
+
+NEVER_READ_THE_INPUT = {
+    ("20261006T213745Z", 1),
+    ("20261006T231003Z", 1),
+    ("20261007T001329Z", 0),
+    ("20261007T183819Z", 0),
+    ("20261007T183819Z", 1),
+    ("20261007T184028Z", 0),
+    ("20261007T184144Z", 0),
+    ("20261007T184144Z", 1),
 }
-"""Per round, the passing adversary trials by role and index and the tier each gets; every other trial failed."""
-
-GAVE_UP = {
-    "20261006T213708Z": {SHORTCUT: 0, AMBIGUITY: 2},
-    "20261006T213730Z": {SHORTCUT: 0, AMBIGUITY: 2},
-    "20261006T213745Z": {SHORTCUT: 2, AMBIGUITY: 1},
-    "20261006T213917Z": {SHORTCUT: 1, AMBIGUITY: 1},
-    "20261006T214000Z": {SHORTCUT: 1, AMBIGUITY: 1},
-    "20261006T214011Z": {SHORTCUT: 1, AMBIGUITY: 2},
-    "20261006T214418Z": {SHORTCUT: 1, AMBIGUITY: 2},
-    "20261006T231003Z": {SHORTCUT: 1, AMBIGUITY: 1},
-    "20261007T001329Z": {SHORTCUT: 1, AMBIGUITY: 1},
-}
-"""Give-ups by the last-line rule per round; rounds not listed have none for shortcut and ambiguity."""
-
-WROTE_THE_INPUT = {("20261006T213708Z", 1), ("20261006T213917Z", 0), ("20261006T214011Z", 1)}
-NEVER_READ_THE_INPUT = {("20261006T213745Z", 1), ("20261006T231003Z", 1), ("20261007T001329Z", 0)}
-"""Shortcut trials (round, index) whose commands wrote, or never read, ``/workspace/numbers.txt``; none passed."""
+"""Shortcut trials (round, index) whose shell commands never read ``numbers.txt`` for content; none passed."""
 
 
-def round_dirs() -> dict[str, Path]:
-    return {ts: EVIDENCE_ROOT / f"e_evidence_round-{ts}" / EVIDENCE_DIR for ts in ROUNDS}
+def old_round_dirs() -> dict[str, Path]:
+    return {ts: EVIDENCE_ROOT / f"e_evidence_round-{ts}" / EVIDENCE_DIR for ts in OLD_ROUNDS}
 
 
-pytestmark = pytest.mark.skipif(
-    not all(path.is_dir() for path in round_dirs().values()), reason="recorded adversary rounds not on this machine"
+old_rounds = pytest.mark.skipif(
+    not all(path.is_dir() for path in old_round_dirs().values()), reason="recorded adversary rounds not on this machine"
 )
 
 
-@pytest.fixture
-def summaries(file_task, file_controls, rounds):
-    draft = rounds.draft(file_task, file_controls, PLAIN)
-    assert task_digest(draft.task, draft.execution, draft.convention).startswith(EVIDENCE_DIR.removeprefix("evidence-"))
-    policy = rounds.policy(k=3, adversary_k=2, adversary_output_tokens=32768)
-    return {ts: summarize(load_validation(draft, path), policy) for ts, path in round_dirs().items()}
+@old_rounds
+def test_consumed_inputs_on_recorded_rounds():
+    never_read = set()
+    for ts, directory in old_round_dirs().items():
+        for name, files in trial_files(directory, TrialKind.ADVERSARY).items():
+            role, index = name.split("/")
+            if role != AdversaryRole.SHORTCUT:
+                continue
+            assert files.last_path is not None
+            outcome = load_outcome(files.last_path)
+            assert outcome.rollout is not None, (ts, name)
+            if not consumed_inputs(shell_commands(outcome.rollout), (NUMBERS,)):
+                never_read.add((ts, int(index)))
+                assert isinstance(outcome, Graded) and not solved(outcome), (ts, name)
+
+    assert never_read == NEVER_READ_THE_INPUT
 
 
-def test_no_recorded_adversary_pass_is_a_defect_to_repair(summaries):
-    for ts, summary in summaries.items():
-        assert [f.kind for f in summary.findings] == [FindingKind.TOO_EASY], ts
-        assert summary.decisive == (), ts
-        assert all(stats.exhausted == 0 for stats in summary.roles.values()), ts
-        leak = summary.roles[LEAK]
-        assert (leak.passes, leak.gave_up, leak.tiers[NONE]) == (0, 2, 2), ts
-        passing = {
-            role: {a.index: a.tier for a in summary.assessments if a.role is role and a.signals.passed}
-            for role in (SHORTCUT, AMBIGUITY)
-        }
-        assert passing == ROUNDS[ts], ts
-        gave_up = {role: summary.roles[role].gave_up for role in (SHORTCUT, AMBIGUITY)}
-        assert gave_up == GAVE_UP.get(ts, {SHORTCUT: 0, AMBIGUITY: 0}), ts
-        assert len(summary.notes) == sum(tier is NOTED for tiers in ROUNDS[ts].values() for tier in tiers.values()), ts
-
-
-def test_recorded_signals_explain_the_tiers(summaries):
-    assessments = [(ts, a) for ts, summary in summaries.items() for a in summary.assessments]
-    shortcut_passes = [a for _, a in assessments if a.role is SHORTCUT and a.signals.passed]
-    ambiguity_passes = [a for _, a in assessments if a.role is AMBIGUITY and a.signals.passed]
-
-    assert len(shortcut_passes) == 18
-    assert all(a.signals.inputs_consumed == (NUMBERS,) and a.rule == "7" for a in shortcut_passes)
-    assert all(a.signals.comparison is Comparison.UNAVAILABLE for a in shortcut_passes)
-    assert Counter(a.rule for a in ambiguity_passes) == {"7": 13, "3": 6}
-    assert Counter(a.role for _, a in assessments if a.signals.gave_up) == {SHORTCUT: 8, AMBIGUITY: 13, LEAK: 30}
-    shortcuts = [(ts, a) for ts, a in assessments if a.role is SHORTCUT]
-    assert {(ts, a.index) for ts, a in shortcuts if a.signals.inputs_written} == WROTE_THE_INPUT
-    assert all(
-        a.signals.inputs_written == (NUMBERS,) and a.rule == "0"
-        for ts, a in shortcuts
-        if (ts, a.index) in WROTE_THE_INPUT
-    )
-    assert {(ts, a.index) for ts, a in shortcuts if not a.signals.inputs_consumed} == NEVER_READ_THE_INPUT
-    assert max(a.signals.output_tokens for _, a in assessments) == 7516
-
-
-def test_the_recorded_summaries_held_the_old_findings_and_stay_untouched(summaries):
-    """The ``calibration.json`` each round wrote under the old rules reported adversary passes as decisive."""
-    old_kinds = {FindingKind.SHORTCUT_PASSED, FindingKind.LEAK_PASSED, FindingKind.AMBIGUOUS}
-    with_adversary_findings = 0
-    for ts, path in round_dirs().items():
+@old_rounds
+def test_the_recorded_summaries_held_the_old_findings_and_stay_untouched():
+    """The ``calibration.json`` each round wrote names the retired roles and parses as no summary today; its attempt
+    files carry no submission record."""
+    for ts, path in old_round_dirs().items():
         recorded = json.loads((path / "calibration.json").read_text())
-        assert "sentinel_replies" in recorded["roles"][SHORTCUT] and "assessments" not in recorded, ts
-        assert recorded["policy_digest"] != summaries[ts].policy_digest, ts
-        with_adversary_findings += any(f["kind"] in old_kinds for f in recorded["findings"])
-    assert with_adversary_findings == 14
+        assert {"leak", "ambiguity"} <= set(recorded["roles"]), ts
+        with pytest.raises(pydantic.ValidationError):
+            load_summary(path / "calibration.json")
+        last = trial_files(path, TrialKind.ADVERSARY)["shortcut/0"].last_path
+        assert last is not None
+        with pytest.raises(ValueError, match="not an adversary attempt"):
+            load_adversary_attempt(last)
+
+
+def v3_round_dirs() -> list[Path]:
+    return sorted(EVIDENCE_ROOT.glob("g_adversary_round-*/evidence-*"))
+
+
+@pytest.mark.skipif(not v3_round_dirs(), reason="no adversary round under the submission protocol on this machine")
+def test_recorded_submission_rounds_keep_their_invariants(file_task, file_controls, rounds):
+    draft = rounds.draft(file_task, file_controls, PLAIN)
+    policy = rounds.policy(k=3, adversary_k=2, adversary_submissions=LIVE_SUBMISSIONS, adversary_repair_submissions=3)
+    for directory in v3_round_dirs():
+        assert directory.name == f"evidence-{task_digest(draft.task, draft.execution, draft.convention)[:12]}"
+        evidence = load_validation(draft, directory)
+        for trial in evidence.adversaries[AdversaryRole.SHORTCUT]:
+            assert isinstance(trial.outcome, Graded), directory
+            assert trial.system == adversary_brief(LIVE_SUBMISSIONS, "")
+            assert len(trial.submissions) <= LIVE_SUBMISSIONS
+            assert all(s.grade.status is not None and s.passed == passing(s.grade) for s in trial.submissions)
+        summary = summarize(evidence, policy)
+        # The file task's grader compares against a constant, so no accepted submission is a grader defect.
+        assert all(a.tier is not DefectTier.REPAIR for a in summary.assessments), directory
