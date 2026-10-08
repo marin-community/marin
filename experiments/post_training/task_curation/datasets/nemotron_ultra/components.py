@@ -485,7 +485,7 @@ def _pipeline(blend: str, path: str) -> RlDataPipeline:
             ULTRA_REPO, ULTRA_REVISION, (f"{blend}.jsonl",), SourceFormat.JSONL, select=select, decode=component.decode
         ),
         convert=component.convert,
-        version="1",
+        version="2",
         environment=ShellSim(),
         intended_use=IntendedUse.TRAIN,
         rubric=component.rubric,
