@@ -780,6 +780,14 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        load_format = self.model.engine_kwargs.get("load_format")
+        for index, arg in enumerate(self.extra_cli_args):
+            if arg.partition("=")[0] == "--load-format":
+                load_format = arg.partition("=")[2] if "=" in arg else self.extra_cli_args[index + 1]
+        has_loader_config = any(arg.partition("=")[0] == "--model-loader-extra-config" for arg in self.extra_cli_args)
+        if _is_object_store_path(self.model_name_or_path) and load_format == "runai_streamer" and not has_loader_config:
+            # Divide object-store reads across ranks, matching MarinSkyRL's loader.
+            self.extra_cli_args.extend(("--model-loader-extra-config", '{"distributed":true}'))
         # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()

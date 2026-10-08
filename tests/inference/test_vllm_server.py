@@ -440,6 +440,47 @@ def _wait_until_ready(environment: VllmEnvironment) -> None:
 
 
 @pytest.mark.parametrize(
+    ("path", "args", "expected"),
+    [
+        ("s3://bucket/model", [], {"distributed": True}),
+        ("gs://bucket/model", [], {"distributed": True}),
+        ("/models/checkpoint", [], None),
+        ("s3://bucket/model", ["--load-format", "safetensors"], None),
+        ("s3://bucket/model", ["--load-format=auto"], None),
+        (
+            "s3://bucket/model",
+            ["--model-loader-extra-config", '{"distributed":false}'],
+            {"distributed": False},
+        ),
+        (
+            "s3://bucket/model",
+            ['--model-loader-extra-config={"distributed":false}'],
+            {"distributed": False},
+        ),
+    ],
+)
+def test_object_store_streaming_distributes_reads_unless_overridden(tmp_path, path, args, expected):
+    argv_path = tmp_path / "argv.json"
+    with VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=path, engine_kwargs={}),
+        port=_free_port(),
+        extra_args=args,
+        launcher=_FakeLauncher("record-args", str(argv_path)),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        wait_for_ready=False,
+    ) as environment:
+        _wait_until_ready(environment)
+        argv = json.loads(argv_path.read_text())
+
+    configs = [
+        json.loads(arg.partition("=")[2] if "=" in arg else argv[index + 1])
+        for index, arg in enumerate(argv)
+        if arg.partition("=")[0] == "--model-loader-extra-config"
+    ]
+    assert configs == ([expected] if expected is not None else [])
+
+
+@pytest.mark.parametrize(
     "args",
     [
         ["--enforce-eager"],
