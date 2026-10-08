@@ -337,7 +337,12 @@ def test_pytest_failclosed_collection_error_cannot_be_hidden_by_passing_required
 
 @pytest.mark.parametrize(
     "implementation",
-    ["def malformed(\n", "raise RuntimeError('candidate import failed')\n", "import os\nos.missing_method()\n"],
+    [
+        "def malformed(\n",
+        "raise RuntimeError('candidate import failed')\n",
+        "import os\nos.missing_method()\n",
+        "compile('def generated(', __file__, 'exec')\n",
+    ],
 )
 def test_candidate_collection_failure_scores_zero_but_golden_runs(tmp_path, implementation):
     workspace = _project(tmp_path, implementation)

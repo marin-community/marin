@@ -16,7 +16,8 @@ import os
 import tempfile
 import time
 from collections import Counter
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 
 from harbor_config.errors import ErrorCategory
@@ -31,13 +32,28 @@ from verifyit.spec import PytestSpec, TestIdMatching
 REPORT_NAME = "report.json"
 PASS_OUTCOMES = frozenset({"passed", "xpassed"})
 FAIL_OUTCOMES = frozenset({"failed", "error"})
+
+
+class _FailureKind(StrEnum):
+    ERROR = "error"
+    DEPENDENCY = "dependency"
+    INTERRUPT = "interrupt"
+
+
+@dataclass(frozen=True)
+class _PytestFailure:
+    kind: _FailureKind
+    filename: str | None
+    nodeid: str | None
+    module: str = ""
+
+
 # The recorder uses builtins so candidate modules can shadow stdlib dependencies.
 PYTEST_RUNNER = """import sys
 
 def record(error, nodeid=None):
     kind = "error"
     if isinstance(error, SyntaxError):
-        kind = "syntax"
         filename = error.filename
     else:
         if isinstance(error, ModuleNotFoundError):
@@ -70,7 +86,7 @@ class FailureCapture:
         if not isinstance(excinfo.value, Interrupted):
             record(excinfo.value)
 
-    def pytest_exception_interact(self, node, call, report):
+    def pytest_exception_interact(self, call, report):
         if call.when == "collect":
             error = call.excinfo.value
             if isinstance(error, Collector.CollectError):
@@ -79,7 +95,7 @@ class FailureCapture:
 
     # Record before older pluggy stops unwinding on pytest's help-hook reraise.
     @pytest.hookimpl(hookwrapper=True, trylast=True)
-    def pytest_cmdline_parse(self, pluginmanager, args):
+    def pytest_cmdline_parse(self):
         outcome = yield
         if outcome.excinfo:
             error = outcome.excinfo[1]
@@ -144,12 +160,16 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
             result = run_command(argv, directory, remaining)
             if result.timed_out:
                 return scored(0.0, reason="timeout", passed=0, total=0)
-            failures = (
-                [ast.literal_eval(line) for line in read_text(failures_path).splitlines()]
-                if failures_path.is_file()
-                else []
-            )
-            if any(failure["kind"] == "interrupt" for failure in failures) or result.returncode < 0:
+            failures = []
+            if failures_path.is_file():
+                for line in read_text(failures_path).splitlines():
+                    record = ast.literal_eval(line)
+                    failures.append(
+                        _PytestFailure(
+                            _FailureKind(record["kind"]), record["filename"], record["nodeid"], record.get("module", "")
+                        )
+                    )
+            if any(failure.kind is _FailureKind.INTERRUPT for failure in failures) or result.returncode < 0:
                 raise RuntimeError("pytest producer was interrupted")
             if result.returncode not in (0, 1, 2, 5) or not report_path.is_file():
                 remaining = deadline - time.monotonic()
@@ -177,8 +197,8 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                 collector for collector in report.get("collectors", []) if collector.get("outcome") == "failed"
             ]
             if failed_collectors:
-                collection_failures = [failure for failure in failures if failure["nodeid"] is not None]
-                if {failure["nodeid"] for failure in collection_failures} != {
+                collection_failures = [failure for failure in failures if failure.nodeid is not None]
+                if {failure.nodeid for failure in collection_failures} != {
                     collector["nodeid"] for collector in failed_collectors
                 }:
                     raise RuntimeError("pytest collection failure has no exception provenance")
@@ -276,27 +296,21 @@ def _protected_paths(spec: PytestSpec, tests_dir: Path, workspace: Path) -> set[
     return protected
 
 
-def _candidate_error_files(failures: list[dict], workspace: Path, protected: set[Path]) -> list[str]:
+def _candidate_error_files(failures: list[_PytestFailure], workspace: Path, protected: set[Path]) -> list[str]:
+    """Return files only when every failure comes from editable source; otherwise return []."""
     root = workspace.resolve()
     files = set()
     for failure in failures:
-        if failure["kind"] in {"dependency", "interrupt"}:
+        if failure.kind in {_FailureKind.DEPENDENCY, _FailureKind.INTERRUPT}:
             return []
-        filename = failure["filename"]
+        filename = failure.filename
         path = (root / filename).resolve() if filename else root
-        if failure.get("module"):
-            module = (root / failure["module"]).resolve()
+        if failure.module:
+            module = (root / failure.module).resolve()
             if module.is_relative_to(root):
                 path = module
         if not path.is_relative_to(root) or not path.is_file() or path in protected:
             return []
-        if failure["kind"] == "syntax":
-            try:
-                compile(path.read_bytes(), str(path), "exec")
-            except SyntaxError:
-                pass
-            else:
-                return []
         files.add(str(path.relative_to(root)))
     return sorted(files)
 
