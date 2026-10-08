@@ -35,11 +35,6 @@ class RunScale(StrEnum):
     FULL = "full"
 
 
-class FinalBatch(StrEnum):
-    INCLUDE = "include"
-    DROP = "drop"
-
-
 @dataclass(frozen=True)
 class DPOParallelism:
     tensor: int
@@ -72,7 +67,7 @@ INPUT_NAME = "data/bfcl-rl-final-dpo-inputs"
 POLICY_FILE = "final_dpo_pi_policy.yaml"
 
 
-def final_dpo_recipe(scale: RunScale, final_batch: FinalBatch) -> str:
+def final_dpo_recipe(scale: RunScale) -> str:
     """Bind the frozen Pi conditions to static masked DPO and its separate evaluator."""
     policy = yaml.safe_load(Path(__file__).with_name(POLICY_FILE).read_text())
     recipe = yaml.safe_load(collection_recipe())
@@ -107,15 +102,12 @@ def final_dpo_recipe(scale: RunScale, final_batch: FinalBatch) -> str:
             "num_layers_in_last_pipeline_stage": parallel.last_stage_layers,
         },
     }
-    pairs = 72 if scale is RunScale.SMOKE else 1720
-    full, remainder = divmod(pairs, ROLE_PLAN.train_batch_size)
-    updates = full + int(final_batch is FinalBatch.INCLUDE and remainder > 0)
+    updates = 4 if scale is RunScale.SMOKE else 1712 // ROLE_PLAN.train_batch_size
     recipe["data"] = {
         "kind": "parquet",
         "train_data": [],
         "val_data": [],
         "preference_pair_format": "tokenized",
-        "epoch_tail": final_batch.value,
         "shuffle": False,
     }
     recipe["environment"] = {"env_class": "preference_pair"}
@@ -185,22 +177,18 @@ def final_dpo_recipe(scale: RunScale, final_batch: FinalBatch) -> str:
     return yaml.safe_dump(recipe, sort_keys=False)
 
 
-def final_dpo_step(input_version: str, scale: RunScale, final_batch: FinalBatch) -> ArtifactStep:
+def final_dpo_step(input_version: str, scale: RunScale) -> ArtifactStep:
     inputs_name = user_owned_name(INPUT_NAME)
     inputs = ArtifactStep.adopt(inputs_name + "-input", input_version, f"{inputs_name}/{input_version}", kind=Artifact)
     model_name = user_owned_name(MODEL_NAME)
     checkpoint = ArtifactStep.adopt(model_name + "-input", MODEL_VERSION, MODEL_URI, kind=LevanterCheckpoint)
     tokenizer = MODELS["student"]
-    data_file = (
-        "smoke.parquet"
-        if scale is RunScale.SMOKE
-        else ("pairs.parquet" if final_batch is FinalBatch.INCLUDE else "full-batches.parquet")
-    )
+    data_file = "full-batches.parquet"
     name = user_owned_name(f"models/bfcl-rl-final-native-dpo-{scale.value}")
     spec = SkyRLSpec(
         name=name,
         version=resolve_version(name, None),
-        config_yaml=final_dpo_recipe(scale, final_batch),
+        config_yaml=final_dpo_recipe(scale),
         runtime=SkyRLRuntime(SkyRLRuntimeProfile.MEGATRON),
         model=ArtifactHfModel(checkpoint, tokenizer.model, tokenizer.revision, relative_path="hf/step-1"),
         train_data=(ArtifactDataSource(inputs, relative_path=data_file),),
@@ -218,10 +206,9 @@ def final_dpo_step(input_version: str, scale: RunScale, final_batch: FinalBatch)
 @click.command(help=__doc__)
 @click.option("--input-version", required=True)
 @click.option("--scale", type=click.Choice([value.value for value in RunScale]), required=True)
-@click.option("--final-batch", type=click.Choice([value.value for value in FinalBatch]), required=True)
 @rl_build_options
-def main(input_version: str, scale: str, final_batch: str) -> ArtifactStep:
-    return final_dpo_step(input_version, RunScale(scale), FinalBatch(final_batch))
+def main(input_version: str, scale: str) -> ArtifactStep:
+    return final_dpo_step(input_version, RunScale(scale))
 
 
 if __name__ == "__main__":
