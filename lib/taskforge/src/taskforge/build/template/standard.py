@@ -30,7 +30,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 from taskcompendium.environment import DockerBuild, EnvironmentFile, EnvironmentKind, EnvironmentSpec, StdoutReward
-from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec, format_conversation
 from taskcompendium.submission import PlainText, submission_instruction
@@ -53,6 +52,7 @@ from taskforge.spec.controls import (
     shell_turn,
     validate_controls,
 )
+from taskforge.spec.draft import task_execution
 
 WORKDIR = "/workspace"
 GRADER_DIR = "/grader"
@@ -61,7 +61,7 @@ GRADER_TIMEOUT = 300.0
 FULL_CREDIT = 0.99
 ATTEMPTS = 3
 RESEARCH_TURNS = 32
-EXECUTION = TaskExecution()
+EXECUTION = task_execution()
 """Template tasks have one stage and set no deadlines or agent user."""
 CONVENTION = PlainText(id="plain_text")
 """Template tasks take a plain-text final reply."""
