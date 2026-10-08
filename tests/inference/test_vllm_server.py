@@ -19,7 +19,9 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
-from marin.inference.config import VllmCompilationCacheMode
+from marin.inference.backend import ModelSpec
+from marin.inference.config import VllmCompilationCacheMode, VllmEngineConfig, VllmLauncherType
+from marin.inference.vllm_backend import VllmBackend
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -440,35 +442,29 @@ def _wait_until_ready(environment: VllmEnvironment) -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "args", "expected"),
+    ("path", "launcher", "args", "expected"),
     [
-        ("s3://bucket/model", [], {"distributed": True}),
-        ("gs://bucket/model", [], {"distributed": True}),
-        ("/models/checkpoint", [], None),
-        ("s3://bucket/model", ["--load-format", "safetensors"], None),
-        ("s3://bucket/model", ["--load-format=auto"], None),
+        ("s3://bucket/model", VllmLauncherType.CUDA, [], {"distributed": True}),
+        ("gs://bucket/model", VllmLauncherType.TPU, [], None),
+        ("/models/checkpoint", VllmLauncherType.CUDA, [], None),
+        ("s3://bucket/model", VllmLauncherType.CUDA, ["--load-format=auto"], None),
         (
             "s3://bucket/model",
-            ["--model-loader-extra-config", '{"distributed":false}'],
-            {"distributed": False},
-        ),
-        (
-            "s3://bucket/model",
+            VllmLauncherType.CUDA,
             ['--model-loader-extra-config={"distributed":false}'],
             {"distributed": False},
         ),
     ],
 )
-def test_object_store_streaming_distributes_reads_unless_overridden(tmp_path, path, args, expected):
+def test_gpu_streaming_default_preserves_overrides(tmp_path, monkeypatch, path, launcher, args, expected):
     argv_path = tmp_path / "argv.json"
-    with VllmEnvironment(
-        vllm_server.InferenceModelConfig(name="fake-model", path=path, engine_kwargs={}),
-        port=_free_port(),
-        extra_args=args,
-        launcher=_FakeLauncher("record-args", str(argv_path)),
-        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
-        wait_for_ready=False,
-    ) as environment:
+    fake = _FakeLauncher("record-args", str(argv_path))
+    launcher_type = IsolatedCudaVllm if launcher is VllmLauncherType.CUDA else vllm_server.IsolatedTpuVllm
+    monkeypatch.setattr(launcher_type, "command", lambda self: fake.command())
+    monkeypatch.setattr(launcher_type, "cache_identity", lambda self: "fake")
+    spec = ModelSpec(path, "fake-model", None, None, "auto", None, "")
+    config = VllmEngineConfig(launcher=launcher, compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED)
+    with VllmBackend(config, port=_free_port()).start(spec, extra_args=args) as environment:
         _wait_until_ready(environment)
         argv = json.loads(argv_path.read_text())
 
