@@ -389,10 +389,10 @@ def summarize(evidence: RoundEvidence, policy: SummaryPolicy) -> CalibrationSumm
     status = trials.status
     solver = trials.reward_stats(TrialKind.SOLVER)
     solve_rate = None if solver.graded == 0 else solver.solved / solver.graded
-    adversary_findings, notes, assessments = _adversary_findings(evidence, policy)
+    adversary = _adversary_findings(evidence, policy)
     findings = [
         *_control_findings(evidence.controls),
-        *adversary_findings,
+        *adversary.findings,
         *_defect_findings(evidence),
         *_band_findings(evidence.solver, solver, status, policy),
     ]
@@ -410,12 +410,12 @@ def summarize(evidence: RoundEvidence, policy: SummaryPolicy) -> CalibrationSumm
             (c.control.id, c.outcome.cause) for c in evidence.controls if isinstance(c.outcome, Ungraded)
         ),
         roles={
-            role: _role_stats(role, trials, policy.adversary_k, assessments)
+            role: _role_stats(role, trials, policy.adversary_k, adversary.assessments)
             for role, trials in evidence.adversaries.items()
         },
         findings=tuple(findings),
-        assessments=tuple(assessments),
-        notes=tuple(notes),
+        assessments=tuple(adversary.assessments),
+        notes=tuple(adversary.notes),
     )
 
 
@@ -776,10 +776,17 @@ def _signal_lines(s: AdversarySignals) -> list[str]:
     ]
 
 
-def _adversary_findings(
-    evidence: RoundEvidence, policy: SummaryPolicy
-) -> tuple[list[Finding], list[Finding], list[AdversaryAssessment]]:
-    """(findings, notes, assessments) of every graded adversary trial, in ``AdversaryRole`` then index order."""
+@dataclass(frozen=True)
+class _AdversaryReview:
+    """What the graded adversary trials of a round add to its summary, in ``AdversaryRole`` then index order."""
+
+    findings: list[Finding]
+    notes: list[Finding]
+    assessments: list[AdversaryAssessment]
+
+
+def _adversary_findings(evidence: RoundEvidence, policy: SummaryPolicy) -> _AdversaryReview:
+    """The findings, notes and assessments of every graded adversary trial."""
     references = honest_submissions(evidence)
     findings: list[Finding] = []
     notes: list[Finding] = []
@@ -813,7 +820,7 @@ def _adversary_findings(
                 control = candidate_control(role, index, subject.ordinal, evidence.task_digest, subject.candidate)
                 new_controls = (control,)
             findings.append(Finding(ruling.kind, "\n".join(lines), FINDING_ROLES[ruling.kind], new_controls))
-    return findings, notes, assessments
+    return _AdversaryReview(findings, notes, assessments)
 
 
 def _by_role(
