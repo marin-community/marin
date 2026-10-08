@@ -29,6 +29,23 @@ def test_read_only_open_does_not_create_directories(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cache_metadata", [True, False])
+async def test_repeated_row_zero_batches_preserve_every_complete_prefix(tmp_path, cache_metadata):
+    rows = [np.asarray([10, 11, 12, 13, 14], np.int32), np.asarray([20, 21], np.int32)]
+    writer = JaggedArrayStore.open(
+        str(tmp_path / "store"), mode="w", item_rank=1, dtype=jnp.int32, cache_metadata=cache_metadata
+    )
+    writer.extend(rows)
+    reader = JaggedArrayStore.open(
+        str(tmp_path / "store"), mode="r", item_rank=1, dtype=jnp.int32, cache_metadata=cache_metadata
+    )
+    indices = [1, 0, 0, 1, 0]
+    for batch in (reader.get_batch_sync(indices), await reader.get_batch(indices)):
+        for index, actual in zip(indices, batch, strict=True):
+            np.testing.assert_array_equal(actual, rows[index])
+
+
+@pytest.mark.asyncio
 async def test_read_only_open_async_does_not_create_directories(tmp_path, monkeypatch):
     path = str(tmp_path / "store")
     writer = JaggedArrayStore.open(path, mode="w", item_rank=1, dtype=jnp.int32)

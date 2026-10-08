@@ -47,6 +47,7 @@ class ConvertCheckpointStepConfig:
     model: LmConfig
     checkpoint_subpath: str = "model"
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
+    export_dtype: str | None = None
     resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
     output_path: str = ""
     upload_to_hf: bool | str | RepoRef = False
@@ -81,6 +82,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         upload_to_hf=config.upload_to_hf,
         checkpoint_subpath=config.checkpoint_subpath,
         max_shard_size=config.max_shard_size,
+        export_dtype=config.export_dtype,
         model=config.model,
         save_tokenizer=config.save_tokenizer,
         tokenizer=config.tokenizer,

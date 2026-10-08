@@ -1,0 +1,134 @@
+name: BFCL campaign controller images
+
+on:
+  push:
+    branches: [bfcl-rl/campaign-20261003]
+    paths: [.github/workflows/bfcl-rl-controller-images.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  SOURCE_COMMIT: ace5323615cec0a0b949af2e162fcad80e4d6322
+  SOURCE_TREE: 0483376b41
+  IMAGE_TAG: bfcl-gvisor-0483376b41
+
+jobs:
+  build:
+    timeout-minutes: 45
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: controller
+            arch: amd64
+            runner: ubuntu-latest
+          - target: controller
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - target: task
+            arch: amd64
+            runner: ubuntu-latest
+          - target: task
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out the approved controller source
+        uses: actions/checkout@v5
+        with:
+          ref: ace5323615cec0a0b949af2e162fcad80e4d6322
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source and record canonical build provenance
+        run: |
+          git config core.abbrev 10
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git rev-parse --short 'HEAD^{tree}')" = "$SOURCE_TREE"
+          PYTHONPATH=lib/rigging/src python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from rigging.provenance import Provenance
+
+          provenance = Provenance.from_git()
+          assert provenance.tree_hash == os.environ["SOURCE_TREE"]
+          assert not provenance.dirty
+          with Path(os.environ["GITHUB_ENV"]).open("a") as output:
+              output.write("IRIS_PROVENANCE=" + provenance.to_json() + "\n")
+          PY
+          printf 'IRIS_REVISION_DATE=%s\n' "$(git log -1 --format=%cs -- lib/iris)" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Authenticate the repository image publisher
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and publish the approved source
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          IMAGE="ghcr.io/marin-community/iris-${TARGET}:${IMAGE_TAG}-${ARCH}"
+          docker buildx build --file lib/iris/Dockerfile --target "$TARGET" \
+            --platform "linux/${ARCH}" --provenance=false \
+            --cache-from "type=registry,ref=ghcr.io/marin-community/iris-cache:${TARGET}-${ARCH}" \
+            --build-arg CARGO_PROFILE=fast \
+            --build-arg "IRIS_GIT_HASH=${SOURCE_TREE}" \
+            --build-arg "IRIS_PROVENANCE=${IRIS_PROVENANCE}" \
+            --build-arg "IRIS_REVISION_DATE=${IRIS_REVISION_DATE}" \
+            --metadata-file image-metadata.json --tag "$IMAGE" --push .
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path("image-metadata.json").read_text())
+          receipt = {
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "source_tree": os.environ["SOURCE_TREE"],
+              "target": os.environ["TARGET"],
+              "arch": os.environ["ARCH"],
+              "digest": metadata["containerimage.digest"],
+              "provenance": json.loads(os.environ["IRIS_PROVENANCE"]),
+          }
+          Path("image-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          PY
+
+      - name: Retain the image receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: bfcl-controller-${{ matrix.target }}-${{ matrix.arch }}
+          path: |
+            image-metadata.json
+            image-receipt.json
+
+  manifests:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [controller, task]
+    steps:
+      - name: Authenticate the repository image publisher
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Publish the multiarch manifest
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          IMAGE="ghcr.io/marin-community/iris-${TARGET}"
+          docker buildx imagetools create --tag "${IMAGE}:${IMAGE_TAG}" \
+            "${IMAGE}:${IMAGE_TAG}-amd64" "${IMAGE}:${IMAGE_TAG}-arm64"

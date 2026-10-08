@@ -43,8 +43,11 @@ Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk.
 `IrisSkyRLExecution` sets the coordinator deadline for its workload. CoreWeave coordinators route
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
 inside Iris, where `--run` executes the artifact graph. This preserves one construction and
-validation path. The submitter forwards `DAYTONA_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
-are present in its environment.
+validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`, `HF_TOKEN`,
+`TOGETHER_API_KEY`, and `WANDB_API_KEY` when they are present in its environment. MarinSkyRL resolves
+the dedicated RL credential from `DAYTONA_RL_API_KEY`, falling back to the canonical RL secret in
+Google Secret Manager. It sets Harbor's `DAYTONA_API_KEY` to that resolved value, replacing any
+forwarded generic key. A Daytona launch fails if neither RL credential source is available.
 
 ## One Hydra launch document
 

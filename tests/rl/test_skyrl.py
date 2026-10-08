@@ -135,6 +135,30 @@ def _spec() -> SkyRLSpec:
     )
 
 
+@pytest.mark.parametrize(
+    "agent_config",
+    [
+        {"name": "opencode"},
+        {"name": "pi"},
+        {"name": "mini-swe-agent"},
+        {"name": "claude-code"},
+        {"name": "codex"},
+        {"name": "terminus-2", "agent_profiles": [{"name": "mini-swe-agent"}, {"name": "pi"}]},
+    ],
+)
+def test_installed_harbor_agents_receive_controller_ingress_with_literal_capture(agent_config: dict) -> None:
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=_config_yaml() + yaml.safe_dump({"terminal_bench": {"harbor": agent_config}}),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+
+    assert launch["ingress"]["mode"] == "controller"
+    assert launch["ingress"]["record_literal"] is True
+
+
 def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     return IrisSkyRLExecution(
         cluster=cluster,

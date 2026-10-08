@@ -1,0 +1,95 @@
+name: BFCL campaign task images
+
+on:
+  push:
+    branches: [bfcl-rl/campaign-20261003]
+    paths: [.github/workflows/bfcl-rl-images.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            task: bfcl-irrelevance-0
+            dockerfile_sha256: 66449a5ed97b0f0feaa6e484e7128dd869a31305bab1a26333ddeda59170e965
+          - language: java
+            task: bfcl-simple-java-0
+            dockerfile_sha256: b607af0e6fdd7f7519fcdad1b7ee02cf684300f3fd867c2990e7947a1c59067e
+          - language: javascript
+            task: bfcl-simple-javascript-0
+            dockerfile_sha256: f78a98ce9c108903392ad7bb44f5ae2f680bb3b5e187911bddd43d1503c814f5
+    env:
+      DATASET_COMMIT: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+      TASK_NAME: ${{ matrix.task }}
+      DOCKERFILE_SHA256: ${{ matrix.dockerfile_sha256 }}
+      IMAGE_LANGUAGE: ${{ matrix.language }}
+    steps:
+      - name: Check out the pinned original task environment
+        uses: actions/checkout@v5
+        with:
+          repository: laude-institute/harbor-datasets
+          ref: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+          path: harbor-datasets
+          sparse-checkout: datasets/bfcl/${{ matrix.task }}/environment
+          persist-credentials: false
+
+      - name: Verify original Dockerfile identity
+        run: |
+          test "$(git -C harbor-datasets rev-parse HEAD)" = "$DATASET_COMMIT"
+          CONTEXT_PATH="harbor-datasets/datasets/bfcl/${TASK_NAME}/environment"
+          printf '%s  %s\n' "$DOCKERFILE_SHA256" "$CONTEXT_PATH/Dockerfile" | sha256sum --check --strict
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Authenticate the repository's image publisher
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and publish the unchanged environment
+        run: |
+          CONTEXT_PATH="harbor-datasets/datasets/bfcl/${TASK_NAME}/environment"
+          IMAGE_TAG="ghcr.io/marin-community/iris-task:bfcl-recovery-${IMAGE_LANGUAGE}-${GITHUB_SHA}"
+          docker buildx build --file "$CONTEXT_PATH/Dockerfile" \
+            --platform linux/amd64 --provenance=false \
+            --metadata-file image-metadata.json --tag "$IMAGE_TAG" --push "$CONTEXT_PATH"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path("image-metadata.json").read_text())
+          digest = metadata["containerimage.digest"]
+          manifest = {
+              "dataset_commit": os.environ["DATASET_COMMIT"],
+              "dockerfile_sha256": os.environ["DOCKERFILE_SHA256"],
+              "task": os.environ["TASK_NAME"],
+              "language": os.environ["IMAGE_LANGUAGE"],
+              "architecture": "amd64",
+              "image": f"ghcr.io/marin-community/iris-task@{digest}",
+              "build_commit": os.environ["GITHUB_SHA"],
+              "actions_run_id": os.environ["GITHUB_RUN_ID"],
+          }
+          Path("image-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Retain image identity and build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: bfcl-image-${{ matrix.language }}
+          path: |
+            image-manifest.json
+            image-metadata.json
+          retention-days: 7

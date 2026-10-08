@@ -40,6 +40,7 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
+_INSTALLED_HARBOR_AGENTS = frozenset({"opencode", "pi", "mini-swe-agent", "claude-code", "codex"})
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -749,7 +750,12 @@ def _launch_config_yaml(
     terminal_bench = recipe.get("terminal_bench", {})
     harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
     agent_name = harbor.get("name") if isinstance(harbor, dict) else None
-    controller_ingress = agent_name == "opencode"
+    profiles = (harbor.get("agent_profiles") or []) if isinstance(harbor, dict) else []
+    profile_names = [profile.get("name") for profile in profiles if isinstance(profile, dict)]
+    controller_ingress = any(
+        isinstance(name, str) and name.strip().lower().replace("_", "-") in _INSTALLED_HARBOR_AGENTS
+        for name in profile_names or [agent_name]
+    )
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
@@ -767,7 +773,9 @@ def _launch_config_yaml(
             "launcher_commit": spec.runtime.commit,
             "profile": spec.runtime.profile.value,
             "entrypoint": "",
-            "experiments_dir": "/app/experiments",
+            "experiments_dir": (
+                prefix_join(output.attempts_root, "literal_capture") if controller_ingress else "/app/experiments"
+            ),
             "task_env": task_env,
         },
         "iris": {

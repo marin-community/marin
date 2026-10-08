@@ -544,8 +544,11 @@ def _install_separate_reference_export_hooks(
         except TypeError:
             logger.warning(f"Invalid hf_save_dtype: {export.hf_save_dtype}. Defaulting to None.")
 
+    last_saved_update = None
+
     def save_policy_hf_checkpoint(step):
-        if step.step == 0:
+        nonlocal last_saved_update
+        if step.next_step == 0 or step.next_step == last_saved_update:
             return
 
         upload_to_hf = export.hf_upload or False
@@ -561,8 +564,9 @@ def _install_separate_reference_export_hooks(
             generation_config=export.generation_config,
             **hf_upload_kwargs,
         )
+        last_saved_update = step.next_step
 
-    trainer.add_hook(save_policy_hf_checkpoint, every=export.hf_save_steps)
+    trainer.add_completed_step_hook(save_policy_hf_checkpoint, every=export.hf_save_steps)
 
 
 def main(config: TrainDpoConfig):

@@ -419,7 +419,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
 
         def run(shape):
             mesh = Mesh(
-                np.asarray(jax.devices()).reshape(shape), axes,
+                np.asarray(jax.devices()[:int(np.prod(shape))]).reshape(shape), axes,
                 axis_types=(AxisType.Explicit,) * len(axes),
             )
             with jax.set_mesh(mesh):
@@ -436,13 +436,13 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             )
 
         data_axis, reference = run((1, 2, 1, 2, 1))
-        context_axis, sharded = run((1, 1, 2, 2, 1))
+        context_axis, sharded = run((1, 1, 4, 2, 1))
         assert data_axis is None
         assert context_axis == "context"
         for expected, actual in zip(reference, sharded, strict=True):
             np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
         """,
-        device_count=4,
+        device_count=8,
     )
 
 
@@ -507,7 +507,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             )
             trainer_cfg = TrainerConfig(
                 id="local-snowball-sft", mesh=mesh, use_explicit_mesh_axes=True,
-                train_batch_size=8, num_train_steps=1, max_eval_batches=0,
+                train_batch_size=8, per_device_parallelism=1, num_train_steps=1, max_eval_batches=0,
                 tracker=JsonFileTrackerConfig(output_path=str(root)),
                 checkpointer=CheckpointerConfig(base_path=str(root / "ckpts")),
                 require_accelerator=False,
