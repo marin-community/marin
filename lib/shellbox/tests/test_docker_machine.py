@@ -71,13 +71,13 @@ def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_lea
 
 
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
-@pytest.mark.parametrize("candidate_state", ["delete", "forge", "completed"])
-def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion(tmp_path, monkeypatch, candidate_state):
+@pytest.mark.parametrize("candidate_state", ["running", "completed"])
+def test_docker_deadline_stops_running_work_and_preserves_completed_work(tmp_path, monkeypatch, candidate_state):
     create_process = asyncio.create_subprocess_exec
     executions = []
 
     async def remote_exec(*args, timeout=None, **kwargs):
-        # STOP or container disposal must end the guest operation after the client deadline.
+        # The guest continues after the client deadline, as it does with a remote Docker daemon.
         execution = asyncio.create_task(docker(*args, timeout=None, **kwargs))
         executions.append(execution)
         result = await asyncio.wait_for(asyncio.shield(execution), timeout=timeout)
@@ -94,16 +94,11 @@ def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion
                 except ProcessLookupError:
                     pass
             return await create_process("true", **kwargs)
-        # Keep a restored guest PID-file implementation inside this fake's private /tmp.
-        argv = tuple(
-            arg.replace("/tmp/.shellbox-command-", str(tmp_path / ".shellbox-command-"))
-            for arg in args[args.index("shellbox-test-container") + 1 :]
-        )
+        argv = args[args.index("shellbox-test-container") + 1 :]
         return await create_process(*argv, start_new_session=True, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", remote_exec)
-    mutation = 'rm -f "$file"' if candidate_state == "delete" else 'printf "999999999\\n" > "$file"'
 
     async def scenario():
         machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)))
@@ -113,7 +108,6 @@ def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion
                 argv = (
                     "sh",
                     "-c",
-                    f'for file in {tmp_path}/.shellbox-command-*; do [ ! -f "$file" ] || {mutation}; done; '
                     f"sleep 3600 & echo $! > {tmp_path}/child.pid; wait",
                 )
             result = await machine.run(Command(argv, timeout=0.5))

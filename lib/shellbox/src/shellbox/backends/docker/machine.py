@@ -9,8 +9,6 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
-from rigging.timing import ExponentialBackoff
-
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
 from shellbox.machine import (
     Backend,
@@ -30,8 +28,9 @@ logger = logging.getLogger(__name__)
 START_COMMAND = 'exec 3<&0; setsid "$@" <&3 3<&- & wait "$!"'
 PROCESS_GROUP_PREFIX = b"SHELLBOX_PGID:"
 PROCESS_GROUP_HEADER_LIMIT_BYTES = 64
-RUN_COMMAND = 'printf "SHELLBOX_PGID:%s\\n" "$$"; exec "$@"'
+RUN_COMMAND = f'printf "{PROCESS_GROUP_PREFIX.decode()}%s\\n" "$$"; exec "$@"'
 INTERRUPT_TIMEOUT = 10
+PROCESS_GROUP_PROBE_INTERVAL = 0.05
 OUTPUT_READ_CHUNK_BYTES = 64 * 1024
 KILL_PROCESS_GROUP_COMMAND = 'kill -KILL "-$1"'
 PROCESS_GROUP_ABSENT_EXIT_CODE = 3
@@ -75,7 +74,7 @@ async def _read_limited(
         if header.startswith(PROCESS_GROUP_PREFIX) and header.endswith(b"\n") and value.isdigit() and int(value) > 1:
             process_group.set_result(int(value))
             header.clear()
-    # Docker can send exec-start errors before the wrapper emits its frame.
+    # Docker can send exec-start errors before the wrapper emits its header.
     retained = header[: limit + 1]
     while chunk := await stream.read(OUTPUT_READ_CHUNK_BYTES):
         retained.extend(chunk[: max(0, limit + 1 - len(retained))])
@@ -93,12 +92,12 @@ async def docker(
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
+    assert process.stdout is not None and process.stderr is not None and process.stdin is not None
     try:
         async with asyncio.timeout(timeout):
             if output_limit_bytes is None:
                 stdout, stderr = await process.communicate(stdin)
             else:
-                assert process.stdout is not None and process.stderr is not None and process.stdin is not None
                 async with asyncio.TaskGroup() as readers:
                     stdout_task = readers.create_task(_read_limited(process.stdout, output_limit_bytes, process_group))
                     stderr_task = readers.create_task(_read_limited(process.stderr, output_limit_bytes))
@@ -115,7 +114,6 @@ async def docker(
     except BaseException:
         if process.returncode is None:
             process.kill()
-        assert process.stdout is not None and process.stderr is not None
         async with asyncio.TaskGroup() as readers:
             readers.create_task(_read_limited(process.stdout, 0))
             readers.create_task(_read_limited(process.stderr, 0))
@@ -152,11 +150,11 @@ class DockerMachine:
         args.extend(
             (
                 self.name,
-                "sh",
+                "/bin/sh",
                 "-c",
                 START_COMMAND,
                 "shellbox-start",
-                "sh",
+                "/bin/sh",
                 "-c",
                 RUN_COMMAND,
                 "shellbox-command",
@@ -203,9 +201,10 @@ class DockerMachine:
         if user is not None:
             args.extend(("--user", user))
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
-            await docker(*args, self.name, "sh", "-c", KILL_PROCESS_GROUP_COMMAND, "stop-command", str(process_group))
+            result = await docker(
+                *args, self.name, "/bin/sh", "-c", KILL_PROCESS_GROUP_COMMAND, "stop-command", str(process_group)
+            )
             # A group signal can succeed while members with different UIDs remain alive.
-            backoff = ExponentialBackoff(initial=0.01, maximum=0.1)
             while True:
                 probe = await docker(
                     "exec",
@@ -220,9 +219,9 @@ class DockerMachine:
                 )
                 if probe.exit_code == PROCESS_GROUP_ABSENT_EXIT_CODE:
                     return
-                if probe.exit_code != 0:
+                if probe.exit_code != 0 or result.exit_code != 0:
                     raise RuntimeError(probe.stderr.decode(errors="replace"))
-                await asyncio.sleep(backoff.next_interval())
+                await asyncio.sleep(PROCESS_GROUP_PROBE_INTERVAL)
 
     async def upload(self, source: Path, target: str) -> None:
         parent = str(PurePosixPath(target).parent)
@@ -317,7 +316,7 @@ class DockerMachineFactory:
             result = await docker(*args)
             if result.exit_code:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
-            prepared = await docker("exec", name, "sh", "-c", "command -v setsid")
+            prepared = await docker("exec", name, "/bin/sh", "-c", "command -v setsid")
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Docker task images require setsid for command cancellation")
         except BaseException:
