@@ -135,7 +135,15 @@ class DcmhaMode(NamedTuple):
 
     pre: bool = True
     post: bool = True
-    dynamic: bool = True
+    terms: tuple[str, ...] = ("qw", "kw", "qg", "kg")
+    """Dynamic terms: query-wise / key-wise low-rank mixing and query / key gates (empty: static only)."""
+
+
+def _dcmha_terms(parts: tuple[str, ...]) -> tuple[str, ...]:
+    """``dynamic`` turns on every dynamic term; otherwise the listed ``qw`` / ``kw`` / ``qg`` / ``kg``."""
+    if "dynamic" in parts:
+        return ("qw", "kw", "qg", "kg")
+    return tuple(t for t in ("qw", "kw", "qg", "kg") if t in parts)
 
 
 class DcmhaWeights(NamedTuple):
@@ -152,7 +160,7 @@ class DcmhaWeights(NamedTuple):
     kg: jax.Array
 
 
-def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: int, dynamic: bool) -> jax.Array:
+def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: int, terms: tuple[str, ...]) -> jax.Array:
     """DCMHA ``Compose`` (arXiv 2405.08553 eq. 4) of one chunk's ``[B, H, C, S]`` scores or probabilities:
     ``a'_h = sum_g a_g (W_gh + sum_r q1_gr q2_hr + sum_r k1_gr k2_hr) + a_h (tanh qg_h + tanh kg_h)`` with the
     query-wise terms from query ``i`` and the key-wise terms from key ``j``."""
@@ -160,12 +168,15 @@ def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: i
     q1, q2, qg = take(dw.q1), take(dw.q2), take(dw.qg)  # [B, C, H, R], [B, C, H]
     k1, k2, kg = (x[:, :, stage].astype(jnp.float32) for x in (dw.k1, dw.k2, dw.kg))  # [B, S, H, R], [B, S, H]
     out = jnp.einsum("bgqk,gh->bhqk", a, dw.static[stage].astype(jnp.float32))
-    if not dynamic:
-        return out
-    out = out + jnp.einsum("bgqk,bqgr,bqhr->bhqk", a, q1, q2)
-    out = out + jnp.einsum("bgqk,bkgr,bkhr->bhqk", a, k1, k2)
-    gate = jnp.tanh(qg).transpose(0, 2, 1)[..., None] + jnp.tanh(kg).transpose(0, 2, 1)[:, :, None, :]
-    return out + a * gate
+    if "qw" in terms:
+        out = out + jnp.einsum("bgqk,bqgr,bqhr->bhqk", a, q1, q2)
+    if "kw" in terms:
+        out = out + jnp.einsum("bgqk,bkgr,bkhr->bhqk", a, k1, k2)
+    if "qg" in terms:
+        out = out + a * jnp.tanh(qg).transpose(0, 2, 1)[..., None]
+    if "kg" in terms:
+        out = out + a * jnp.tanh(kg).transpose(0, 2, 1)[:, :, None, :]
+    return out
 
 
 class Lightning(NamedTuple):
@@ -344,13 +355,13 @@ def _sparse_math(
         else:
             logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
         if dcmha is not None and dcmha_mode.pre:
-            logits = _dcmha_compose(logits, dcmha, 0, c0, chunk, dcmha_mode.dynamic)
+            logits = _dcmha_compose(logits, dcmha, 0, c0, chunk, dcmha_mode.terms)
         dense = logits
         logits = jnp.where(allowed, logits, -1e9)
         if gauss is not None:
             out = _gauss_read(jax.nn.softmax(logits, axis=-1), gauss, v, segment_ids, qi, seg_q).astype(v.dtype)
         elif dcmha is not None and dcmha_mode.post:
-            weights = _dcmha_compose(jax.nn.softmax(logits, axis=-1), dcmha, 1, c0, chunk, dcmha_mode.dynamic)
+            weights = _dcmha_compose(jax.nn.softmax(logits, axis=-1), dcmha, 1, c0, chunk, dcmha_mode.terms)
             out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
         elif compress:
             joint = jax.nn.softmax(jnp.concatenate([logits, c_logits], axis=-1), axis=-1)
@@ -505,7 +516,7 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         dcmha_mode=DcmhaMode(
             pre="pre" in cfg.mla_dcmha_parts,
             post="post" in cfg.mla_dcmha_parts,
-            dynamic="dynamic" in cfg.mla_dcmha_parts,
+            terms=_dcmha_terms(cfg.mla_dcmha_parts),
         ),
         topk=0 if dsa_first else cfg.mla_sparse_topk,
         dsa_topk=cfg.mla_sparse_topk if dsa_first else cfg.mla_sparse_dsa_topk,
