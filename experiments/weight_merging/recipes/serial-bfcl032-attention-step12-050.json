@@ -1,0 +1,762 @@
+{
+  "anchor": {
+    "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92_fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab-c869d77c2f029573",
+    "revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"
+  },
+  "donors": [
+    {
+      "path": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/routing-bfcl032-step92-native-metadata",
+      "revision": "05e345f356f7bc12f6d7bfaf58287d51e0fd52b6"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+      "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+    }
+  ],
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/serial-bfcl032-attention-step12-050",
+  "parameters": {
+    "method": "average",
+    "coefficients": [
+      1.0,
+      0.0
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 42
+  },
+  "preserve_rows": {
+    "model.embed_tokens.weight": [],
+    "lm_head.weight": []
+  },
+  "tensor_coefficients": {
+    "model.layers.0.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.0.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.1.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.10.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.11.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.12.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.13.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.14.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.15.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.16.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.17.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.18.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.19.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.2.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.20.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.21.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.22.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.23.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.24.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.25.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.3.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.4.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.5.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.6.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.7.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.8.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.attn_gated_norm.down_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.attn_gated_norm.up_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.self_attn.attn_gate.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.self_attn.k_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.self_attn.o_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.self_attn.q_proj.weight": [
+      0.5,
+      0.5
+    ],
+    "model.layers.9.self_attn.v_proj.weight": [
+      0.5,
+      0.5
+    ]
+  },
+  "row_overrides": {}
+}
