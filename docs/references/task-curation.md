@@ -126,8 +126,9 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
 for each grader image, as recorded in `images/__init__.py`; given
 `--controller-url`, it schedules images without a bundle on Iris instead of
 leaving their sources inconclusive. Grading machines never have network
-access. Add `--run --base-url PROVIDER_URL` to execute, with
-`GLM_BULK_TOKEN` in the driver environment. Full execution requires
+access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
+the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
+`--base-url` overrides it. Full execution requires
 `--mode full --sample-report CAMPAIGN_PREFIX/sample.json`; the sample must match
 the current source graph and worker image, and only sources whose sample ended
 `sampled` or `completed` are processed.
