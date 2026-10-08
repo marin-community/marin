@@ -28,6 +28,7 @@ GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
+MARINSKYRL_CONFIG_NAME = "MarinSkyRL"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
@@ -106,7 +107,7 @@ EXTERNAL_PROJECTS = (
         "HARBOR",
         runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
     ),
-    ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
+    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
 )
 
 
@@ -649,7 +650,7 @@ def main() -> None:
                 ],
                 check=True,
             )
-            if project.config_name == "MarinSkyRL":
+            if project.config_name == MARINSKYRL_CONFIG_NAME:
                 validate_marinskyrl_environment(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
