@@ -137,8 +137,9 @@ def local_runtime(lock_url: str) -> LocalRuntime:
     return LocalRuntime(lock_url, built.lock_sha256, tuple(built.data))
 
 
-OWNED_ROOTS = ("/tests", "/logs", "/output", "/solution", "/controls")
-"""Directories grading stages hidden tests, verdicts, captures, oracles and controls in; emptied per machine."""
+OWNED_ROOTS = ("/tests", "/logs", "/output", "/solution", "/controls", "/setup_files")
+"""Directories grading stages hidden tests, verdicts, captures, oracles, controls and TaskTrove setup files in;
+emptied per machine."""
 SHARED_ROOTS = (DEFAULT_WORKSPACE,)
 """The grading workspace, which an Iris task also runs from, so it is written to but never emptied."""
 
