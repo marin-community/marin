@@ -11,18 +11,25 @@ import pyarrow.parquet as pq
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationToolCall,
+    ConversationTrace,
+    GradingAttempt,
     NoGrader,
     ScriptGrader,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    grades_in_process,
 )
+from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
+from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.pipeline.sources import staged_raw_file_rows
+from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
     BLENDS,
@@ -60,11 +67,32 @@ SHELL_TOOL = {
     "description": "Run a shell command.",
     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
 }
+PYTHON_TOOL = {
+    "type": "function",
+    "name": "stateful_python_code_exec",
+    "description": "Call this function to execute Python code in a stateful Jupyter notebook environment.",
+    "parameters": {
+        "type": "object",
+        "properties": {"code": {"type": "string", "description": "Code to execute"}},
+        "required": ["code"],
+    },
+    "strict": True,
+}
 REPORT_TOOL = {
     "type": "function",
     "name": "report",
     "parameters": {"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]},
 }
+MATH_QUESTION = (
+    "Find all real solutions to the equation $x^5 - 15x^4 + 10x^3 - 30x^2 + 5x - 3 = 0$. "
+    "Express the answer using \\boxed{}."
+)
+MATH_ANSWER = r"\( \frac{2^{\frac{1}{5}} + 1}{2^{\frac{1}{5}} - 1} \)"
+"""A sampled math_cot row's reference, delimiters included, as the blend stores it."""
+UNPARSEABLE_MATH_ANSWER = (
+    "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}"
+)
+"""A sampled reference that only the source's LLM judge could compare."""
 COUNT_SCHEMA = json.dumps({"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]})
 GRID = [[1, 2], [3, 4]]
 
@@ -121,6 +149,19 @@ def format_row(component: str, agent: str) -> dict:
 
 def structured_row(component: str, agent: str) -> dict:
     return ultra_row(component, agent, "Return the count as JSON.", schema_str=COUNT_SCHEMA, schema_type="json")
+
+
+def math_row(component: str, agent: str, prompt: str, answer: str, tools=()) -> dict:
+    return ultra_row(
+        component,
+        agent,
+        prompt,
+        tools=tools,
+        question=prompt,
+        expected_answer=answer,
+        verifier_type="math_with_judge",
+        pass_rate=0.375,
+    )
 
 
 def mcqa_row(component: str, grading_mode: str) -> dict:
@@ -189,19 +230,15 @@ COMPONENT_ROWS: dict[str, dict] = {
         "Prove 1 + 1 = 2.",
         formal_statement="theorem t : 1 + 1 = 2 := by sorry",
     ),
-    "ultra_sft_step3200_math_cot": ultra_row(
-        "ultra_sft_step3200_math_cot",
-        "math_with_judge_agent",
-        "placeholder",
-        _hf_question_placeholder={"dataset": DAPO, "split": "train", "row": 0, "mode": "canonical"},
+    "ultra_sft_step3200_math_cot": math_row(
+        "ultra_sft_step3200_math_cot", "math_with_judge_simple_agent", MATH_QUESTION, MATH_ANSWER
     ),
-    "ultra_sft_step3200_math_tir": ultra_row(
+    "ultra_sft_step3200_math_tir": math_row(
         "ultra_sft_step3200_math_tir",
-        "math_with_judge_agent",
-        "Compute 2 + 2 with Python.",
-        tools=[SHELL_TOOL],
-        question="Compute 2 + 2 with Python.",
-        expected_answer="4",
+        "ns_tools_simple_agent",
+        "Compute 2 + 2 with Python. Your answer should be placed inside \\boxed{}.",
+        "4",
+        tools=[PYTHON_TOOL],
     ),
     "ultra_sft_step3200_multichallenge_len40k": ultra_row(
         "ultra_sft_step3200_multichallenge_len40k",
@@ -279,6 +316,8 @@ ROWS: dict[str, dict] = {
     pipeline_name(blend, path): COMPONENT_ROWS[path] for blend, paths in BLENDS.items() for path in paths
 } | {"nemotron_ultra_rlvr2_ultra_sft_step3200_rdkit": fixture_row("rdkit_rlvr2.json")}
 
+# Components graded in process by a verifyit mode.
+IN_PROCESS = {"ultra_sft_step3200_math_cot", "ultra_sft_step3200_math_tir"}
 # Components graded in the grader image; the rest keep a NoGrader contract.
 GRADED: set[str] = {
     f"{NEXT_ACTION}/SWE-Gym/SWE-Gym",
@@ -335,6 +374,10 @@ def component_path(name: str) -> str:
 def test_every_component_row_converts_with_its_grader(name, staged):
     task = converted_task(PIPELINES[name], ROWS[name], inputs=staged)
     path = component_path(name)
+    if path in IN_PROCESS:
+        assert grades_in_process(task.grader)
+        assert grader_config(task)["contract"]["agent_ref"] == ROWS[name]["agent_ref"]
+        return
     if path not in GRADED:
         assert isinstance(task.grader, NoGrader)
         assert grader_config(task)["contract"]["agent_ref"] == ROWS[name]["agent_ref"]
@@ -375,7 +418,10 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
         placeholder,
     )
     inputs = {DAPO: StoragePath(str(tmp_path / DAPO))}
-    row = COMPONENT_ROWS["ultra_sft_step3200_math_cot"]
+    row = {
+        **COMPONENT_ROWS["ultra_sft_step3200_math_cot"],
+        "_hf_question_placeholder": {"dataset": DAPO, "split": "train", "row": 0, "mode": "canonical"},
+    }
     result = convert_row(PIPELINES["nemotron_ultra_rlvr1_ultra_sft_step3200_math_cot"], row, inputs=inputs)
     assert isinstance(result, NormalizedTask)
     assert result.task.context.events == (TextMessage(role="user", content=DAPO_QUESTION),)
@@ -383,7 +429,7 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
     assert contract["expected_answer"] == expected
     assert contract["placeholder_provenance"]["dataset"] == DAPO
     assert "_hf_question_placeholder" not in contract
-    assert [change.field for change in result.changes] == ["question", "expected_answer"]
+    assert [change.field for change in result.changes] == ["question", "expected_answer", "grader"]
 
 
 @pytest.mark.parametrize(
@@ -450,6 +496,12 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
             {"_hf_question_placeholder": {"dataset": DAPO, "split": "train", "row": 0}},
             "unsupported",
             "unresolved_external_placeholder",
+        ),
+        (
+            "ultra_sft_step3200_math_cot",
+            {"expected_answer": UNPARSEABLE_MATH_ANSWER},
+            "unsupported",
+            "unparseable_math_reference",
         ),
     ],
 )
@@ -525,6 +577,37 @@ def test_tool_action_expecting_a_message_accepts_a_text_reply(staged):
     )
     assert TOOL_ACTION_CONTROLS.golden is not None
     assert isinstance(TOOL_ACTION_CONTROLS.golden(task).event, TextMessage)
+
+
+def math_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
+    trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
+    result = grade_task(task, GradingAttempt(trace))
+    return result.status, result.reward
+
+
+@pytest.mark.parametrize("path", ["ultra_sft_step3200_math_cot", "ultra_sft_step3200_math_tir"])
+def test_math_controls_score_the_boxed_reference_one_and_a_wrong_reply_zero(staged, path):
+    controls = PIPELINES[pipeline_name("rlvr2", path)].controls
+    assert controls is not None
+    report = run_controls(task_for(path, staged), controls=controls, machines=None)
+    statuses = {check.check: check.status for check in report.checks}
+    assert statuses == {"empty": CheckStatus.PASS, "golden": CheckStatus.PASS, "negative": CheckStatus.PASS}, report
+
+
+def test_math_grader_compares_the_answer_symbolically_with_the_expected_answer(staged):
+    task = task_for("ultra_sft_step3200_math_cot", staged)
+    assert isinstance(task.grader, VerifyitGrader) and task.grader.mode == "math"
+    equivalent = r"So $x = \boxed{\frac{\sqrt[5]{2}+1}{\sqrt[5]{2}-1}}$."
+    assert math_grade(task, equivalent) == (Outcome.GRADED, 1.0)
+    assert math_grade(task, r"\boxed{\frac{\sqrt[5]{2}-1}{\sqrt[5]{2}+1}}") == (Outcome.GRADED, 0.0)
+
+
+def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
+    task = task_for("ultra_sft_step3200_math_tir", staged)
+    assert grades_in_process(task.grader)
+    assert [tool.name for tool in task.interaction_tools] == ["stateful_python_code_exec"]
+    provider = task.environment_requirements.tool_providers["nemotron_agent"]
+    assert provider.action_interface == "nemotron-agent:ns_tools_simple_agent"
 
 
 def test_ungraded_agent_components_keep_tools_and_initial_state_with_the_agent(staged):

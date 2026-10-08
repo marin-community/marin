@@ -9,8 +9,9 @@ multiple-choice, structured-output, competitive-code, RDKit chemistry or single-
 the row's grading contract as ``/tests/config.json``. Scripts that score the chat conversation also ship
 ``conversation.py``, which reads its final reply. Reasoning Gym rows are scored by the puzzle task's
 own scorer in the grader image's ``reasoning_gym``. Every script runs in the grader image
-(``images.recipes.GRADER``). Components whose NeMo Gym agent needs a model judge, a live environment or
-a Lean toolchain keep their row as a ``NoGrader`` contract.
+(``images.recipes.GRADER``). The math components grade the final answer in process with the verifyit
+math comparator, in place of NeMo Gym's ``math_with_judge`` verifier. Components whose NeMo Gym agent
+needs a model judge, a live environment or a Lean toolchain keep their row as a ``NoGrader`` contract.
 """
 
 import copy
@@ -22,7 +23,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from taskcompendium.convert.answers import source_defect, unsupported
+from pydantic import JsonValue
+from taskcompendium.convert.answers import math_type, source_defect, unsupported
 from taskcompendium.convert.code import (
     CODE_GRADER_MEMORY_MB,
     FAILING_PROGRAM,
@@ -40,7 +42,7 @@ from taskcompendium.convert.nemotron_ultra import (
 )
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasktrove import ANSWER_PATH
-from taskcompendium.grader import grader_config
+from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -50,11 +52,12 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ProviderRequirement,
+    ResourceGroups,
     TaskResource,
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.controls import answer_reply
+from taskcompendium.pipeline.controls import answer_reply, reference_reply, wrong_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
@@ -65,6 +68,10 @@ from taskcompendium.pipeline.models import (
     Reply,
 )
 from taskcompendium.runtime.resources import inline_resource
+from verifyit.candidate import grade_candidate
+from verifyit.grade import Status, positive_candidate
+from verifyit.modes.extract import extract_boxed
+from verifyit.spec import MathSpec
 
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 """The NeMo Gym revision whose agents grade the pinned Ultra blends."""
@@ -119,6 +126,9 @@ RDKIT_PROPERTIES = frozenset({"count", "bool", "presence", "fragment"})
 STRUCTURED_SCHEMA_TYPES = frozenset({"json", "yaml", "toml", "xml", "csv"})
 FORMAT_VERIFIER_TYPES = frozenset({"regex", "inline_prose", "string_match"})
 WRONG_TOOL = "__wrong_tool__"
+MATH_AGENTS = ("math_with_judge_simple_agent", "ns_tools_simple_agent")
+"""The math components' agents: a plain chat, and a chat with a Python tool."""
+MATH_VERIFIER = "math_with_judge"
 
 DAPO = "BytedTsinghua-SIA/DAPO-Math-17k"
 DAPO_PREFIX = (
@@ -252,20 +262,22 @@ def _agent_provider(request: BlendRequest) -> dict[str, ProviderRequirement]:
     return {"nemotron_agent": ProviderRequirement(action_interface=interface, initial_state=request.state)}
 
 
-def _ungraded(
+def _source_contract(request: BlendRequest) -> dict[str, JsonValue]:
+    """The NeMo Gym agent that grades the row upstream, its revision and the row's grading data."""
+    return {"evaluator": request.agent, "source_revision": VERIFIER_REVISION, "contract": request.contract}
+
+
+def _agent_task(
     row: RawRow,
     request: BlendRequest,
     providers: dict[str, ProviderRequirement],
+    package: GraderPackage,
     changes: tuple[NormalizationChange, ...] = (),
 ) -> NormalizedTask:
-    """Keep the conversation and the agent's grading contract; no grader runs here."""
+    """Keep the conversation, with the tools and initial state the NeMo Gym agent serves."""
     expected_action = request.contract.get("expected_action", {})
     answers_with_call = isinstance(expected_action, dict) and expected_action.get("type") == "function_call"
     action = answers_with_call and bool(request.tools)
-    grader = NoGrader(
-        reason=f"The NeMo Gym agent {request.agent} at revision {VERIFIER_REVISION} has no runnable grader here",
-        contract={"evaluator": request.agent, "source_revision": VERIFIER_REVISION, "contract": request.contract},
-    )
     task = TaskSpec(
         id=row.id,
         source=row.source,
@@ -277,9 +289,24 @@ def _ungraded(
         interaction_tools=request.tools,
         answer_type=AnswerType.NATIVE_ACTION if action else AnswerType.TEXT,
         answer_format=FinalAction() if action else PlainText(),
-        grader=grader,
+        grader=package.grader,
+        resources=ResourceGroups(verifier=package.resources),
     )
     return NormalizedTask(task, (*changes, *request.changes))
+
+
+def _ungraded(
+    row: RawRow,
+    request: BlendRequest,
+    providers: dict[str, ProviderRequirement],
+    changes: tuple[NormalizationChange, ...] = (),
+) -> NormalizedTask:
+    """Keep the conversation and the agent's grading contract; no grader runs here."""
+    grader = NoGrader(
+        reason=f"The NeMo Gym agent {request.agent} at revision {VERIFIER_REVISION} has no runnable grader here",
+        contract=_source_contract(request),
+    )
+    return _agent_task(row, request, providers, GraderPackage(grader), changes)
 
 
 def convert_ungraded(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
@@ -364,7 +391,13 @@ def restore_placeholder(data: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[
 
 
 def convert_math(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """A math component, with questions held by DAPO or Skywork placeholders restored first."""
+    """Grade the final answer against ``expected_answer`` in process with the verifyit math comparator.
+
+    Upstream, the agent's ``math_with_judge`` verifier checks the answer symbolically and asks an LLM
+    judge when that check fails. No judge runs here, so the comparator grades alone, as it does for
+    the SkyRL math sources, and a reference it cannot parse is rejected. Questions held by DAPO or
+    Skywork placeholders are restored first; a row with a Python tool keeps the agent that serves it.
+    """
     data: Mapping[str, Any] = row.data
     changes: tuple[NormalizationChange, ...] = ()
     if data.get(PLACEHOLDER_FIELD) and PLACEHOLDER_SOURCE_FIELD in data:
@@ -372,10 +405,36 @@ def convert_math(row: RawRow, _context: ConversionContext) -> NormalizedTask | I
             data, changes = restore_placeholder(data)
         except (ValueError, KeyError, TypeError) as error:
             return unsupported("invalid_placeholder_source", str(error))
-    request = blend_request(data)
+    request = agent_request(data, MATH_AGENTS)
     if isinstance(request, ImportRejection):
         return request
-    return _ungraded(row, request, _agent_provider(request) if request.tools else {}, changes)
+    if request.contract.get("verifier_type") != MATH_VERIFIER:
+        return unsupported("unsupported_math_verifier", str(request.contract.get("verifier_type")))
+    reference = request.contract.get("expected_answer")
+    if not isinstance(reference, str) or not reference.strip():
+        return source_defect("invalid_reference", "The reference answer must be a nonempty string")
+    expected = extract_boxed(reference) or reference.strip()
+    spec = MathSpec(expected=expected, math_type=math_type(expected))
+    # Grading the boxed reference parses it as every rollout's grade will; the mode reports a
+    # reference it cannot parse as an invalid task.
+    verdict = grade_candidate(spec, positive_candidate(spec), {})
+    if verdict.status is Status.INVALID_TASK:
+        return unsupported("unparseable_math_reference", verdict.detail["error"])
+    contract = _source_contract(request)
+    config = inline_resource("config.json", json.dumps(contract, allow_nan=False, sort_keys=True).encode())
+    package = verifyit_package(spec, (config,))
+    replacement = NormalizationChange(
+        field="grader",
+        reason="Grade with the verifyit math comparator; the upstream verifier's LLM-judge fallback cannot run here",
+        original=json.dumps(
+            {"evaluator": request.agent, "source_revision": VERIFIER_REVISION, "verifier_type": MATH_VERIFIER}
+        ),
+        replacement=package.grader.model_dump_json(),
+    )
+    changes = (*changes, replacement)
+    if request.tools:
+        return _agent_task(row, request, _agent_provider(request), package, changes)
+    return blend_task(row, request, package, changes=changes)
 
 
 def mcqa_reference(contract: Mapping[str, Any]) -> str | None:
@@ -456,6 +515,8 @@ def tool_action_negative(task: TaskSpec) -> Reply:
 
 # Components whose rows carry no known answer check only that an empty reply scores zero.
 REPLY_CONTROLS = Controls()
+# The boxed reference must score one, and a reply no reference matches zero.
+MATH_CONTROLS = Controls(golden=reference_reply, negative=wrong_reply)
 MCQA_CONTROLS = Controls(golden=mcqa_golden)
 CODE_CONTROLS = Controls(golden=code_golden, negative=code_negative, memory_mb=CODE_GRADER_MEMORY_MB)
 RDKIT_CONTROLS = Controls(golden=rdkit_golden, negative=rdkit_negative)

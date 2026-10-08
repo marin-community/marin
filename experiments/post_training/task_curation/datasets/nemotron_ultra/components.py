@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     CODE_CONTROLS,
     CODE_SHIPS,
     DAPO,
+    MATH_CONTROLS,
     MCQA_CONTROLS,
     PLACEHOLDER_SOURCE_FIELD,
     RDKIT_CONTROLS,
@@ -209,8 +210,10 @@ MATH_ANSWER_RUBRIC = """
 Verify complete mathematical inputs and agreement of expected_answer with the actual public problem; difficulty alone
 is not a defect.
 
-The source can require symbolic, approximate, or judge-assisted scoring. A single stored expression is evidence, not
-authority to reject equivalent answers. Unresolved external question placeholders are acquisition gaps.
+A symbolic comparator grades the reply's last boxed expression, or its last line, against expected_answer and
+accepts equivalent forms; the source's LLM-judge fallback does not run. Flag an expected_answer that only a judge
+could compare, such as prose or a choice among alternatives. Unresolved external question placeholders are
+acquisition gaps.
 """
 
 MATH_PROOF_RUBRIC = """
@@ -286,7 +289,7 @@ class Component:
     """How one component's rows become tasks; ``decode`` and ``inputs`` restore placeholder questions.
 
     ``grader_image`` runs the component's grade script and ``ships`` holds the scorer directories it
-    packages; components kept as ``NoGrader`` contracts name neither.
+    packages; components graded in process or kept as ``NoGrader`` contracts name neither.
     """
 
     convert: Converter
@@ -311,7 +314,9 @@ CALENDAR = scored(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC)
 COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS, CODE_SHIPS)
 FORMAT = scored(convert_format, INSTRUCTION_FOLLOWING_RUBRIC)
 INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC)
-MATH = Component(convert_math, MATH_ANSWER_RUBRIC, decode=attach_placeholder_source, inputs=PLACEHOLDER_INPUTS)
+MATH = Component(
+    convert_math, MATH_ANSWER_RUBRIC, MATH_CONTROLS, decode=attach_placeholder_source, inputs=PLACEHOLDER_INPUTS
+)
 MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
 MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
