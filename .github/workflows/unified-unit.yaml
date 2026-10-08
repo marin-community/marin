@@ -372,8 +372,10 @@ jobs:
       - name: Test Docker command interruption
         run: |
           docker pull busybox:1.36
+          docker pull ubuntu:24.04
           uv run --project lib/rolloutengine --frozen --group test pytest \
-            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py -m docker -q
+            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/shellbox/tests/test_download_limits.py -m docker -q
 
       - name: Type-check RolloutEngine
         working-directory: lib/rolloutengine

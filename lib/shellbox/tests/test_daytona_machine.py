@@ -240,6 +240,57 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
     asyncio.run(scenario())
 
 
+def test_daytona_command_finishes_at_deadline_without_disposing_the_sandbox(tmp_path):
+    class CompletedAtDeadline(LocalProcess):
+        async def exec(self, command, **kwargs):
+            response = await super().exec(command, **kwargs)
+            if "candidate-finished" in command:
+                raise TimeoutError("Response arrived after the command deadline")
+            return response
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = CompletedAtDeadline()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("printf", "candidate-finished"), timeout=5))
+            assert result.reason is ExitReason.TIMED_OUT
+            following = await machine.run(Command(("printf", "still-ready")))
+            assert (following.exit_code, following.stdout) == (0, b"still-ready")
+            assert not client.deleted
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_path):
+    class MissingSessionOption(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if command == "su --help":
+                return SimpleNamespace(exit_code=0, result="su -c command")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = MissingSessionOption()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(UnsupportedMachineSpec, match="--session-command"):
+                await machine.run(Command(("sh", "-c", "touch candidate-ran"), user="nobody"))
+            assert not (tmp_path / "candidate-ran").exists()
+            following = await machine.run(Command(("printf", "still-ready")))
+            assert (following.exit_code, following.stdout) == (0, b"still-ready")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("mode, exit_code", [(0o755, 0), (0o640, 126)])
 def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, exit_code: int) -> None:
     async def scenario() -> None:

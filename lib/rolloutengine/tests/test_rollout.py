@@ -1274,9 +1274,17 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     closed = asyncio.Event()
 
     class Machine:
+        def __init__(self):
+            self.learner_ready = False
+
         async def run(self, command):
             commands.append(command)
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+            if command.user == "0" and command.argv == ("sh", "-c", "mkdir -p /logs/agent"):
+                self.learner_ready = True
+            if command.user != "0" and not self.learner_ready:
+                return Result(126, b"", b"User is not prepared", False, False, ExitReason.EXITED)
+            output = command.user.encode() if command.argv == ("whoami",) else b""
+            return Result(0, output, b"", False, False, ExitReason.EXITED)
 
         async def close(self):
             closed.set()
@@ -1293,7 +1301,8 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             return SessionStart(({"role": "user", "content": "Run the task."},), {})
 
         async def advance(self, turn):
-            await self.machine.run(Command(("whoami",)))
+            result = await self.machine.run(Command(("whoami",)))
+            assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
         async def grade(self, messages):
@@ -1309,7 +1318,59 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()}, sessions={"fixture": Session}
     ).run(lowered(task, machine=machine_runtime(user="learner"), task_session="fixture"))
     assert record.grade.reward == 1.0
-    assert [command.user for command in commands] == ["0", "learner"]
+    assert commands[0].user == "0"
+    assert all(command.user == "learner" for command in commands[1:])
+    assert closed.is_set()
+
+
+@pytest.mark.parametrize("failure", ["unsupported_su", "exit", "timeout"])
+async def test_execution_user_preflight_fails_during_start_before_model_inference(failure):
+    closed = asyncio.Event()
+
+    class MissingSessionOption:
+        async def exec(self, command):
+            assert command == "su --help"
+            return SimpleNamespace(exit_code=0, result="su -c command")
+
+    class FailedProbeMachine:
+        async def run(self, command):
+            assert command.user == "learner"
+            return Result(
+                126 if failure == "exit" else None,
+                b"",
+                b"",
+                False,
+                False,
+                ExitReason.EXITED if failure == "exit" else ExitReason.TIMED_OUT,
+            )
+
+        async def close(self):
+            closed.set()
+
+    class Factory:
+        async def create(self, spec):
+            if failure != "unsupported_su":
+                return FailedProbeMachine()
+            resources = AsyncExitStack()
+            resources.callback(closed.set)
+            return DaytonaMachine(SimpleNamespace(process=MissingSessionOption()), spec, resources)
+
+    model = ReplayModel([])
+    task = arithmetic_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(docker_image=FIXTURE_IMAGE)}
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(model, {"local": Factory()}).run(lowered(task, machine=machine_runtime(user="learner")))
+    assert caught.value.operation == RolloutOperation.START
+    assert isinstance(
+        caught.value.__cause__,
+        {
+            "unsupported_su": UnsupportedMachineSpec,
+            "exit": RuntimeError,
+            "timeout": TimeoutError,
+        }[failure],
+    )
+    assert model.requests == []
     assert closed.is_set()
 
 

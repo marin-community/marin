@@ -6,17 +6,21 @@
 import asyncio
 import sys
 import tracemalloc
+from contextlib import AsyncExitStack
+from types import SimpleNamespace
 
 import pytest
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine
+from shellbox.backends.daytona.machine import DaytonaMachine, DaytonaMachineFactory
+from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
 from shellbox.backends.gvisor.machine import GvisorMachine
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
+    Command,
     DockerImage,
     DownloadLimitExceeded,
+    ExitReason,
     MachineSpec,
     QemuBundle,
     ShellSimBuiltins,
@@ -118,6 +122,91 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
             assert not list(tmp_path.glob(".shellbox-download-*"))
             if client is not None:
                 assert client.sandbox.fs.download_closed
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("backend", ["docker", "daytona"])
+def test_nonroot_pid_tampering_cannot_authorize_a_root_kill(backend, monkeypatch):
+    # The Daytona SDK boundary uses Docker only to test real guest UIDs and processes.
+    # This is not a live Daytona service test.
+    async def scenario():
+        guest = await DockerMachineFactory().create(MachineSpec(DockerImage("ubuntu:24.04"), workdir="/tmp"))
+        victim_survived = False
+
+        async def checked_docker(*args, **kwargs):
+            nonlocal victim_survived
+            if args[:2] == ("rm", "-f"):
+                result = await docker("exec", "--user", "0", guest.name, "sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')
+                victim_survived = result.exit_code == 0
+            return await docker(*args, **kwargs)
+
+        monkeypatch.setattr("shellbox.backends.docker.machine.docker", checked_docker)
+
+        class GuestProcess:
+            async def exec(self, command, cwd=None, env=None, timeout=None):
+                args = ["exec", "--user", "0"]
+                if cwd:
+                    args.extend(("-w", cwd))
+                for key, value in (env or {}).items():
+                    args.extend(("-e", f"{key}={value}"))
+                result = await docker(*args, guest.name, "sh", "-c", command, timeout=timeout)
+                return SimpleNamespace(exit_code=result.exit_code, result=result.stdout.decode())
+
+        class GuestFiles:
+            async def download_file(self, source):
+                result = await docker("exec", "--user", "0", guest.name, "cat", source)
+                assert result.exit_code == 0
+                return result.stdout
+
+        resources = AsyncExitStack()
+        resources.push_async_callback(guest.close)
+        machine = (
+            guest
+            if backend == "docker"
+            else DaytonaMachine(SimpleNamespace(process=GuestProcess(), fs=GuestFiles()), guest.spec, resources)
+        )
+        try:
+            await guest.run(Command(("sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")))
+            candidate = Command(
+                (
+                    "sh",
+                    "-c",
+                    "victim=$(cat /tmp/victim.pid); "
+                    "for file in /tmp/.shellbox-command-* /tmp/.shellbox-*/pid; do "
+                    '[ ! -w "$file" ] || printf "%s\\n" "$victim" > "$file"; done; '
+                    "sleep 3600 & echo $! > /tmp/candidate-child.pid; wait",
+                ),
+                user="nobody",
+                timeout=1,
+            )
+            if backend == "docker":
+                with pytest.raises(TimeoutError):
+                    await machine.run(candidate)
+                assert victim_survived
+                disposed = await docker("inspect", guest.name)
+                assert disposed.exit_code != 0
+            else:
+                result = await machine.run(candidate)
+                assert result.reason is ExitReason.TIMED_OUT
+                result = await guest.run(Command(("sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')))
+                assert result.exit_code == 0
+                followup = await machine.run(Command(("printf", "ready"), user="nobody"))
+                assert (followup.exit_code, followup.stdout) == (0, b"ready")
+                child = await guest.run(
+                    Command(
+                        (
+                            "sh",
+                            "-c",
+                            'path="/proc/$(cat /tmp/candidate-child.pid)/stat"; '
+                            'if [ -f "$path" ]; then read pid comm state rest < "$path"; test "$state" = Z; fi',
+                        )
+                    )
+                )
+                assert child.exit_code == 0
         finally:
             await machine.close()
 

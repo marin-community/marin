@@ -162,7 +162,7 @@ class DockerMachine:
             )
         except (TimeoutError, asyncio.CancelledError) as interruption:
             try:
-                await self._interrupt(pidfile)
+                await self._interrupt(pidfile, command.user)
             except Exception:
                 logger.exception("Cannot stop the Docker command process group")
                 try:
@@ -182,11 +182,12 @@ class DockerMachine:
             ExitReason.EXITED,
         )
 
-    async def _interrupt(self, pidfile: str) -> None:
+    async def _interrupt(self, pidfile: str, user: str | None) -> None:
+        args = ["exec"]
+        if user is not None:
+            args.extend(("--user", user))
         result = await docker(
-            "exec",
-            "--user",
-            "0",
+            *args,
             self.name,
             "sh",
             "-c",

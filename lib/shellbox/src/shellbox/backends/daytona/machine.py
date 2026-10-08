@@ -124,8 +124,21 @@ class DaytonaMachine:
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
-        stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
-        pidfile = f"{prefix}-pid"
+        stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
+        pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
+        argv = command.argv
+        if command.user not in (None, "root", "0"):
+            user = command.user
+            # su accepts names. Resolve a numeric UID in the guest's account database.
+            if user.isdecimal():
+                account = await self.sandbox.process.exec(f"getent passwd {shlex.quote(user)}")
+                if account.exit_code or not account.result.strip():
+                    raise ValueError(f"Execution user {user} has no guest account")
+                user = account.result.split(":", 1)[0]
+            capabilities = await self.sandbox.process.exec("su --help")
+            if capabilities.exit_code or "--session-command" not in capabilities.result:
+                raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
+            argv = ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
         argv = (
             "sh",
             "-c",
@@ -136,22 +149,17 @@ class DaytonaMachine:
             RUN_COMMAND,
             "shellbox-command",
             pidfile,
-            *command.argv,
+            *argv,
         )
-        if command.user not in (None, "root", "0"):
-            user = command.user
-            # su accepts names. Resolve a numeric UID in the guest's account database.
-            if user.isdecimal():
-                account = await self.sandbox.process.exec(f"getent passwd {shlex.quote(user)}")
-                if account.exit_code or not account.result.strip():
-                    raise ValueError(f"Execution user {user} has no guest account")
-                user = account.result.split(":", 1)[0]
-            argv = ("su", "-s", "/bin/sh", "-m", user, "-c", shlex.join(argv))
         script = (
             f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
+            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}; "
+            f"status=$?; touch {shlex.quote(completed_path)}; exit $status"
         )
         try:
+            prepared = await self.sandbox.process.exec(f"umask 077; mkdir {shlex.quote(prefix)}")
+            if prepared.exit_code:
+                raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
             if command.stdin:
                 await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
             operation = self.sandbox.process.exec(
@@ -176,7 +184,8 @@ class DaytonaMachine:
             try:
                 async with asyncio.timeout(INTERRUPT_TIMEOUT):
                     stopped = await self.sandbox.process.exec(
-                        shlex.join(("sh", "-c", STOP_COMMAND, "stop-command", pidfile))
+                        f"if [ -f {shlex.quote(completed_path)} ]; then exit 0; fi; "
+                        + shlex.join(("sh", "-c", STOP_COMMAND, "stop-command", pidfile))
                     )
                     if stopped.exit_code:
                         raise RuntimeError(stopped.result)
@@ -189,10 +198,7 @@ class DaytonaMachine:
             raise
         finally:
             if not self._closed:
-                await self.sandbox.process.exec(
-                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)} "
-                    f"{shlex.quote(pidfile)}"
-                )
+                await self.sandbox.process.exec(f"rm -rf {shlex.quote(prefix)}")
 
     async def upload(self, source: Path, target: str) -> None:
         if self._closed:

@@ -235,7 +235,7 @@ def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeyp
                 if interruption == "timeout":
                     raise TimeoutError("Docker exec startup timed out")
                 await asyncio.Future()
-            elif args[:3] == ("exec", "--user", "0"):
+            elif args[0] == "exec" and "stop-command" in args:
                 return DockerCommandResult(1, b"", b"Command PID is not available")
             elif args[:2] == ("rm", "-f"):
                 containers.remove(args[2])
