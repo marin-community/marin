@@ -1,48 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL code and text-to-SQL sources, graded by their source scorers in the grader image.
+"""SkyRL code and text-to-SQL sources, graded by their vendored source scorers.
 
-Each reply is scored by a ``*_grade.py`` script next to this module that calls the scorer the
-image installs: the APPS evaluator for APPS, the SkyRL LiveCodeBench evaluator for Eurus-2 and
-verifiable-coding problems, and the SkyRL text-to-SQL comparator for Gretel. The script receives
-the hidden cases in ``config.json``; ``config.json`` also keeps the source's known solution, which
-the golden control replays.
+Each task ships a grade script from beside this module with the scorer it imports from
+``scorers/``: the APPS evaluator for APPS, the SkyRL LiveCodeBench evaluator for Eurus-2 and
+verifiable-coding problems, and the SkyRL text-to-SQL comparator for Gretel. Conversion prepares
+LiveCodeBench cases and the text-to-SQL ground truth with the scorer's own preparation functions,
+as SkyRL's dataset builders do, so a row the scorer cannot grade is rejected here rather than
+failing at grading. ``config.json`` also keeps the source's known solution, which the golden
+control replays.
 """
 
 import json
-import re
-import sqlite3
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.code import (
-    CODE_GRADER_MEMORY_MB,
-    FAILING_PROGRAM,
-    THREAD_ENVIRONMENT,
-    python_reply,
-    validate_code_cases,
-)
-from taskcompendium.convert.conversation import conversation_task
-from taskcompendium.convert.source_scorer import grade_script_package
+from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, FAILING_PROGRAM, THREAD_ENVIRONMENT, python_reply
 from taskcompendium.grader import grader_config
-from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
 
+from experiments.post_training.task_curation.datasets.skyrl.scorer_tasks import SCORERS, scorer_task
+from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
-APPS_GRADE = "apps_grade.py"
-LCB_GRADE = "lcb_grade.py"
-SQL_GRADE = "sql_grade.py"
-GRADE_SCRIPTS = {name: Path(__file__).with_name(name).read_bytes() for name in (APPS_GRADE, LCB_GRADE, SQL_GRADE)}
-APPS_TESTING_UTIL_PATH = "/opt/apps/eval/testing_util.py"
-APPS_TESTING_UTIL_SHA256 = "9a4e58ff2634ef606c42597457c0733910862e0588ea750d901265bbfe65d36f"
-SKYRL_GYM_ROOT = "/opt/skyrl_gym"
+APPS_GRADE = Path(__file__).with_name("apps_grade.py")
+LCB_GRADE = Path(__file__).with_name("lcb_grade.py")
+SQL_GRADE = Path(__file__).with_name("sql_grade.py")
 GRADER_TIMEOUT = 330.0
 CODE_INSTRUCTION = "\nReturn the complete Python solution in this format:\n```python\n# solution\n```"
 SQL_INSTRUCTION = (
@@ -50,9 +40,6 @@ SQL_INSTRUCTION = (
     "answers the question. Return only the query, inside <solution></solution>."
 )
 FAILING_SQL = "SELECT FROM"
-NONDETERMINISTIC_SQL = re.compile(
-    r"\b(?:random|randomblob|current_date|current_time|current_timestamp)\b", re.IGNORECASE
-)
 
 APPS_RUBRIC = """
 Check the public problem and starter code against every hidden test. Multiple valid outputs and permissive source
@@ -94,26 +81,27 @@ def _with_instruction(events: Sequence[TextMessage], instruction: str) -> tuple[
 
 def scored_task(
     row: RawRow,
+    context: ConversionContext,
     *,
     events: Sequence[TextMessage],
     instruction: str,
-    script: str,
+    script: Path,
     scorer: str,
-    environment: EnvironmentRequirements,
     config: Mapping[str, Any],
     evidence: Mapping[str, Any],
 ) -> TaskSpec:
-    """A conversation task whose reply ``script`` grades by calling the ``scorer`` installed in ``environment``."""
-    package = grade_script_package(
-        script,
-        GRADE_SCRIPTS[script],
-        leading_args=(scorer,),
+    """A conversation task whose reply ``script`` grades with the vendored ``scorer``."""
+    return scorer_task(
+        row,
+        events=_with_instruction(events, instruction),
+        script=script,
+        scorer=scorer,
         config=config,
-        environment=environment,
+        environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
         env=THREAD_ENVIRONMENT,
+        evidence=evidence,
     )
-    return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
 
 
 def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -138,14 +126,13 @@ def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRe
     prompt = question + (f"\n\nStarter code:\n{starter}" if starter else "")
     return scored_task(
         row,
+        context,
         events=(TextMessage(role="user", content=prompt),),
         instruction=CODE_INSTRUCTION,
         script=APPS_GRADE,
-        scorer=APPS_TESTING_UTIL_PATH,
-        environment=required_grader_environment(context),
+        scorer="apps_testing_util.py",
         config={
-            "apps_source_sha256": APPS_TESTING_UTIL_SHA256,
-            "input_output": encoded,
+            "input_output": tests,
             "reference_reply": next((reply for reply in map(python_reply, solutions) if reply is not None), None),
         },
         evidence={
@@ -154,26 +141,44 @@ def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRe
     )
 
 
+def lcb_test_cases(source_cases: Any) -> list[dict[str, Any]]:
+    """The LiveCodeBench evaluator's canonical cases for a source's test layout.
+
+    Raises ``ValueError`` or ``TypeError`` for a layout the evaluator cannot normalize, and
+    ``json.JSONDecodeError`` for a functional case whose arguments or result are not JSON: the
+    evaluator decodes those only when it runs a reply, and then fails every reply.
+    """
+    cases = json.loads(livecodebench.normalize_lcb_ground_truth(source_cases))
+    if cases[0]["testtype"] == livecodebench.FUNCTIONAL_TEST_TYPE:
+        for case in cases:
+            for argument in case["input"].split("\n"):
+                json.loads(argument)
+            json.loads(case["output"])
+    return cases
+
+
 def _lcb_task(
     row: RawRow,
+    context: ConversionContext,
     events: Sequence[TextMessage],
-    test_cases: Mapping[str, Any] | list[Any],
+    source_cases: Any,
     reference: str | None,
     evidence: Mapping[str, Any],
-    environment: EnvironmentRequirements,
 ) -> TaskSpec | ImportRejection:
     try:
-        validate_code_cases(test_cases)
+        cases = lcb_test_cases(source_cases)
+    except json.JSONDecodeError as error:
+        return source_defect("invalid_test_cases", f"Functional test case is not JSON: {error}")
     except (ValueError, TypeError) as error:
         return unsupported("unsupported_test_cases", str(error))
     return scored_task(
         row,
+        context,
         events=events,
         instruction=CODE_INSTRUCTION,
         script=LCB_GRADE,
-        scorer=SKYRL_GYM_ROOT,
-        environment=environment,
-        config={"test_cases": test_cases, "reference_reply": reference},
+        scorer="livecodebench.py",
+        config={"test_cases": cases, "reference_reply": reference},
         evidence=evidence,
     )
 
@@ -187,14 +192,10 @@ def convert_eurus2_code(row: RawRow, context: ConversionContext) -> TaskSpec | I
     ground_truth = reward.get("ground_truth") if isinstance(reward, dict) else None
     if not isinstance(messages, list) or not messages or not isinstance(ground_truth, str) or not ground_truth:
         return source_defect("missing_prompt_or_tests", "prompt and reward_model ground_truth are required")
-    try:
-        test_cases = json.loads(ground_truth)
-    except json.JSONDecodeError as error:
-        return unsupported("unsupported_test_cases", str(error))
     events = tuple(TextMessage(role=message["role"], content=message["content"]) for message in messages)
     evidence = {key: row.data[key] for key in ("extra_info", "data_source", "ability") if key in row.data}
     # Eurus-2 publishes no solutions, so these tasks have no golden control.
-    return _lcb_task(row, events, test_cases, None, evidence, required_grader_environment(context))
+    return _lcb_task(row, context, events, ground_truth, None, evidence)
 
 
 def convert_verifiable_code(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -210,31 +211,37 @@ def convert_verifiable_code(row: RawRow, context: ConversionContext) -> TaskSpec
         if key in row.data
     }
     return _lcb_task(
-        row,
-        (TextMessage(role="user", content=problem),),
-        verification,
-        python_reply(solution),
-        evidence,
-        required_grader_environment(context),
+        row, context, (TextMessage(role="user", content=problem),), verification, python_reply(solution), evidence
     )
 
 
-def validate_seeded_reference(context: str, reference: str) -> None:
-    """Reject a reference that is not one deterministic SELECT running on a seeded SQLite database."""
-    if re.match(r"\s*(?:select|with)\b", reference, re.IGNORECASE) is None or ";" in reference.strip().rstrip(";"):
-        raise ValueError("Reference must be one SELECT")
-    if NONDETERMINISTIC_SQL.search(reference):
-        raise ValueError("Reference is nondeterministic")
-    if not re.search(r"\bcreate\s+(?:temp(?:orary)?\s+)?table\b", context, re.IGNORECASE):
-        raise ValueError("Context has no CREATE TABLE")
-    if not re.search(r"\binsert\s+(?:into|or)\b", context, re.IGNORECASE):
-        raise ValueError("Context has no INSERT")
-    with sqlite3.connect(":memory:") as database:
-        try:
-            database.executescript(context)
-            database.execute(reference).fetchone()
-        except sqlite3.Error as error:
-            raise ValueError("Seeded reference cannot execute") from error
+def sql_ground_truth(sql_context: str, reference: str) -> dict[str, Any]:
+    """The text-to-SQL comparator's ground truth for a seeded context and its reference query.
+
+    Raises ``ValueError`` unless the context holds only CREATE TABLE and INSERT statements that
+    load in SQLite and the reference is one deterministic, read-only query that matches itself on
+    the seeded and perturbed databases.
+    """
+    statements: dict[str, list[str]] = {"create_table": [], "insert": []}
+    for statement in text_to_sql_scoring.split_statements(sql_context):
+        kind = text_to_sql_scoring.classify_statement(statement)
+        if kind not in statements:
+            raise ValueError(f"Context has a {kind} statement")
+        statements[kind].append(statement)
+    ground_truth = json.loads(
+        text_to_sql_scoring.normalize_ground_truth(
+            {
+                "schema_sql": ";\n".join(statements["create_table"]),
+                "insert_sql": ";\n".join(statements["insert"]),
+                "reference_sql": reference,
+                "order_significant": text_to_sql_scoring.has_top_level_order_by(reference),
+            }
+        )
+    )
+    outcome, detail = text_to_sql_scoring.grade(ground_truth, reference)
+    if outcome != text_to_sql_scoring.GradeOutcome.MATCH:
+        raise ValueError(f"Reference does not grade as correct: {detail}")
+    return ground_truth
 
 
 def convert_gretel_text_to_sql(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -243,21 +250,17 @@ def convert_gretel_text_to_sql(row: RawRow, context: ConversionContext) -> TaskS
         return source_defect("missing_prompt_or_reference", "SQL prompt, context and reference are required")
     assert isinstance(sql_context, str) and isinstance(reference, str)
     try:
-        validate_seeded_reference(sql_context, reference)
+        ground_truth = sql_ground_truth(sql_context, reference)
     except ValueError as error:
         return unsupported("unsupported_sql_context", str(error))
     return scored_task(
         row,
+        context,
         events=(TextMessage(role="user", content=f"{question}\n\nDatabase context:\n{sql_context}"),),
         instruction=SQL_INSTRUCTION,
         script=SQL_GRADE,
-        scorer=SKYRL_GYM_ROOT,
-        environment=required_grader_environment(context),
-        config={
-            "reference_sql": reference,
-            "context_sql": sql_context,
-            "reference_reply": f"<solution>{reference}</solution>",
-        },
+        scorer="text_to_sql_scoring.py",
+        config={"ground_truth": ground_truth, "reference_reply": f"<solution>{reference}</solution>"},
         evidence={
             key: row.data[key] for key in ("sql_explanation", "sql_complexity", "sql_task_type", "id") if key in row.data
         },
@@ -296,6 +299,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=APPS_RUBRIC,
             controls=CODE_CONTROLS,
             grader_image=GRADER,
+            ships=(SCORERS,),
             atlas_id="MarinSkyRL:apps",
         ),
         RlDataPipeline(
@@ -314,6 +318,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=EURUS2_CODE_RUBRIC,
             controls=CODE_CONTROLS,
             grader_image=GRADER,
+            ships=(SCORERS,),
             atlas_id="MarinSkyRL:eurus2_code",
         ),
         RlDataPipeline(
@@ -331,6 +336,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=VERIFIABLE_CODE_RUBRIC,
             controls=CODE_CONTROLS,
             grader_image=GRADER,
+            ships=(SCORERS,),
             atlas_id="MarinSkyRL:verifiable_code",
         ),
         RlDataPipeline(
@@ -348,6 +354,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
             controls=SQL_CONTROLS,
             grader_image=GRADER,
+            ships=(SCORERS,),
             atlas_id="MarinSkyRL:gretel_text_to_sql",
         ),
     ]

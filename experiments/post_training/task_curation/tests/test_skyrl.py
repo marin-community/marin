@@ -27,6 +27,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
+from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import source_files
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_IMAGE,
@@ -256,13 +257,11 @@ def test_gpqa_shuffles_choices_and_keys_the_correct_option():
 
 
 @pytest.mark.parametrize("name", sorted(CODE_SOURCES))
-def test_code_task_ships_its_scorer_cases_and_known_solution(name):
+def test_code_task_golden_control_replays_the_known_solution(name):
     task = converted_task(PIPELINES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
     assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
-    script = grader.argv[1].removeprefix("/tests/")
-    assert verifier_file(task, script) == code.GRADE_SCRIPTS[script]
     final_prompt = task.context.events[-1]
     assert isinstance(final_prompt, TextMessage) and final_prompt.role == "user"
     golden = code.reference_solution(task)
@@ -284,21 +283,21 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert not pipeline.source.select({**ROWS["eurus2_code"], "ability": "math"}, fixture_context(pipeline))
     task = converted_task(pipeline, ROWS["eurus2_code"])
     assert [event.role for event in task.context.events] == ["system", "user"]
-    assert grader_config(task)["test_cases"] == SUM_TESTS
+    assert grader_config(task)["test_cases"] == [{"input": "1 2\n", "output": "3\n", "testtype": "stdin"}]
 
 
 @pytest.mark.parametrize(
     ("name", "constraints"),
     [
         ("nemotron_if", [{"func_name": "validate_lowercase"}]),
-        ("rlvr_ifeval", {"func_name": "validate_no_commas"}),
+        ("rlvr_ifeval", [{"func_name": "validate_no_commas"}]),
     ],
 )
-def test_ifeval_task_calls_the_source_scorer_with_skyrl_constraints(name, constraints):
+def test_ifeval_task_gives_the_scorer_skyrl_constraints(name, constraints):
     task = converted_task(PIPELINES[name], ROWS[name])
     assert isinstance(task.grader, ScriptGrader)
     assert task.grader.environment.docker_image == FIXTURE_GRADER_IMAGE
-    assert json.loads(verifier_file(task, "config.json"))["contract"]["constraints"] == constraints
+    assert grader_config(task)["constraints"] == constraints
 
 
 def test_nemotron_repeat_prompt_constraint_receives_the_instruction():
@@ -310,8 +309,55 @@ def test_nemotron_repeat_prompt_constraint_receives_the_instruction():
         },
     }
     task = converted_task(PIPELINES["nemotron_if"], row)
-    (constraint,) = json.loads(verifier_file(task, "config.json"))["contract"]["constraints"]
+    (constraint,) = grader_config(task)["constraints"]
     assert constraint == {"func_name": "validate_repeat_prompt", "original_prompt": row["input"][0]["content"]}
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        *(
+            [{"func_name": "validate_word_constraint", "N": bound, "quantifier": quantifier}]
+            for quantifier, bound in (("at least", 50), ("less than", 3), ("at most", 3), ("around", 2))
+        ),
+        *(
+            [{"func_name": "verify_sentence_constraint", "N": bound, "quantifier": quantifier}]
+            for quantifier, bound in (("at least", 3), ("less than", 2), ("at most", 2), ("around", 1))
+        ),
+        [{"func_name": "validate_frequency_capital_words", "N": 2, "quantifier": "at most"}],
+        [{"func_name": "validate_sections", "N": 1, "section_splitter": "SECTION"}],
+        [{"func_name": "verify_paragraph_count", "N": 1}],
+        [{"func_name": "validate_paragraphs", "N": 1, "first_word": "rain", "i": 1}],
+        [{"func_name": "verify_bullet_points", "N": 0}],
+        [{"func_name": "verify_letter_frequency", "letter": "z", "N": 1}],
+        # RLVR-IFeval gives options as one string, which the scorer searches character by character.
+        [{"func_name": "validate_choice", "options": "yes/no/maybe"}],
+        [
+            {"func_name": "verify_keywords", "keyword_list": ["rain"]},
+            {
+                "func_name": "verify_keyword_frequency_relation",
+                "keyword_list": ["cloud"],
+                "N": 2,
+                "quantifier": "less than",
+            },
+            {"func_name": "validate_forbidden_words", "forbidden_words": ["storm"]},
+            {"func_name": "validate_no_commas"},
+            {"func_name": "validate_lowercase"},
+            {"func_name": "validate_uppercase"},
+            {"func_name": "validate_highlighted_sections", "N": 2},
+            {"func_name": "validate_placeholders", "N": 1},
+            {"func_name": "verify_postscript", "postscript_marker": "P.S."},
+            {"func_name": "validate_title"},
+            {"func_name": "validate_end", "end_phrase": "That's all."},
+            {"func_name": "validate_quotation"},
+            {"func_name": "validate_json_format"},
+            {"func_name": "validate_two_responses"},
+            {"func_name": "validate_repeat_prompt", "original_prompt": "Write a haiku about rain."},
+        ],
+    ],
+)
+def test_ifeval_violating_reply_fails_every_constraint(constraints):
+    assert ifeval_utils.compute_score(ifeval.violating_text(constraints), constraints)["score"] == 0.0
 
 
 @pytest.mark.parametrize("name", sorted(PREFERENCE_SOURCES))
@@ -354,10 +400,18 @@ REJECTIONS = [
         "unsupported_test_cases",
     ),
     (
-        "gretel_text_to_sql",
-        {"sql_context": "CREATE TABLE t (v INTEGER);"},
-        ImportFailureKind.UNSUPPORTED,
-        "unsupported_sql_context",
+        "eurus2_code",
+        {"reward_model": {"ground_truth": json.dumps({"inputs": ["1 2"], "outputs": ["3"], "fn_name": "add"})}},
+        ImportFailureKind.SOURCE_DEFECT,
+        "invalid_test_cases",
+    ),
+    *(
+        ("gretel_text_to_sql", changes, ImportFailureKind.UNSUPPORTED, "unsupported_sql_context")
+        for changes in (
+            {"sql_context": "CREATE TABLE t (v INTEGER);"},
+            {"sql_context": f"{ROWS['gretel_text_to_sql']['sql_context']} CREATE VIEW w AS SELECT v FROM t;"},
+            {"sql": "SELECT missing FROM t"},
+        )
     ),
     (
         "numina_math",

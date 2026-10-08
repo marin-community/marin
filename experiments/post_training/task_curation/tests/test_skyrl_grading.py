@@ -1,202 +1,152 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The SkyRL grader scripts turn their source scorers' verdicts into binary rewards.
+"""SkyRL grade scripts score replies with the vendored scorers in the grader image.
 
-The scorers live only in the grader image, so each test stands in a small scorer with the same
-interface and runs the packaged script as the grader machine does.
+Each test converts a fixture row and grades it the way a campaign does, in a fresh container of the
+locally built grader image, which stands in for the task's pinned grader image. Build it from the
+repository root with::
+
+    docker build --platform linux/amd64 --build-context verifyit=lib/verifyit/src/verifyit \\
+        -t local/task-curation-grader:test experiments/post_training/task_curation/images/grader
 """
 
-import hashlib
+import asyncio
 import json
+import shutil
 import subprocess
-import sys
-from pathlib import Path
+from dataclasses import replace
+from typing import Any
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
+from shellbox.machine import Backend, DockerImage, MachineSpec
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage
+from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.models import CheckStatus
+from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.datasets.skyrl import code
+from experiments.post_training.task_curation.tests.conversion import converted_task
+from experiments.post_training.task_curation.tests.test_skyrl import PIPELINES, ROWS, SUM_SOLUTION
 
-APPS_TESTING_UTIL = """
-def run_test(*, problem, test):
-    assert problem["input_output"]["inputs"] == ["1 2\\n"]
-    return [1, 1] if "print(a + b)" in test else [1, -1]
-"""
+pytestmark = pytest.mark.docker
 
-LCB_MODULE = """
-FUNCTIONAL_TEST_TYPE = "functional"
-
-
-class TestExecutionMode:
-    stop_on_failure = "stop_on_failure"
-
-
-def normalize_lcb_ground_truth(value):
-    return value
-
-
-def extract_code_from_model(answer):
-    start = answer.find("```python\\n")
-    return answer[start + 10 : answer.rindex("```")] if start >= 0 else None
+GRADER_IMAGE = "local/task-curation-grader:test"
+GRADING_MEMORY_MB = 5120
+NOISY_ADD = '```python\ndef add(a, b):\n    print("x" * 20000)\n    return a + b\n```'
+"""A correct function that prints more than the runtime keeps of a grader's stdout."""
 
 
-def lcb_execution_result(tests, code, execution_mode):
-    assert execution_mode == TestExecutionMode.stop_on_failure
-    return [test["output"] in code for test in tests], {"cases": len(tests)}
-"""
+class LocalGraderImage:
+    """Starts the locally built grader image whatever grader image the task pins."""
 
-SQL_MODULE = """
-import enum
-import sqlite3
+    backend = Backend.DOCKER
 
-
-class GradeOutcome(enum.Enum):
-    INFRA = "infra"
-    MATCH = "match"
-    MISMATCH = "mismatch"
+    async def create(self, spec: MachineSpec) -> DockerMachine:
+        return await DockerMachineFactory().create(replace(spec, source=DockerImage(GRADER_IMAGE)))
 
 
-def split_statements(text):
-    return [part.strip() for part in text.split(";") if part.strip()]
+class LocalGradingMachines:
+    """Grading machines from the local Docker daemon, requested the way a campaign's controls request them."""
+
+    def identity(self) -> dict[str, Any]:
+        return {"backend": Backend.DOCKER}
+
+    def machine(self, image: str, memory_mb: int) -> tuple[LocalGraderImage, MachineSpec]:
+        return LocalGraderImage(), MachineSpec(DockerImage(image), memory_mb=memory_mb)
 
 
-def classify_statement(text):
-    lowered = text.lower()
-    if lowered.startswith("create table"):
-        return "create_table"
-    return "insert" if lowered.startswith("insert") else "select"
+@pytest.fixture(scope="module")
+def machines() -> LocalGradingMachines:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker is not installed")
+    inspected = subprocess.run(["docker", "image", "inspect", GRADER_IMAGE], capture_output=True, check=False)
+    if inspected.returncode != 0:
+        pytest.skip(f"{GRADER_IMAGE} is not built; see this module's docstring")
+    return LocalGradingMachines()
 
 
-def create_table_is_schema_qualified(text):
-    return False
-
-
-def create_table_name(text):
-    return text.split()[2]
-
-
-def is_nondeterministic(text):
-    return False
-
-
-def has_top_level_order_by(text):
-    return "order by" in text.lower()
-
-
-def extract_sql(text):
-    return text.removeprefix("<solution>").removesuffix("</solution>")
-
-
-def grade(spec, query):
-    database = sqlite3.connect(":memory:")
-    database.executescript(spec["schema_sql"] + spec["insert_sql"])
-    try:
-        expected = sorted(database.execute(spec["reference_sql"]).fetchall())
-    except sqlite3.Error as error:
-        return GradeOutcome.INFRA, str(error)
-    try:
-        actual = sorted(database.execute(query).fetchall())
-    except sqlite3.Error as error:
-        return GradeOutcome.MISMATCH, str(error)
-    return (GradeOutcome.MATCH if actual == expected else GradeOutcome.MISMATCH), {"rows": len(actual)}
-"""
-
-
-def run_script(tmp_path: Path, script: str, scorer: Path, config: dict, answer: str) -> subprocess.CompletedProcess:
-    (tmp_path / "config.json").write_text(json.dumps(config))
-    (tmp_path / "answer.txt").write_text(answer)
-    return subprocess.run(
-        [
-            sys.executable,
-            str(Path(code.__file__).with_name(script)),
-            str(scorer),
-            str(tmp_path / "config.json"),
-            str(tmp_path / "answer.txt"),
-            str(tmp_path / "score.json"),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+def grade(task: TaskSpec, reply: str, machines: LocalGradingMachines) -> GradeResult:
+    assert task.grader.environment is not None and task.grader.environment.docker_image is not None
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
     )
-
-
-def reward(tmp_path: Path, completed: subprocess.CompletedProcess) -> float:
-    assert completed.returncode == 0, completed.stderr
-    return json.loads((tmp_path / "score.json").read_text())["reward"]
-
-
-def skyrl_gym_root(tmp_path: Path, module: str, source: str) -> Path:
-    """A SkyRL checkout holding only ``module``, laid out as the image installs it."""
-    root = tmp_path / "skyrl_gym_root"
-    path = root / (module.replace(".", "/") + ".py")
-    path.parent.mkdir(parents=True)
-    for package in path.relative_to(root).parents:
-        if package != Path("."):
-            (root / package / "__init__.py").write_text("")
-    path.write_text(source)
-    return root
+    machine = machines.machine(task.grader.environment.docker_image, GRADING_MEMORY_MB)
+    return asyncio.run(grade_in_sandbox(task, attempt, *machine))
 
 
 @pytest.mark.parametrize(
-    ("answer", "expected"),
+    ("name", "golden"),
     [
-        ("```python\na, b = map(int, input().split())\nprint(a + b)\n```", 1.0),
-        ("```python\nprint(a - b)\n```", 0.0),
-        ("print(a + b)", 0.0),
+        ("apps", CheckStatus.PASS),
+        ("eurus2_code", CheckStatus.SKIPPED),
+        ("verifiable_code", CheckStatus.PASS),
+        ("gretel_text_to_sql", CheckStatus.PASS),
+        ("nemotron_if", CheckStatus.SKIPPED),
+        ("rlvr_ifeval", CheckStatus.SKIPPED),
     ],
 )
-def test_apps_grade_requires_every_case_to_pass(tmp_path, answer, expected):
-    scorer = tmp_path / "testing_util.py"
-    scorer.write_text(APPS_TESTING_UTIL)
-    config = {
-        "apps_source_sha256": hashlib.sha256(scorer.read_bytes()).hexdigest(),
-        "input_output": json.dumps({"inputs": ["1 2\n"], "outputs": ["3\n"]}),
-    }
-    assert reward(tmp_path, run_script(tmp_path, code.APPS_GRADE, scorer, config, answer)) == expected
-
-
-def test_apps_grade_refuses_a_changed_evaluator(tmp_path):
-    scorer = tmp_path / "testing_util.py"
-    scorer.write_text(APPS_TESTING_UTIL)
-    config = {"apps_source_sha256": "0" * 64, "input_output": json.dumps({"inputs": ["1 2\n"], "outputs": ["3\n"]})}
-    completed = run_script(tmp_path, code.APPS_GRADE, scorer, config, "```python\nprint(a + b)\n```")
-    assert completed.returncode != 0
-    assert not (tmp_path / "score.json").exists()
+def test_declared_controls_pass_in_the_grader_image(name, golden, machines):
+    """An empty and a wrong reply score 0, and the source's known solution, where it has one, scores 1."""
+    pipeline = PIPELINES[name]
+    assert pipeline.controls is not None
+    report = run_controls(converted_task(pipeline, ROWS[name]), controls=pipeline.controls, machines=machines)
+    statuses = {check.check: check.status for check in report.checks}
+    assert statuses == {"empty": CheckStatus.PASS, "golden": golden, "negative": CheckStatus.PASS}, report.checks
 
 
 @pytest.mark.parametrize(
-    ("answer", "expected"),
-    [("```python\nprint(3)  # 3\n```", 1.0), ("```python\nprint(4)\n```", 0.0), ("print(3)", 0.0)],
-)
-def test_lcb_grade_requires_every_case_to_pass(tmp_path, answer, expected):
-    root = skyrl_gym_root(tmp_path, "skyrl_gym.envs.lcb.livecodebench", LCB_MODULE)
-    config = {"test_cases": json.dumps([{"testtype": "stdin", "input": "", "output": "3"}])}
-    assert reward(tmp_path, run_script(tmp_path, code.LCB_GRADE, root, config, answer)) == expected
-
-
-@pytest.mark.parametrize(
-    ("answer", "expected"),
+    ("name", "scorer"),
     [
-        ("<solution>SELECT v AS renamed FROM t</solution>", 1.0),
-        ("<solution>SELECT DISTINCT v FROM t</solution>", 0.0),
-        (code.FAILING_SQL, 0.0),
+        ("apps", "apps_testing_util.py"),
+        ("verifiable_code", "livecodebench.py"),
+        ("gretel_text_to_sql", "text_to_sql_scoring.py"),
+        ("rlvr_ifeval", "ifeval_utils.py"),
     ],
 )
-def test_sql_grade_compares_results_on_the_seeded_database(tmp_path, answer, expected):
-    root = skyrl_gym_root(tmp_path, "skyrl_gym.envs.text_to_sql.scoring", SQL_MODULE)
-    config = {
-        "reference_sql": "SELECT v FROM t",
-        "context_sql": "CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1), (1), (2);",
-    }
-    assert reward(tmp_path, run_script(tmp_path, code.SQL_GRADE, root, config, answer)) == expected
+def test_grade_script_fails_rather_than_scoring_when_its_scorer_cannot_import(name, scorer, machines):
+    task = converted_task(PIPELINES[name], ROWS[name])
+    broken = inline_resource(scorer, b"import package_missing_from_the_grader_image\n")
+    verifier = tuple(broken if resource.path == scorer else resource for resource in task.resources.verifier)
+    task = task.model_copy(update={"resources": task.resources.model_copy(update={"verifier": verifier})})
+    result = grade(task, f"```python\n{SUM_SOLUTION}\n```", machines)
+    assert result.status == Outcome.INFRA_ERROR
+    assert result.diagnostics is not None and result.diagnostics["exit_code"] != 0
 
 
-def test_sql_grade_fails_on_a_reference_that_does_not_run(tmp_path):
-    root = skyrl_gym_root(tmp_path, "skyrl_gym.envs.text_to_sql.scoring", SQL_MODULE)
-    config = {
-        "reference_sql": "SELECT missing FROM t",
-        "context_sql": "CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1);",
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [("a calm haiku about rain.", 1.0), ("a calm haiku, about rain.", 0.5), ("A calm haiku, about rain.", 0.0)],
+)
+def test_ifeval_rewards_the_fraction_of_constraints_a_reply_meets(reply, reward, machines):
+    row = {
+        **ROWS["nemotron_if"],
+        "args": {
+            "instruction_id_list": ["change_case:english_lowercase", "punctuation:no_comma"],
+            "instruction_kwargs": [{}, {}],
+        },
     }
-    completed = run_script(tmp_path, code.SQL_GRADE, root, config, "<solution>SELECT v FROM t</solution>")
-    assert completed.returncode != 0
+    result = grade(converted_task(PIPELINES["nemotron_if"], row), reply, machines)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [
+        (NOISY_ADD, 1.0),
+        ("```python\ndef add(a, b):\n    raise SystemExit(0)\n```", 0.0),
+    ],
+)
+def test_apps_reward_survives_a_program_that_floods_stdout_or_exits(reply, reward, machines):
+    row = {**ROWS["apps"], "input_output": json.dumps({"inputs": [[1, 2]], "outputs": [3], "fn_name": "add"})}
+    result = grade(converted_task(PIPELINES["apps"], row), reply, machines)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+def test_lcb_reward_survives_a_program_that_floods_stdout(machines):
+    cases = [{"type": "functional", "fn_name": "add", "input": [1, 2], "output": 3}]
+    row = {**ROWS["verifiable_code"], "verification_info": {"language": "python", "test_cases": cases}}
+    result = grade(converted_task(PIPELINES["verifiable_code"], row), NOISY_ADD, machines)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)

@@ -1,37 +1,56 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score an APPS reply with the image-installed APPS evaluator: 1 when every hidden case passes.
+"""Score an APPS reply with the vendored APPS evaluator: 1 when every hidden case passes.
 
-Usage: apps_grade.py TESTING_UTIL CONFIG ANSWER SCORE. ``TESTING_UTIL`` is the evaluator's
-``testing_util.py``, checked against ``apps_source_sha256`` in the config before it runs.
+The evaluator runs the last fenced code block of ``/app/answer.txt`` against ``input_output`` from
+``/tests/config.json``. It executes the program in the calling process after disabling process and
+file functions there, so this script calls it from a child process: a program that ends the child,
+for example with ``sys.exit()`` in a call-based solution, or that runs past ``DEADLINE`` scores 0.
 """
 
-import hashlib
-import importlib.util
 import json
+import multiprocessing
+import os
 import re
 import sys
+from multiprocessing.connection import Connection
 from pathlib import Path
+
+sys.path.insert(0, "/tests")
+
+import apps_testing_util
+
+CODE_BLOCK = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
+DEADLINE = 300.0
+"""Seconds for all cases together, below the grader's timeout so that a stuck program scores 0."""
+
+
+def run_tests(problem: dict, program: str, results: Connection) -> None:
+    os.dup2(2, 1)  # The program's prints go to stderr; stdout carries only the reward.
+    results.send(apps_testing_util.run_test(problem=problem, test=program))
+
+
+def passes(problem: dict, program: str) -> bool:
+    receiver, sender = multiprocessing.Pipe(duplex=False)
+    child = multiprocessing.Process(target=run_tests, args=(problem, program, sender))
+    child.start()
+    sender.close()
+    try:
+        results = receiver.recv() if receiver.poll(DEADLINE) else None
+    except EOFError:
+        results = None
+    finally:
+        child.kill()
+        child.join()
+    return bool(results) and all(result == 1 for result in results)
 
 
 def main() -> None:
-    source, config_path, answer_path, score_path = map(Path, sys.argv[1:5])
-    config = json.loads(config_path.read_text())
-    if hashlib.sha256(source.read_bytes()).hexdigest() != config["apps_source_sha256"]:
-        raise ValueError("APPS evaluator source hash mismatch")
-    spec = importlib.util.spec_from_file_location("apps_testing_util", source)
-    assert spec is not None and spec.loader is not None
-    evaluator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(evaluator)
-
-    problem = {"input_output": json.loads(config["input_output"])}
-    blocks = re.findall(r"```(?:\w+)?\n(.*?)```", answer_path.read_text(), re.DOTALL)
-    reward = 0.0
-    if blocks:
-        results = evaluator.run_test(problem=problem, test=blocks[-1].strip())
-        reward = 1.0 if results and all(result == 1 for result in results) else 0.0
-    score_path.write_text(json.dumps({"reward": reward}))
+    config = json.loads(Path("/tests/config.json").read_text())
+    blocks = CODE_BLOCK.findall(Path("/app/answer.txt").read_text())
+    passed = bool(blocks) and passes({"input_output": config["input_output"]}, blocks[-1].strip())
+    print(1.0 if passed else 0.0)
 
 
 if __name__ == "__main__":

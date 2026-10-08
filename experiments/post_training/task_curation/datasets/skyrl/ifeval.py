@@ -1,39 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL instruction-following sources, graded by the pinned SkyRL IFEval scorer in the grader image.
+"""SkyRL instruction-following sources, graded by the vendored SkyRL IFEval scorer.
 
 The scorer rewards the fraction of constraints a reply satisfies. RLVR-IFeval rows already carry
-SkyRL constraint descriptors; Nemotron instruction IDs are mapped to the same descriptors. The
-sources publish no passing replies, so no control can check these graders offline.
+SkyRL constraint descriptors; Nemotron instruction IDs are mapped to the same descriptors.
+Conversion normalizes them with the scorer's own preparation function, which rejects unknown
+constraints and missing arguments. The sources publish no passing replies, so the controls check
+only that a reply violating every constraint scores 0.
 """
 
 import json
 import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.conversation import conversation_task
-from taskcompendium.convert.source_scorer import source_scorer_package
-from taskcompendium.models import ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.grader import grader_config
+from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
-from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
+from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
 
+from experiments.post_training.task_curation.datasets.skyrl.scorer_tasks import SCORERS, scorer_task
+from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
-IFEVAL_SCORER_PATH = "/opt/skyrl_gym/skyrl_gym/envs/ifeval/utils.py"
-IFEVAL_INVOCATION = {
-    "function": "pinned_skyrl_ifeval:compute_score",
-    "source_path": IFEVAL_SCORER_PATH,
-    # SkyRL revision 544d5d6f14116a06bde0209352585903133bd618.
-    "source_sha256": "3194b7a44ada0a4cd185ab3c85d883f85da8641970fef3dfc4b66d13780079fc",
-    "args": ["answer", "contract.constraints"],
-    "reward_key": "score",
-}
+IFEVAL_GRADE = Path(__file__).with_name("ifeval_grade.py")
 GRADER_TIMEOUT = 40.0
+FILLER = "vx"
+"""A word no constraint names; the violating reply pads counts with it."""
 
 RUBRIC = """
 Identify every public content request and requirement across the complete conversation; do not discard earlier
@@ -52,6 +51,8 @@ Missing requested documents or inputs are defects.
 """
 
 # Nemotron instruction ID -> (SkyRL constraint function, {Nemotron argument: SkyRL argument}).
+# keywords:letter_frequency has no entry: Nemotron asks for a relation such as "at least N times",
+# and the scorer's letter check counts exactly N.
 NEMOTRON_CONSTRAINTS: dict[str, tuple[str, dict[str, str]]] = {
     "keywords:existence": ("verify_keywords", {"keywords": "keyword_list"}),
     "keywords:frequency": (
@@ -59,7 +60,6 @@ NEMOTRON_CONSTRAINTS: dict[str, tuple[str, dict[str, str]]] = {
         {"keywords": "keyword_list", "frequency": "N", "relation": "quantifier"},
     ),
     "keywords:forbidden_words": ("validate_forbidden_words", {"forbidden_words": "forbidden_words"}),
-    "keywords:letter_frequency": ("verify_letter_frequency", {"letter": "letter", "let_frequency": "N"}),
     "language:response_language": ("validate_response_language", {"language": "language"}),
     "length_constraints:number_paragraphs": ("verify_paragraph_count", {"num_paragraphs": "N"}),
     "length_constraints:number_words": ("validate_word_constraint", {"num_words": "N", "relation": "quantifier"}),
@@ -92,7 +92,7 @@ NEMOTRON_CONSTRAINTS: dict[str, tuple[str, dict[str, str]]] = {
     "change_case:english_lowercase": ("validate_lowercase", {}),
     "startend:end_checker": ("validate_end", {"end_phrase": "end_phrase"}),
     "punctuation:no_comma": ("validate_no_commas", {}),
-    "detectable_format:quotation": ("validate_quotation", {}),
+    "startend:quotation": ("validate_quotation", {}),
 }
 
 
@@ -109,7 +109,8 @@ def nemotron_constraint(instruction_id: str, arguments: Mapping[str, Any], promp
             # Some rows name one keyword, or only quote it in the instruction's first paragraph.
             keyword = arguments.get("keyword")
             value = [keyword] if isinstance(keyword, str) else re.findall(r'"([^"\n]+)"', prompt.split("\n\n", 1)[0])
-        if value is None:
+        # An empty keyword list makes the check pass on any reply.
+        if value is None or value == []:
             raise ValueError(f"Nemotron instruction {instruction_id!r} requires {source_name!r}")
         constraint[target_name] = value
     return constraint
@@ -121,20 +122,28 @@ def _messages(value: Any) -> tuple[TextMessage, ...]:
     return messages
 
 
-def ifeval_scorer_task(
+def ifeval_task(
     row: RawRow,
+    context: ConversionContext,
     events: Sequence[TextMessage],
-    constraints: Any,
+    constraints: list[Any],
     evidence: Mapping[str, Any],
-    environment: EnvironmentRequirements,
-) -> TaskSpec:
-    package = source_scorer_package(
-        invocation=IFEVAL_INVOCATION,
-        config={"contract": {"constraints": constraints}},
-        environment=environment,
+) -> TaskSpec | ImportRejection:
+    try:
+        normalized = json.loads(ifeval_utils.normalize_ground_truth(constraints))
+    except (ValueError, TypeError) as error:
+        return unsupported("unsupported_ifeval_constraint", str(error))
+    return scorer_task(
+        row,
+        events=events,
+        script=IFEVAL_GRADE,
+        scorer="ifeval_utils.py",
+        config={"constraints": normalized},
+        environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
+        env={},
+        evidence=evidence,
     )
-    return conversation_task(row, events=events, package=package, evidence=evidence)
 
 
 def convert_nemotron_if(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -153,19 +162,69 @@ def convert_nemotron_if(row: RawRow, context: ConversionContext) -> TaskSpec | I
     except ValueError as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
     evidence = {key: value for key, value in row.data.items() if key not in {"input", "args", "path"}}
-    return ifeval_scorer_task(row, events, constraints, evidence, required_grader_environment(context))
+    return ifeval_task(row, context, events, constraints, evidence)
 
 
 def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
         events = _messages(row.data["messages"])
-        constraints = json.loads(row.data["ground_truth"])
-        if not isinstance(constraints, dict) or not isinstance(constraints.get("func_name"), str):
-            raise ValueError("The source ground truth must name its constraint function")
+        constraint = json.loads(row.data["ground_truth"])
     except (ValidationError, ValueError, KeyError, TypeError) as error:
         return unsupported("invalid_instruction_contract", str(error))
     evidence = {key: value for key, value in row.data.items() if key not in {"messages", "ground_truth", "path"}}
-    return ifeval_scorer_task(row, events, constraints, evidence, required_grader_environment(context))
+    return ifeval_task(row, context, events, [constraint], evidence)
+
+
+def _overshoot(quantifier: str, bound: int, tolerance: int) -> int:
+    """How many items take a count past an upper ``bound``; zero for a lower bound, which the short reply misses."""
+    return {"less than": bound, "at most": bound + 1, "around": bound + tolerance + 1}.get(quantifier, 0)
+
+
+def violating_text(constraints: Sequence[Mapping[str, Any]]) -> str:
+    """A reply that fails every constraint.
+
+    The reply starts as one short mixed-case word without punctuation, markup or keywords, which
+    fails the case and format checks and any lower bound above one. Each other constraint adds what
+    it forbids, or more words, sentences or capital words than its upper bound allows.
+    """
+    head, words = "Qz", []
+    for constraint in constraints:
+        name, bound, quantifier = constraint["func_name"], constraint.get("N"), constraint.get("quantifier")
+        match name:
+            case "validate_no_commas":
+                head += ","
+            case "validate_forbidden_words":
+                words.append(constraint["forbidden_words"][0])
+            case "verify_keyword_frequency" if bound == 0:
+                words.append(constraint["word"])
+            case "verify_keyword_frequency_relation":
+                words += [constraint["keyword_list"][0]] * _overshoot(quantifier, bound, 0)
+            case "validate_word_constraint":
+                words += [FILLER] * _overshoot(quantifier, bound, max(round(bound * 0.1), 1))
+            case "verify_sentence_constraint":
+                words += [f"{FILLER}."] * _overshoot(quantifier, bound, 1)
+            case "validate_frequency_capital_words":
+                words += [FILLER.upper()] * _overshoot(quantifier, bound, max(round(bound * 0.1), 1))
+            case "verify_bullet_points" if bound == 0:
+                words.append(f"\n- {FILLER}")
+            case "verify_paragraph_count" if bound == 1:
+                words.append(f"\n* * *\n{FILLER}")
+            case "validate_paragraphs" if bound == 1:
+                words.append(f"\n\n{FILLER}")
+            case "validate_sections" if bound == 1:
+                words += [constraint["section_splitter"], FILLER] * 2
+    text = " ".join((head, *words))
+    for constraint in constraints:
+        if constraint["func_name"] == "verify_letter_frequency" and text.count(constraint["letter"]) == constraint["N"]:
+            text = constraint["letter"] + text
+    return text
+
+
+def violating_reply(task: TaskSpec) -> Reply:
+    return answer_reply(task, violating_text(grader_config(task)["constraints"]))
+
+
+CONTROLS = Controls(negative=violating_reply)
 
 
 def pipelines() -> list[RlDataPipeline]:
@@ -183,7 +242,9 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
+            controls=CONTROLS,
             grader_image=GRADER,
+            ships=(SCORERS,),
             atlas_id="MarinSkyRL:nemotron_if",
         ),
         RlDataPipeline(
@@ -199,7 +260,9 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
+            controls=CONTROLS,
             grader_image=GRADER,
+            ships=(SCORERS,),
             atlas_id="MarinSkyRL:rlvr_ifeval",
         ),
     ]
