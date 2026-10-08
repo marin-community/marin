@@ -14,8 +14,8 @@
       "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
     }
   ],
-  "calibration_artifact": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/calibration/expertpp-v1/expertpp-tools/complete.json",
-  "block_elements": 1048576,
+  "calibration_artifact": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/calibration/expertpp-tools-v2/expertpp-tools/complete.json",
+  "block_elements": 4194304,
   "preserve_rows": {
     "model.embed_tokens.weight": [
       128000,

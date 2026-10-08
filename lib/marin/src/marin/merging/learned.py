@@ -44,6 +44,7 @@ class _FrozenWeightBlend(torch.autograd.Function):
     @staticmethod
     def backward(ctx: _BlendContext, *grad_outputs: torch.Tensor) -> tuple[torch.Tensor | None, ...]:
         (gradient,) = grad_outputs
+        gradient_flat = gradient.reshape(-1)
         coefficient_gradient = torch.zeros(ctx.coefficient_shape, device=gradient.device, dtype=torch.float32)
         for chunk in range(ctx.coefficient_shape[0]):
             chunk_start = gradient.numel() * chunk // ctx.coefficient_shape[0]
@@ -51,7 +52,7 @@ class _FrozenWeightBlend(torch.autograd.Function):
             for start in range(chunk_start, chunk_end, ctx.block_elements):
                 end = min(chunk_end, start + ctx.block_elements)
                 base = ctx.anchor.flatten()[start:end].to(device=gradient.device, dtype=torch.float32)
-                grad = gradient.flatten()[start:end].float()
+                grad = gradient_flat[start:end].float()
                 for donor_index, donor in enumerate(ctx.donors):
                     delta = donor.flatten()[start:end].to(device=gradient.device, dtype=torch.float32) - base
                     coefficient_gradient[chunk, donor_index].add_(torch.dot(grad, delta))
