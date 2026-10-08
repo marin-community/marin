@@ -28,6 +28,7 @@ import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig, XprofUploadConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
@@ -39,7 +40,7 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
 from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
     GrugTrainerConfig,
@@ -53,6 +54,7 @@ SNOWBALL_HIDDEN_DIM = 2560
 # The production window (half of the 4096-token training context), which Levanter's SnowballConfig pins as well.
 # The width heuristic would otherwise derive seq_len // 2 and give the medium preset a shorter window than Snowball's.
 SNOWBALL_SLIDING_WINDOW = 2048
+POOLED_WAVE_MOE_IMPL = "fixed_pooled_wave_all_to_all"
 
 
 def snowball_model(seq_len: int) -> GrugModelConfig:
@@ -101,11 +103,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
     parser.add_argument("--attention", choices=get_args(GrugAttentionImplementation), default="reference")
     parser.add_argument("--moe-impl", default="ring", help="MoE dispatch backend (default: ring).")
+    parser.add_argument(
+        "--capacity-factor", type=float, help="EP receiver capacity factor (default: GrugModelConfig's)."
+    )
+    parser.add_argument(
+        "--pooled-transport-capacity-factor",
+        type=float,
+        help="Sender pool capacity factor; required by --moe-impl fixed_pooled_wave_all_to_all.",
+    )
+    parser.add_argument(
+        "--num-expert-waves",
+        type=int,
+        default=1,
+        help="Waves for fixed_pooled_wave_all_to_all; must divide the local expert count.",
+    )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
     parser.add_argument("--log-dir", type=Path, default=Path("logs/june-synthetic"))
     parser.add_argument("--run-id", help="Run id under --log-dir (default: size and timestamp).")
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
+    parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
+    parser.add_argument(
+        "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
+    )
     return parser.parse_args()
 
 
@@ -132,9 +152,28 @@ def report_memory() -> None:
 def main() -> None:
     args = parse_args()
     model, default_mp = preset(args.size, args.seq_len)
-    model = dataclasses.replace(model, attention_implementation=args.attention, moe_implementation=args.moe_impl)
+    model = dataclasses.replace(
+        model,
+        attention_implementation=args.attention,
+        moe_implementation=args.moe_impl,
+        remat_mode=args.remat_mode,
+        pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
+        num_expert_waves=args.num_expert_waves,
+    )
+    if args.capacity_factor is not None:
+        model = dataclasses.replace(model, capacity_factor=args.capacity_factor)
     if args.layers is not None:
         model = dataclasses.replace(model, num_layers=args.layers)
+    if args.moe_impl == POOLED_WAVE_MOE_IMPL:
+        # The backend checks these only on the first step, after the full model state is built.
+        if args.pooled_transport_capacity_factor is None:
+            raise ValueError(f"--moe-impl {POOLED_WAVE_MOE_IMPL} requires --pooled-transport-capacity-factor")
+        local_experts = model.num_experts // args.expert_axis
+        if local_experts % args.num_expert_waves != 0:
+            raise ValueError(
+                f"--num-expert-waves {args.num_expert_waves} must divide the {local_experts} local experts "
+                f"({model.num_experts} experts over --expert-axis {args.expert_axis})"
+            )
     batch_size = jax.device_count() if args.batch_size is None else args.batch_size
     if batch_size == 1:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
@@ -163,6 +202,7 @@ def main() -> None:
         jax_compilation_cache_dir=args.compilation_cache_dir,
         log_jaxprs=False,
         log_xla_hlo=False,
+        watch=WatchConfig(interval=args.watch_interval),
     )
     # One fresh example per sequence, and a mixture block exactly as long as the dataset so nothing repeats.
     examples = synthetic_examples(args.steps * batch_size, model.max_seq_len, model.vocab_size)
@@ -185,7 +225,8 @@ def main() -> None:
     flops_per_example, _ = _compute_flops(model_config=model)
     logger.info(
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
-        "expert_axis=%d attention=%s moe=%s flops_per_example=%.4e",
+        "expert_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s watch_interval=%d "
+        "flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -200,6 +241,11 @@ def main() -> None:
         args.expert_axis,
         args.attention,
         args.moe_impl,
+        model.capacity_factor,
+        model.pooled_transport_capacity_factor,
+        model.num_expert_waves,
+        args.remat_mode,
+        args.watch_interval,
         flops_per_example,
     )
     _run_grug_local(config)
