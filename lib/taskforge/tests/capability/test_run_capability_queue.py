@@ -5,28 +5,35 @@
 
 import importlib.util
 import json
+import os
 import re
+import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
 import pytest
 
-from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind
-from taskforge.llm.client import Pool
+from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.loop.events import EventKind, ProposalOrigin, Terminal
 from taskforge.loop.program import IDEA_FILE, IDEA_PREFIX, ITEMS_DIR, LEDGER_DIR
-from taskforge.proposal.model import REQUIRED_HEADINGS
-from taskforge.queue.config import LaptopGlm, load_run_config
+from taskforge.proposal.model import REQUIRED_HEADINGS, parse
+from taskforge.proposal.sources.capability import capability_adversary_context
+from taskforge.queue.config import LaptopGlm, ParallelKeyFile, load_run_config
 from taskforge.queue.job import SUMMARY_FILE, run_job
 from taskforge.queue.run import FailedItems
 from taskforge.sandbox.factories import MachineHost
+from taskforge.validate.adversary import AdversaryRole
 
 TASKFORGE = Path(__file__).parents[2]
 SCRIPT = TASKFORGE / "scripts" / "run_capability_queue.py"
 EXAMPLE = TASKFORGE / "docs" / "policy.example.json"
 CAPABILITY_ID = "d01.algebra.linear-transformations"
+LIVE_EVIDENCE = TASKFORGE / ".evidence" / "capability_queue"
+TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
+PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
 SECTION = "A technician reconciles the stock sheet against the labels and records the total in millilitres. " * 4
 REVIEW = {
     "realism": 2,
@@ -125,8 +132,63 @@ async def test_a_named_capability_is_proposed_triaged_against_its_catalog_record
     assert opened.attrs["origin"] == ProposalOrigin.GENERATED
 
 
+async def test_each_proposal_briefs_its_adversary_with_the_record_of_its_own_capability(tmp_path, fake_glm):
+    script = load_script()
+    ideas = script.selected_ideas(catalog(tmp_path / "catalog.json"), [])
+    endpoint = GlmEndpoint(base_url=fake_glm.base_url, token="test-token", pool=Pool.HIGH)
+    proposal = parse(proposal_document(ideas[CAPABILITY_ID].capability_hash))
+
+    async with GlmClient(endpoint) as client:
+        inputs = script.capability_inputs(ideas, 1, client, tmp_path / "run")
+        context = inputs.adversary_context(proposal)
+
+    assert context == capability_adversary_context(ideas[CAPABILITY_ID])
+    assert "d01.algebra.other" not in context
+
+
 def test_an_unknown_capability_is_refused_before_the_run_starts(tmp_path):
     script = load_script()
 
     with pytest.raises(ValueError, match=re.escape("no capabilities ['d09.missing']")):
         script.selected_ideas(catalog(tmp_path / "catalog.json"), [CAPABILITY_ID, "d09.missing"])
+
+
+@pytest.mark.live_glm
+@pytest.mark.timeout(10800)
+async def test_one_capability_through_the_queue_live(glm_settings, image_cache, capability_catalog):
+    script = load_script()
+    ideas = script.selected_ideas(capability_catalog, [CAPABILITY_ID])
+    root = LIVE_EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
+    example = load_run_config(EXAMPLE)
+    web = os.environ.get(PARALLEL_KEY_FILE_ENV)
+    config = replace(
+        example,
+        run_id=f"capability-live-{root.name}",
+        root=root,
+        host=MachineHost.LAPTOP,
+        image_cache=image_cache,
+        glm=LaptopGlm(glm_settings.base_url, Path(os.environ[TOKEN_FILE_ENV]).expanduser(), Pool.HIGH),
+        web=ParallelKeyFile(Path(web).expanduser()) if web else None,
+        policy=replace(
+            example.policy,
+            proposals_per_idea=2,
+            max_idea_reproposals=0,
+            validation=replace(example.policy.validation, k=3, adversary_k=1),
+        ),
+        width=64,
+    )
+
+    summary = await run_job(config, partial(script.capability_inputs, ideas, 1), FailedItems.SKIP)
+
+    assert summary.failed == {}, json.dumps(summary.summary_json())
+    assert Terminal.FAILED not in summary.items.values(), json.dumps(summary.summary_json())
+    idea_record = json.loads((root / ITEMS_DIR / f"{IDEA_PREFIX}{CAPABILITY_ID}" / IDEA_FILE).read_text())
+    assert idea_record["capability_hash"] == ideas[CAPABILITY_ID].capability_hash
+    for path in ledger_files(root / LEDGER_DIR):
+        for entry in read_entries(path):
+            if entry.kind is EntryKind.EVENT and entry.step == EventKind.OPENED:
+                assert entry.attrs["origin"] == ProposalOrigin.GENERATED, path
+    for path in sorted(root.rglob(f"adversary/{AdversaryRole.SHORTCUT}/*/attempt-*.json")):
+        assert CAPABILITY_ID in json.loads(path.read_text())["adversary"]["system"], path
+    for item, accepted in summary.accepted.items():
+        assert accepted.solve_rate == accepted.solved / accepted.k, item

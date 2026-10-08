@@ -7,8 +7,17 @@ Every catalog capability (or each ``--capability`` named) becomes a ``Capability
 proposes from it with ``CapabilitySource`` and records it in its ``idea.json`` with
 ``capability_idea_record``, triages with the structural checks and a ``GlmRubric``
 of ``--rubric-samples`` samples that is shown each capability's catalog record, and carries every
-proposal through ``queue.run.run_queue``. ``CONFIG`` is a ``queue.config.RunConfig`` file
-(``docs/policy.example.json`` is the committed unattended configuration; set its ``relay_job``).
+proposal through ``queue.run.run_queue``. Each item's adversary brief carries its capability's
+record (``capability_adversary_context``), so a submission the grader accepts without the
+capability's new operation counts as a shortcut.
+
+``CONFIG`` is a ``queue.config.RunConfig`` file. ``docs/policy.example.json`` is the committed
+unattended configuration for this run (set its ``relay_job``): the ``bulk`` pool; ``band_rules``
+that revise a too-easy task once and then accept it, labelled in ``summary.json`` with its
+synthesis pass rate (``solved``, ``k``, ``solve_rate``) and ``band: too_easy``, while a too-hard task
+is revised once and then rejected; and ``adversary_submissions=10`` verifier calls per adversary
+trial, of which an accepted shortcut reached within ``adversary_repair_submissions=3`` sends the
+task back for repair and a later one is only noted.
 The run writes ``summary.json`` into the run root and exits non-zero when any item ended ``FAILED``.
 
 Laptop, through the GLM port-forward on the interactive pool (a copy of the example with
@@ -36,9 +45,11 @@ from taskforge.llm.client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.store import CallStore
 from taskforge.loop.events import Terminal
+from taskforge.proposal.model import SourceRef, TaskProposal
 from taskforge.proposal.sources.capability import (
     CapabilityIdea,
     CapabilitySource,
+    capability_adversary_context,
     capability_idea_record,
     capability_prompt_record,
     load_capability_ideas,
@@ -66,6 +77,11 @@ def selected_ideas(catalog: Path, capabilities: Sequence[str]) -> dict[str, Capa
     return {capability: ideas[capability] for capability in capabilities}
 
 
+def context_for(contexts: Mapping[SourceRef, str], proposal: TaskProposal) -> str:
+    """The adversary context of the capability ``proposal`` was generated from."""
+    return contexts[proposal.header.source]
+
+
 def capability_inputs(
     ideas: Mapping[str, CapabilityIdea], rubric_samples: int, client: GlmClient, root: Path
 ) -> RunInputs[CapabilityIdea]:
@@ -74,11 +90,13 @@ def capability_inputs(
     The rubric's calls are kept under ``root / CALLS_DIR``, so a relaunch on the same root replays them.
     """
     records = {source_ref(idea): capability_prompt_record(idea) for idea in ideas.values()}
+    contexts = {source_ref(idea): capability_adversary_context(idea) for idea in ideas.values()}
     rubric = GlmRubric(CallStore(root / CALLS_DIR, client), PROPOSAL_POLICY, rubric_samples, records)
     return RunInputs(
         ideas=ideas,
         source=CapabilitySource(client, PROPOSAL_POLICY),
         describe_idea=capability_idea_record,
+        adversary_context=partial(context_for, contexts),
         checks=CHECKS,
         rubric=rubric,
         check_context=CheckContext(allowed_combinations=ALL_COMBINATIONS),

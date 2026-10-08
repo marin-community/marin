@@ -532,8 +532,10 @@ through `scripts/push_image_task.py`, `scripts/iris_machine_probe.py` probes the
 backend, and `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task.
 `scripts/run_queue.py` runs a queue from a run config on a laptop or in an Iris task;
 `scripts/run_capability_queue.py` is the same run over the capability catalog (every capability,
-or the ones `--capability` names, proposed by `CapabilitySource` and triaged against its catalog
-record); and
+or the ones `--capability` names, proposed by `CapabilitySource`, triaged against its catalog
+record, and red-teamed by an adversary whose brief carries that record); the policy example is its
+committed configuration, so a too-easy task is revised once and then accepted, labelled in
+`summary.json` with `band: too_easy` and its synthesis pass rate; and
 `scripts/cluster_queue_probe.py` is the fail-fast preflight for an unattended run: GLM health for
 both pools, machine creation without leaked credentials, a width of concurrent validation rounds,
 the Finelog mirror, resume from the event logs, and a registry image pull.
