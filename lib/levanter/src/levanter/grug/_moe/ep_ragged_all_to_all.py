@@ -123,7 +123,12 @@ def _cute_expert_mlp(
 def _quack_grouped_gemm_available() -> bool:
     if jax.default_backend() != "gpu":
         return False
-    if float(jax.devices("gpu")[0].compute_capability) < _SM100_COMPUTE_CAPABILITY:
+    device = jax.devices("gpu")[0]
+    # Only NVIDIA devices report `compute_capability` as a CUDA major.minor version; ROCm reports
+    # a gfx architecture name such as "gfx942".
+    if "nvidia" not in device.device_kind.lower():
+        return False
+    if float(device.compute_capability) < _SM100_COMPUTE_CAPABILITY:
         return False
     try:
         # `sonic_cute` pulls in `quack_moe_cute`, which imports QuACK's varlen entry points at
