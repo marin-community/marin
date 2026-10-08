@@ -5,8 +5,8 @@
 
 import asyncio
 import os
-from collections.abc import Mapping
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -187,3 +187,31 @@ class _AttemptMachineFactory:
                 self.runtime, spec, self.factories, self.cleanup, self.owned, self.environment
             )
         return _OwnedMachine(machine)
+
+
+@asynccontextmanager
+async def prepare_machine(
+    requirements: EnvironmentRequirements,
+    runtime: MachineRuntimeSpec,
+    resources: tuple[TaskResource, ...],
+    factories: Mapping[str, MachineFactory],
+    *,
+    cleanup_timeout: float,
+) -> AsyncIterator[Machine]:
+    """Yield a fresh machine prepared as the engine prepares a task or verifier machine.
+
+    The machine comes from ``factories[runtime.backend]``. Creation, the upload of ``resources``
+    under ``/``, and ``requirements.setup_commands`` (run as user ``0``) share
+    ``runtime.startup_timeout``. Other commands run as ``runtime.user`` unless they name a user.
+    Leaving the context closes the machine within ``runtime.cleanup_timeout``, or
+    ``cleanup_timeout`` when the runtime sets none, and raises a close failure unless the body
+    raised first. A machine whose creation finishes after cancellation is closed in the background.
+    """
+    cleanup = _Cleanup(cleanup_timeout)
+    async with AsyncExitStack() as owned:
+        machine = await _prepare_machine(requirements, runtime, resources, factories, cleanup, owned)
+        assert machine is not None
+        yield machine
+    if cleanup.errors:
+        failed = ", ".join(f"{error.operation} ({error.exception_type})" for error in cleanup.errors)
+        raise RuntimeError(f"Machine cleanup failed: {failed}")
