@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical JSON, content digests, and atomic file replacement.
+"""Canonical JSON and the sha256 content hashes Taskforge computes from it.
 
 ``canonical_json`` is the one encoding Taskforge hashes: sorted keys, compact separators, UTF-8
 text, bytes as base64, and dataclasses and pydantic models by field. ``digest`` is the sha256 of
@@ -11,8 +11,6 @@ the indented form shown to models and written for people to read.
 
 import hashlib
 import json
-import os
-from pathlib import Path
 
 from pydantic_core import to_jsonable_python
 
@@ -36,10 +34,3 @@ def sha256_hex(content: bytes) -> str:
 def digest(value: object) -> str:
     """The sha256 hex of ``canonical_json(value)``."""
     return sha256_hex(canonical_json(value).encode())
-
-
-def write_atomic(path: Path, content: bytes) -> None:
-    """Replace ``path`` with ``content`` through a per-process temporary file beside it."""
-    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    temp.write_bytes(content)
-    temp.replace(path)
