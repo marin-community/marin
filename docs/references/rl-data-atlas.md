@@ -139,13 +139,14 @@ competitive-programming; interaction labels describe single-turn or multi-turn
 conversations. Task Trove families come from its release manifest. Benchmark flags
 include explicit card designations such as AIME 1983–2024, APPS, and GPQA as well
 as HF's official benchmark tag. A false flag means no designation was found.
+
 For routes evaluated through verifyit, the verifier identity includes the package
 commit installed by SkyRL Gym and the revisions of its shared verifier adapter
 modules. The package pin comes from the Marin monorepo URL for `lib/verifyit` in
 `skyrl-gym/pyproject.toml`. Harbor routes track the verifier revision within the
 Harbor commit installed by SkyRL's `uv.lock`. Changes to these dependencies mark
 prior quality and difficulty results stale; the historical reviews remain
-available. Native ARC, RDKit, and GenRM scorers retain their environment-code
+available. Native ARC, RDKit, and GenRM scorers retain their environment code
 identity.
 
 Quality links to a sample-based review: green Good, yellow Some issues, red Bad,
