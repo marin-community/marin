@@ -122,6 +122,10 @@ username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
 control process as root and uses `su` for other execution users. Numeric UIDs
 require `getent` and a matching guest account.
+Daytona framework commands use `/usr/sbin:/usr/bin:/sbin:/bin` for `PATH`.
+Agent commands retain the image's `PATH` and explicit task or command overrides.
+The command deadline includes account and `su` capability probes.
+Failed command-file cleanup closes the sandbox and preserves a primary command error.
 An empty Docker `MachineSpec.workdir` retains the image's working directory.
 
 To prepare a registry image, use a standard image reference without `https://`:
