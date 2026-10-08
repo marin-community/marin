@@ -488,7 +488,7 @@ def _clip(text: str) -> str:
 def _trial_lines(name: str, outcome: Outcome) -> list[str]:
     rollout = outcome.rollout
     if isinstance(outcome, Graded):
-        head = f"{name}: graded {outcome.grade.status}, reward {outcome.reward}, timed out {outcome.timed_out}"
+        head = f"{name}: status {outcome.grade.status}, reward {outcome.reward}, timed out {outcome.timed_out}"
     else:
         head = f"{name}: ungraded ({outcome.cause}): {_clip(outcome.detail)}"
     if rollout is None:
@@ -820,8 +820,8 @@ def _adversary_findings(evidence: RoundEvidence, policy: SummaryPolicy) -> _Adve
             if ruling.kind is None:
                 continue
             lines = [
-                f"The {role} adversary {index} found an accepted submission. Tier {ruling.tier} (row {ruling.rule}): "
-                f"{ruling.reason}",
+                f"The {role} adversary {index + 1} of {len(trials)} found an accepted submission. "
+                f"Tier {ruling.tier} (row {ruling.rule}): {ruling.reason}",
                 *_signal_lines(signals),
                 *(_submission_line(s) for s in trial.submissions),
                 *_trial_lines(f"adversary/{role}/{index}", trial.outcome),

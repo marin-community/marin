@@ -13,6 +13,9 @@ An adversary attempt file is the same record with one more key, ``ADVERSARY_KEY`
 attempt ran under, its parsed verdict and every verifier submission (``adversary_attempt_json``).
 ``load_outcome`` ignores that key, so ``trial_files`` reads adversary directories unchanged;
 ``load_adversary_attempt`` reads all of it.
+
+An adversary attempt file keeps the engine's rollout envelope: the adversary brief is ``messages[0]`` and the
+full agent loop, every tool call and result, is in ``steps[-1].messages``.
 """
 
 import dataclasses

@@ -405,7 +405,8 @@ async def test_a_shortcut_above_the_threshold_is_a_note(adversary, trial, lenien
     assert summary.findings == () and summary.calibrated
     (note,) = summary.notes
     assert note.kind is FindingKind.SHORTCUT_PASSED and note.new_controls == ()
-    assert note.detail.startswith("The shortcut adversary 0 found an accepted submission. Tier noted (row 7): ")
+    assert note.detail.startswith("The shortcut adversary 1 of 1 found an accepted submission. Tier noted (row 7): ")
+    assert "\nadversary/shortcut/0: status graded, reward " in note.detail
     (assessment,) = summary.assessments
     assert (assessment.signals.first_pass, assessment.signals.exploit, assessment.signals.submissions) == (4, 4, 4)
     assert assessment.signals.budget_spent
