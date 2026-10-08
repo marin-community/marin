@@ -127,7 +127,7 @@ def policy() -> LoopPolicy:
         adversary_repair_submissions=3,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
-        deadlines=Deadlines(agent_timeout=900, attempt_timeout=1200),
+        deadlines=Deadlines(total_turn_timeout=900, attempt_timeout=1200),
         max_retries=2,
         token_contract_retries=2,
         retry_backoff=RetryBackoff(initial=5, maximum=60, factor=2, jitter=0.1),
@@ -172,7 +172,12 @@ async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_c
         web=None,
         policy=policy(),
         engine=EngineConfig(
-            max_turns=20, command_timeout=120, cleanup_timeout=120, conventions=(PlainText(id="plain_text"),)
+            max_turns=20,
+            command_timeout=120,
+            tool_turn_timeout=240,
+            model_turn_timeout=600,
+            cleanup_timeout=120,
+            conventions=(PlainText(id="plain_text"),),
         ),
         width=64,
         restore_from=None,

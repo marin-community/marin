@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """A whole run on fakes at the I/O boundary: a fake proposal source and rubric, a scripted GLM server
-for the author and the adversary agent loops, a builder program without model calls on ShellSim, and a
-scripted solver rollout model and tokenizer for validation.
+for the author and the adversary agent loops, a builder program without model calls that builds a
+ShellSim task with a host-run script grader, and a scripted solver rollout model and tokenizer for
+validation.
 
 The GLM server answers in the order replies are queued, so a test queues each item's author replies
 before its adversary turns: an item's adversary trials start only after its build.
@@ -23,13 +24,12 @@ from typing import Any
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import MachineFactory
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend, MachineFactory
 from taskcompendium.submission import PlainText
 
-from taskforge.build.author import SUBMIT_TOOL
-from taskforge.build.sdk import BuildServices
-from taskforge.build.template import standard
+from taskforge.builder.author import SUBMIT_TOOL
+from taskforge.builder.sdk import BuildServices
+from taskforge.builder.template import standard
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import FinishReason, GlmClient, GlmEndpoint, Pool, Usage
 from taskforge.llm.policy import LLMPolicy
@@ -39,7 +39,7 @@ from taskforge.proposal.model import TaskProposal, parse
 from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.queue.run import FailedItems, RunSummary, run_queue
 from taskforge.review.rules import BandChoice, BandRule, BandRules
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import SHELLSIM, MachineHost
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
@@ -81,51 +81,55 @@ None.
 """
 
 GRADE = """
-import json, sys
-messages = json.load(sys.stdin)
-final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
-print(1.0 if final.strip().endswith("ANSWER = 42") else 0.0)
+import json, os, pathlib
+final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
+verdict = {"status": "scored", "reward": float(final.endswith("ANSWER = 42")), "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
 """
 
 PROGRAM = """
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, StdoutReward
-from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source, TaskSpec
+from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
 from taskcompendium.submission import PlainText
 
-EXECUTION = TaskExecution()
 CONVENTION = PlainText(id="plain_text")
+MACHINE = spec.machine(startup_timeout=60)
+SESSION = spec.session(
+    max_turns=8,
+    model_turn_timeout=None,
+    command_timeout=None,
+    tool_turn_timeout=None,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=60,
+    cleanup_timeout=30,
+)
+FILES = (spec.file("workspace/question.txt", "6 * 7"),)
 
 GRADE = GRADE_SOURCE
 
 
 @step(StepRole.ENVIRONMENT)
-async def machine(b: Build) -> EnvironmentSpec:
-    return spec.environment(EnvironmentKind.SHELLSIM, files=(spec.file("/workspace/question.txt", "6 * 7"),))
+async def machine(b: Build) -> EnvironmentRequirements:
+    return spec.requirements(image=None)
 
 
 @step(StepRole.GRADER)
-async def grader(b: Build, env: EnvironmentSpec) -> Grader:
-    verifier = spec.shell_verifier(
-        argv=("python3", "/grader/grade.py"),
-        reward=StdoutReward(),
-        timeout=60,
-        files=(spec.file("/grader/grade.py", GRADE),),
-    )
-    return Grader(verifier=verifier, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
+async def grader(b: Build, env: EnvironmentRequirements) -> Grader:
+    package = spec.script_verifier(GRADE, {}, timeout=60)
+    return Grader(package=package, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
 
 
 @step(StepRole.ASSEMBLE)
-async def assemble(b: Build, env: EnvironmentSpec, graded: Grader) -> TaskSpec:
+async def assemble(b: Build, env: EnvironmentRequirements, graded: Grader) -> TaskSpec:
     return spec.assemble(
         task_id=b.item_id,
         instruction="Compute the product in question.txt. " + graded.answer_contract,
         answer_type=AnswerType.TEXT,
-        environment=env,
-        verifier=graded.verifier,
+        grader=graded.package,
         source=Source(dataset="test", revision="r1", row="0", importer_revision="test"),
-        execution=EXECUTION,
+        environment=env,
+        files=FILES,
     )
 
 
@@ -158,14 +162,16 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=await fixed_controls(b, task))
+    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=None, session=SESSION)
+    return BuildOutput(task=task, lowered=lowered, convention=CONVENTION, controls=await fixed_controls(b, task))
 """.replace(
     "GRADE_SOURCE", repr(GRADE)
 )
 # PROGRAM, with a grader step that tries the reference reply on a machine.
 MACHINE_PROGRAM = PROGRAM.replace(
     "    return Grader(",
-    '    await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")\n    return Grader(',
+    '    await b.try_grader(env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
+    "    return Grader(",
 )
 
 CALL = ModelCall(Usage(100, 50, 40, 0), wall_time=0.1, finish_reason=FinishReason.TOOL_CALLS)
@@ -298,7 +304,7 @@ def loop_policy(
         adversary_repair_submissions=2,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
-        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=0,
         token_contract_retries=0,
         retry_backoff=FAST,
@@ -334,13 +340,13 @@ class QueueRun:
     source: FakeSource
     rubric: FakeRubric
     model: SolverModel
-    build_factories: Mapping[EnvironmentKind, MachineFactory]
+    build_factories: Mapping[str, MachineFactory]
 
     async def __call__(
         self, ideas: Mapping[str, str], policy: LoopPolicy, width: int, failed: FailedItems = FailedItems.SKIP
     ) -> RunSummary:
         ledger = JsonlLedger(self.root / LEDGER_DIR)
-        factories = {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
+        factories = {Backend.SHELLSIM.value: ShellSimMachineFactory()}
         endpoint = GlmEndpoint(base_url=self.glm_base_url, token="test-token", pool=Pool.HIGH)
         async with GlmClient(endpoint, backoff=FAST.schedule()) as client:
             services = LoopServices(
@@ -352,12 +358,21 @@ class QueueRun:
                 rubric=self.rubric,
                 check_context=CheckContext(allowed_combinations=ALL_COMBINATIONS),
                 template=standard,
-                build=BuildServices(client=client, policy=LLMPolicy(), factories=self.build_factories, ledger=ledger),
+                build=BuildServices(
+                    client=client,
+                    policy=LLMPolicy(),
+                    host=MachineHost.LAPTOP,
+                    factories=self.build_factories,
+                    images=None,
+                    ledger=ledger,
+                ),
                 engine=EngineSettings(
                     factories=factories,
-                    capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+                    capabilities={Backend.SHELLSIM.value: SHELLSIM},
                     max_turns=4,
                     command_timeout=30,
+                    tool_turn_timeout=40,
+                    model_turn_timeout=60,
                     cleanup_timeout=30,
                     conventions=(PlainText(id="plain_text"),),
                 ),
@@ -381,7 +396,7 @@ def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
         rubric: FakeRubric | None = None,
         model: SolverModel | None = None,
         source: FakeSource | None = None,
-        build_factories: Mapping[EnvironmentKind, MachineFactory] | None = None,
+        build_factories: Mapping[str, MachineFactory] | None = None,
     ) -> QueueRun:
         return QueueRun(
             root=tmp_path / "run",
@@ -390,7 +405,7 @@ def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
             rubric=rubric or FakeRubric(TriageDecision.ACCEPT),
             model=model or SolverModel(),
             build_factories=(
-                {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()} if build_factories is None else build_factories
+                {Backend.SHELLSIM.value: ShellSimMachineFactory()} if build_factories is None else build_factories
             ),
         )
 

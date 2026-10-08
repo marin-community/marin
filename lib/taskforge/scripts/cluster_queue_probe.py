@@ -26,7 +26,7 @@ Checks:
 1. ``glm``: the endpoint resolves (through the relay on Iris) and ``/health`` reports workers for the
    probe's pool and the config's pool.
 2. ``machines``: each factory the run has creates and closes a machine, and no credential-shaped
-   environment variable reaches a docker sandbox.
+   environment variable reaches a container sandbox (Docker on a laptop, gVisor on Iris).
 3. ``width``: ``--items`` concurrent validation rounds of a null-environment math task (controls,
    then one solver trial each) complete with ``Complete`` evidence; the TRIAL ledger rows show the
    concurrency reached and the wall time, and the solver attempt files show the requests sent, the
@@ -48,7 +48,7 @@ import os
 import time
 import traceback
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -56,15 +56,13 @@ from typing import Any
 
 import httpx
 from shellbox.image import RegistryImage as ShellboxRegistryImage
-from shellbox.machine import Command, MachineSpec, NetworkPolicy, ShellSimBuiltins
-from taskcompendium.environment import EnvironmentKind
-from taskcompendium.execution import TaskExecution
-from taskcompendium.grading import numeric_answer
+from shellbox.machine import Backend, Command, MachineFactory, MachineSpec, NetworkPolicy, ShellSimBuiltins
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source
 from taskcompendium.submission import PlainText
+from verifyit.spec import NumericSpec
 
-from taskforge.build.run import Provenance, TaskDraft
+from taskforge.builder.run import Provenance, TaskDraft
 from taskforge.ledger.finelog import LEDGER_NAMESPACE, CompositeLedger, FlushResult, connect_finelog_ledger
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind, Ledger
@@ -87,9 +85,9 @@ from taskforge.queue.job import (
     secret_names,
 )
 from taskforge.queue.run import FailedItems, item_terminal, run_queue
-from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
+from taskforge.sandbox.factories import MachineHost, container_backend, factory_capabilities, machine_factories
 from taskforge.spec.controls import Control, ControlCategory, ControlConcern, ControlKind, Expectation, Transcript, reply
-from taskforge.spec.draft import assemble, environment
+from taskforge.spec.draft import answer_verifier, assemble, lower, session
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
@@ -104,6 +102,18 @@ MATH_ANSWER = "395"
 # Prints names only; `env | cut` would leak fragments of multi-line values into evidence.
 ENV_NAMES_SCRIPT = "awk 'BEGIN{for(k in ENVIRON) print k}' | sort | tr '\\n' ' '"
 HEALTH_TIMEOUT = 20.0
+# The probe task's own session; validation replaces every limit but the verifier timeout and the
+# answer grader runs in process, so none binds.
+PROBE_SESSION = session(
+    max_turns=1,
+    model_turn_timeout=None,
+    command_timeout=None,
+    tool_turn_timeout=None,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=None,
+    cleanup_timeout=60,
+)
 PROBE_DIR = "queue_probe"
 PROBE_PROPOSAL = """---
 id: "probe/SLOT"
@@ -152,15 +162,17 @@ class Probe:
     report: dict[str, Any] = field(default_factory=dict)
 
 
-def math_draft(index: int) -> TaskDraft:
+def math_draft(index: int, host: MachineHost, factories: Mapping[str, MachineFactory]) -> TaskDraft:
     task = assemble(
         f"probe-math-{index}",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
         AnswerType.NUMBER,
-        environment(EnvironmentKind.NULL),
-        numeric_answer(MATH_ANSWER, tolerance_abs=0, tolerance_rel=0),
+        answer_verifier(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
         Source(dataset="taskforge-queue-probe", revision="1", row=str(index), importer_revision="1"),
-        execution=TaskExecution(),
+        environment=None,
+    )
+    lowered = lower(
+        task, host=host, task_machine=None, verifier_machine=None, session=PROBE_SESSION, factories=factories
     )
     correct = Expectation(status=Outcome.GRADED, reward_min=1.0)
     wrong = Expectation(status=Outcome.GRADED, reward_max=0.0)
@@ -203,7 +215,7 @@ def math_draft(index: int) -> TaskDraft:
         ),
     )
     provenance = Provenance(task.id, "probe", "probe", "probe", "probe", "probe", 0, (), ())
-    return TaskDraft(task, TaskExecution(), PlainText(id="plain_text"), controls, provenance)
+    return TaskDraft(task, lowered, PlainText(id="plain_text"), controls, provenance)
 
 
 def max_concurrency(spans: list[tuple[float, float]]) -> int:
@@ -250,12 +262,12 @@ async def check_glm(probe: Probe, endpoint: GlmEndpoint) -> dict[str, Any]:
 async def check_machines(probe: Probe) -> dict[str, Any]:
     factories = machine_factories(probe.config.host, controller_url(probe.config.host), probe.config.image_cache)
     report: dict[str, Any] = {}
-    for kind, factory in factories.items():
+    for backend, factory in factories.items():
         started = time.monotonic()
-        if kind is EnvironmentKind.SHELLSIM:
+        if backend == Backend.SHELLSIM.value:
             machine = await factory.create(MachineSpec(source=ShellSimBuiltins()))
             await machine.close()
-            report[str(kind)] = {"created_and_closed": True, "seconds": time.monotonic() - started}
+            report[backend] = {"created_and_closed": True, "seconds": time.monotonic() - started}
             continue
         spec = MachineSpec(source=ShellboxRegistryImage(probe.image), network=NetworkPolicy.ALLOW)
         machine = await factory.create(spec)
@@ -265,9 +277,9 @@ async def check_machines(probe: Probe) -> dict[str, Any]:
             await machine.close()
         names = result.stdout.decode().split()
         leaked = secret_names(names)
-        report[str(kind)] = {"created_and_closed": True, "seconds": time.monotonic() - started, "secret_names": leaked}
+        report[backend] = {"created_and_closed": True, "seconds": time.monotonic() - started, "secret_names": leaked}
         if leaked:
-            raise CheckFailed(f"SANDBOX_SECRETS credential-like names reach {kind} sandboxes: {leaked}")
+            raise CheckFailed(f"SANDBOX_SECRETS credential-like names reach {backend} sandboxes: {leaked}")
     return report
 
 
@@ -282,7 +294,7 @@ async def check_width(probe: Probe, endpoint: GlmEndpoint, ledger: Ledger, root:
         tokenize = ServerTokenizer(client, validation.sampling)
 
         async def item(index: int) -> tuple[bool, Evidence]:
-            draft = math_draft(index)
+            draft = math_draft(index, config.host, factories)
             site = ValidationSite(f"probe-width-{index}", 0, root / "width" / str(index), ledger)
             async with slots:
                 controls = await replay_controls(draft, validation, site, settings, tokenize)
@@ -406,9 +418,10 @@ async def check_finelog(remote_flush: FlushResult | None, run_id: str) -> dict[s
 
 async def check_image(probe: Probe) -> dict[str, Any]:
     factories = machine_factories(probe.config.host, controller_url(probe.config.host), probe.config.image_cache)
-    factory = factories.get(EnvironmentKind.DOCKER)
+    backend = container_backend(probe.config.host)
+    factory = factories.get(backend.value)
     if factory is None:
-        raise CheckFailed(f"{probe.config.host} has no docker factory to pull {probe.image}")
+        raise CheckFailed(f"{probe.config.host} has no {backend} factory to pull {probe.image}")
     started = time.monotonic()
     machine = await factory.create(MachineSpec(source=ShellboxRegistryImage(probe.image), network=NetworkPolicy.ALLOW))
     await machine.close()

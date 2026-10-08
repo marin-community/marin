@@ -19,7 +19,8 @@ A config file looks like ``docs/policy.example.json``::
           | {"kind": "relay", "relay_job": ..., "token_env": ..., "pool": "high" | "bulk"},
      "web": null | {"kind": "key_file", "path": ...} | {"kind": "key_env", "env": ...},
      "policy": <loop.policy.POLICY>,
-     "engine": {"max_turns": ..., "command_timeout": ..., "cleanup_timeout": ...,
+     "engine": {"max_turns": ..., "command_timeout": ..., "tool_turn_timeout": ...,
+                "model_turn_timeout": ..., "cleanup_timeout": ...,
                 "conventions": [{"type": "PlainText", "convention": {"id": ...}}, ...]},
      "width": ..., "restore_from": null | "<archived run root>"}
 """
@@ -33,10 +34,9 @@ from pathlib import Path
 from typing import Any
 
 from shellbox.machine import MachineFactory
-from taskcompendium.environment import EnvironmentKind
 from taskcompendium.submission import SubmissionConvention
 
-from taskforge.build.run import CONVENTION_TYPES
+from taskforge.builder.run import CONVENTION_TYPES
 from taskforge.llm.client import Pool
 from taskforge.loop.policy import POLICY, LoopPolicy
 from taskforge.sandbox.factories import FactoryCapabilities, MachineHost
@@ -124,7 +124,8 @@ type WebConfig = ParallelKeyFile | ParallelKeyEnv
 
 @dataclass(frozen=True)
 class EngineConfig:
-    """The run-wide RolloutEngine settings; the factories come from the host at run time.
+    """The run-wide RolloutEngine session limits (``validate.trials.EngineSettings``); the factories
+    come from the host at run time.
 
     ``conventions`` are what tasks may be presented with, in preference order; each draft is
     validated under its own convention only.
@@ -132,19 +133,22 @@ class EngineConfig:
 
     max_turns: int
     command_timeout: float
+    tool_turn_timeout: float
+    model_turn_timeout: float
     cleanup_timeout: float
     conventions: tuple[SubmissionConvention, ...]
 
     def settings(
-        self,
-        factories: Mapping[EnvironmentKind, MachineFactory],
-        capabilities: Mapping[EnvironmentKind, FactoryCapabilities],
+        self, factories: Mapping[str, MachineFactory], capabilities: Mapping[str, FactoryCapabilities]
     ) -> EngineSettings:
+        """These limits over ``factories`` and ``capabilities``, both keyed by shellbox ``Backend`` value."""
         return EngineSettings(
             factories=factories,
             capabilities=capabilities,
             max_turns=self.max_turns,
             command_timeout=self.command_timeout,
+            tool_turn_timeout=self.tool_turn_timeout,
+            model_turn_timeout=self.model_turn_timeout,
             cleanup_timeout=self.cleanup_timeout,
             conventions=self.conventions,
         )
@@ -227,10 +231,18 @@ def web_config(obj: Mapping[str, Any] | None) -> WebConfig | None:
 
 
 def engine_config(obj: Mapping[str, Any]) -> EngineConfig:
-    _fields(obj, frozenset({"max_turns", "command_timeout", "cleanup_timeout", "conventions"}), "engine")
+    _fields(
+        obj,
+        frozenset(
+            {"max_turns", "command_timeout", "tool_turn_timeout", "model_turn_timeout", "cleanup_timeout", "conventions"}
+        ),
+        "engine",
+    )
     return EngineConfig(
         max_turns=obj["max_turns"],
         command_timeout=obj["command_timeout"],
+        tool_turn_timeout=obj["tool_turn_timeout"],
+        model_turn_timeout=obj["model_turn_timeout"],
         cleanup_timeout=obj["cleanup_timeout"],
         conventions=tuple(convention(c) for c in obj["conventions"]),
     )

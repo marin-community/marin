@@ -40,7 +40,7 @@
         "stall_timeout": 600.0,
         "max_continuations": 0
       },
-      "deadlines": {"agent_timeout": 1800.0, "attempt_timeout": 2400.0},
+      "deadlines": {"total_turn_timeout": 1800.0, "attempt_timeout": 2400.0},
       "max_retries": 2,
       "token_contract_retries": 2,
       "retry_backoff": {"initial": 5.0, "maximum": 60.0, "factor": 2.0, "jitter": 0.1}
@@ -49,6 +49,8 @@
   "engine": {
     "max_turns": 40,
     "command_timeout": 120.0,
+    "tool_turn_timeout": 240.0,
+    "model_turn_timeout": 1800.0,
     "cleanup_timeout": 120.0,
     "conventions": [
       {"type": "PlainText", "convention": {"id": "plain_text"}},

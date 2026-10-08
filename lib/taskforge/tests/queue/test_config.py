@@ -63,6 +63,7 @@ def test_a_policy_must_state_its_band_rules_and_adversary_budget(edit, problem):
         (("glm",), "pool"),
         (("web",), "kind"),
         (("engine",), "max_turns"),
+        (("engine",), "tool_turn_timeout"),
     ],
 )
 def test_every_field_is_required(path, removed):

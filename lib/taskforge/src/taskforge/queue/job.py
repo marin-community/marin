@@ -29,8 +29,8 @@ from iris.cluster.runtime.env import IRIS_OUTPUT_DIR_ENV
 from rigging.filesystem.storage_path import StoragePath
 
 from taskforge.atomic_file import write_atomic
-from taskforge.build.sdk import BuildServices
-from taskforge.build.template import standard
+from taskforge.builder.sdk import BuildServices
+from taskforge.builder.template import standard
 from taskforge.content_hash import pretty_json
 from taskforge.ledger.finelog import run_ledger
 from taskforge.ledger.records import Ledger
@@ -221,7 +221,8 @@ async def loop_services[IdeaT](
 
     Builders sample at ``BUILD_POLICY``; the solver, adversaries and the control tokenizer at the
     validation policy's sampling. ``rollout_models`` builds the solver's models; adversaries run as agent
-    loops on the run's client.
+    loops on the run's client. The builders get no ``ImageBuilder``, so a build that publishes a task
+    image is abandoned with ``InfrastructureCause.NO_IMAGE_BUILDER``.
     """
     factories = machine_factories(config.host, controller_url(config.host), config.image_cache)
     sampling = config.policy.validation.sampling
@@ -241,7 +242,15 @@ async def loop_services[IdeaT](
             rubric=run_inputs.rubric,
             check_context=run_inputs.check_context,
             template=standard,
-            build=BuildServices(client=client, policy=BUILD_POLICY, factories=factories, ledger=ledger, web_tools=tools),
+            build=BuildServices(
+                client=client,
+                policy=BUILD_POLICY,
+                host=config.host,
+                factories=factories,
+                images=None,
+                ledger=ledger,
+                web_tools=tools,
+            ),
             engine=config.engine.settings(factories, factory_capabilities(config.host)),
             rollout_models=partial(GlmRolloutModel, client, sampling),
             tokenize=ServerTokenizer(client, sampling),

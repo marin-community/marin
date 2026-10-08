@@ -3,11 +3,10 @@
 
 import asyncio
 
-from shellbox.machine import Machine, MachineSpec
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend, Machine, MachineSpec
 
-from taskforge.build.infrastructure import InfrastructureCause
-from taskforge.build.run import load_draft
+from taskforge.builder.infrastructure import InfrastructureCause
+from taskforge.builder.run import load_draft
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
 from taskforge.loop.events import Terminal
@@ -139,6 +138,10 @@ async def test_a_run_killed_mid_validation_resumes_without_reproposing_or_rebuil
 class UnreachableHost:
     """A machine factory whose host connection always drops."""
 
+    @property
+    def backend(self) -> Backend:
+        return Backend.SHELLSIM
+
     async def create(self, spec: MachineSpec) -> Machine:
         raise ConnectionError("connection reset by the machine host")
 
@@ -148,7 +151,7 @@ async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch
 ):
     author_replies(1, fakes.machine_program)
     no_shortcut(1)
-    unreachable = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={EnvironmentKind.SHELLSIM: UnreachableHost()})
+    unreachable = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={Backend.SHELLSIM.value: UnreachableHost()})
     policy = fakes.policy(max_build_retries=1)
 
     first = await unreachable({"a": "a"}, policy, width=2)
