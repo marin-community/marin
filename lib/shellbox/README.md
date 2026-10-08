@@ -88,8 +88,7 @@ these settings to its resource flags. Storage limits require a Docker storage
 driver that supports `--storage-opt size`, and GPU allocation requires a GPU
 runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
 It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
-memory settings. Backends reject resource overrides that they cannot apply, except that the local backend ignores
-`memory_mb`.
+memory settings. Backends reject resource overrides that they cannot apply.
 
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and
@@ -157,9 +156,11 @@ With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable 
 ```python
 from pathlib import Path
 from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.python_environment import build_python_environment
 from shellbox.machine import Command, HostImage, MachineSpec
 
-factory = LocalMachineFactory(bin_dirs=(Path("/opt/grader-venv/bin"),))
+environment = build_python_environment(Path("/var/tmp/grader-env"), Path("grader.lock"), "3.12.13")
+factory = LocalMachineFactory(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))
 machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
 try:
     result = await machine.run(Command(("python3", "/tests/grade.py")))
@@ -167,15 +168,19 @@ finally:
     await machine.close()
 ```
 
-- Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each venv in `bin_dirs` and the Python installation its `python3` links to. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
+- Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
 - Machines are independent, so a process may run any number of them at once.
 - Files persist in the machine's root between commands. Each command gets new PID, IPC and UTS namespaces and a fresh `/proc`, `/dev` and `/dev/shm`; a command's processes end when it exits or times out. Under `NetworkPolicy.DENY` it also gets a network namespace with only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` it uses the host network.
 - `upload` copies into the machine's root and rejects targets in the read-only directories. `download` reads the machine's root or the read-only host directories; a missing path raises `RuntimeError`, as the container backends do.
-- Commands never inherit the host environment, which can hold cluster credentials. Each command gets `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and the host's `PYTHONHASHSEED` if set, then `MachineSpec.env` and `Command.env`.
+- Commands never inherit the host environment, which can hold cluster credentials. Each command gets `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Output beyond `output_limit_bytes` is discarded while the command runs.
 - Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files, files of at most 1 GiB, and, for a command with a timeout, at most the timeout multiplied by the usable CPUs plus 5 seconds of CPU time per process. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
-- `memory_mb` is ignored: an address-space limit breaks NumPy and SymPy allocations. CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
+- The backend enforces no memory limit, since an address-space limit breaks NumPy and SymPy allocations. `memory_mb`, CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
 - `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
+
+The factory mounts exactly the directories in `read_only` and infers nothing from `bin_dirs`, which only sets `PATH`. The caller must keep each `read_only` directory self-contained. A symlink whose target lies outside the mounted directories does not resolve in the sandbox. A uv venv, for example, links `python` to an interpreter elsewhere on the host, so mounting the venv alone leaves `python3` missing. The factory raises `ValueError` for a `read_only` path that is not an existing directory.
+
+`build_python_environment(root, lock, python_version)` builds such a directory for Python. It installs a uv-managed CPython of the given full version under `root/python`, creates a venv at `root/venv` from it, and runs `uv pip sync --require-hashes` with the lock, a requirements file with hashes such as `uv pip compile --generate-hashes` writes. Every file and symlink of the environment lies under `root`, and the venv refers to its interpreter by absolute path, so the root must stay where it was built. It returns a `PythonEnvironment` whose `root` goes in `read_only` and whose `bin_dir` goes in `bin_dirs`. Concurrent builders of one root on a host take an exclusive `flock` on a file beside it, so the environment is built once. A completion marker records a finished build; a root without one is a failed or interrupted build and is removed and rebuilt. A finished root built from another lock or Python version raises `ValueError`. The builder needs `uv` on `PATH` and network access to download the interpreter and packages.
 
 The factory checks once, when it is created, that `bwrap` can build a sandbox, and raises `SandboxUnavailable` with each candidate's error when it cannot. It tries the bundled binary, then any `bwrap` on `PATH`, or only the `bwrap` path it is given. Run as root, `bwrap` creates its namespaces without a user namespace, which needs `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, no AppArmor confinement, and a seccomp filter that allows `pivot_root`. Container runtimes withhold all three by default. On Kubernetes, the container's `securityContext` needs `capabilities.add: [SYS_ADMIN, NET_ADMIN]` and `appArmorProfile: {type: Unconfined}`, and no `RuntimeDefault` seccomp profile. Run as another user, `bwrap` needs unprivileged user namespaces; Ubuntu restricts them to programs whose AppArmor profile allows them, including `/usr/bin/bwrap`, so there the factory uses the system binary.
 
