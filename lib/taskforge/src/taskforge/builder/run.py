@@ -14,7 +14,7 @@ controls include a candidate ``b.try_grader`` graded (other than a grader's refe
 empty answer) fails, so a program cannot fit its controls to its grader. The draft is written to
 ``<item_dir>/draft/``.
 
-A host failure during the build (``taskforge.build.infrastructure``) raises
+A host failure during the build (``taskforge.builder.infrastructure``) raises
 ``BuildInfrastructureFailure`` rather than ``BuildFailure``, even when the program wrapped it.
 """
 
@@ -39,8 +39,8 @@ from taskcompendium.submission import (
 )
 
 from taskforge.atomic_file import write_atomic
-from taskforge.build.infrastructure import BuildInfrastructureFailure, infrastructure_failure
-from taskforge.build.sdk import (
+from taskforge.builder.infrastructure import BuildInfrastructureFailure, infrastructure_failure
+from taskforge.builder.sdk import (
     GRADED_RESOURCE_PREFIX,
     Build,
     BuildFailure,
@@ -49,7 +49,7 @@ from taskforge.build.sdk import (
     GradedCandidate,
     Grader,
 )
-from taskforge.build.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole
+from taskforge.builder.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole
 from taskforge.content_hash import pretty_json
 from taskforge.ledger.records import EntryKind, span
 from taskforge.proposal.model import TaskProposal
@@ -91,7 +91,7 @@ class TaskDraft:
 
 
 class Program(Protocol):
-    """A compiled builder program; ``taskforge.build.author.BuildProgram`` satisfies this."""
+    """A compiled builder program; ``taskforge.builder.author.BuildProgram`` satisfies this."""
 
     @property
     def digest(self) -> str: ...

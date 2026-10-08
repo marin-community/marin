@@ -35,8 +35,8 @@ from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec, fo
 from taskcompendium.submission import PlainText, submission_instruction
 from verifyit.spec import ExactSpec, NumericSpec
 
-from taskforge.build.sdk import DOCKER_IMAGE_REQUIREMENTS, NUMERIC_LITERALS, Build, BuildFailure, BuildOutput, Grader
-from taskforge.build.step import SDK_VERSION, StepRole, step
+from taskforge.builder.sdk import DOCKER_IMAGE_REQUIREMENTS, NUMERIC_LITERALS, Build, BuildFailure, BuildOutput, Grader
+from taskforge.builder.step import SDK_VERSION, StepRole, step
 from taskforge.llm.agent import AgentStop
 from taskforge.llm.policy import Message
 from taskforge.proposal.model import Environment

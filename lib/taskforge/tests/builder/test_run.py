@@ -9,10 +9,10 @@ from taskcompendium.environment import EnvironmentKind
 from taskcompendium.grading_result import Outcome
 from taskcompendium.submission import PlainText
 
-from taskforge.build.author import compile_program
-from taskforge.build.run import load_draft, run_build
-from taskforge.build.sdk import GRADED_RESOURCE_PREFIX, BuildFailure
-from taskforge.build.step import CacheStatus
+from taskforge.builder.author import compile_program
+from taskforge.builder.run import load_draft, run_build
+from taskforge.builder.sdk import GRADED_RESOURCE_PREFIX, BuildFailure
+from taskforge.builder.step import CacheStatus
 
 
 async def build_once(proposal, program, tmp_path, services, invalidate=()):

@@ -18,11 +18,11 @@ from taskcompendium.environment import DockerBuild, EnvironmentKind, StdoutRewar
 from taskcompendium.models import AnswerType
 from taskcompendium.submission import PlainText
 
-from taskforge.build.author import compile_program
-from taskforge.build.infrastructure import BuildInfrastructureFailure, InfrastructureCause
-from taskforge.build.run import item_id_for, run_build
-from taskforge.build.sdk import Build, BuildFailure, BuildServices
-from taskforge.build.step import StepCache
+from taskforge.builder.author import compile_program
+from taskforge.builder.infrastructure import BuildInfrastructureFailure, InfrastructureCause
+from taskforge.builder.run import item_id_for, run_build
+from taskforge.builder.sdk import Build, BuildFailure, BuildServices
+from taskforge.builder.step import StepCache
 from taskforge.ledger.records import EntryKind
 from taskforge.spec import draft
 

@@ -11,7 +11,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 
-from taskforge.build.sdk import BuildServices
+from taskforge.builder.sdk import BuildServices
 from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentTool
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool

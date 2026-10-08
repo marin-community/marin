@@ -10,11 +10,11 @@ from shellbox.machine import Command, MachineSpec, ShellSimBuiltins
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import VerifierKind
 
-from taskforge.build.author import compile_program
-from taskforge.build.run import item_id_for, run_build
-from taskforge.build.sdk import Build
-from taskforge.build.step import StepCache
-from taskforge.build.template import standard
+from taskforge.builder.author import compile_program
+from taskforge.builder.run import item_id_for, run_build
+from taskforge.builder.sdk import Build
+from taskforge.builder.step import StepCache
+from taskforge.builder.template import standard
 from taskforge.llm.agent import AgentTool
 from taskforge.spec.controls import ControlCategory
 

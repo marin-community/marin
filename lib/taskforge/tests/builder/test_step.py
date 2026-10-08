@@ -3,10 +3,10 @@
 
 import pytest
 
-from taskforge.build.author import load_module
-from taskforge.build.run import item_id_for
-from taskforge.build.sdk import Build
-from taskforge.build.step import CacheStatus, StepCache
+from taskforge.builder.author import load_module
+from taskforge.builder.run import item_id_for
+from taskforge.builder.sdk import Build
+from taskforge.builder.step import CacheStatus, StepCache
 
 PROGRAM = """
 import asyncio

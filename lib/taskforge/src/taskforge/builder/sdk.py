@@ -30,9 +30,9 @@ from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import AnswerType, Source, TaskSpec, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
-from taskforge.build import step as step_module
-from taskforge.build.infrastructure import host_checked_factories, infrastructure_failure
-from taskforge.build.step import (
+from taskforge.builder import step as step_module
+from taskforge.builder.infrastructure import host_checked_factories, infrastructure_failure
+from taskforge.builder.step import (
     CURRENT_STEP,
     SDK_VERSION,
     Blob,

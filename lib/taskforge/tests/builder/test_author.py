@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from taskforge.build.author import (
+from taskforge.builder.author import (
     PROGRAM_FILE,
     PROGRAM_RECORD,
     SUBMIT_TOOL,
@@ -17,8 +17,8 @@ from taskforge.build.author import (
     load_program,
     module_name,
 )
-from taskforge.build.run import item_id_for
-from taskforge.build.template import standard
+from taskforge.builder.run import item_id_for
+from taskforge.builder.template import standard
 
 
 @pytest.mark.parametrize(

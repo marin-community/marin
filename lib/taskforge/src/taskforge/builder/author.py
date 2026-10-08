@@ -30,8 +30,8 @@ from types import ModuleType
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from taskforge.atomic_file import write_atomic
-from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, sdk_reference
-from taskforge.build.step import SDK_VERSION, Step, StepRole, code_names
+from taskforge.builder.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, sdk_reference
+from taskforge.builder.step import SDK_VERSION, Step, StepRole, code_names
 from taskforge.content_hash import sha256_hex
 from taskforge.llm.client import Completion
 from taskforge.llm.policy import Message
@@ -47,9 +47,9 @@ SUBMIT_TOOL = "submit_build_program"
 
 ALLOWED_IMPORTS = frozenset(
     {
-        "taskforge.build.sdk",
-        "taskforge.build.step",
-        "taskforge.build.template.standard",
+        "taskforge.builder.sdk",
+        "taskforge.builder.step",
+        "taskforge.builder.template.standard",
         "taskforge.spec.draft",
         "taskforge.spec.controls",
         "taskforge.llm.agent",
@@ -130,7 +130,7 @@ SDK described below. Rules:
   compute; compute exact values (answer keys, arithmetic) in Python inside steps where possible.
 - Never put an answer the grader checks into the solver-visible instruction or files.
 - You may import from: {imports}. You may reuse helpers and steps from
-  `taskforge.build.template.standard`, but the grader and controls steps must be your own.
+  `taskforge.builder.template.standard`, but the grader and controls steps must be your own.
 The template below is the standard session shape; adapt it to the proposal.
 """
 
@@ -141,7 +141,7 @@ AUTHOR_USER = """\
 
 {reference}
 
-# Template (`taskforge.build.template.standard`)
+# Template (`taskforge.builder.template.standard`)
 
 ```python
 {template}

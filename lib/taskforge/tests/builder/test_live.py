@@ -17,11 +17,11 @@ from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from taskcompendium.grading_result import Outcome
 
-from taskforge.build.author import author
-from taskforge.build.run import item_id_for, run_build
-from taskforge.build.sdk import BuildServices
-from taskforge.build.step import CacheStatus
-from taskforge.build.template import standard
+from taskforge.builder.author import author
+from taskforge.builder.run import item_id_for, run_build
+from taskforge.builder.sdk import BuildServices
+from taskforge.builder.step import CacheStatus
+from taskforge.builder.template import standard
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy

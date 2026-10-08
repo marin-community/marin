@@ -11,9 +11,9 @@ from taskcompendium.models import AnswerType, VerifierSpec
 from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText, SubmissionConvention
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec
 
-from taskforge.build.run import item_id_for
-from taskforge.build.sdk import Build, BuildFailure
-from taskforge.build.step import StepCache
+from taskforge.builder.run import item_id_for
+from taskforge.builder.sdk import Build, BuildFailure
+from taskforge.builder.step import StepCache
 from taskforge.spec import draft
 
 SHELLSIM = draft.environment(EnvironmentKind.SHELLSIM)

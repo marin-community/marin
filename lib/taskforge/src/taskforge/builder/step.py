@@ -42,7 +42,7 @@ from taskforge.atomic_file import write_atomic
 from taskforge.content_hash import canonical_json, digest, sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, check_item_id, span
 
-SDK_VERSION = "taskforge.build/5"
+SDK_VERSION = "taskforge.builder/5"
 """Bump when a library change alters what an unchanged step would produce."""
 
 
@@ -129,7 +129,7 @@ class BlobStore:
 
 
 class StepContext(Protocol):
-    """What ``Step`` needs from the build context; ``taskforge.build.sdk.Build`` implements it."""
+    """What ``Step`` needs from the build context; ``taskforge.builder.sdk.Build`` implements it."""
 
     async def run_step(self, step: "Step", arguments: Mapping[str, object]) -> Any: ...
 
