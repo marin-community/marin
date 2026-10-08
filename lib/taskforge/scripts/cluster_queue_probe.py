@@ -342,6 +342,10 @@ class SeedSource:
         return ProposalBatch((), (), slots)
 
 
+def describe_probe(idea: str) -> dict[str, object]:
+    return {"idea": idea}
+
+
 async def check_resume(
     probe: Probe, endpoint: GlmEndpoint, secrets: HostSecrets, ledger: Ledger, root: Path
 ) -> dict[str, Any]:
@@ -350,7 +354,7 @@ async def check_resume(
     rubric = RejectingRubric()
 
     def inputs(client: GlmClient, run_root: Path) -> RunInputs[str]:
-        return RunInputs({"probe": "probe"}, SeedSource(), (), rubric, CheckContext(ALL_COMBINATIONS))
+        return RunInputs({"probe": "probe"}, SeedSource(), describe_probe, (), rubric, CheckContext(ALL_COMBINATIONS))
 
     policy = replace(probe.config.policy, proposals_per_idea=probe.items)
     config = replace(probe.config, policy=policy)

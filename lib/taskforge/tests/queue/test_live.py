@@ -93,11 +93,17 @@ class OneProposal:
         return ProposalBatch((), (), (SlotProposal(0, parse(PROPOSAL), (), (), None),))
 
 
+def describe_unit(idea: str) -> dict[str, object]:
+    return {"idea": idea}
+
+
 def inputs(client: GlmClient, root: Path) -> RunInputs[str]:
     proposal: TaskProposal = parse(PROPOSAL)
     record = {"capability": "unit conversion in lab inventory", "difficulty": "easy"}
     rubric = GlmRubric(CallStore(root / "calls", client), LLMPolicy(), 1, {proposal.header.source: record})
-    return RunInputs({"live.queue.units": "units"}, OneProposal(), CHECKS, rubric, CheckContext(ALL_COMBINATIONS))
+    return RunInputs(
+        {"live.queue.units": "units"}, OneProposal(), describe_unit, CHECKS, rubric, CheckContext(ALL_COMBINATIONS)
+    )
 
 
 def policy() -> LoopPolicy:

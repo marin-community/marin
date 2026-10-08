@@ -39,7 +39,15 @@ from taskforge.build.run import DRAFT_DIR, item_id_for
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind, LedgerEntry
 from taskforge.llm.client import GlmUnavailable
-from taskforge.loop.events import FINAL, EventKind, Terminal, build_host_failures, derive_state, events
+from taskforge.loop.events import (
+    FINAL,
+    EventKind,
+    ProposalOrigin,
+    Terminal,
+    build_host_failures,
+    derive_state,
+    events,
+)
 from taskforge.loop.policy import LoopPolicy
 from taskforge.loop.program import (
     DIGEST_CHARS,
@@ -278,7 +286,7 @@ async def _item(
     try:
         terminal = item_terminal(ledger_dir, item_id)
         if enters(terminal, failed):
-            terminal = await run_item(proposal, policy, services)
+            terminal = await run_item(proposal, ProposalOrigin.GENERATED, policy, services)
         assert terminal is not None
         tally.record(services.root, item_id, terminal, list(read_entries(JsonlLedger(ledger_dir).path_for(item_id))))
     except Exception as error:
