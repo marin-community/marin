@@ -6,6 +6,9 @@ Checked-in apps and private applets use the same IAP login, database, app
 directory, and browser test harness. An isolated public service exposes only
 applets that their publishers explicitly mark public.
 
+[Filer](../../docs/references/filer.md) is the private object-storage browser and
+file viewer, maintained as an applet under `applets/filer/`.
+
 ## Layout
 
 ```
@@ -210,7 +213,9 @@ a comma-separated set of user IDs allowed to update, roll back, or archive any
 applet; otherwise only the recorded owner may do so.
 
 `MARINA_APPLET_HOSTS` can assign named hosts to applet UUIDs. Each host serves
-only its assigned applet behind the same authentication. Its root redirects
+only its assigned applet behind the same authentication. The deployment stack
+reads the host-to-UUID mapping from `marin-marina:applet_hosts` and provisions
+its DNS records and Cloud Run domain mappings. Its root redirects
 to `/v/<current>/` on that host; assets, queries, and Python APIs remain pinned
 to that revision. Existing URLs on `MARINA_APPLET_ORIGIN` remain valid.
 
