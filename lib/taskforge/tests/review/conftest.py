@@ -7,16 +7,17 @@ from collections import Counter
 from collections.abc import Callable
 
 import pytest
-from taskcompendium.environment import EnvironmentKind, ExitCodeReward
-from taskcompendium.execution import StageExecution
-from taskcompendium.grading import numeric_answer
-from taskcompendium.models import AnswerType, Source, StageRewardStrategy
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend
+from taskcompendium.models import AnswerType, Source
 from taskcompendium.submission import PlainText
+from verifyit.spec import NumericSpec
 
-from taskforge.build.run import Provenance, TaskDraft
-from taskforge.build.step import Blob, CacheStatus, StepRecord, StepRole
+from taskforge.builder.run import Provenance, TaskDraft
+from taskforge.builder.step import Blob, CacheStatus, StepRecord, StepRole
 from taskforge.review.rules import BandChoice, BandRule, BandRules
-from taskforge.spec.draft import assemble, environment, shell_verifier, stage, staged, task_execution
+from taskforge.sandbox.factories import MachineHost
+from taskforge.spec.draft import answer_verifier, assemble, lower, session
 from taskforge.validate.adversary import AdversaryRole, ClaimKind
 from taskforge.validate.calibration import CalibrationBand, CalibrationSummary, DefectTier, Finding, RoleStats
 from taskforge.validate.evidence import Complete, Incomplete, RewardStats
@@ -25,6 +26,16 @@ from taskforge.validate.outcome import Cause
 SOURCE = Source(dataset="taskforge-review-tests", revision="1", row="0", importer_revision="1")
 BAND = CalibrationBand(min_solve_rate=0.125, max_solve_rate=0.875)
 K = 8
+SESSION = session(
+    max_turns=4,
+    model_turn_timeout=None,
+    command_timeout=10,
+    tool_turn_timeout=20,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=30,
+    cleanup_timeout=10,
+)
 STEPS = (
     ("sources", StepRole.SOURCES),
     ("machine", StepRole.ENVIRONMENT),
@@ -60,37 +71,19 @@ def draft() -> TaskDraft:
         "review-math",
         "What is 17 * 23 + 4? Reply with only the number.",
         AnswerType.NUMBER,
-        environment(EnvironmentKind.NULL),
-        numeric_answer("395", tolerance_abs=0, tolerance_rel=0),
+        answer_verifier(NumericSpec(expected="395", tolerance_abs=0, tolerance_rel=0)),
         SOURCE,
-        execution=task_execution(),
+        environment=None,
     )
-    return TaskDraft(
-        task=task,
-        execution=task_execution(),
-        convention=PlainText(id="plain_text"),
-        controls=(),
-        provenance=provenance(),
+    lowered = lower(
+        task,
+        host=MachineHost.LAPTOP,
+        task_machine=None,
+        verifier_machine=None,
+        session=SESSION,
+        factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
     )
-
-
-@pytest.fixture
-def staged_draft() -> TaskDraft:
-    check = shell_verifier(("sh", "-c", '[ "$(cat /workspace/answer)" = 12 ]'), ExitCodeReward(), timeout=5)
-    execution = task_execution(stages={"one": StageExecution(), "two": StageExecution()})
-    task = assemble(
-        "review-staged",
-        "Write 12 to /workspace/answer.",
-        AnswerType.FILE,
-        environment(EnvironmentKind.SHELLSIM),
-        staged(StageRewardStrategy.FINAL),
-        SOURCE,
-        execution=execution,
-        stages=(stage("one", check), stage("two", check, instruction="Again.")),
-    )
-    return TaskDraft(
-        task=task, execution=execution, convention=PlainText(id="plain_text"), controls=(), provenance=provenance()
-    )
+    return TaskDraft(task, lowered, PlainText(id="plain_text"), (), provenance())
 
 
 def role_stats(passes: int) -> RoleStats:

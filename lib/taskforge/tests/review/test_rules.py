@@ -8,19 +8,17 @@ from dataclasses import replace
 import pytest
 from taskcompendium.grading_result import Outcome
 
-from taskforge.build.step import StepRole
+from taskforge.builder.step import StepRole
 from taskforge.review.decision import Accept, BandOutcome, Reject, RejectKind, Repair, Retry
 from taskforge.review.rules import (
     NEW_CONTROLS_HEADER,
     NOTES_HEADER,
-    STAGED_BRIEF,
     BandChoice,
     BandRule,
     BandRules,
     ItemHistory,
     decide,
     render_brief,
-    staged_repair,
     steps_for,
 )
 from taskforge.spec.controls import (
@@ -204,21 +202,6 @@ def test_a_repair_whose_roles_ran_no_step_still_revises_the_program(draft, summa
 
     assert isinstance(decision, Repair)
     assert decision.invalidate == ()
-
-
-def test_staged_draft_gets_the_fixed_repair_not_validation(staged_draft, summary, rules):
-    with pytest.raises(ValueError, match="staged"):
-        decide(staged_draft, summary(), FRESH, rules)
-
-    decision = staged_repair(staged_draft, FRESH)
-    assert isinstance(decision, Repair)
-    assert decision.brief.failure == STAGED_BRIEF
-    assert decision.invalidate == ()
-
-    spent = staged_repair(staged_draft, SPENT)
-    assert isinstance(spent, Reject)
-    assert spent.kind == RejectKind.BUDGET
-    assert spent.summary is None
 
 
 def test_brief_carries_new_controls_the_author_can_copy_verbatim():

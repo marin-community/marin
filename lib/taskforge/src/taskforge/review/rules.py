@@ -23,9 +23,6 @@ Rules, in order; the first that fires decides:
 5. Complete evidence with no findings gives ``Accept`` with ``band`` ``IN_BAND``.
 
 Noted adversary results ride along in the brief and in an accepted summary; they never change the decision.
-
-Staged tasks are not validated. ``staged_repair`` gives the fixed repair the loop applies to a staged
-draft before validation: build the sequence as separate tasks.
 """
 
 from collections import Counter
@@ -33,8 +30,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from taskforge.build.run import TaskDraft
-from taskforge.build.step import StepRecord, StepRole
+from taskforge.builder.run import TaskDraft
+from taskforge.builder.step import StepRecord, StepRole
 from taskforge.review.decision import (
     BAND_OUTCOMES,
     Accept,
@@ -74,10 +71,6 @@ Validation also observed the adversary results below. They are recorded, not def
 adversary reached an accepted submission only after more verifier calls than the repair threshold, gave no \
 verdict, or passed a many-answer grader with text no honest run produced while reporting no shortcut. Do not \
 add controls for them. Mention them only if the finding you are fixing is related."""
-
-STAGED_BRIEF = """\
-Staged tasks are not validated. Build the sequence as separate single-stage tasks whose environment \
-files and setup reconstruct the state the earlier stages leave, and grade each one on its own."""
 
 
 class BandChoice(StrEnum):
@@ -216,8 +209,6 @@ def _most_common(causes: Counter[Cause]) -> tuple[Cause, int]:
 
 def decide(draft: TaskDraft, summary: CalibrationSummary, history: ItemHistory, rules: BandRules) -> Decision:
     """The decision for one validation round of ``draft``; see the module docstring for the rules."""
-    if draft.task.stages:
-        raise ValueError(f"{draft.task.id} is staged; staged drafts take staged_repair, not validation")
     decisive = summary.decisive
     if decisive:
         return _repair(draft, summary, decisive, history)
@@ -235,17 +226,3 @@ def decide(draft: TaskDraft, summary: CalibrationSummary, history: ItemHistory, 
     if band:
         return _band(draft, summary, band[0], history, rules)
     return Accept(summary=summary, band=BandOutcome.IN_BAND)
-
-
-def staged_repair(draft: TaskDraft, history: ItemHistory) -> Repair | Reject:
-    """The fixed decision for a staged draft at BUILT, counted against the repair budget."""
-    if not draft.task.stages:
-        raise ValueError(f"{draft.task.id} is not staged")
-    if not history.repairs_left:
-        reasons = (
-            "staged tasks are not validated",
-            f"repairs exhausted: {history.repairs_used} of {history.max_repairs}",
-        )
-        return Reject(kind=RejectKind.BUDGET, reasons=reasons, summary=None)
-    brief = RepairBrief(findings=(), notes=(), failure=STAGED_BRIEF)
-    return Repair(program_digest=draft.provenance.program_digest, brief=brief, invalidate=())

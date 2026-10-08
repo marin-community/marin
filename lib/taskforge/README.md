@@ -168,7 +168,7 @@ in the order, or on a package the order does not name.
   `Reject(kind, reasons, summary)` with kind
   `TASK`, `BUDGET` or `HOST`, `Repair(program_digest, brief, invalidate)` or `Retry(cause, count)`,
   and `review.decision.write_decision` and `load_decision` keep it in `decision.json` beside
-  `calibration.json`. `review.rules.staged_repair` is the fixed decision for a staged draft.
+  `calibration.json`.
   `RepairBrief` holds the `findings` the author must fix, the `notes` (noted adversary passes from
   `CalibrationSummary.notes`) it shows as information, and the rendered `failure`;
   `review.rules.render_brief(findings, notes)` builds it.
@@ -320,7 +320,7 @@ too-easy task and labels it with its synthesis pass rate, the solve rate its sum
 accept choice outranks a spent repair budget, so a consumer that accepts too-easy tasks never loses
 one to `BUDGET`. An accept outside the band keeps `calibrated` false in its summary: `Accept.band`
 says where the task fell, `calibrated` says the evidence held no finding. A `Repair` carries a
-brief, not a patch: the loop passes `brief.failure` to `build.author.author` as
+brief, not a patch: the loop passes `brief.failure` to `builder.author.author` as
 `Revision.failure`, so the author is the only model that writes builder code. The brief renders
 repair-tier shortcuts as controls the revised CONTROLS step must return verbatim, so the next
 round's control replay checks the fix, and lists noted adversary results after the findings as
@@ -328,8 +328,7 @@ information, not defects. Notes never change a decision:
 an accepted summary carries them, and a repair's `invalidate` and a rejection's reasons come from
 the findings alone. `invalidate` names
 the steps whose roles the findings condemn, so a model-driven step the author left unchanged is
-resampled rather than replayed from the step cache. Staged tasks are not validated; a staged
-draft gets one fixed repair asking for separate single-stage tasks.
+resampled rather than replayed from the step cache.
 
 ## Testing
 
