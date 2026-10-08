@@ -90,3 +90,19 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Configuration**: Uses `draccus` for configuration management, consistent with other Levanter components
 - **Error Handling**: Comprehensive error reporting with proper HTTP status codes
 - **Logging**: Structured logging with configurable verbosity levels
+
+## Paged short-convolution history
+
+`levanter.layers.paged_short_conv` provides the causal history needed by Hero's
+key-projection, attention-output, and MoE-output convolutions. It uses the
+attention page allocation and keeps `min(page_size, kernel_size - 1)` input rows
+per physical page. A page-local ring updates in packed token order; each token
+reads its own request's preceding positions before overwriting a ring entry.
+This supports chunked prefill, incremental decode, and kernels wider than a page.
+
+`ShortConvPageCache` implements `PageCache.copy_page` and `reset`, so a cloned
+partial page receives independent convolution history. Padding does not update
+the rings. The implementation uses a JAX scan and matches the existing
+short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
+mixed request order, page crossings, clone divergence, and reset. This component
+has not yet been integrated into a native Hero model or validated on accelerators.
