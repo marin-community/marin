@@ -1221,10 +1221,8 @@ class GrugModelConfig:
     """Full AttnRes over output deltas: source n becomes ``x_n - x_{n-1}`` for the gate's source sequence
     ``[embedding, sublayer outputs...]`` (source 0 stays the embedding); logits are scored on the deltas."""
     attn_res_head_sub: str = "none"
-    """Hierarchical multi-head AttnRes (needs ``attn_res_heads``): each gate keeps one full-width query that
-    sets every source's overall strength, and head h adds a zero-init sub-query correction. ``slice``: the
-    sub-query is D/H wide and dots only its channel slice; ``full``: it is D wide and dots the whole key.
-    Each head then mixes its own channel slice. ``none``: plain multi-head (the query split into slices)."""
+    """Hierarchical multi-head AttnRes: a full-width query plus a zero-init per-head sub-query (``slice``: D/H
+    wide on its slice; ``full``: D wide). ``none``: plain multi-head."""
     attn_res_temperature: bool = False
     """A learnable logit multiplier per gate (and per head with ``attn_res_heads``), init 1."""
     attn_res_head_norm: bool = False
@@ -1325,10 +1323,7 @@ class GrugModelConfig:
     """Asymmetric logit cap ``A * sigmoid((z + B) / C)`` as ``(A, B, C)`` (modded-nanogpt record #54);
     overrides ``logit_soft_cap`` when set."""
     output_bigram_rank: int = 0
-    """Output-side bigram logit prior of this rank (0: off): the pre-cap logits gain ``rms(U[x_t]) @ W``, a
-    low-rank ``P(x_{t+1} | x_t)`` table (n-gram interpolation in logit space). ``U`` [vocab, r] and ``W``
-    [r, vocab] (zero-init, so the model is unchanged at init) ride the lm_head as ``r`` extra contraction
-    columns of the one fused cross-entropy call, so the soft cap and the z-loss see the combined logits."""
+    """Output-side low-rank bigram logit prior ``rms(U[x_t]) @ W`` (``W`` zero-init) inside the soft cap; 0: off."""
     lm_head_unigram_bias: bool = False
     """A learnable ``[V]`` output bias (Adam) added to the logits inside the soft-cap. The trainer sets it to the
     log unigram frequencies of the first training batches before step 0 (``lm_head_unigram_batches``); a model
@@ -3166,6 +3161,12 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
             scale = jax.lax.stop_gradient(layer.attn.beta_scale).astype(jnp.float32)
             stats[f"attn_res_knob_kda_beta_scale_mean_L{i}"] = jnp.mean(scale)
             stats[f"attn_res_knob_kda_beta_scale_max_L{i}"] = jnp.max(scale)
+    gauss = getattr(layer.attn, "gauss", None)
+    if gauss is not None:  # per-head shift and width of the value kernel
+        sigma = jax.nn.softplus(gauss.rho.astype(jnp.float32)) + 0.05
+        for h in range(gauss.mu.shape[0]):
+            stats[f"attn_res_knob_gauss_mu_L{i}_H{h}"] = jax.lax.stop_gradient(gauss.mu[h]).astype(jnp.float32)
+            stats[f"attn_res_knob_gauss_sigma_L{i}_H{h}"] = jax.lax.stop_gradient(sigma[h])
     router_tok_b = getattr(layer.mlp, "router_tok_b", None)
     if router_tok_b is not None:
         stats[f"attn_res_knob_router_tok_b_norm_L{i}"] = jnp.linalg.norm(
