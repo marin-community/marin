@@ -52,20 +52,25 @@ def load_schema(path: Path) -> dict:
     """The JSON Schema at ``path``. Raises ``InvalidTask`` when it is absent or not a schema."""
     if not path.is_file():
         raise InvalidTask(f"schema file not found: {path}")
+    return parse_schema(read_text(path), str(path))
+
+
+def parse_schema(text: str, name: str) -> dict:
+    """The JSON Schema in ``text``, read from the file ``name``. Raises ``InvalidTask`` for a non-schema."""
     try:
-        schema = json.loads(read_text(path))
+        schema = json.loads(text)
     except (ValueError, RecursionError) as error:
-        raise InvalidTask(f"schema file {path} is not JSON: {error}") from error
+        raise InvalidTask(f"schema file {name} is not JSON: {error}") from error
     if not isinstance(schema, dict):
-        raise InvalidTask(f"schema file {path} must hold a JSON object")
+        raise InvalidTask(f"schema file {name} must hold a JSON object")
     try:
         if has_nonfinite_number(schema):
-            raise InvalidTask(f"schema file {path} contains a nonfinite number")
+            raise InvalidTask(f"schema file {name} contains a nonfinite number")
         validator_for(schema).check_schema(schema)
     except RecursionError as error:
-        raise InvalidTask(f"schema file {path} exceeds nesting limit") from error
+        raise InvalidTask(f"schema file {name} exceeds nesting limit") from error
     except SchemaError as error:
-        raise InvalidTask(f"schema file {path} is not a valid JSON Schema: {error.message}") from error
+        raise InvalidTask(f"schema file {name} is not a valid JSON Schema: {error.message}") from error
     return schema
 
 

@@ -37,9 +37,10 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
     (source / "answer").chmod(0o755)
     remote = tmp_path / "remote"
     target = tmp_path / "download"
+    workdir = tmp_path / "workdir"
 
     async def scenario():
-        machine = await GvisorMachineFactory().create(MachineSpec(DockerImage("fixture")))
+        machine = await GvisorMachineFactory().create(MachineSpec(DockerImage("fixture"), workdir=str(workdir)))
         try:
             await machine.upload(source, str(remote))
             await machine.download(str(remote), target)
@@ -49,6 +50,7 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
             await machine.close()
 
     asyncio.run(scenario())
+    assert workdir.is_dir()
     assert (target / "answer").read_bytes() == b"\x00\xffpayload"
     assert (target / "answer").stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in target.iterdir()) == ["answer"]

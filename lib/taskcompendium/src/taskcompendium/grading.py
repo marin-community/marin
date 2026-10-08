@@ -14,11 +14,7 @@ import json
 import math
 
 from pydantic import JsonValue
-from verifyit.candidate import (
-    CandidateSpec,
-    grade_text_candidate,
-    supports_candidate_mode,
-)
+from verifyit.candidate import grade_candidate
 from verifyit.grade import Reward, Status, scored
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
@@ -44,6 +40,7 @@ from taskcompendium.grading_contract import (
     SubmissionFailure,
     TextSubmission,
     resolve_verifier,
+    supports_candidate_mode,
 )
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -92,7 +89,7 @@ def parse_grade_result(verifier: Spec, data: bytes) -> GradeResult:
         return GradeResult(Outcome.INFRA_ERROR, None, "Invalid verifier verdict", failure=GradingFailure.INVALID_REWARD)
 
 
-def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
+def _grade_submission(verifier: Spec, submission: Submission) -> GradeResult:
     match verifier, submission:
         case StructuredExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             return grade_result(verifier, grade_structured_exact_candidate(verifier, value))
@@ -106,9 +103,9 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "Text verifier requires a string JSON value")
-            return grade_result(verifier, grade_text_candidate(verifier, value))
+            return grade_result(verifier, grade_candidate(verifier, value, {}))
         case ExactSpec() | NumericSpec() | McqSpec(), TextSubmission(value=value):
-            return grade_result(verifier, grade_text_candidate(verifier, value))
+            return grade_result(verifier, grade_candidate(verifier, value, {}))
         case StructuredExactSpec(), _:
             raise TypeError("Structured exact verifier requires a JSON or state submission")
         case PredictedActionSpec(), _:
@@ -124,7 +121,6 @@ def grade_answer(specification: TaskSpec, convention: SubmissionConvention, atte
     if not supports_candidate_mode(specification.verifier.kind):
         raise NotImplementedError("This verifier requires runtime grading")
     verifier = resolve_verifier(specification.verifier)
-    assert isinstance(verifier, CandidateSpec)
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
