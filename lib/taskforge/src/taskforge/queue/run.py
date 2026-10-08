@@ -19,10 +19,11 @@ from the sub-phase its log names, and validation only from the trials not settle
 whose batch is in its log is not proposed again.
 
 ``RunSummary`` is where a run exports its accepted tasks: every ``ACCEPTED`` item is listed as an
-``AcceptedTask`` with its draft and the synthesis pass rate (solved of ``k``, solve rate, band outcome)
-from the calibration summary it was accepted on. Every item whose final decision carries a calibration
-summary lists its noted-tier adversary passes (``NotedPass``). Both are read from the item directories,
-so a relaunch exports items an earlier launch finished.
+``AcceptedTask`` with its draft, the synthesis pass rate (solved of ``k`` and the solve rate) of the
+calibration summary it was accepted on, and the band outcome of the ``Accept`` decision: ``IN_BAND``, or
+the band kind the policy's ``BandRules`` chose to accept outside the band. Every item whose final
+decision carries a calibration summary lists its noted-tier adversary passes (``NotedPass``). Both are
+read from the item directories, so a relaunch exports items an earlier launch finished.
 """
 
 import asyncio
@@ -60,28 +61,14 @@ from taskforge.loop.program import (
     run_item,
 )
 from taskforge.proposal.model import TaskProposal
-from taskforge.review.decision import DECISION_FILE, Accept, Reject, load_decision
+from taskforge.review.decision import DECISION_FILE, Accept, BandOutcome, Reject, load_decision
 from taskforge.validate.adversary import AdversaryRole
-from taskforge.validate.calibration import CalibrationSummary, DefectTier, FindingKind
+from taskforge.validate.calibration import CalibrationSummary, DefectTier
 from taskforge.validate.outcome import Cause
 
 logger = logging.getLogger(__name__)
 
 CAUSES = frozenset(str(cause) for cause in Cause)
-
-
-class BandOutcome(StrEnum):
-    """Where the solver's solve rate fell against the calibrated band."""
-
-    IN_BAND = "in_band"
-    TOO_EASY = "too_easy"
-    TOO_HARD = "too_hard"
-
-
-BAND_OUTCOMES: Mapping[FindingKind, BandOutcome] = {
-    FindingKind.TOO_EASY: BandOutcome.TOO_EASY,
-    FindingKind.TOO_HARD: BandOutcome.TOO_HARD,
-}
 
 
 @dataclass(frozen=True)
@@ -95,7 +82,7 @@ class AcceptedTask:
         solved: Solver trials that passed in the accepted round (the synthesis pass count).
         k: Solver trials the validation policy asks for.
         solve_rate: ``solved`` over the graded solver trials.
-        band: Where ``solve_rate`` fell against the calibrated band, as the summary's band finding records it.
+        band: The accept decision's band outcome: ``IN_BAND``, or the band kind accepted outside the band.
     """
 
     round: int
@@ -196,10 +183,12 @@ def ungraded_causes(ledger_dir: Path) -> Counter[Cause]:
 
 @dataclass(frozen=True)
 class DecidedRound:
-    """The round of an item's last ``DECIDED`` event and the calibration summary its decision carries."""
+    """The round of an item's last ``DECIDED`` event, the calibration summary its decision carries, and the
+    band outcome of an ``Accept`` (``IN_BAND`` for a ``Reject``, which is never exported)."""
 
     round: int
     summary: CalibrationSummary
+    band: BandOutcome
 
 
 def final_round(root: Path, item_id: str, entries: Sequence[LedgerEntry]) -> DecidedRound | None:
@@ -213,19 +202,20 @@ def final_round(root: Path, item_id: str, entries: Sequence[LedgerEntry]) -> Dec
     assert last.input_hash is not None
     evidence = root / ITEMS_DIR / item_id / ROUNDS_DIR / str(last.round) / f"evidence-{last.input_hash[:DIGEST_CHARS]}"
     match load_decision(evidence / DECISION_FILE):
-        case Accept(summary=summary):
-            return DecidedRound(last.round, summary)
+        case Accept(summary=summary, band=band):
+            return DecidedRound(last.round, summary, band)
         case Reject(summary=CalibrationSummary() as summary):
-            return DecidedRound(last.round, summary)
+            return DecidedRound(last.round, summary, BandOutcome.IN_BAND)
         case _:
             return None
 
 
-def accepted_task(item_id: str, round: int, summary: CalibrationSummary) -> AcceptedTask:  # noqa: A002
-    """The exported record of an item accepted on ``summary`` in ``round``."""
+def accepted_task(
+    item_id: str, round: int, summary: CalibrationSummary, band: BandOutcome  # noqa: A002
+) -> AcceptedTask:
+    """The exported record of an item accepted on ``summary`` in ``round`` with band outcome ``band``."""
     if summary.solve_rate is None:
         raise ValueError(f"{item_id}: accepted on a summary with no graded solver trial")
-    bands = [BAND_OUTCOMES[finding.kind] for finding in summary.findings if finding.kind in BAND_OUTCOMES]
     return AcceptedTask(
         round=round,
         task_digest=summary.task_digest,
@@ -233,7 +223,7 @@ def accepted_task(item_id: str, round: int, summary: CalibrationSummary) -> Acce
         solved=summary.solver.solved,
         k=summary.k,
         solve_rate=summary.solve_rate,
-        band=bands[0] if bands else BandOutcome.IN_BAND,
+        band=band,
     )
 
 
@@ -258,7 +248,7 @@ class _Tally:
         if final is None:
             return
         if terminal is Terminal.ACCEPTED:
-            self.accepted[item_id] = accepted_task(item_id, final.round, final.summary)
+            self.accepted[item_id] = accepted_task(item_id, final.round, final.summary, final.band)
         notes = noted_passes(final.summary)
         if notes:
             self.noted[item_id] = notes
