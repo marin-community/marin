@@ -316,6 +316,7 @@ class EnvironmentRequirements(BaseModel):
     setup_commands: tuple[str, ...] = ()
     environment_variables: dict[str, str] = Field(default_factory=dict)
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
+    packages_lock: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
@@ -323,10 +324,11 @@ class EnvironmentRequirements(BaseModel):
             raise ValueError("Compatible backends must be unique")
         if Backend.SHELLSIM in self.compatible_backends and self.docker_image is not None:
             raise ValueError("ShellSim cannot satisfy a required Docker image")
-        # The local backend runs on a host that reproduces the image's dependencies, so the image still
-        # names what the environment provides.
-        if Backend.LOCAL in self.compatible_backends and self.docker_image is None:
-            raise ValueError("A local environment requires the image whose dependencies the host provides")
+        # A local environment runs on a host that builds its packages from the lock; an image carries its own.
+        if Backend.LOCAL in self.compatible_backends and self.packages_lock is None:
+            raise ValueError("A local environment requires the packages lock the host builds")
+        if Backend.LOCAL not in self.compatible_backends and self.packages_lock is not None:
+            raise ValueError("Only a local environment carries a packages lock")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):
@@ -452,9 +454,9 @@ class FileReward(BaseModel):
     pass_above: float | None = Field(default=None, allow_inf_nan=False)
 
 
-def _require_grader_image(environment: EnvironmentRequirements) -> None:
-    if environment.docker_image is None:
-        raise ValueError("A grading environment requires a digest-pinned image")
+def _require_grader_environment(environment: EnvironmentRequirements) -> None:
+    if environment.docker_image is None and environment.packages_lock is None:
+        raise ValueError("A grading environment requires a digest-pinned image or a packages lock")
     if environment.tool_providers:
         raise ValueError("A grading environment cannot declare tool providers")
 
@@ -494,7 +496,7 @@ class VerifyitGrader(BaseModel):
     def validate_grader(self) -> "VerifyitGrader":
         spec = verifyit_spec(self)
         if self.environment is not None:
-            _require_grader_image(self.environment)
+            _require_grader_environment(self.environment)
             answer = verifyit_answer_file(spec)
             if answer is not None and under_grader_root(answer):
                 raise ValueError("The answer file must lie outside /tests and /logs/verifier")
@@ -539,7 +541,7 @@ class ScriptGrader(BaseModel):
 
     @model_validator(mode="after")
     def validate_grader(self) -> "ScriptGrader":
-        _require_grader_image(self.environment)
+        _require_grader_environment(self.environment)
         normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
         if self.answer_path is not None:

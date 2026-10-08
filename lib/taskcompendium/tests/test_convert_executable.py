@@ -312,7 +312,7 @@ async def test_agent_machine_rejects_an_incompatible_backend_before_start(execut
 
 def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image(executable_task):
     data = executable_task.model_dump(mode="json")
-    data["grader"]["environment"]["compatible_backends"] = ["local"]
+    data["grader"]["environment"] = {"compatible_backends": ["local"], "packages_lock": "fixture/requirements.lock"}
     machines = RoutedMachines()
     report = run_controls(TaskSpec.model_validate_json(json.dumps(data)), controls=CONTROLS, machines=machines)
     assert checks(report) == {"golden": CheckStatus.PASS}

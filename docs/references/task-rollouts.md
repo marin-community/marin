@@ -186,7 +186,7 @@ The Harbor importer converts the package environment and tests into a `ScriptGra
 The caller selects backend settings, users, and deadlines during lowering.
 The Harbor importer accepts only separate verifier environments.
 An unset verifier mode without a separate environment selects shared mode and causes rejection.
-Script grading requires a prebuilt, digest-pinned grader image and a separate machine.
+Script grading requires a separate machine: a sandbox of a prebuilt, digest-pinned grader image, or a local machine whose host builds the grader's packages lock.
 The Shellbox session's Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so this Harbor path is unsupported on Iris.
 Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.

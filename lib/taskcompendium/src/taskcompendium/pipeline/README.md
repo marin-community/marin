@@ -72,12 +72,16 @@ cannot convert.
 
    An `OracleCommand` runs with the task's worker and oracle resources
    installed in a fresh machine of the task's agent image, whose tools and
-   directories it expects, or of the grader image when the task has no agent
-   image. Its output files, or the contents of `answer_file`, become the
-   submission, which the grader then grades in its own image. Sandbox graders
-   get their machines from the campaign's `GradingMachines`, always with network
-   access denied. Without controls the stage is skipped and sandbox graders stay
-   unverified.
+   directories it expects, or of the grader's machine when the task has no
+   agent image. Its output files, or the contents of `answer_file`, become the
+   submission, which the grader then grades in its own environment. Graders
+   that run outside the process get their machines from the campaign's
+   `GradingMachines`, which routes each environment by its
+   `compatible_backends`: a `local` environment to a locked-down host machine
+   with the Python environment built from its `packages_lock`, and an image
+   environment to a sandbox of that image. Every grading machine has network
+   access denied. Without controls the stage is skipped and sandbox graders
+   stay unverified.
 
    A source whose converted panel tasks are all graded by a verifyit judge is
    not sampled, with or without controls: no judge control exists yet, so the

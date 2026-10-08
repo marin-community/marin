@@ -134,8 +134,6 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
     if not grades_in_process(grader):
         environment = grader.environment
         assert environment is not None
-        if environment.docker_image is None:
-            raise ValueError("Sandbox controls require a grader image")
         if machines is None:
             raise ValueError("Sandbox controls require grading machines")
         sandbox = _Sandbox(machines, controls.memory_mb, _image_machine(machines, environment, controls.memory_mb))

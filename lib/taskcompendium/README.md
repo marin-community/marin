@@ -114,10 +114,11 @@ criteria and the distinction between declarations and sampled runtime evidence.
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
 | `environment_variables` | String values required in the worker or grading machine environment. |
 | `tool_providers` | Mapping from a task-local provider instance name to a required action interface and initial state. |
+| `packages_lock` | Storage URL of a uv-compiled, hash-pinned requirements lock. A `local` environment requires it: the host builds the lock into a Python environment for the commands it runs. Other environments must omit it. |
 
 Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
-The task's `docker_image` and worker file mounts describe worker initial state. A grader that runs in its own machine declares that machine's image, capabilities, setup commands, and environment variables in `grader.environment`. A grader environment must pin a `docker_image` and cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment.
+The task's `docker_image` and worker file mounts describe worker initial state. A grader that runs in its own machine declares that machine's image, capabilities, setup commands, and environment variables in `grader.environment`. A grader environment must pin a `docker_image` or, when it runs on the `local` backend, carry a `packages_lock`, and it cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment.
 
 ## Resource mounts
 
