@@ -119,9 +119,7 @@ def _sandbox_argv(
 ) -> list[str]:
     """The bwrap invocation that runs a program over ``root`` with ``read_only`` and the system directories.
 
-    Run by root, bwrap creates its namespaces with the caller's CAP_SYS_ADMIN and no user namespace, so it
-    can mount a fresh ``/proc`` inside a container, and ``--cap-drop ALL`` leaves the command without
-    capabilities. Run by another user, bwrap creates a user namespace to hold its namespaces.
+    The program runs without capabilities; as root, bwrap needs no user namespace for its own.
     """
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
@@ -146,11 +144,7 @@ def _sandbox_argv(
 
 
 def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
-    """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``.
-
-    Ubuntu's AppArmor policy grants unprivileged user namespaces only to ``/usr/bin/bwrap``, so a non-root
-    process on Ubuntu needs the system binary; elsewhere the bundled one works wherever bwrap can.
-    """
+    """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``; the caller probes each in turn."""
     if bwrap is not None:
         return (bwrap,)
     system = shutil.which("bwrap")
@@ -273,10 +267,16 @@ class LocalMachine:
             raise RuntimeError("Machine is closed")
 
     def _host_path(self, path: PurePosixPath) -> Path:
-        """Where the host keeps the file that commands see at ``path``."""
+        """Where the host keeps the file that commands see at ``path``.
+
+        A command may plant a symlink in its root that points outside it; a transfer must not follow one.
+        """
         if _within(path, (*SYSTEM_DIRECTORIES, *self.read_only)):
             return Path(path)
-        return self.root / path.relative_to("/")
+        host = self.root / path.relative_to("/")
+        if not Path(os.path.realpath(host)).is_relative_to(self.root):
+            raise RuntimeError(f"{path} leaves the machine root through a symlink")
+        return host
 
     async def run(self, command: Command) -> Result:
         self._check_open()
@@ -364,8 +364,9 @@ class LocalMachineFactory:
     and the venvs and interpreters of ``bin_dirs`` read-only. Every other path, including ``/tmp`` and
     ``HOME``, lies in a root directory of the machine's own that starts empty and is removed by
     ``close``; no other host file is visible. Commands never inherit the host's environment: they get
-    ``bin_dirs`` ahead of a standard ``PATH``, ``HOME``, ``LANG``, the host's ``PYTHONHASHSEED`` if set,
-    and the spec's and command's variables. ``memory_mb`` is ignored.
+    ``bin_dirs`` ahead of a standard ``PATH``, ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has
+    a ``hash_seed``, and the spec's and command's variables. A spec with ``memory_mb`` is rejected, since
+    the backend enforces no memory limit.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
@@ -374,8 +375,9 @@ class LocalMachineFactory:
 
     backend: Backend = Backend.LOCAL
 
-    def __init__(self, *, bin_dirs: tuple[Path, ...] = (), bwrap: Path | None = None):
+    def __init__(self, *, bin_dirs: tuple[Path, ...] = (), bwrap: Path | None = None, hash_seed: str | None = None):
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
+        self.hash_seed = hash_seed
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
         self._read_only = _interpreter_roots(self.bin_dirs)
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
@@ -383,8 +385,8 @@ class LocalMachineFactory:
     async def create(self, spec: MachineSpec) -> LocalMachine:
         if not isinstance(spec.source, HostImage):
             raise UnsupportedMachineSpec(f"The local backend requires HostImage, not {type(spec.source).__name__}")
-        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus:
-            raise UnsupportedMachineSpec("The local backend does not provide CPU, storage, or GPU allocations")
+        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
+            raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
         workdir = _absolute_path(spec.workdir or "/")
         if _within(workdir, (*SYSTEM_DIRECTORIES, *self._read_only)):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host directory")
@@ -399,6 +401,6 @@ class LocalMachineFactory:
             "HOME": str(HOME),
             "LANG": "C.UTF-8",
         }
-        if "PYTHONHASHSEED" in os.environ:
-            environment["PYTHONHASHSEED"] = os.environ["PYTHONHASHSEED"]
+        if self.hash_seed is not None:
+            environment["PYTHONHASHSEED"] = self.hash_seed
         return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=self._read_only, environment=environment)

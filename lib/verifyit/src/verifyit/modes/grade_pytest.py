@@ -73,19 +73,7 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
             if remaining <= 0:
                 return scored(0.0, reason="timeout", passed=0, total=0)
             report_path = Path(scratch) / f"{index}-{REPORT_NAME}"
-            argv = [
-                spec.python,
-                "-m",
-                "pytest",
-                "--json-report",
-                f"--json-report-file={report_path}",
-                "-p",
-                "no:cacheprovider",
-                "-o",
-                "addopts=",
-                *spec.args,
-                *paths,
-            ]
+            argv = _pytest_argv(spec.python, report_path, *spec.args, *paths)
             result = run_command(argv, directory, remaining)
             if result.timed_out:
                 return scored(0.0, reason="timeout", passed=0, total=0)
@@ -147,6 +135,23 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
     return reward
 
 
+def _pytest_argv(python: str, report: Path, *args: str, isolated: bool = False) -> list[str]:
+    """Run pytest with the JSON report plugin, no cache and no inherited addopts; ``isolated`` adds ``-I``."""
+    return [
+        python,
+        *(("-I",) if isolated else ()),
+        "-m",
+        "pytest",
+        "--json-report",
+        f"--json-report-file={report}",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        *args,
+    ]
+
+
 def _pytest_available(python: str, directory: Path, timeout: float) -> bool:
     # Candidate modules can shadow pytest's dependencies before collection.
     # Probe the installed interpreter/plugin without importing any task code.
@@ -156,21 +161,7 @@ def _pytest_available(python: str, directory: Path, timeout: float) -> bool:
     config.write_text("[pytest]\n")
     report = directory / "availability.json"
     result = run_command(
-        [
-            python,
-            "-I",
-            "-m",
-            "pytest",
-            "--json-report",
-            f"--json-report-file={report}",
-            "-p",
-            "no:cacheprovider",
-            "-o",
-            "addopts=",
-            "-c",
-            str(config),
-            str(test),
-        ],
+        _pytest_argv(python, report, "-c", str(config), str(test), isolated=True),
         directory,
         timeout,
         env={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "", "PYTEST_ADDOPTS": "", "PYTEST_PLUGINS": ""},
