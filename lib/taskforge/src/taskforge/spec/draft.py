@@ -333,17 +333,26 @@ def lower(
     if (verifier_machine is None) != (task.verifier.kind != SHELL_KIND):
         raise ValueError("A verifier machine is given exactly when the task has a shell grader")
     runtime = TaskRuntimeSpec(
-        task_machine=_machine_runtime(task_machine, task.environment_requirements, host),
-        verifier_machine=_machine_runtime(verifier_machine, task.verifier.environment_requirements, host),
+        task_machine=(
+            None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
+        ),
+        verifier_machine=(
+            None
+            if verifier_machine is None
+            else machine_runtime(verifier_machine, task.verifier.environment_requirements, host)
+        ),
     )
     return lower_task(task, runtime, session, factories=factories, sessions={})
 
 
-def _machine_runtime(
-    settings: MachineSettings | None, requirements: EnvironmentRequirements, host: MachineHost
-) -> MachineRuntimeSpec | None:
-    if settings is None:
-        return None
+def machine_runtime(
+    settings: MachineSettings, requirements: EnvironmentRequirements, host: MachineHost
+) -> MachineRuntimeSpec:
+    """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
+
+    ``lower`` builds every task and verifier machine with it; a builder prototyping a machine
+    outside a lowered task uses it too, so the backend choice stays in one place.
+    """
     backend = Backend.SHELLSIM if requirements.docker_image is None else container_backend(host)
     return MachineRuntimeSpec(
         backend=backend.value,
