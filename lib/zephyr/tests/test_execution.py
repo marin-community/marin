@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -67,6 +68,30 @@ class _UnpicklableError(Exception):
     def __init__(self, a, b, c):
         self.a, self.b, self.c = a, b, c
         super().__init__(f"boom {a}/{b}/{c}")  # self.args = (message,) -> revive needs 3 args
+
+
+@pytest.mark.parametrize("pool", ["dedicated", "shared"])
+@pytest.mark.parametrize(
+    ("name", "prefix"),
+    [
+        (None, ""),
+        ("", ""),
+        (" /?! ", ""),
+        (" RLVR/IfEval__Review! ", "rlvr-ifeval-review-"),
+        ("a" * 63 + " /tail", "a" * 63 + "-"),
+        ("b" * 80, "b" * 64 + "-"),
+    ],
+)
+def test_execute_names_execution_id(local_client, tmp_path, pool, name, prefix):
+    context = ZephyrContext(client=local_client, max_workers=1, chunk_storage_prefix=str(tmp_path))
+    if pool == "shared":
+        context.start()
+    try:
+        result = context.execute(Dataset.from_list([1]).map(lambda x: x + 1), name=name)
+        assert result.results == [2]
+        assert re.fullmatch(prefix + r"\d{8}-\d{6}-[0-9a-f]{8}", result.execution_id)
+    finally:
+        context.shutdown()
 
 
 def test_ensure_picklable_exception_passes_through_picklable():
