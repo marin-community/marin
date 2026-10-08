@@ -3,10 +3,10 @@
 
 """Fakes at the loop's I/O boundaries: a proposal source, a rubric, a solver model and a tokenizer.
 
-The author is the real ``build.author.author`` against the ``fake_glm`` router, which serves scripted
+The author is the real ``builder.author.author`` against the ``fake_glm`` router, which serves scripted
 ``submit_build_program`` calls; the builder programs it returns make no model call and build a ShellSim
-task whose shell grader gives full credit only to ``ANSWER = 42`` (a lenient program's grader to any
-``ANSWER = <int>``). Validation runs on ShellSim through RolloutEngine. The adversary is the real agent
+task whose host-run script grader gives full credit only to ``ANSWER = 42`` (a lenient program's grader
+to any ``ANSWER = <int>``). Validation runs on ShellSim through RolloutEngine. The adversary is the real agent
 loop against the same router: ``adversary_turns`` queues its turns after the author's, and every
 ``submit`` it makes is graded by the task's real verifier. ``Loop`` assembles a run root and its
 ``LoopServices`` for one test.
@@ -23,12 +23,12 @@ from typing import Any
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend
 from taskcompendium.submission import PlainText
 
-from taskforge.build.author import SUBMIT_TOOL
-from taskforge.build.sdk import BuildServices
-from taskforge.build.template import standard
+from taskforge.builder.author import SUBMIT_TOOL
+from taskforge.builder.sdk import BuildServices
+from taskforge.builder.template import standard
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import LedgerEntry
 from taskforge.llm.client import Completion, FinishReason, GlmClient, GlmEndpoint, GlmUnavailable, Pool, Usage
@@ -38,7 +38,7 @@ from taskforge.loop.program import LEDGER_DIR, LoopServices
 from taskforge.proposal.model import TaskProposal, parse, render
 from taskforge.proposal.source import ProposalBatch, SlotFailure, SlotProposal
 from taskforge.review.rules import BandChoice, BandRule, BandRules
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import SHELLSIM, MachineHost
 from taskforge.triage.checks import CheckContext, CheckResult
 from taskforge.triage.program import Repair as TriageRepair
 from taskforge.triage.program import RubricAssessment
@@ -86,93 +86,86 @@ None.
 """
 
 GRADE = """
-import json, sys
-messages = json.load(sys.stdin)
-final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
-print(1.0 if final.strip().endswith("ANSWER = 42") else 0.0)
+import json, os, pathlib
+final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
+verdict = {"status": "scored", "reward": float(final.endswith("ANSWER = 42")), "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
 """
 
 LENIENT_GRADE = """
-import json, re, sys
-messages = json.load(sys.stdin)
-final = [m for m in messages if m.get("role") == "assistant"][-1].get("content") or ""
-print(1.0 if re.search(r"ANSWER = -?[0-9]+$", final.strip()) else 0.0)
+import json, os, pathlib, re
+final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
+verdict = {"status": "scored", "reward": float(bool(re.search(r"ANSWER = -?[0-9]+$", final))), "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
 """
 
 PROGRAM = """
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, StdoutReward
-from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source, StageRewardStrategy, TaskSpec
+from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
 from taskcompendium.submission import PlainText
 
-STAGES = STAGE_NAMES
-EXECUTION = TaskExecution(stages={name: StageExecution() for name in STAGES})
 CONVENTION = PlainText(id="plain_text")
+MACHINE = spec.machine(startup_timeout=60)
+SESSION = spec.session(
+    max_turns=8,
+    model_turn_timeout=None,
+    command_timeout=None,
+    tool_turn_timeout=None,
+    total_turn_timeout=None,
+    attempt_timeout=None,
+    verifier_timeout=60,
+    cleanup_timeout=30,
+)
+FILES = (spec.file("workspace/question.txt", "6 * 7"),)
 
 GRADE = GRADE_SOURCE
 
 
 @step(StepRole.ENVIRONMENT)
-async def machine(b: Build) -> EnvironmentSpec:
-    return spec.environment(EnvironmentKind.SHELLSIM, files=(spec.file("/workspace/question.txt", "6 * 7"),))
+async def machine(b: Build) -> EnvironmentRequirements:
+    return spec.requirements(image=None)
 
 
 @step(StepRole.GRADER)
-async def grader(b: Build, env: EnvironmentSpec) -> Grader:
-    verifier = spec.shell_verifier(
-        argv=("python3", "/grader/grade.py"),
-        reward=StdoutReward(),
-        timeout=GRADER_TIMEOUT,
-        files=(spec.file("/grader/grade.py", GRADE),),
-    )
-    reference = await b.try_grader(env, verifier, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42")
+async def grader(b: Build, env: EnvironmentRequirements) -> Grader:
+    package = spec.script_verifier(GRADE, {}, timeout=GRADER_TIMEOUT)
+    reference = await b.try_grader(env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)
     b.check(reference.reward == 1.0, f"reference scored {reference.reward}")
-    return Grader(verifier=verifier, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
+    return Grader(package=package, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
 
 
 @step(StepRole.ASSEMBLE)
-async def assemble(b: Build, env: EnvironmentSpec, graded: Grader) -> TaskSpec:
-    stages = tuple(
-        spec.stage(name, graded.verifier, instruction=None if index == 0 else "Check it again.")
-        for index, name in enumerate(STAGES)
-    )
+async def assemble(b: Build, env: EnvironmentRequirements, graded: Grader) -> TaskSpec:
     return spec.assemble(
         task_id=b.item_id,
         instruction="Compute the product in question.txt. " + graded.answer_contract,
         answer_type=AnswerType.TEXT,
-        environment=env,
-        verifier=spec.staged(StageRewardStrategy.FINAL) if stages else graded.verifier,
+        grader=graded.package,
         source=Source(dataset="test", revision="r1", row="0", importer_revision="test"),
-        execution=EXECUTION,
-        stages=stages,
+        environment=env,
+        files=FILES,
     )
 
 
-def control(id, kind, category, concern, text, stage, **expect):
+def control(id, kind, category, concern, text, **expect):
     return controls.Control(
-        id=f"{id}-{stage}",
+        id=id,
         kind=kind,
         category=category,
         concern=concern,
         author="test",
         payload=controls.Transcript((controls.reply(text),)),
         expect=controls.Expectation(status=Outcome.GRADED, **expect),
-        stage=stage,
     )
 
 
 @step(StepRole.CONTROLS)
 async def fixed_controls(b: Build, task: TaskSpec) -> tuple[controls.Control, ...]:
-    return tuple(
-        c
-        for stage in range(max(1, len(STAGES)))
-        for c in (
-            control("gold", K.POSITIVE, C.KNOWN_CORRECT, N.REFERENCE, "ANSWER = 42", stage, reward_min=1.0),
-            control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, N.EXTRACTION, "", stage, reward_max=0.0),
-            control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE, WRONG_REPLY, stage, reward_max=0.0),
-            control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT, SUM_REPLY, stage, reward_max=0.0),
-        )
+    return (
+        control("gold", K.POSITIVE, C.KNOWN_CORRECT, N.REFERENCE, "ANSWER = 42", reward_min=1.0),
+        control("empty", K.MALFORMED, C.EMPTY_OR_MALFORMED, N.EXTRACTION, "", reward_max=0.0),
+        control("off-by-one", K.NEGATIVE, C.PLAUSIBLE_WRONG, N.ACCEPTANCE, WRONG_REPLY, reward_max=0.0),
+        control("sum", K.NEGATIVE, C.TASK_SPECIFIC_SHORTCUT, N.SHORTCUT, SUM_REPLY, reward_max=0.0),
     )
 
 
@@ -186,21 +179,20 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    return BuildOutput(task=task, execution=EXECUTION, convention=CONVENTION, controls=await fixed_controls(b, task))
+    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=None, session=SESSION)
+    return BuildOutput(task=task, lowered=lowered, convention=CONVENTION, controls=await fixed_controls(b, task))
 """
 
 
-def program(grader_timeout: int = 60, staged: bool = False, lenient: bool = False) -> str:
+def program(grader_timeout: int = 60, lenient: bool = False) -> str:
     """A builder program without model calls; a different ``grader_timeout`` builds a different task.
 
     A ``lenient`` program's grader accepts any ``ANSWER = <int>`` line; its negative controls end on no
     such line, so they hold under it.
     """
-    names = ("one", "two") if staged else ()
     return (
         PROGRAM.replace("GRADE_SOURCE", repr(LENIENT_GRADE if lenient else GRADE))
         .replace("GRADER_TIMEOUT", str(grader_timeout))
-        .replace("STAGE_NAMES", repr(names))
         .replace("LENIENT", repr(lenient))
     )
 
@@ -376,7 +368,7 @@ def validation_policy() -> ValidationPolicy:
         adversary_repair_submissions=2,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
-        deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
+        deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=0,
         token_contract_retries=0,
         retry_backoff=FAST,
@@ -435,14 +427,18 @@ class Loop:
                 build=BuildServices(
                     client=client,
                     policy=LLMPolicy(),
-                    factories={EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+                    host=MachineHost.LAPTOP,
+                    factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+                    images=None,
                     ledger=ledger,
                 ),
                 engine=EngineSettings(
-                    factories={EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-                    capabilities={EnvironmentKind.SHELLSIM: SHELLSIM},
+                    factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+                    capabilities={Backend.SHELLSIM.value: SHELLSIM},
                     max_turns=6,
                     command_timeout=10,
+                    tool_turn_timeout=20,
+                    model_turn_timeout=30,
                     cleanup_timeout=10,
                     conventions=(CONVENTION,),
                 ),

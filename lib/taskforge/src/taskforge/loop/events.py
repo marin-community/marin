@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from taskforge.build.infrastructure import InfrastructureCause
+from taskforge.builder.infrastructure import InfrastructureCause
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
 from taskforge.review.decision import BandOutcome, RejectKind
 from taskforge.triage.verdict import TriageDecision
@@ -69,7 +69,7 @@ class EventKind(StrEnum):
     input_hash: the program digest. attrs: cause (an ``InfrastructureCause``), message (truncated),
     retries_used, abandon, not_before."""
     BUILT = "built"
-    """input_hash: the task digest. attrs: program_digest, steps, hits, staged."""
+    """input_hash: the task digest. attrs: program_digest, steps, hits."""
     CONTROLS_REPLAYED = "controls_replayed"
     """input_hash: the task digest. attrs: met, violated, ungraded (counts), passed."""
     SOLVED = "solved"
@@ -81,7 +81,7 @@ class EventKind(StrEnum):
     consumer's adversary context, ``""`` when it was empty."""
     DECIDED = "decided"
     """input_hash: the task digest. attrs: decision (a ``DecisionKind``), repairs_used, retries_used and
-    notes (the kinds of the noted adversary passes, comma-separated; empty when staged or none); band
+    notes (the kinds of the noted adversary passes, comma-separated; empty when none); band
     (a ``BandOutcome``: where the solve rate fell, or the kind accepted outside it), solved, graded
     and solve_rate (three decimals) for accept; kind (a ``RejectKind``) and reasons for reject;
     findings and invalidate for repair; cause, count, abandon and not_before for retry."""
@@ -416,11 +416,10 @@ def _apply(state: ItemState, kind: EventKind, entry: LedgerEntry) -> ItemState:
                 return _closing(state, Terminal.ABANDONED, reason, None, failures)
             return replace(state, not_before=float(attrs["not_before"]))
         case EventKind.BUILT:
-            staged = attrs["staged"] == "true"
             return replace(
                 state,
                 task_digest=entry.input_hash,
-                phase=Phase.DECIDE if staged else Phase.CONTROLS,
+                phase=Phase.CONTROLS,
                 solved=False,
                 adversaries_run=False,
                 build_host_failures=(),

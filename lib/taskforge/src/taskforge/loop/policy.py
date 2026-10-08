@@ -34,11 +34,11 @@ class LoopPolicy:
         max_idea_reproposals: Re-proposals of an idea whose batch yielded zero proposals.
         max_triage_repairs: Rubric repairs per item; a REPAIR verdict past it rejects the item.
         max_build_revisions: Author revisions per item after a build failure or a no-op repair.
-        max_repairs: Review ``Repair`` decisions per item, staged repairs included.
+        max_repairs: Review ``Repair`` decisions per item.
         max_validation_retries: Review ``Retry`` decisions per item per launch; then the item is abandoned.
         max_build_retries: Rebuilds of a program after consecutive host failures of its build, per
             launch; then the item is abandoned. A host failure spends no build revision; one in
-            ``build.infrastructure.HOST_REJECTIONS`` is not retried but abandons the item at once.
+            ``builder.infrastructure.HOST_REJECTIONS`` is not retried but abandons the item at once.
         retry_backoff: Wait before a ``Retry`` re-enters validation, or a build the host failed is
             retried; the k-th retry waits the k-th interval.
         output_token_budget: Output tokens of the item's ``LLM_CALL`` ledger entries (triage, author,

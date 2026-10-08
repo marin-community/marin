@@ -385,13 +385,13 @@ different `policy.json` is refused.
 The loop keeps a run's bounds separate because their costs differ: a build revision is one author
 call, a review repair is a whole validation round. A build failure, or any exception the builder
 program raises, goes back to the author as a revision. A
-`build.infrastructure.BuildInfrastructureFailure` (no factory for the machine kind, a scheduling
-timeout, an unreachable host) is the machine host's failure, not the program's: it spends no
+`builder.infrastructure.BuildInfrastructureFailure` (no factory for the machine backend, no image
+builder, a scheduling timeout, an unreachable host) is the machine host's failure, not the program's: it spends no
 revision and the author never sees it. The loop records `BUILD_INFRASTRUCTURE` with the cause,
 waits out the retry backoff without holding a slot and rebuilds the same program; a host failure
 after `max_build_retries` rebuilds ends the item `ABANDONED` with its cause counts, and the next
-launch rebuilds the same program with a fresh count. A missing factory is deterministic on the host
-(a laptop without Docker stays without Docker), so it abandons the item at once (`retries_used=0`,
+launch rebuilds the same program with a fresh count. A missing factory or image builder is
+deterministic on the host (a laptop without Docker stays without Docker), so it abandons the item at once (`retries_used=0`,
 `abandon=true`): retrying would spend the backoff ladder for nothing. It is not a `HOST` rejection,
 because `REJECTED` is final and a run root moved to a host with the factory must still build the
 item; `ABANDONED` is re-entered on the next launch. A host failure never ends an item `REJECTED` or

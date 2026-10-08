@@ -16,8 +16,8 @@ accepts the task (``ACCEPTED``, labelled with its band) or rejects it. A build t
 host failed (``BuildInfrastructureFailure``) spends no revision and reaches no author: it records
 ``BUILD_INFRASTRUCTURE`` and rebuilds the same program after the same backoff. Either kind of retry,
 spent, ends the item ``ABANDONED`` with its causes. A host failure no retry changes (``HOST_REJECTIONS``:
-the host has no factory for the machine kind) abandons the item at once, so the next launch on a host
-with the factory builds it. An unhandled exception,
+the host has no factory for the machine backend, or no image builder) abandons the item at once, so
+the next launch on a host with them builds it. An unhandled exception,
 ``GlmUnavailable`` included, records ``FAILED`` and propagates.
 
 Each loop iteration derives the item's state from its event log, runs the sub-phase the state names
@@ -54,11 +54,11 @@ from types import ModuleType
 from pydantic import TypeAdapter
 
 from taskforge.atomic_file import write_atomic
-from taskforge.build.author import PROGRAM_FILE, Revision, author, load_program
-from taskforge.build.infrastructure import HOST_REJECTIONS, BuildInfrastructureFailure
-from taskforge.build.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
-from taskforge.build.sdk import BuildFailure, BuildServices
-from taskforge.build.step import CacheStatus
+from taskforge.builder.author import PROGRAM_FILE, Revision, author, load_program
+from taskforge.builder.infrastructure import HOST_REJECTIONS, BuildInfrastructureFailure
+from taskforge.builder.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
+from taskforge.builder.sdk import BuildFailure, BuildServices
+from taskforge.builder.step import CacheStatus
 from taskforge.content_hash import pretty_json, sha256_hex
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry, SpanFields, check_item_id, span
@@ -96,12 +96,12 @@ from taskforge.review.decision import (
     load_decision,
     write_decision,
 )
-from taskforge.review.rules import ItemHistory, decide, staged_repair
+from taskforge.review.rules import ItemHistory, decide
 from taskforge.triage.checks import Check, CheckContext
 from taskforge.triage.program import RubricProgram, evaluate
 from taskforge.triage.verdict import ModelCall, TriageDecision, Verdict
 from taskforge.validate.adversary import AdversaryContext, run_adversaries
-from taskforge.validate.calibration import CalibrationSummary, Finding, summarize, write_summary
+from taskforge.validate.calibration import CalibrationSummary, summarize, write_summary
 from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
@@ -155,7 +155,7 @@ class LoopServices[IdeaT]:
         checks: Triage's structural checks.
         rubric: Triage's rubric program.
         check_context: What the structural checks read besides the proposal.
-        template: The builder template the author adapts (``build.template.standard``).
+        template: The builder template the author adapts (``builder.template.standard``).
         build: The author's and builder's services; its ledger is ``ledger``.
         engine: Run-wide engine settings; each draft's trials run under its own convention alone.
         rollout_models: Builds each solver trial's model, recording under the trial's step.
@@ -346,7 +346,7 @@ class _Item:
     def draft(self, state: ItemState) -> TaskDraft:
         assert state.task_digest is not None
         draft = load_draft(self.round_dir(state.round) / DRAFT_DIR)
-        built = task_digest(draft.task, draft.execution, draft.convention)
+        built = task_digest(draft.lowered, draft.convention)
         if built != state.task_digest:
             raise ValueError(f"{self.item_id}: the stored draft has digest {built}, its BUILT event {state.task_digest}")
         return draft
@@ -574,7 +574,7 @@ async def _build(item: _Item, state: ItemState) -> None:
             step = (error.step or "") if isinstance(error, BuildFailure) else ""
             _build_failed(item, state, program.digest, step, failure, noop=False)
             return
-    digest = task_digest(draft.task, draft.execution, draft.convention)
+    digest = task_digest(draft.lowered, draft.convention)
     if digest == state.repaired_task_digest:
         failure = f"{NOOP_FAILURE}\n\n{_pending_repair(item, state).brief.failure}"
         _build_failed(item, state, program.digest, "", failure, noop=True)
@@ -587,7 +587,6 @@ async def _build(item: _Item, state: ItemState) -> None:
         program_digest=program.digest,
         steps=str(len(steps)),
         hits=str(sum(record.status is CacheStatus.HIT for record in steps)),
-        staged=str(bool(draft.task.stages)).lower(),
     )
 
 
@@ -692,19 +691,13 @@ def _decide(item: _Item, state: ItemState) -> None:
     evidence_dir = item.evidence_dir(state.round, state.task_digest)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     history = ItemHistory(state.repairs_used, policy.max_repairs, state.band_repairs)
-    decision: Decision
-    notes: tuple[Finding, ...] = ()
-    if draft.task.stages:
-        decision = staged_repair(draft, history)
-    else:
-        summary = summarize(load_validation(draft, evidence_dir), policy.validation)
-        write_summary(evidence_dir / CALIBRATION_FILE, summary)
-        decision = decide(draft, summary, history, policy.band_rules)
-        notes = summary.notes
+    summary = summarize(load_validation(draft, evidence_dir), policy.validation)
+    write_summary(evidence_dir / CALIBRATION_FILE, summary)
+    decision = decide(draft, summary, history, policy.band_rules)
     write_decision(evidence_dir / DECISION_FILE, decision)
     attrs = _decision_attrs(decision, state, policy)
     item.log.append(
-        state.round, EventKind.DECIDED, state.task_digest, **attrs, notes=joined(note.kind for note in notes)
+        state.round, EventKind.DECIDED, state.task_digest, **attrs, notes=joined(note.kind for note in summary.notes)
     )
 
 

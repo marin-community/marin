@@ -13,11 +13,10 @@ from dataclasses import replace
 import pytest
 from pydantic import TypeAdapter
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Machine, MachineSpec
-from taskcompendium.environment import EnvironmentKind
+from shellbox.machine import Backend, Machine, MachineSpec
 
-from taskforge.build.infrastructure import InfrastructureCause
-from taskforge.build.run import item_id_for
+from taskforge.builder.infrastructure import InfrastructureCause
+from taskforge.builder.run import item_id_for
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import Completion
@@ -33,7 +32,7 @@ from taskforge.loop.events import (
 from taskforge.loop.program import NOOP_FAILURE, idea_item_id, run_idea, run_item
 from taskforge.proposal.model import render
 from taskforge.review.decision import DECISION_FILE, Accept, BandOutcome, Reject, RejectKind, Repair, load_decision
-from taskforge.review.rules import STAGED_BRIEF, BandChoice, BandRule, BandRules
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.triage.verdict import TriageDecision
 from taskforge.validate.adversary import CONTEXT_HEADER, SUBMIT_TOOL_NAME, AdversaryRole
 from taskforge.validate.attempts import load_adversary_attempt, trial_files
@@ -314,25 +313,6 @@ async def test_a_shortcut_within_the_threshold_is_repaired_with_its_candidate_co
     ]
 
 
-async def test_a_staged_draft_is_repaired_into_a_single_stage_task_without_validation(loop, programs, fake_glm):
-    proposal = programs.proposal()
-    programs.submit(fake_glm, programs.source(staged=True))
-    programs.submit(fake_glm, programs.source())
-    programs.adversary_turns(fake_glm)
-
-    async with loop.services() as services:
-        terminal = await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(), services)
-    item_id = item_id_for(proposal)
-
-    assert terminal is Terminal.ACCEPTED
-    assert STAGED_BRIEF in last_user_turn(fake_glm, 1)
-    staged_round = evidence_dir(loop, item_id, 0)
-    assert isinstance(load_decision(staged_round / DECISION_FILE), Repair)
-    assert not (staged_round / "control").exists()
-    built = events_of(loop, item_id, EventKind.BUILT)
-    assert [e.attrs["staged"] for e in built] == ["true", "false"]
-
-
 async def test_validation_retries_end_abandoned_and_a_relaunch_re_enters_with_a_fresh_budget(
     loop, programs, fake_glm, unavailable
 ):
@@ -419,6 +399,10 @@ class DroppingFactory:
         self.drops = drops
         self.inner = ShellSimMachineFactory()
 
+    @property
+    def backend(self) -> Backend:
+        return self.inner.backend
+
     async def create(self, spec: MachineSpec) -> Machine:
         if self.drops:
             self.drops -= 1
@@ -432,9 +416,7 @@ async def test_a_dropped_host_connection_rebuilds_the_program_without_telling_th
     programs.adversary_turns(fake_glm)
 
     async with loop.services() as services:
-        flaky = replace(
-            services, build=replace(services.build, factories={EnvironmentKind.SHELLSIM: DroppingFactory(1)})
-        )
+        flaky = replace(services, build=replace(services.build, factories={Backend.SHELLSIM.value: DroppingFactory(1)}))
         assert (
             await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(max_build_retries=1), flaky)
             is Terminal.ACCEPTED
@@ -457,7 +439,7 @@ async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuil
 
     async with loop.services() as services:
         dropping = replace(
-            services, build=replace(services.build, factories={EnvironmentKind.SHELLSIM: DroppingFactory(2)})
+            services, build=replace(services.build, factories={Backend.SHELLSIM.value: DroppingFactory(2)})
         )
         assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, dropping) is Terminal.ABANDONED
     item_id = item_id_for(proposal)

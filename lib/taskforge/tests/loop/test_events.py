@@ -47,7 +47,7 @@ def built_log(tmp_path) -> Log:
         .add(EventKind.OPENED, input_hash="p1", proposal="d00.x/1", idea="d00.x", origin="supplied", policy_digest="pol")
         .add(EventKind.TRIAGED, input_hash="p1", decision="accept", tally="1 accept", repairs="0")
         .add(EventKind.AUTHORED, input_hash="prog1", revises="", revision="none")
-        .add(EventKind.BUILT, input_hash="task1", program_digest="prog1", steps="5", hits="0", staged="false")
+        .add(EventKind.BUILT, input_hash="task1", program_digest="prog1", steps="5", hits="0")
     )
 
 
@@ -78,7 +78,7 @@ def test_a_recorded_log_folds_through_repair_and_retry(tmp_path):
     assert not state.solved and not state.adversaries_run
 
     log.add(EventKind.AUTHORED, at_round=1, input_hash="prog2", revises="r", revision="repair")
-    log.add(EventKind.BUILT, at_round=1, input_hash="task2", program_digest="prog2", steps="5", hits="3", staged="false")
+    log.add(EventKind.BUILT, at_round=1, input_hash="task2", program_digest="prog2", steps="5", hits="3")
     log.add(
         EventKind.CONTROLS_REPLAYED, at_round=1, input_hash="task2", met="5", violated="0", ungraded="0", passed="true"
     )

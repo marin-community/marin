@@ -27,9 +27,9 @@ import httpx
 import pytest
 from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText
 
-from taskforge.build.run import item_id_for
-from taskforge.build.sdk import BuildServices
-from taskforge.build.template import standard
+from taskforge.builder.run import item_id_for
+from taskforge.builder.sdk import BuildServices
+from taskforge.builder.template import standard
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
@@ -79,7 +79,7 @@ POLICY_VALUES = LoopPolicy(
         adversary_repair_submissions=3,
         band=CalibrationBand(0.125, 0.875),
         sampling=SAMPLING,
-        deadlines=Deadlines(agent_timeout=1800.0, attempt_timeout=2400.0),
+        deadlines=Deadlines(total_turn_timeout=1800.0, attempt_timeout=2400.0),
         max_retries=2,
         token_contract_retries=2,
         retry_backoff=RetryBackoff(initial=1.0, maximum=30.0, factor=2.0, jitter=0.1),
@@ -142,7 +142,9 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
                 build=BuildServices(
                     client=client,
                     policy=LLMPolicy(),
+                    host=MachineHost.LAPTOP,
                     factories=factories,
+                    images=None,
                     ledger=ledger,
                     web_tools=web_tools(http, parallel_key.value),
                 ),
@@ -151,6 +153,8 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
                     capabilities=factory_capabilities(MachineHost.LAPTOP),
                     max_turns=40,
                     command_timeout=120.0,
+                    tool_turn_timeout=240.0,
+                    model_turn_timeout=600.0,
                     cleanup_timeout=120.0,
                     conventions=(
                         PlainText(id="plain_text"),
