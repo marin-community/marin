@@ -9,7 +9,9 @@ import safetensors.torch
 import torch
 from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource, RowMerge, merge_checkpoint
+from marin.merging.curvature import ota_merge_tensor
 from marin.merging.geometry import weight_update_gram
+from marin.merging.learned import differentiable_weight_blend
 
 
 @pytest.mark.parametrize("chunk_elements", [1, 2, 10])
@@ -191,3 +193,37 @@ def test_ram_preserves_unique_updates_and_averages_shared_updates(dtype, method,
     parameters = MergeParameters(method, (1, 1), 1, 1, 42, RamParameters(0.25, rescale, 0.5))
     result = merge_tensor(anchor, donors, parameters, tensor_name="weight")
     torch.testing.assert_close(result, torch.tensor(expected, dtype=dtype), rtol=0, atol=0)
+
+
+def test_curvature_grafting_keeps_small_sensitive_edits_and_weights_all_donors():
+    anchor = torch.zeros(2)
+    donors = [torch.tensor([1.0, 10.0]), torch.tensor([3.0, 2.0])]
+    moments = [torch.tensor([100.0, 0.01]), torch.tensor([4.0, 25.0])]
+    result = ota_merge_tensor(anchor, donors, moments, density=0.5, epsilon=1.0)
+    # Saliencies are [100, 1] and [36, 100]; each donor retains a different coordinate.
+    expected = torch.tensor([11 / 14, 12 / 7.1])
+    torch.testing.assert_close(result, expected, rtol=1e-6, atol=1e-7)
+
+
+@pytest.mark.parametrize("block_elements", [1, 3, 100])
+def test_learned_blend_gradients_match_direct_weight_arithmetic(block_elements):
+    anchor = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    donors = (anchor + 2, anchor - 1)
+    coefficients = torch.tensor([[0.25, 0.5], [0.75, 0.25]], requires_grad=True)
+    inputs = torch.tensor([2.0, -1.0])
+    weights = differentiable_weight_blend(anchor, donors, coefficients, block_elements=block_elements)
+    prediction = weights @ inputs
+    prediction.square().sum().backward()
+    # Merged rows are [1, 2] and [4.25, 5.25], giving predictions 0 and 3.25.
+    torch.testing.assert_close(prediction, torch.tensor([0.0, 3.25]), rtol=0, atol=0)
+    torch.testing.assert_close(coefficients.grad, torch.tensor([[0.0, 0.0], [13.0, -6.5]]), rtol=0, atol=0)
+
+
+def test_learned_blend_uneven_chunks_use_every_coefficient():
+    anchor = torch.zeros(4)
+    donor = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    coefficients = torch.tensor([[1.0], [2.0], [3.0]], requires_grad=True)
+    result = differentiable_weight_blend(anchor, (donor,), coefficients, block_elements=2)
+    result.sum().backward()
+    torch.testing.assert_close(result, torch.tensor([1.0, 4.0, 9.0, 12.0]), rtol=0, atol=0)
+    torch.testing.assert_close(coefficients.grad, torch.tensor([[1.0], [2.0], [7.0]]), rtol=0, atol=0)
