@@ -27,7 +27,7 @@ from jaxtyping import Array, Float, Int
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
-from experiments.grug.fast_track.key_offset import shifted_channels
+from experiments.grug.fast_track.key_offset import shift_tokens, shifted_channels
 
 _QUERY_CHUNK = 256
 
@@ -64,6 +64,66 @@ class Compose(NamedTuple):
     u: Float[Array, "B S H"] | None
     w: Float[Array, "B S H2"] | None
     offset_mask: jax.Array  # [H, D] channels whose key is the previous token's
+
+
+class Gauss(eqx.Module):
+    """Per-head Gaussian value kernel: shift ``mu`` (tokens, positive = later) and width ``softplus(rho) + 0.05``;
+    ``qscale``: the tied query's per-head scale (``mla_gauss_tied``). Trained with Adam (``.gauss.``)."""
+
+    mu: jax.Array
+    rho: jax.Array
+    qscale: jax.Array | None
+
+
+class GaussValues(NamedTuple):
+    """``[H, 2K + 1]`` kernel over value offsets ``-K..K``, the in-document smoothed values ``[B, S, H, E]`` and the
+    kernel mass that stays in the document ``[B, S, H]``."""
+
+    kernel: jax.Array
+    smooth: jax.Array
+    mass: jax.Array
+
+
+def gauss_values(g: Gauss, v: jax.Array, segment_ids: jax.Array, reach: int) -> GaussValues:
+    """Smooth each head's values along the sequence: ``smooth_j = sum_o G(o) v_{j+o}`` within the document."""
+    offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
+    sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05
+    centred = offsets[None, :] - g.mu.astype(jnp.float32)[:, None]
+    kernel = jax.nn.softmax(-jnp.square(centred) / (2 * sigma[:, None] ** 2), axis=-1)
+    vf = v.astype(jnp.float32)
+    ones = jnp.ones(v.shape[:3], jnp.float32)
+    smooth = jnp.zeros_like(vf)
+    mass = jnp.zeros(v.shape[:3], jnp.float32)
+    for i, o in enumerate(range(-reach, reach + 1)):
+        w = kernel[:, i]  # [H]
+        smooth = smooth + w[None, None, :, None] * shift_tokens(vf, segment_ids, -o)
+        mass = mass + w[None, None, :] * shift_tokens(ones, segment_ids, -o)
+    return GaussValues(kernel, smooth, mass)
+
+
+def _gauss_read(a, gv: GaussValues, v, segment_ids, qi, seg_q):
+    """``sum_j a_ij smooth_j / sum_j a_ij mass_j`` without the kernel mass that lands after the query: for keys within
+    the kernel's reach, subtract their spill onto tokens ``i + 1 .. i + K`` from the output and the normaliser."""
+    batch, heads, chunk, seq = a.shape
+    reach = (gv.kernel.shape[-1] - 1) // 2
+    main = jnp.einsum("bhqk,bkhd->bqhd", a, gv.smooth)
+    z = jnp.einsum("bhqk,bkh->bqh", a, gv.mass)
+    m = jnp.arange(reach)
+    back = qi[:, None] - m[None, :]  # [C, K]: key i - m
+    a_band = jnp.take_along_axis(a, jnp.broadcast_to(jnp.clip(back, 0, seq - 1), (batch, heads, chunk, reach)), axis=-1)
+    a_band = jnp.where(back >= 0, a_band, 0.0)
+    u = jnp.arange(1, reach + 1)
+    o = m[None, :] + u[:, None]  # [K(u), K(m)]: the offset that lands on token i + u
+    spill_w = jnp.where(o <= reach, gv.kernel[:, jnp.clip(o + reach, 0, 2 * reach)], 0.0)  # [H, K, K]
+    c = jnp.einsum("bhcm,hum->bhcu", a_band, spill_w)
+    ahead = jnp.clip(qi[:, None] + u[None, :], 0, seq - 1)  # [C, K]
+    same_doc = segment_ids[:, ahead] == seg_q[:, :, None]  # [B, C, K]
+    ok = ((qi[:, None] + u[None, :]) < seq)[None] & same_doc
+    c = c * ok[:, None]
+    v_ahead = v.astype(jnp.float32)[:, ahead]  # [B, C, K, H, E]
+    corr = jnp.einsum("bhcu,bcuhd->bchd", c, v_ahead)
+    z = z - jnp.sum(c, axis=-1).transpose(0, 2, 1)
+    return (main - corr) / (z[..., None] + 1e-6)
 
 
 class DcmhaMode(NamedTuple):
@@ -153,6 +213,7 @@ def _sparse_math(
     tap_weights,
     compose,
     dcmha,
+    gauss,
     *,
     spec: "IndexSpec",
     tap_offsets: tuple[int, ...],
@@ -282,7 +343,9 @@ def _sparse_math(
             logits = _dcmha_compose(logits, dcmha, 0, c0, chunk, dcmha_mode.dynamic)
         dense = logits
         logits = jnp.where(allowed, logits, -1e9)
-        if dcmha is not None and dcmha_mode.post:
+        if gauss is not None:
+            out = _gauss_read(jax.nn.softmax(logits, axis=-1), gauss, v, segment_ids, qi, seg_q).astype(v.dtype)
+        elif dcmha is not None and dcmha_mode.post:
             weights = _dcmha_compose(jax.nn.softmax(logits, axis=-1), dcmha, 1, c0, chunk, dcmha_mode.dynamic)
             out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
         elif compress:
@@ -336,6 +399,7 @@ def sparse_index_attention(
     tap_weights: jax.Array | None = None,
     compose: Compose | None = None,
     dcmha: DcmhaWeights | None = None,
+    gauss: GaussValues | None = None,
     *,
     window: int,
     topk: int,
@@ -366,10 +430,10 @@ def sparse_index_attention(
     )
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha)
+        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha, gauss)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
-    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha)
+    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha, gauss)
 
 
 def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
@@ -406,6 +470,12 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
                 else jnp.zeros((heads, head_dim), bool)
             ),
         )
+    gv = None
+    if attn.gauss is not None:
+        seg = jnp.zeros(q.shape[:2], jnp.int32) if segment_ids is None else segment_ids
+        gv = gauss_values(attn.gauss, v, seg, cfg.mla_gauss_reach)
+        if attn.gauss.qscale is not None:  # tied: the query is the token's own key
+            q = (k.astype(jnp.float32) * attn.gauss.qscale.astype(jnp.float32)[None, None, :, None]).astype(q.dtype)
     spec = IndexSpec(
         untied=cfg.mla_sparse_untied,
         anchor_match=cfg.mla_sparse_anchor_match,
@@ -424,6 +494,7 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         attn.sparse_taps,
         compose,
         None if attn.dcmha is None else dcmha_weights(attn.dcmha, x, q.shape[2], cfg.mla_dcmha_rank),
+        gv,
         window=cfg.mla_sparse_window,
         spec=spec,
         tap_offsets=cfg.mla_sparse_taps,
@@ -511,12 +582,22 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         ),
         logit_mix_u=jnp.zeros((d, n), jnp.float32) if cfg.mla_logit_compose_dynamic else None,
         logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
+        gauss=_gauss_init(cfg, n) if cfg.mla_gauss else None,
         dcmha=(
             _dcmha_init(random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden)
             if cfg.mla_dcmha
             else None
         ),
     )
+
+
+def _gauss_init(cfg, heads: int) -> Gauss:
+    mu = jnp.asarray(cfg.mla_gauss_mu_init if cfg.mla_gauss_mu_init else (0.0,) * heads, jnp.float32)
+    if mu.shape != (heads,):
+        raise ValueError(f"mla_gauss_mu_init needs one entry per head ({heads}), got {cfg.mla_gauss_mu_init}")
+    rho = jnp.full((heads,), math.log(math.expm1(cfg.mla_gauss_sigma_init - 0.05)), jnp.float32)
+    qscale = jnp.full((heads,), cfg.qk_mult, jnp.float32) if cfg.mla_gauss_tied else None
+    return Gauss(mu=mu, rho=rho, qscale=qscale)
 
 
 def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> Dcmha:

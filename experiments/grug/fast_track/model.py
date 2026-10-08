@@ -82,7 +82,13 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.fast_track.sparse_attention import Dcmha, SparseIndex, mla_sparse_attention, mla_sparse_params
+from experiments.grug.fast_track.sparse_attention import (
+    Dcmha,
+    Gauss,
+    SparseIndex,
+    mla_sparse_attention,
+    mla_sparse_params,
+)
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -1011,6 +1017,12 @@ class GrugModelConfig:
     mla_dcmha_rank: int = 2
     mla_dcmha_hidden: int = 64
     mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
+    mla_gauss: bool = False
+    """MLA values read through a learned per-head shifted Gaussian (``sparse_attention.Gauss``; the emulation)."""
+    mla_gauss_mu_init: tuple[float, ...] = ()
+    mla_gauss_sigma_init: float = 0.5
+    mla_gauss_reach: int = 16
+    mla_gauss_tied: bool = False
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -2363,6 +2375,7 @@ class CausalSelfAttention(eqx.Module):
     logit_mix_u: Float[Array, "D N"] | None  # mla_logit_compose_dynamic: rank-1 query-wise mix
     logit_mix_w: Float[Array, "D N2"] | None
     dcmha: Dcmha | None
+    gauss: Gauss | None
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2633,6 +2646,7 @@ class CausalSelfAttention(eqx.Module):
             logit_mix_u=None,
             logit_mix_w=None,
             dcmha=None,
+            gauss=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
