@@ -3,9 +3,10 @@
 
 """Live validation of trials and control replay against GLM-5.3 (interactive tier) on ShellSim.
 
-Each check writes ``lib/taskforge/.evidence/validate/<check>-<utc>/``: ``summary.json`` (purpose,
+Each check writes ``<evidence_root>/validate/<check>-<utc>/``: ``summary.json`` (purpose,
 per-trial outcome, reward, cause, shell commands executed, token counts, wall time), the per-attempt
-rollout records that ``run_trials`` writes, and the ledger (``ledger/<item>.jsonl``).
+rollout records that ``run_trials`` writes, and the ledger (``ledger/<item>.jsonl``). ``evidence_root``
+is the fixture in ``tests/conftest.py``.
 """
 
 import json
@@ -39,7 +40,6 @@ from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_
 
 pytestmark = pytest.mark.live_glm
 
-EVIDENCE_ROOT = Path(__file__).resolve().parents[2] / ".evidence" / "validate"
 POLICY = LLMPolicy(max_continuations=0)
 K = 3
 LIVE_TIMEOUT = 1800
@@ -89,8 +89,8 @@ def control_plan(directory: Path, item_id: str) -> ControlPlan:
     )
 
 
-def check_dir(check: str) -> Path:
-    return EVIDENCE_ROOT / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+def check_dir(evidence_dir: Path, check: str) -> Path:
+    return evidence_dir / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
 
 def shell_commands(outcome: Outcome) -> list[str]:
@@ -121,7 +121,14 @@ def outcome_summary(outcome: Outcome) -> dict[str, object]:
 
 def ledger_summary(directory: Path) -> list[dict[str, object]]:
     return [
-        {"kind": e.kind, "step": e.step, "cause": e.cause, "wall": e.wall, "attrs": e.attrs, "tokens_out": e.tokens_out}
+        {
+            "kind": e.kind,
+            "step": e.step,
+            "cause": e.cause,
+            "wall_time": e.wall_time,
+            "attrs": e.attrs,
+            "tokens_out": e.tokens_out,
+        }
         for path in ledger_files(directory / "ledger")
         for e in read_entries(path)
     ]
@@ -154,6 +161,11 @@ def control_summary(outcomes: Sequence[ControlOutcome]) -> list[dict[str, object
 
 
 @pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "validate"
+
+
+@pytest.fixture
 async def client(glm_settings):
     endpoint = GlmEndpoint(base_url=glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
     async with GlmClient(endpoint) as glm:
@@ -161,9 +173,14 @@ async def client(glm_settings):
 
 
 async def solver_trials(
-    client: GlmClient, task: TaskSpec, check: str, purpose: str, factories: dict[EnvironmentKind, MachineFactory]
+    client: GlmClient,
+    evidence_dir: Path,
+    task: TaskSpec,
+    check: str,
+    purpose: str,
+    factories: dict[EnvironmentKind, MachineFactory],
 ) -> tuple[list[Outcome], Path]:
-    directory = check_dir(check)
+    directory = check_dir(evidence_dir, check)
     trial_plan = plan(directory, TrialKind.SOLVER, task.id)
     model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, task.id, 0, str(TrialKind.SOLVER)))
     started = time.monotonic()
@@ -179,9 +196,14 @@ async def solver_trials(
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_math_task_trials(client, math_task):
+async def test_math_task_trials(client, evidence_dir, math_task):
     outcomes, directory = await solver_trials(
-        client, math_task, "a_math_trials", "null-environment numeric task, k=3, verifyit numeric grading", {}
+        client,
+        evidence_dir,
+        math_task,
+        "a_math_trials",
+        "null-environment numeric task, k=3, verifyit numeric grading",
+        {},
     )
     assert len(outcomes) == K
     assert all(isinstance(o, Graded) for o in outcomes), directory
@@ -189,9 +211,10 @@ async def test_math_task_trials(client, math_task):
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_shellsim_file_task_trials(client, file_task):
+async def test_shellsim_file_task_trials(client, evidence_dir, file_task):
     outcomes, directory = await solver_trials(
         client,
+        evidence_dir,
         file_task,
         "b_shellsim_trials",
         "ShellSim task, k=3: shell tool calls execute, private ShellVerifierSpec script grades /workspace/sum.txt",
@@ -203,12 +226,13 @@ async def test_shellsim_file_task_trials(client, file_task):
 
 async def replay_controls(
     client: GlmClient,
+    evidence_dir: Path,
     task: TaskSpec,
     controls: tuple[Control, ...],
     check: str,
     factories: dict[EnvironmentKind, MachineFactory],
 ) -> list[ControlOutcome]:
-    directory = check_dir(check)
+    directory = check_dir(evidence_dir, check)
     started = time.monotonic()
     tokenizer = CountingTokenizer(ServerTokenizer(client, POLICY))
     outcomes = await replay(task, EXECUTION, controls, control_plan(directory, task.id), settings(factories), tokenizer)
@@ -238,24 +262,30 @@ class CountingTokenizer:
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_control_replay_math(client, math_task, math_controls):
-    outcomes = await replay_controls(client, math_task, math_controls, "c_controls_math", {})
+async def test_control_replay_math(client, evidence_dir, math_task, math_controls):
+    outcomes = await replay_controls(client, evidence_dir, math_task, math_controls, "c_controls_math", {})
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(math_controls)
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_control_replay_shellsim(client, file_task, file_controls):
+async def test_control_replay_shellsim(client, evidence_dir, file_task, file_controls):
     outcomes = await replay_controls(
-        client, file_task, file_controls, "c_controls_shellsim", {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
+        client,
+        evidence_dir,
+        file_task,
+        file_controls,
+        "c_controls_shellsim",
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
     )
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_forced_machine_failure_is_classified_and_retried(client, file_task, fakes):
+async def test_forced_machine_failure_is_classified_and_retried(client, evidence_dir, file_task, fakes):
     factory = fakes.flaky_factory(failures=2, error=lambda: RuntimeError("forced start failure"))
     outcomes, directory = await solver_trials(
         client,
+        evidence_dir,
         file_task,
         "d_forced_failure",
         "forced machine-start failure on the first 2 creates; k=3 trials classify MACHINE_START and retry",
@@ -268,10 +298,11 @@ async def test_forced_machine_failure_is_classified_and_retried(client, file_tas
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_unsupported_machine_is_not_retried(client, file_task, fakes):
+async def test_unsupported_machine_is_not_retried(client, evidence_dir, file_task, fakes):
     factory = fakes.flaky_factory(failures=100, error=lambda: UnsupportedMachineSpec("forced unsupported spec"))
     outcomes, _ = await solver_trials(
         client,
+        evidence_dir,
         file_task,
         "d_forced_unsupported",
         "forced UnsupportedMachineSpec: classified MACHINE_UNSUPPORTED, not retried, evidence incomplete",
