@@ -48,7 +48,7 @@ import os
 import time
 import traceback
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -88,9 +88,9 @@ from taskforge.queue.run import FailedItems, item_terminal, run_queue
 from taskforge.sandbox.factories import MachineHost, container_backend, factory_capabilities, machine_factories
 from taskforge.spec.controls import Control, ControlCategory, ControlConcern, ControlKind, Expectation, Transcript, reply
 from taskforge.spec.draft import answer_verifier, assemble, lower, session
-from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
-from taskforge.triage.program import RubricAssessment
-from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
+from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext, CheckResult
+from taskforge.triage.program import Repair, RubricAssessment
+from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision, Verdict
 from taskforge.validate.attempts import load_outcome
 from taskforge.validate.controls import ServerTokenizer
 from taskforge.validate.evidence import Complete, Evidence
@@ -335,11 +335,11 @@ class RejectingRubric:
 
     assessed: list[str] = field(default_factory=list)
 
-    async def assess(self, p: TaskProposal, structural: object) -> RubricAssessment:
+    async def assess(self, p: TaskProposal, structural: Sequence[CheckResult]) -> RubricAssessment:
         self.assessed.append(p.header.id)
         return RubricAssessment((REJECT_SAMPLE,), (NO_CALL,))
 
-    async def repair(self, p: TaskProposal, verdict: object) -> Any:
+    async def repair(self, p: TaskProposal, verdict: Verdict) -> Repair:
         raise AssertionError("the probe rubric rejects; it never repairs")
 
 
