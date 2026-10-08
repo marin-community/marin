@@ -405,8 +405,8 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
                     (
                         "sh",
                         "-c",
-                        "mkdir -m 700 /private; printf secret > /private/answer; "
-                        "chmod 600 /private/answer; chmod 777 /workspace; "
+                        "mkdir -m 700 /private && printf secret > /private/answer && "
+                        "chmod 600 /private/answer && chmod 777 /workspace && "
                         "mkdir -m 777 /workspace/artifacts",
                     ),
                     user="0",
@@ -422,7 +422,9 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
     verifier = ShellVerifierSpec(
         argv=("sh", "-c", "cmp /workspace/artifacts/answer /tests/expected"),
         reward=ExitCodeReward(),
-        artifacts=(VerifierArtifact(source="/workspace/artifacts", target="/workspace/artifacts"),),
+        artifacts=(
+            VerifierArtifact(source="/workspace/artifacts", target="/workspace/artifacts", kind=ArtifactKind.DIRECTORY),
+        ),
     )
     task = file_task().model_copy(
         update={
