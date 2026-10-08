@@ -210,6 +210,29 @@ def control_turns(control: Control) -> tuple[dict[str, Any], ...]:
     return tuple(wire_message(turn) for turn in control.payload.turns)
 
 
+def check_replayable(task: TaskSpec, controls: Sequence[Control], max_turns: int) -> None:
+    """Refuse a control set that cannot be replayed against ``task`` within ``max_turns`` turns.
+
+    Raises:
+        ValueError: ``controls`` is not a valid control set for ``task`` (``validate_controls``), ``task``
+            is staged, or a control needs more than ``max_turns`` turns.
+    """
+    validate_controls(task, controls)
+    if task.stages:
+        raise ValueError("Control replay does not support staged tasks")
+    too_long = [control.id for control in controls if len(control_turns(control)) > max_turns]
+    if too_long:
+        raise ValueError(f"Controls {too_long} need more than max_turns={max_turns} turns")
+
+
+def context_assistant_turns(task: TaskSpec) -> int:
+    """The assistant turns in ``task``'s context, which a ``ScriptedModel`` skips before its script."""
+    return sum(
+        isinstance(event, AssistantToolCalls) or (isinstance(event, TextMessage) and event.role == "assistant")
+        for event in task.context.events
+    )
+
+
 async def replay(
     task: TaskSpec,
     execution: TaskExecution,
@@ -222,23 +245,14 @@ async def replay(
     named by its id.
 
     Raises:
-        ValueError: ``controls`` is not a valid control set for ``task`` (``validate_controls``), a
-            control needs more turns than ``settings.max_turns``, ``task`` is staged, or
-            ``plan.first_attempts`` names a control not in ``controls``.
+        ValueError: ``check_replayable`` refuses ``controls``, or ``plan.first_attempts`` names a control not
+            in ``controls``.
     """
-    validate_controls(task, controls)
+    check_replayable(task, controls, settings.max_turns)
     unknown = sorted(set(plan.first_attempts) - {control.id for control in controls})
     if unknown:
         raise ValueError(f"First attempts name controls {unknown} that are not replayed")
-    if task.stages:
-        raise ValueError("Control replay does not support staged tasks yet")
-    too_long = [control.id for control in controls if len(control_turns(control)) > settings.max_turns]
-    if too_long:
-        raise ValueError(f"Controls {too_long} need more than max_turns={settings.max_turns} turns")
-    context_assistant_turns = sum(
-        isinstance(event, AssistantToolCalls) or (isinstance(event, TextMessage) and event.role == "assistant")
-        for event in task.context.events
-    )
+    context_turns = context_assistant_turns(task)
     async with asyncio.TaskGroup() as group:
         runs = [
             group.create_task(
@@ -247,7 +261,7 @@ async def replay(
                     execution,
                     plan.trial_plan(control.id),
                     settings,
-                    ScriptedModel(control_turns(control), context_assistant_turns, tokenize),
+                    ScriptedModel(control_turns(control), context_turns, tokenize),
                     control.id,
                 )
             )
