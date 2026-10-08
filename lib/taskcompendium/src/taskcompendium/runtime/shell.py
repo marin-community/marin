@@ -96,6 +96,39 @@ async def upload_resources(machine: Machine, resources: Sequence[TaskResource], 
                     raise RuntimeError(f"Could not set resource permissions: {target}")
 
 
+async def captured_output_files(
+    machine: Machine, paths: tuple[str, ...], *, timeout: float | None, limit_bytes: int, user: str | None = None
+) -> dict[str, bytes]:
+    """The regular files at ``paths`` on ``machine``, omitting missing ones.
+
+    Reading through the machine keeps capture sizes bounded, including symlinks. A file that is
+    unreadable or larger than ``limit_bytes`` raises ``RuntimeError``.
+    """
+    files = {}
+    for path in paths:
+        result = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    f'if [ -f "$1" ]; then head -c "$2" -- "$1"; else exit {MISSING_CAPTURE_EXIT_CODE}; fi',
+                    "capture-output",
+                    path,
+                    str(limit_bytes + 1),
+                ),
+                timeout=timeout,
+                user=user,
+                output_limit_bytes=limit_bytes + 1,
+            )
+        )
+        if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
+            continue
+        if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > limit_bytes:
+            raise RuntimeError(f"Capture unavailable or exceeds budget: {path}")
+        files[path] = result.stdout
+    return files
+
+
 @dataclass
 class ShellEnvironment:
     machine: Machine
@@ -127,28 +160,9 @@ class ShellEnvironment:
         )
 
     async def evidence(self) -> RuntimeEvidence:
-        files = {}
-        for path in self.output_paths:
-            # Reading through the machine keeps capture sizes bounded, including symlinks.
-            result = await self.machine.run(
-                Command(
-                    (
-                        "/bin/bash",
-                        "-c",
-                        f'if test -f "$1"; then head -c "$2" < "$1"; else exit {MISSING_CAPTURE_EXIT_CODE}; fi',
-                        "capture",
-                        path,
-                        str(self.output_limit_bytes + 1),
-                    ),
-                    timeout=self.command_timeout,
-                    output_limit_bytes=self.output_limit_bytes + 1,
-                )
-            )
-            if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
-                continue
-            if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > self.output_limit_bytes:
-                raise RuntimeError(f"Capture unavailable or exceeds budget: {path}")
-            files[path] = result.stdout
+        files = await captured_output_files(
+            self.machine, self.output_paths, timeout=self.command_timeout, limit_bytes=self.output_limit_bytes
+        )
         for selection in self.output_directories:
             result = await self.machine.run(
                 Command(

@@ -17,6 +17,9 @@ from zephyr.context import ZephyrContext
 from zephyr.coordinator import ZephyrExecutionResult
 from zephyr.dataset import Dataset
 
+TELEMETRY_FILENAME = "telemetry.json"
+"""Where ``SourceTelemetry.record`` writes below the source artifact."""
+
 
 class TelemetryStatus(StrEnum):
     RUNNING = "running"
@@ -70,7 +73,7 @@ class SourceTelemetry:
             self.status = TelemetryStatus.COMPLETED
         finally:
             self.source_wall_seconds = time.monotonic() - started
-            path = StoragePath(self.source_artifact_path) / "telemetry.json"
+            path = StoragePath(self.source_artifact_path) / TELEMETRY_FILENAME
             with path.open("wt", auto_mkdir=True) as stream:
                 json.dump({"schema_version": 1, **asdict(self)}, stream, indent=2, allow_nan=False)
                 stream.write("\n")

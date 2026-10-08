@@ -20,9 +20,7 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.local_grader import (
-    LocalGraderMachines,
     grade,
-    local_grader_machines,
     with_verifier_file,
 )
 from experiments.post_training.task_curation.tests.test_reasoning_gym import GENERATED_ROW, PIPELINES
@@ -32,11 +30,6 @@ pytestmark = [pytest.mark.docker, pytest.mark.timeout(300)]
 GRADING_MEMORY_MB = 2048
 TASKTROVE_ARCHIVE = Path(__file__).parent / "fixtures" / "reasoning_gym.tar.gz"
 """A TaskTrove ``fraction_simplification`` task, as its ``tasks.parquet`` row stores it."""
-
-
-@pytest.fixture(scope="module")
-def machines() -> LocalGraderMachines:
-    return local_grader_machines()
 
 
 def reply(content: str) -> Reply:

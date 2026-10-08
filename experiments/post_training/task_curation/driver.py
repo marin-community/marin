@@ -33,14 +33,16 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import (
+    ADMITTING_SAMPLE_STATUSES,
     CampaignPool,
     CampaignRuntime,
+    SourceOutcome,
     campaign_identity,
     campaign_plan,
     require_matching_sample,
     run_campaign,
 )
-from experiments.post_training.task_curation.pipeline import source_step
+from experiments.post_training.task_curation.pipeline import RlDataArtifact, RlDataPipeline, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
@@ -111,6 +113,129 @@ def job_controller_url() -> str | None:
     return info.controller_address if info is not None else None
 
 
+def _controller_url(backend: VerificationBackend, controller_url: str | None) -> str | None:
+    """``controller_url``, or for Iris verification without one, the controller of this process's job."""
+    if backend != VerificationBackend.IRIS or controller_url is not None:
+        return controller_url
+    job_url = job_controller_url()
+    if job_url is None:
+        raise click.UsageError("--verification-backend iris outside an Iris job requires --controller-url")
+    return job_url
+
+
+def _selected_pipelines(sources: tuple[str, ...]) -> dict[str, RlDataPipeline]:
+    """The named catalog sources in catalog order, or the whole catalog when none is named."""
+    catalog = all_pipelines()
+    unknown = set(sources) - catalog.keys()
+    if unknown:
+        raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
+    return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
+
+
+def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_concurrency: int) -> Reviewer:
+    token = os.environ[GLM_BULK_TOKEN_ENV]
+    if review.mode == ReviewMode.CHAT:
+        return ChatReviewer(
+            OpenAIChatClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT),
+            review.model,
+            review.model_revision,
+            query_cache_root=review_cache,
+            max_concurrent=review_concurrency,
+            max_batch_bytes=review.max_batch_bytes,
+        )
+    return BatchReviewer(
+        OpenAIBatchClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT, request_attempts=3),
+        review.model,
+        review.model_revision,
+        query_cache_root=review_cache,
+        max_batch_bytes=review.max_batch_bytes,
+    )
+
+
+def _pipeline_config(
+    mode: SourceProcessingMode,
+    review: ReviewConfig,
+    reviewer: Reviewer | None,
+    machines: GradingMachines,
+    *,
+    seed: int,
+    verification_sample_size: int,
+    max_workers: int,
+    worker_resources: ResourceConfig,
+    normalized_shards: int,
+) -> SourcePipelineConfig:
+    return SourcePipelineConfig(
+        mode=mode,
+        quality_policy=SourceQualityPolicy(sample_size=100, seed=seed),
+        verification_policy=SourceVerificationPolicy(verification_sample_size, seed, 2, 0.95),
+        review=review,
+        execution=AuditExecution(
+            max_workers=max_workers,
+            review_batch_size=64,
+            reviewer=reviewer,
+            worker_resources=worker_resources,
+            # Iris isolates each shard in a process. Admit one review process per
+            # worker so its request semaphore enforces the worker's provider cap.
+            review_task_resources=worker_resources,
+        ),
+        filter_policy=FilterPolicy(),
+        normalized_shards=normalized_shards,
+        machines=machines,
+    )
+
+
+def _adopted_sample(
+    pipeline: RlDataPipeline,
+    sample_step: ArtifactStep[RlDataArtifact],
+    outcome: SourceOutcome,
+    *,
+    sample_report: str,
+    sample_identity: str,
+) -> ArtifactStep[Artifact] | None:
+    """The admitted sample output whose control trials a full run of ``pipeline`` reuses."""
+    if outcome.status not in ADMITTING_SAMPLE_STATUSES:
+        return None
+    provenance = {
+        "campaign_report": sample_report,
+        "sample_identity": sample_identity,
+        "sample_source": sample_step.name,
+        "sample_fingerprint": sample_step.fingerprint(),
+        "sample_path": outcome.path,
+    }
+    return ArtifactStep.adopt(
+        f"task-curation/sample/{pipeline.name}-{fingerprint_hash(canonical_json(provenance))[:16]}",
+        sample_step.version,
+        source=outcome.path,
+        kind=Artifact,
+        config=provenance,
+    )
+
+
+def _full_steps(
+    pipelines: dict[str, RlDataPipeline],
+    sample_steps: list[ArtifactStep[RlDataArtifact]],
+    config: SourcePipelineConfig,
+    runtime: CampaignRuntime,
+    *,
+    sample_report: str,
+    sample_identity: str,
+) -> tuple[list[ArtifactStep[RlDataArtifact]], dict[str, SourceOutcome]]:
+    """Full-mode source steps, each reusing its admitted sample output, and each step's sample outcome."""
+    sampled = require_matching_sample(json.loads(StoragePath(sample_report).read_text()), sample_identity, sample_steps)
+    steps = [
+        source_step(
+            pipeline,
+            config,
+            runtime,
+            previous=_adopted_sample(
+                pipeline, sample_step, outcome, sample_report=sample_report, sample_identity=sample_identity
+            ),
+        )
+        for pipeline, sample_step, outcome in zip(pipelines.values(), sample_steps, sampled, strict=True)
+    ]
+    return steps, {step.name: outcome for step, outcome in zip(steps, sampled, strict=True)}
+
+
 @click.command(help=__doc__)
 @click.option("--model", default=GLM_MODEL, show_default=True)
 @click.option("--model-revision", required=True)
@@ -170,58 +295,30 @@ def main(
     do_run: bool,
 ) -> None:
     backend = VerificationBackend(verification_backend)
-    if backend == VerificationBackend.IRIS and controller_url is None:
-        controller_url = job_controller_url()
-        if controller_url is None:
-            raise click.UsageError("--verification-backend iris outside an Iris job requires --controller-url")
-    catalog = all_pipelines()
-    unknown = set(sources) - catalog.keys()
-    if unknown:
-        raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
-    pipelines = {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
+    controller_url = _controller_url(backend, controller_url)
+    pipelines = _selected_pipelines(sources)
+    if do_run and mode == "full" and sample_report is None:
+        raise click.UsageError("Full execution requires --sample-report")
     review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
-    worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image)
-    reviewer: Reviewer | None = None
+    reviewer = None
     if do_run:
-        if base_url is None:
-            base_url = resolve_glm_base_url(relay_job)
-        if mode == "full" and sample_report is None:
-            raise click.UsageError("Full execution requires --sample-report")
-        token = os.environ[GLM_BULK_TOKEN_ENV]
-        if review.mode == ReviewMode.CHAT:
-            reviewer = ChatReviewer(
-                OpenAIChatClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT),
-                model,
-                model_revision,
-                query_cache_root=review_cache,
-                max_concurrent=review_concurrency,
-                max_batch_bytes=review.max_batch_bytes,
-            )
-        else:
-            reviewer = BatchReviewer(
-                OpenAIBatchClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT, request_attempts=3),
-                model,
-                model_revision,
-                query_cache_root=review_cache,
-                max_batch_bytes=review.max_batch_bytes,
-            )
-    config = SourcePipelineConfig(
-        mode=SourceProcessingMode(mode),
-        quality_policy=SourceQualityPolicy(sample_size=100, seed=seed),
-        verification_policy=SourceVerificationPolicy(verification_sample_size, seed, 2, 0.95),
-        review=review,
-        execution=AuditExecution(
-            max_workers=max_workers,
-            review_batch_size=64,
-            reviewer=reviewer,
-            worker_resources=worker_resources,
-            # Iris isolates each shard in a process. Admit one review process per
-            # worker so its request semaphore enforces the worker's provider cap.
-            review_task_resources=worker_resources,
-        ),
-        filter_policy=FilterPolicy(),
+        reviewer = _reviewer(
+            review,
+            base_url if base_url is not None else resolve_glm_base_url(relay_job),
+            review_cache=review_cache,
+            review_concurrency=review_concurrency,
+        )
+    worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image)
+    config = _pipeline_config(
+        SourceProcessingMode(mode),
+        review,
+        reviewer,
+        campaign_machines(backend, worker_image, controller_url),
+        seed=seed,
+        verification_sample_size=verification_sample_size,
+        max_workers=max_workers,
+        worker_resources=worker_resources,
         normalized_shards=normalized_shards,
-        machines=campaign_machines(backend, worker_image, controller_url),
     )
     runtime = CampaignRuntime()
     steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
@@ -246,29 +343,9 @@ def main(
     sample_outcomes = None
     if mode == "full":
         assert sample_report is not None
-        sampled = require_matching_sample(
-            json.loads(StoragePath(sample_report).read_text()), sample_identity, sample_steps
+        steps, sample_outcomes = _full_steps(
+            pipelines, sample_steps, config, runtime, sample_report=sample_report, sample_identity=sample_identity
         )
-        steps = []
-        for pipeline, sample_step, outcome in zip(pipelines.values(), sample_steps, sampled, strict=True):
-            previous = None
-            if outcome.status in {"sampled", "completed"}:
-                provenance = {
-                    "campaign_report": sample_report,
-                    "sample_identity": sample_identity,
-                    "sample_source": sample_step.name,
-                    "sample_fingerprint": sample_step.fingerprint(),
-                    "sample_path": outcome.path,
-                }
-                previous = ArtifactStep.adopt(
-                    f"task-curation/sample/{pipeline.name}-{fingerprint_hash(canonical_json(provenance))[:16]}",
-                    sample_step.version,
-                    source=outcome.path,
-                    kind=Artifact,
-                    config=provenance,
-                )
-            steps.append(source_step(pipeline, config, runtime, previous=previous))
-        sample_outcomes = {step.name: outcome for step, outcome in zip(steps, sampled, strict=True)}
     run_campaign(
         steps,
         runtime=runtime,

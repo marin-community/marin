@@ -37,6 +37,7 @@ from taskcompendium.models import (
     MissingArtifactPolicy,
     RewardFileFormat,
     ScriptGrader,
+    Submission,
     SubmissionFailure,
     TaskResource,
     TaskSpec,
@@ -79,16 +80,21 @@ class _StagedFile:
     mtime_ns: int | None = None
 
 
-def _answer_bytes(task: TaskSpec, attempt: GradingAttempt, *, actions: bool) -> bytes:
-    submission = answer_submission(task, attempt)
+def _verifyit_answer_bytes(submission: Submission) -> bytes:
+    """A text or JSON submission as the verifyit spec's answer file."""
     match submission:
         case TextSubmission(value=value):
             return value.encode()
         case JsonSubmission(value=value):
             return json.dumps(value, allow_nan=False).encode()
-        case ActionSubmission(message=message) if actions:
-            return message.model_dump_json().encode()
     raise TypeError(f"A {type(submission).__name__} cannot be written as an answer file")
+
+
+def _script_answer_bytes(submission: Submission) -> bytes:
+    """The answer file a script grader reads: a verifyit answer file, or a native action's final message as JSON."""
+    if isinstance(submission, ActionSubmission):
+        return submission.message.model_dump_json().encode()
+    return _verifyit_answer_bytes(submission)
 
 
 def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, ...]) -> list[_StagedFile]:
@@ -421,9 +427,10 @@ async def grade_in_sandbox(
         if grading.spec is not None and task.answer_type in CONVERSATION_ANSWERS:
             require_submission_compatibility(task)
             assert answer_file is not None
-            submissions.append(_StagedFile(answer_file, _answer_bytes(task, attempt, actions=False)))
+            submissions.append(_StagedFile(answer_file, _verifyit_answer_bytes(answer_submission(task, attempt))))
         elif isinstance(grading.grader, ScriptGrader) and grading.grader.answer_path is not None:
-            submissions.append(_StagedFile(grading.grader.answer_path, _answer_bytes(task, attempt, actions=True)))
+            answer = _script_answer_bytes(answer_submission(task, attempt))
+            submissions.append(_StagedFile(grading.grader.answer_path, answer))
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     if (

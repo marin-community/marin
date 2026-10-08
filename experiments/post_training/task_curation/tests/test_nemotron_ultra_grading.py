@@ -17,9 +17,7 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import pipeline_name
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.local_grader import (
-    LocalGraderMachines,
     grade,
-    local_grader_machines,
     with_verifier_file,
 )
 from experiments.post_training.task_curation.tests.test_nemotron_ultra import COMPONENT_ROWS, PIPELINES
@@ -46,11 +44,6 @@ def report_call(count: object) -> Reply:
 def task(path: str) -> TaskSpec:
     blend = "mopd" if path == STRUCTURED_TOOL else "rlvr2"
     return converted_task(PIPELINES[pipeline_name(blend, path)], COMPONENT_ROWS[path])
-
-
-@pytest.fixture(scope="module")
-def machines() -> LocalGraderMachines:
-    return local_grader_machines()
 
 
 @pytest.mark.parametrize(

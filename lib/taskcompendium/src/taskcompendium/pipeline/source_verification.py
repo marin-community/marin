@@ -4,7 +4,6 @@
 """Sample completed source outputs and gate publication on repeated controls."""
 
 import hashlib
-import heapq
 import inspect
 import json
 import re
@@ -36,7 +35,7 @@ from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, GraderReadiness, VerificationReport
-from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order
+from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.stages import (
     ACCEPTED_SHARD_TEMPLATE,
     AUDIT_INPUT_PATTERN,
@@ -48,6 +47,8 @@ from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
 SOURCE_VERIFICATION_REVISION = "6"
+VERIFICATION_REPORT_FILENAME = "verification.json"
+"""The verified stage's report; a rerun reuses its matching control trials."""
 
 
 @dataclass(frozen=True)
@@ -336,16 +337,7 @@ def _sample_key(row: dict[str, Any], seed: int) -> tuple[str, str]:
 
 def sample_rows(rows: Iterator[dict[str, Any]], *, size: int, seed: int) -> VerificationSample:
     """Select accepted rows by seeded task-ID hashes and count eligible rows."""
-    count = 0
-
-    def eligible() -> Iterator[dict[str, Any]]:
-        nonlocal count
-        for row in rows:
-            if is_accepted(row):
-                count += 1
-                yield row
-
-    selected = heapq.nsmallest(size, eligible(), key=partial(_sample_key, seed=seed))
+    count, selected = seeded_sample(filter(is_accepted, rows), size=size, key=partial(_sample_key, seed=seed))
     return VerificationSample(count, selected)
 
 
@@ -513,6 +505,162 @@ def gate_source_row(
     }
 
 
+@dataclass(frozen=True)
+class _VerificationRun:
+    """One verification of the audit shards below ``source``, written below ``output``."""
+
+    context: ZephyrContext
+    source: StoragePath
+    output: StoragePath
+    telemetry: PhaseTelemetry | None
+
+    @property
+    def inputs(self) -> str:
+        return str(self.source / AUDIT_INPUT_PATTERN)
+
+    @property
+    def report_path(self) -> StoragePath:
+        return self.output / VERIFICATION_REPORT_FILENAME
+
+
+def _prior_trials(
+    output: StoragePath, previous_report_path: str | None, *, identity: str, attempts: int
+) -> dict[tuple[str, int], SavedTrial]:
+    """Trials saved by an earlier attempt at this output, or else by ``previous_report_path``."""
+    local_report = output / VERIFICATION_REPORT_FILENAME
+    previous = str(local_report) if local_report.exists() else previous_report_path
+    if previous is None:
+        return {}
+    return saved_trials(previous, identity=identity, attempts=attempts)
+
+
+def _select_sample(run: _VerificationRun, policy: SourceVerificationPolicy) -> VerificationSample:
+    return execute_phase(
+        run.context,
+        Dataset.from_files(run.inputs)
+        .load_parquet(columns=["task_id", "task_json", "filter_status"])
+        .reduce(
+            partial(sample_rows, size=policy.sample_size, seed=policy.seed),
+            partial(merge_samples, size=policy.sample_size, seed=policy.seed),
+        ),
+        telemetry=run.telemetry,
+        operation="select",
+    ).results[0]
+
+
+def _with_saved_trials(
+    rows: list[dict[str, Any]], prior: Mapping[tuple[str, int], SavedTrial], attempts: int
+) -> list[dict[str, Any]]:
+    """Attach the saved trials whose exact task digest matches each selected row."""
+    selected = []
+    for row in rows:
+        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
+        selected.append(
+            {
+                **row,
+                "saved_trials": {
+                    attempt: prior[(digest, attempt)] for attempt in range(attempts) if (digest, attempt) in prior
+                },
+            }
+        )
+    return selected
+
+
+def _run_trials(
+    run: _VerificationRun,
+    sample: VerificationSample,
+    prior: Mapping[tuple[str, int], SavedTrial],
+    suite: CheckSuite,
+    policy: SourceVerificationPolicy,
+    identity: str,
+) -> list[VerifiedSample]:
+    if not sample.rows:
+        return []
+    return execute_phase(
+        run.context,
+        Dataset.from_list(_with_saved_trials(sample.rows, prior, policy.attempts)).map(
+            partial(
+                _verify_sample_with_evidence,
+                suite=suite,
+                attempts=policy.attempts,
+                identity=identity,
+                report_path=str(run.report_path),
+            )
+        ),
+        telemetry=run.telemetry,
+        operation="trials",
+    ).results
+
+
+def _write_report(
+    run: _VerificationRun,
+    suite: CheckSuite,
+    decision: SourceReport,
+    verified: list[VerifiedSample],
+    outside_failures: list[HistoricalTrial],
+) -> dict[str, Any]:
+    report = {
+        **decision.model_dump(mode="json"),
+        "source_path": str(run.source),
+        "suite": {"id": suite.id, "revision": suite.revision, "parameters": suite.parameters},
+        "implementation_revision": SOURCE_VERIFICATION_REVISION,
+        "evidence": [evidence.model_dump(mode="json") for item in verified for evidence in item.evidence],
+        "prior_failed_trials": [previous.model_dump(mode="json") for previous in outside_failures],
+    }
+    with run.report_path.open("wt", auto_mkdir=True) as stream:
+        json.dump(report, stream, indent=2, allow_nan=False)
+    return report
+
+
+def _gate_rows(
+    run: _VerificationRun,
+    decision: SourceReport,
+    results: list[SampleResult],
+    outside_failures: list[HistoricalTrial],
+) -> None:
+    """Rewrite every audit row with its source gate, then export the accepted rows."""
+    execute_phase(
+        run.context,
+        Dataset.from_files(run.inputs)
+        .load_parquet()
+        .map(
+            partial(
+                gate_source_row,
+                status=decision.status,
+                sampled_readiness=(
+                    GraderReadiness.UNVERIFIED if decision.counts.skipped else GraderReadiness.SOURCE_SAMPLED
+                ),
+                results={result.task_id: sample_result_checks(result) for result in results},
+                previous_failures=_known_failures(outside_failures),
+            )
+        )
+        .write_parquet(str(run.output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA),
+        telemetry=run.telemetry,
+        operation="row_gate",
+    )
+    execute_phase(
+        run.context,
+        Dataset.from_files(str(run.output / AUDIT_INPUT_PATTERN))
+        .load_parquet()
+        .filter(is_accepted)
+        .write_parquet(str(run.output / ACCEPTED_SHARD_TEMPLATE), schema=TASK_SCHEMA),
+        telemetry=run.telemetry,
+        operation="accepted",
+    )
+
+
+def _write_manifest(run: _VerificationRun, counts: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Write the verified stage manifest after checking that every audit row survived."""
+    manifest = {**counts, "verification": report}
+    with (run.source / "manifest.json").open("rt") as stream:
+        expected = json.load(stream)["input_rows"]
+    if manifest["input_rows"] != expected:
+        raise ValueError("Source verification lost audit rows")
+    with (run.output / "manifest.json").open("wt", auto_mkdir=True) as stream:
+        json.dump(manifest, stream, indent=2, allow_nan=False)
+    return manifest
+
+
 def verify_source(
     source_path: str,
     output_path: str,
@@ -528,108 +676,20 @@ def verify_source(
     """Verify an output sample and retain the full audit when publication is denied."""
     source, output = StoragePath(source_path), StoragePath(output_path)
     identity = verification_identity(suite, policy)
-    prior = {}
-    local_report = output / "verification.json"
-    previous = str(local_report) if local_report.exists() else previous_report_path
-    if previous is not None:
-        prior = saved_trials(previous, identity=identity, attempts=policy.attempts)
-    failed_trials = _failed_trials(prior)
-    inputs = str(source / AUDIT_INPUT_PATTERN)
+    prior = _prior_trials(output, previous_report_path, identity=identity, attempts=policy.attempts)
     with (
         nullcontext(context)
         if context is not None
         else ZephyrContext(max_workers=max_workers, resources=worker_resources, name="verify-source")
     ) as context:
-        sample = execute_phase(
-            context,
-            Dataset.from_files(inputs)
-            .load_parquet(columns=["task_id", "task_json", "filter_status"])
-            .reduce(
-                partial(sample_rows, size=policy.sample_size, seed=policy.seed),
-                partial(merge_samples, size=policy.sample_size, seed=policy.seed),
-            ),
-            telemetry=telemetry,
-            operation="select",
-        ).results[0]
-        selected = []
-        for row in sample.rows:
-            digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
-            selected.append(
-                {
-                    **row,
-                    "saved_trials": {
-                        attempt: prior[(digest, attempt)]
-                        for attempt in range(policy.attempts)
-                        if (digest, attempt) in prior
-                    },
-                }
-            )
-        verified = (
-            execute_phase(
-                context,
-                Dataset.from_list(selected).map(
-                    partial(
-                        _verify_sample_with_evidence,
-                        suite=suite,
-                        attempts=policy.attempts,
-                        identity=identity,
-                        report_path=str(output / "verification.json"),
-                    )
-                ),
-                telemetry=telemetry,
-                operation="trials",
-            ).results
-            if sample.rows
-            else []
-        )
+        run = _VerificationRun(context, source, output, telemetry)
+        sample = _select_sample(run, policy)
+        verified = _run_trials(run, sample, prior, suite, policy, identity)
         results = [item.result for item in verified]
         sampled_ids = {result.task_id for result in results}
-        outside_failures = [record for record in failed_trials if record.evidence.task_id not in sampled_ids]
+        outside_failures = [record for record in _failed_trials(prior) if record.evidence.task_id not in sampled_ids]
         decision = source_verification_report(sample, results, policy)
-        report = {
-            **decision.model_dump(mode="json"),
-            "source_path": str(source),
-            "suite": {"id": suite.id, "revision": suite.revision, "parameters": suite.parameters},
-            "implementation_revision": SOURCE_VERIFICATION_REVISION,
-            "evidence": [evidence.model_dump(mode="json") for item in verified for evidence in item.evidence],
-            "prior_failed_trials": [previous.model_dump(mode="json") for previous in outside_failures],
-        }
-        with (output / "verification.json").open("wt", auto_mkdir=True) as stream:
-            json.dump(report, stream, indent=2, allow_nan=False)
-        execute_phase(
-            context,
-            Dataset.from_files(inputs)
-            .load_parquet()
-            .map(
-                partial(
-                    gate_source_row,
-                    status=decision.status,
-                    sampled_readiness=(
-                        GraderReadiness.UNVERIFIED if decision.counts.skipped else GraderReadiness.SOURCE_SAMPLED
-                    ),
-                    results={result.task_id: sample_result_checks(result) for result in results},
-                    previous_failures=_known_failures(outside_failures),
-                )
-            )
-            .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA),
-            telemetry=telemetry,
-            operation="row_gate",
-        )
-        execute_phase(
-            context,
-            Dataset.from_files(str(output / AUDIT_INPUT_PATTERN))
-            .load_parquet()
-            .filter(is_accepted)
-            .write_parquet(str(output / ACCEPTED_SHARD_TEMPLATE), schema=TASK_SCHEMA),
-            telemetry=telemetry,
-            operation="accepted",
-        )
+        report = _write_report(run, suite, decision, verified, outside_failures)
+        _gate_rows(run, decision, results, outside_failures)
         counts = manifest_counts(output, context, telemetry=telemetry)
-    manifest = {**counts, "verification": report}
-    with (source / "manifest.json").open("rt") as stream:
-        expected = json.load(stream)["input_rows"]
-    if manifest["input_rows"] != expected:
-        raise ValueError("Source verification lost audit rows")
-    with (output / "manifest.json").open("wt", auto_mkdir=True) as stream:
-        json.dump(manifest, stream, indent=2, allow_nan=False)
-    return manifest
+    return _write_manifest(run, counts, report)

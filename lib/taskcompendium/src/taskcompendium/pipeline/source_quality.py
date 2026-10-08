@@ -4,7 +4,6 @@
 """Sample source quality without imputing missing model observations."""
 
 import hashlib
-import heapq
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
     TaskAudit,
 )
-from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order
+from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
 
 SOURCE_QUALITY_REVISION = "7"
@@ -156,23 +155,23 @@ def contract_signature(audit: TaskAudit) -> str:
 def sample_quality_rows(records: Iterator[dict], *, policy: SourceQualityPolicy) -> QualitySample:
     """Sample IDs with bounded memory while counting every population and exclusion."""
     inputs = 0
-    eligible = 0
     exclusions: Counter[str] = Counter()
     contracts: Counter[str] = Counter()
 
-    def candidates():
-        nonlocal inputs, eligible
+    def eligible_ids() -> Iterator[str]:
+        nonlocal inputs
         for record in records:
             inputs += 1
             audit = TaskAudit.model_validate(record)
             if reason := quality_exclusion(audit):
                 exclusions[reason] += 1
                 continue
-            eligible += 1
             contracts[contract_signature(audit)] += 1
             yield audit.task_id
 
-    selected = heapq.nsmallest(policy.sample_size, candidates(), key=partial(seeded_order, seed=policy.seed))
+    eligible, selected = seeded_sample(
+        eligible_ids(), size=policy.sample_size, key=partial(seeded_order, seed=policy.seed)
+    )
     return QualitySample(inputs, eligible, dict(exclusions), dict(contracts), tuple(selected))
 
 

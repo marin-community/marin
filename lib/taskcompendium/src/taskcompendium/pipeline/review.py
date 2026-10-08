@@ -6,7 +6,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -132,13 +132,118 @@ def private_test_preview(tests: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any]) -> None:
-    """Preview private traces and fixtures while keeping public instructions and judge rules whole."""
-    contract = parameters["contract"]
-    messages = [event for event in payload["context"]["events"] if event["type"] == "message"]
-    public = {(message["role"], message["content"]): index for index, message in enumerate(messages)}
-    providers = payload["environment_requirements"]["tool_providers"]
-    for provider in providers.values():
+SOURCE_CONTRACT_PREVIEW_POLICY = (
+    "Public conversation, tool schemas, judge instructions, rubric and gold remain complete. "
+    "Duplicate private transcripts point to their full public copy. Historical private model reasoning "
+    "and large private test fixtures have explicit bounded previews with original counts and hashes. "
+    "Omitted private preview text alone is not a defect; do not certify unseen test contents. "
+    "Full source and verifier evidence remains in the audit."
+)
+ENCODED_TEST_PREVIEW_POLICY = (
+    " Encoded ground_truth test fixtures are explicitly previewed, rather than scalar reference answers; "
+    "harness parameters remain complete. Counts identify omitted cases; do not certify unseen contents."
+)
+
+
+@dataclass(frozen=True)
+class PublicMessages:
+    """The task's public conversation messages, indexed by role and content."""
+
+    messages: list[dict[str, Any]]
+    index: dict[tuple[str, str], int]
+
+
+type ContractRedaction = Callable[[dict[str, Any], PublicMessages], None]
+"""Replace one kind of private or duplicated source contract field with a bounded summary, in place."""
+
+
+def _summarize_judge_sources(contract: dict[str, Any], _public: PublicMessages) -> None:
+    for field in ("source_judge_data", "source_judge_toml"):
+        if field in contract:
+            contract[field] = private_evidence_summary(
+                contract[field], "Original retained in audit; parsed rules retained separately"
+            )
+
+
+def _summarize_public_question(contract: dict[str, Any], public: PublicMessages) -> None:
+    question = contract.get("question")
+    if isinstance(question, str) and any(question == message["content"] for message in public.messages):
+        contract["question"] = private_evidence_summary(question, "Complete question occurs in public conversation")
+
+
+def _summarize_public_context(contract: dict[str, Any], public: PublicMessages) -> None:
+    context = contract.get("context")
+    if isinstance(context, str) and duplicate_public_context(context, public.messages):
+        contract["context"] = private_evidence_summary(context, "Complete transcript occurs in public context.events")
+
+
+def _summarize_metadata_system(contract: dict[str, Any], public: PublicMessages) -> None:
+    metadata = contract.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    system = metadata.get("system")
+    if isinstance(system, str) and ("system", system) in public.index:
+        metadata["system"] = private_evidence_summary(
+            system, "Complete system instruction occurs in public context.events"
+        )
+
+
+def _metadata_message(message: dict[str, Any], public: PublicMessages) -> dict[str, Any]:
+    role, content = message.get("role"), message.get("content")
+    if isinstance(role, str) and isinstance(content, str) and (role, content) in public.index:
+        evidence = f"Complete text occurs in public message {public.index[(role, content)]}"
+        return {**message, "content": private_evidence_summary(content, evidence)}
+    if role == "thinking":
+        return {
+            **message,
+            "content": private_evidence_summary(
+                content,
+                "Private historical model reasoning; full trace retained in audit",
+                PRIVATE_REASONING_PREVIEW_CHARACTERS,
+            ),
+        }
+    return message
+
+
+def _summarize_metadata_messages(contract: dict[str, Any], public: PublicMessages) -> None:
+    metadata = contract.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    source_messages = metadata.get("messages")
+    if isinstance(source_messages, list):
+        metadata["messages"] = [_metadata_message(message, public) for message in source_messages]
+
+
+def _preview_provider_reasoning(contract: dict[str, Any], _public: PublicMessages) -> None:
+    if "provider_reasoning" in contract:
+        contract["provider_reasoning"] = private_evidence_summary(
+            contract["provider_reasoning"],
+            "Private provider reasoning; full trace retained in audit",
+            RESOURCE_PREVIEW_CHARACTERS,
+        )
+
+
+def _preview_unit_tests(contract: dict[str, Any], _public: PublicMessages) -> None:
+    verifier_metadata = contract.get("verifier_metadata")
+    if isinstance(verifier_metadata, dict) and isinstance(verifier_metadata.get("unit_tests"), dict):
+        verifier_metadata["unit_tests"] = private_test_preview(verifier_metadata["unit_tests"])
+
+
+CONTRACT_REDACTIONS: tuple[ContractRedaction, ...] = (
+    _summarize_judge_sources,
+    _summarize_public_question,
+    _summarize_public_context,
+    _summarize_metadata_system,
+    _summarize_metadata_messages,
+    _preview_provider_reasoning,
+    _preview_unit_tests,
+)
+"""The source contract redactions, applied in order; each touches its own fields."""
+
+
+def _summarize_shared_provider_state(contract: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Point tool-provider state that duplicates a contract field at the contract's copy."""
+    for provider in payload["environment_requirements"]["tool_providers"].values():
         state = provider["initial_state"]
         if not isinstance(state, dict):
             continue
@@ -148,91 +253,48 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
                     value,
                     f"Shared evidence is represented in grader_data.contract.{field}; full value retained in audit",
                 )
-    for field in ("source_judge_data", "source_judge_toml"):
-        if field in contract:
-            contract[field] = private_evidence_summary(
-                contract[field], "Original retained in audit; parsed rules retained separately"
-            )
-    question = contract.get("question")
-    if isinstance(question, str) and any(question == message["content"] for message in messages):
-        contract["question"] = private_evidence_summary(question, "Complete question occurs in public conversation")
-    context = contract.get("context")
-    if isinstance(context, str) and duplicate_public_context(context, messages):
-        contract["context"] = private_evidence_summary(context, "Complete transcript occurs in public context.events")
-    metadata = contract.get("metadata")
-    if isinstance(metadata, dict):
-        system = metadata.get("system")
-        if isinstance(system, str) and ("system", system) in public:
-            metadata["system"] = private_evidence_summary(
-                system, "Complete system instruction occurs in public context.events"
-            )
-        source_messages = metadata.get("messages")
-        if isinstance(source_messages, list):
-            projected = []
-            for message in source_messages:
-                role, content = message.get("role"), message.get("content")
-                if isinstance(content, str) and (role, content) in public:
-                    projected.append(
-                        {
-                            **message,
-                            "content": private_evidence_summary(
-                                content, f"Complete text occurs in public message {public[(role, content)]}"
-                            ),
-                        }
-                    )
-                elif role == "thinking":
-                    projected.append(
-                        {
-                            **message,
-                            "content": private_evidence_summary(
-                                content,
-                                "Private historical model reasoning; full trace retained in audit",
-                                PRIVATE_REASONING_PREVIEW_CHARACTERS,
-                            ),
-                        }
-                    )
-                else:
-                    projected.append(message)
-            metadata["messages"] = projected
-    if "provider_reasoning" in contract:
-        contract["provider_reasoning"] = private_evidence_summary(
-            contract["provider_reasoning"],
-            "Private provider reasoning; full trace retained in audit",
-            RESOURCE_PREVIEW_CHARACTERS,
-        )
-    verifier_metadata = contract.get("verifier_metadata")
-    if isinstance(verifier_metadata, dict) and "unit_tests" in verifier_metadata:
-        tests = verifier_metadata["unit_tests"]
-        if isinstance(tests, dict):
-            verifier_metadata["unit_tests"] = private_test_preview(tests)
+
+
+def _preview_encoded_ground_truth(contract: dict[str, Any]) -> bool:
+    """Preview a large ``reward_model.ground_truth`` that encodes test fixtures; return whether it did."""
     reward = contract.get("reward_model")
-    encoded_test_policy = ""
-    if (
+    if not (
         isinstance(reward, dict)
         and isinstance(reward.get("ground_truth"), str)
         and len(reward["ground_truth"]) > TOTAL_RESOURCE_PREVIEW_CHARACTERS
     ):
-        encoded = reward["ground_truth"]
-        try:
-            tests = json.loads(encoded)
-        except json.JSONDecodeError:
-            tests = None
-        if isinstance(tests, dict) and isinstance(tests.get("inputs"), list) and isinstance(tests.get("outputs"), list):
-            reward["ground_truth"] = {
-                **private_evidence_summary(encoded, "Encoded private tests; original retained in audit"),
-                "parsed_test_preview": private_test_preview(tests),
-            }
-            encoded_test_policy = (
-                " Encoded ground_truth test fixtures are explicitly previewed, rather than scalar reference answers; "
-                "harness parameters remain complete. Counts identify omitted cases; do not certify unseen contents."
-            )
-    payload["source_contract_preview_policy"] = (
-        "Public conversation, tool schemas, judge instructions, rubric and gold remain complete. "
-        "Duplicate private transcripts point to their full public copy. Historical private model reasoning "
-        "and large private test fixtures have explicit bounded previews with original counts and hashes. "
-        "Omitted private preview text alone is not a defect; do not certify unseen test contents. "
-        "Full source and verifier evidence remains in the audit."
-    ) + encoded_test_policy
+        return False
+    encoded = reward["ground_truth"]
+    try:
+        tests = json.loads(encoded)
+    except json.JSONDecodeError:
+        return False
+    if not (
+        isinstance(tests, dict) and isinstance(tests.get("inputs"), list) and isinstance(tests.get("outputs"), list)
+    ):
+        return False
+    reward["ground_truth"] = {
+        **private_evidence_summary(encoded, "Encoded private tests; original retained in audit"),
+        "parsed_test_preview": private_test_preview(tests),
+    }
+    return True
+
+
+def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Preview private traces and fixtures while keeping public instructions and judge rules whole."""
+    contract = parameters["contract"]
+    messages = [event for event in payload["context"]["events"] if event["type"] == "message"]
+    public = PublicMessages(
+        messages, {(message["role"], message["content"]): index for index, message in enumerate(messages)}
+    )
+    # Provider state is compared with the contract before any contract field is summarized.
+    _summarize_shared_provider_state(contract, payload)
+    for redact in CONTRACT_REDACTIONS:
+        redact(contract, public)
+    encoded_tests = _preview_encoded_ground_truth(contract)
+    payload["source_contract_preview_policy"] = SOURCE_CONTRACT_PREVIEW_POLICY + (
+        ENCODED_TEST_PREVIEW_POLICY if encoded_tests else ""
+    )
 
 
 def review_payload(task: TaskSpec) -> dict[str, Any]:

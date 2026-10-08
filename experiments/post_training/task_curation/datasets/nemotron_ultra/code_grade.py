@@ -16,16 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, "/tests")
 
-from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+from conversation import terminal_message
 from skyrl_gym.envs.nemotron_ultra.code_gen import grade_code
-
-
-def terminal_message() -> dict:
-    """The final assistant message, its text reduced to the final answer."""
-    message = json.loads(Path("/tests/conversation.json").read_text())[-1]
-    if message["role"] != "assistant":
-        raise ValueError(f"The conversation ends with a {message['role']} message, not a reply")
-    return {**message, "content": final_answer_text(message.get("content") or "")}
 
 
 def main() -> None:

@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from threading import Lock
 
 from fray.current_client import current_client, set_current_client
@@ -21,9 +22,31 @@ from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
 logger = logging.getLogger(__name__)
+
+
+class CampaignStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class OutcomeStatus(StrEnum):
+    """A source's campaign state before or instead of its pipeline's ``SourceStatus``."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    NOT_ADMITTED = "not_admitted"
+    FAILED = "failed"
+
+
+ADMITTING_SAMPLE_STATUSES = frozenset({SourceStatus.SAMPLED, SourceStatus.COMPLETED})
+"""Sample outcomes whose sources proceed to full processing."""
+TERMINAL_SAMPLE_STATUSES = frozenset({*SourceStatus, OutcomeStatus.FAILED})
+"""Sample outcomes a full campaign accepts: any pipeline status, or a failed build."""
 
 
 @dataclass
@@ -110,7 +133,7 @@ def require_matching_sample(
     """Validate the whole terminal sample before selecting sources for full processing."""
     if (
         report.get("mode") != "sample"
-        or report.get("status") not in {"completed", "failed"}
+        or report.get("status") not in {CampaignStatus.COMPLETED, CampaignStatus.FAILED}
         or report.get("sample_identity") != expected_identity
     ):
         raise ValueError(
@@ -121,14 +144,12 @@ def require_matching_sample(
     sources = tuple(SourceOutcome(**source) for source in report.get("sources", []))
     if len(expected) != len(sample_steps) or len(sources) != len(expected) or {s.name for s in sources} != set(expected):
         raise ValueError("Sample outcomes must cover every canonical source exactly once")
-    if any(
-        source.path != expected[source.name]
-        or source.status not in {"sampled", "completed", "gated", "unsupported", "failed", "incomplete"}
-        for source in sources
-    ):
+    if any(source.path != expected[source.name] or source.status not in TERMINAL_SAMPLE_STATUSES for source in sources):
         raise ValueError("Sample outcomes must have matching paths and terminal source states")
     counts = dict(Counter(source.status for source in sources))
-    if report.get("counts") != counts or (report["status"] == "failed") != bool(counts.get("failed")):
+    if report.get("counts") != counts or (report["status"] == CampaignStatus.FAILED) != bool(
+        counts.get(OutcomeStatus.FAILED)
+    ):
         raise ValueError("Sample summary does not match its source outcomes")
     by_name = {source.name: source for source in sources}
     return tuple(by_name[step.name] for step in sample_steps)
@@ -153,7 +174,7 @@ def error_chain(error: BaseException) -> str:
 
 
 def campaign_report(
-    status: str,
+    status: CampaignStatus,
     *,
     mode: str,
     sample_identity: str | None,
@@ -197,19 +218,19 @@ def run_campaign(
         raise ValueError("Full processing requires a sample outcome for every source")
     if mode != "full" and sample_outcomes is not None:
         raise ValueError("Sample admission applies only to full processing")
-    outcomes = {step.name: SourceOutcome(step.name, step.path(), "queued") for step in steps}
+    outcomes = {step.name: SourceOutcome(step.name, step.path(), OutcomeStatus.QUEUED) for step in steps}
     admitted = []
     for step in steps:
         sample = sample_outcomes[step.name] if sample_outcomes is not None else None
-        if sample is not None and sample.status not in {"sampled", "completed"}:
+        if sample is not None and sample.status not in ADMITTING_SAMPLE_STATUSES:
             outcomes[step.name] = SourceOutcome(
-                step.name, step.path(), "not_admitted", f"Sample status: {sample.status}"
+                step.name, step.path(), OutcomeStatus.NOT_ADMITTED, f"Sample status: {sample.status}"
             )
         else:
             admitted.append(step)
     report_lock = Lock()
 
-    def write_report(status: str) -> None:
+    def write_report(status: CampaignStatus) -> None:
         report = campaign_report(
             status,
             mode=mode,
@@ -221,12 +242,12 @@ def run_campaign(
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:
-            outcomes[step.name] = SourceOutcome(step.name, step.path(), "running")
-            write_report("running")
+            outcomes[step.name] = SourceOutcome(step.name, step.path(), OutcomeStatus.RUNNING)
+            write_report(CampaignStatus.RUNNING)
 
-    write_report("running")
+    write_report(CampaignStatus.RUNNING)
     if not admitted:
-        write_report("completed")
+        write_report(CampaignStatus.COMPLETED)
         return tuple(outcomes[step.name] for step in steps)
     client = current_client()
     try:
@@ -256,16 +277,16 @@ def run_campaign(
                         outcome = future.result()
                     except Exception as error:
                         logger.exception("Source failed: %s", step.name)
-                        outcome = SourceOutcome(step.name, step.path(), "failed", error_chain(error))
+                        outcome = SourceOutcome(step.name, step.path(), OutcomeStatus.FAILED, error_chain(error))
                     with report_lock:
                         outcomes[step.name] = outcome
-                        write_report("running")
+                        write_report(CampaignStatus.RUNNING)
     except Exception:
-        write_report("failed")
+        write_report(CampaignStatus.FAILED)
         raise
     ordered = tuple(outcomes[step.name] for step in steps)
-    failed = any(outcome.status == "failed" for outcome in ordered)
-    write_report("failed" if failed else "completed")
+    failed = any(outcome.status == OutcomeStatus.FAILED for outcome in ordered)
+    write_report(CampaignStatus.FAILED if failed else CampaignStatus.COMPLETED)
     if failed:
         raise CampaignFailed(f"Campaign failed; retained source outcomes at {report_path}")
     return ordered

@@ -170,13 +170,13 @@ def test_full_admission_cannot_use_inconsistent_source_coverage(corruption):
         require_matching_sample(report, identity, steps)
 
 
-def test_full_campaign_records_gated_and_unsupported_without_dispatch(tmp_path):
+def test_full_campaign_records_gated_and_incomplete_samples_without_dispatch(tmp_path):
     def unexpected_execution(_config):
-        raise AssertionError("A gated or unsupported source must not execute")
+        raise AssertionError("A gated or incomplete source must not execute")
 
     steps = [
         ArtifactStep(name, "2026.10.06", CampaignArtifact, unexpected_execution, lambda ctx: {})
-        for name in ("gated", "unsupported")
+        for name in ("gated", "incomplete")
     ]
     samples = {
         step.name: SourceOutcome(f"sample/{step.name}", f"sample/{step.name}/2026.10.06", step.name) for step in steps
@@ -195,4 +195,4 @@ def test_full_campaign_records_gated_and_unsupported_without_dispatch(tmp_path):
     assert report["status"] == "completed"
     assert report["counts"] == {"not_admitted": 2}
     assert report["sample_outcomes"]["gated"]["status"] == "gated"
-    assert report["sample_outcomes"]["unsupported"]["status"] == "unsupported"
+    assert report["sample_outcomes"]["incomplete"]["status"] == "incomplete"

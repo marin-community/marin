@@ -17,7 +17,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
-from experiments.post_training.task_curation.tests.local_grader import LocalGraderMachines, grade, local_grader_machines
+from experiments.post_training.task_curation.tests.local_grader import grade
 from experiments.post_training.task_curation.tests.test_tasktrove_text import fixture_files
 
 pytestmark = pytest.mark.docker
@@ -50,11 +50,6 @@ def main(version: bool = typer.Option(False, "--version", help="Show the version
     ),
 }
 """An implementation of the ``stack_pytest`` fixture's request; its hidden tests import ``typer``."""
-
-
-@pytest.fixture(scope="module")
-def machines() -> LocalGraderMachines:
-    return local_grader_machines()
 
 
 def fixture_task(name: str, fixture: str) -> TaskSpec:

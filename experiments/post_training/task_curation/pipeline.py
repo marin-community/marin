@@ -43,9 +43,11 @@ from taskcompendium.pipeline.models import (
     IntendedUse,
     ReviewRubric,
     SourceRecipe,
+    SourceStatus,
 )
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
+    VERIFY_REPORT_PATH,
     SourcePipelineConfig,
     run_source_pipeline,
 )
@@ -365,7 +367,7 @@ def _source_run(
         output_path=ctx.output_path,
         grader_image=grader_image,
         previous_verification_report=(
-            str(StoragePath(ctx.artifact_path(previous)) / "verify/report.json") if previous is not None else None
+            str(StoragePath(ctx.artifact_path(previous)) / VERIFY_REPORT_PATH) if previous is not None else None
         ),
     )
 
@@ -383,7 +385,7 @@ def _run_source(
         previous_verification_report=run.previous_verification_report,
         canonical_source=pipeline.name,
     )
-    if result.status == "incomplete":
+    if result.status == SourceStatus.INCOMPLETE:
         raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
     return RlDataArtifact(path=run.output_path, status=result.status, manifest=asdict(result))
 

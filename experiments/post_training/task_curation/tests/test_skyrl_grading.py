@@ -19,7 +19,6 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.local_grader import (
     LocalGraderMachines,
-    local_grader_machines,
     with_verifier_file,
 )
 from experiments.post_training.task_curation.tests.local_grader import grade as grade_submission
@@ -30,11 +29,6 @@ pytestmark = pytest.mark.docker
 GRADING_MEMORY_MB = 5120
 NOISY_ADD = '```python\ndef add(a, b):\n    print("x" * 20000)\n    return a + b\n```'
 """A correct function that prints more than the runtime keeps of a grader's stdout."""
-
-
-@pytest.fixture(scope="module")
-def machines() -> LocalGraderMachines:
-    return local_grader_machines()
 
 
 def grade(task: TaskSpec, reply: str, machines: LocalGraderMachines) -> GradeResult:

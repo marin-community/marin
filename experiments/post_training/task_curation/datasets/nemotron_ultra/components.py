@@ -50,11 +50,10 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     convert_instruction_following,
     convert_math,
     convert_mcqa,
-    convert_next_action,
     convert_rdkit,
     convert_reasoning_gym,
     convert_structured_output,
-    convert_toolcall_schema,
+    convert_tool_action,
     convert_ungraded,
     convert_ungraded_agent,
 )
@@ -316,7 +315,7 @@ MATH = Component(convert_math, MATH_ANSWER_RUBRIC, decode=attach_placeholder_sou
 MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
 MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
-NEXT_ACTION = scored(convert_next_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
+NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
 NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS, ARC_SHIPS)
 RDKIT = scored(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS)
 REASONING_GYM = scored(convert_reasoning_gym, REASONING_GYM_RUBRIC, REASONING_GYM_CONTROLS)
@@ -324,7 +323,7 @@ SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
 STRUCTURED_OUTPUT = scored(convert_structured_output, INSTRUCTION_FOLLOWING_RUBRIC)
 SWE_REPO = Component(convert_ungraded_agent, SWE_REPO_RUBRIC)
 TAU_PIVOT = Component(convert_ungraded_agent, TOOL_USE_RUBRIC)
-TOOLCALL_SCHEMA = scored(convert_toolcall_schema, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
+TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
 
 HS3_EN = Component(
     convert_ungraded,

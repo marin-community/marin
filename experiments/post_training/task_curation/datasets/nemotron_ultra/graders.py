@@ -6,7 +6,8 @@
 A graded component's tasks ship a ``*_grade.py`` script from beside this module as ``/tests/grade.py``,
 with the vendored NeMo Gym scorer it calls from ``scorers/`` (calendar, format, instruction-following,
 multiple-choice, structured-output, competitive-code, RDKit chemistry or single-step tool-action) and
-the row's grading contract as ``/tests/config.json``. Reasoning Gym rows are scored by the puzzle task's
+the row's grading contract as ``/tests/config.json``. Scripts that score the chat conversation also ship
+``conversation.py``, which reads its final reply. Reasoning Gym rows are scored by the puzzle task's
 own scorer in the grader image's ``reasoning_gym``. Every script runs in the grader image
 (``images.recipes.GRADER``). Components whose NeMo Gym agent needs a model judge, a live environment or
 a Lean toolchain keep their row as a ``NoGrader`` contract.
@@ -90,6 +91,8 @@ ULTRA_BASE = shipped_files(
 """The final-answer extractor every Ultra grade script imports, with the packages around it."""
 LIVECODEBENCH = inline_resource("skyrl_gym/envs/lcb/livecodebench.py", (SKYRL_SCORERS / "livecodebench.py").read_bytes())
 """The one vendored LiveCodeBench evaluator, at the path ``code_gen`` imports it from."""
+CONVERSATION = shipped_files(HERE, "conversation.py")
+"""The final-reply reader shipped beside the scripts that score the chat conversation."""
 
 
 def ultra_grade_script(script: str, *modules: str) -> tuple[TaskResource, ...]:
@@ -101,10 +104,10 @@ CALENDAR_GRADE = ultra_grade_script("calendar_grade.py", "calendar")
 FORMAT_GRADE = ultra_grade_script("format_grade.py", "format_verification")
 INSTRUCTION_FOLLOWING_GRADE = ultra_grade_script("instruction_following_grade.py", "instruction_following")
 MCQA_GRADE = ultra_grade_script("mcqa_grade.py", "mcqa")
-CODE_GRADE = (*ultra_grade_script("code_grade.py", "code_gen"), LIVECODEBENCH)
-STRUCTURED_OUTPUT_GRADE = ultra_grade_script("structured_output_grade.py", "structured_outputs")
+CODE_GRADE = (*ultra_grade_script("code_grade.py", "code_gen"), *CONVERSATION, LIVECODEBENCH)
+STRUCTURED_OUTPUT_GRADE = (*ultra_grade_script("structured_output_grade.py", "structured_outputs"), *CONVERSATION)
 RDKIT_GRADE = ultra_grade_script("rdkit_chemistry_grade.py", "rdkit_chemistry")
-TOOL_ACTION_GRADE = ultra_grade_script("expected_action_grade.py", "tool_call")
+TOOL_ACTION_GRADE = (*ultra_grade_script("expected_action_grade.py", "tool_call"), *CONVERSATION)
 REASONING_GYM_GRADE = ultra_grade_script("reasoning_gym_grade.py")
 
 TOOL_ACTION_AGENTS = (
@@ -232,7 +235,8 @@ def convert_rdkit(row: RawRow, context: ConversionContext) -> NormalizedTask | I
     return _scored(row, request, RDKIT_GRADE, context)
 
 
-def _tool_action(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+def convert_tool_action(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    """Compare one predicted action, such as a SWE agent's next call, with the expected call, without executing it."""
     request = agent_request(row.data, TOOL_ACTION_AGENTS)
     if isinstance(request, ImportRejection):
         return request
@@ -240,16 +244,6 @@ def _tool_action(row: RawRow, context: ConversionContext) -> NormalizedTask | Im
     if kind not in {"message", "function_call"}:
         return unsupported("unsupported_action_type", str(kind))
     return _scored(row, request, TOOL_ACTION_GRADE, context, answer_type=AnswerType.NATIVE_ACTION)
-
-
-def convert_toolcall_schema(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Compare one predicted action with the expected call, without executing the tool."""
-    return _tool_action(row, context)
-
-
-def convert_next_action(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Compare a predicted SWE agent action with the expected call, without executing the tool."""
-    return _tool_action(row, context)
 
 
 def _agent_provider(request: BlendRequest) -> dict[str, ProviderRequirement]:

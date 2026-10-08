@@ -8,13 +8,13 @@ from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Any
 
-from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, Machine, MachineFactory
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
-from taskcompendium.runtime.grading import grade_in_sandbox
-from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE
+from taskcompendium.runtime.grading import ROOT, grade_in_sandbox
+from taskcompendium.runtime.shell import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
@@ -38,7 +38,14 @@ async def _grade_rollout(
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
         return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation))
     timeout = lowered.session.verifier_timeout
-    attempt = GradingAttempt(conversation, await _capture_outputs(machine, task.output_paths, timeout))
+    files = (
+        {}
+        if machine is None
+        else await captured_output_files(
+            machine, task.output_paths, timeout=timeout, limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, user=ROOT
+        )
+    )
+    attempt = GradingAttempt(conversation, files)
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = lowered.runtime.verifier_machine
     assert selection is not None
@@ -50,31 +57,3 @@ async def _grade_rollout(
         task_machine=machine,
         timeout=timeout,
     )
-
-
-async def _capture_outputs(machine: Machine | None, paths: tuple[str, ...], timeout: float | None) -> dict[str, bytes]:
-    if machine is None:
-        return {}
-    files = {}
-    for path in paths:
-        result = await machine.run(
-            Command(
-                (
-                    "sh",
-                    "-c",
-                    f'if [ -f "$1" ]; then head -c "$2" -- "$1"; else exit {MISSING_CAPTURE_EXIT_CODE}; fi',
-                    "capture-output",
-                    path,
-                    str(DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES + 1),
-                ),
-                timeout=timeout,
-                user="0",
-                output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES + 1,
-            )
-        )
-        if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
-            continue
-        if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES:
-            raise RuntimeError(f"Cannot capture task output within the size limit: {path}")
-        files[path] = result.stdout
-    return files

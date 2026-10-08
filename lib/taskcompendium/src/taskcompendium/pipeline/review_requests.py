@@ -182,10 +182,12 @@ def batch_output(
     max_batch_requests: int = DEFAULT_MAX_BATCH_REQUESTS,
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
 ) -> str:
-    """Split inference uploads by request count and UTF-8 JSONL byte size.
+    """Submit ``requests`` as provider batches and return their combined raw JSONL output.
 
-    A request is indivisible: one exceeding the upload budget is recorded as
-    unavailable, while the other tasks continue. The reviewer owns retries.
+    Each output line is one provider response keyed by ``custom_id``. Batches stay within
+    ``max_batch_requests`` and ``max_batch_bytes``. A request over the byte budget, or in a batch
+    whose submission fails, gets an error line instead while the other requests continue; the
+    reviewer owns retries. Requests, submissions and raw outputs are retained below ``output_path``.
     """
     if max_batch_requests < 1 or max_batch_bytes < 1:
         raise ValueError("Inference batch budgets must be positive")

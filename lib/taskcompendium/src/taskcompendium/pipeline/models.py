@@ -165,6 +165,21 @@ class GraderReadiness(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class SourceStatus(StrEnum):
+    """The terminal status of one source pipeline run, recorded in its manifest.
+
+    ``SAMPLED``: a sample-mode run processed only its panel. ``COMPLETED``: every row was processed,
+    by full expansion or because the panel is a census. ``GATED``: a quality or verification gate
+    rejected the source. ``INCOMPLETE``: the quality gate could not decide or a control trial hit an
+    infrastructure error; evidence is retained for a retry.
+    """
+
+    SAMPLED = "sampled"
+    COMPLETED = "completed"
+    GATED = "gated"
+    INCOMPLETE = "incomplete"
+
+
 class Admission(StrEnum):
     """Whether a row reaches the final export, and why not."""
 
