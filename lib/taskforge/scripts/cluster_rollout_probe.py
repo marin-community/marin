@@ -21,17 +21,15 @@ submitter keys Iris forwards) from this process's environment before anything su
 Phases, each ``k`` trials through ``taskforge.validate.trials.run_trials``:
 
 - ``math``: a null-environment numeric task (no machine).
-- ``docker_shipped``: a docker task from a digest-pinned public image on
-  ``machine_factories(MachineHost.IRIS, controller_url, image_cache=None)`` exactly as shipped, with the task's
-  ``IRIS_CONTROLLER_URL``.
-- ``docker_readiness_fix``: the same task and factory with a readiness poll that
-  compares against ``iris`` ``TaskState``, patched into this process (``apply_readiness_fix``),
-  then one machine that lists the environment variable names a sandbox receives. The run exits
-  non-zero after writing its results when any of those names looks like a credential
-  (``secret_names``): on CoreWeave, cluster ``task_env`` object-store keys reach every
-  sandbox, which a model-controlled machine with network must not see.
+- ``docker``: a task on a digest-pinned public image on
+  ``machine_factories(MachineHost.IRIS, controller_url, image_cache=None)`` as shipped, with the
+  task's ``IRIS_CONTROLLER_URL``. Its shell grader runs in a separate verifier machine started from
+  the same image, which receives the agent's ``/workspace/sum.txt`` as an artifact.
 
-The docker task asks for ``network: true``: the shipped Iris factory refuses ``NetworkPolicy.DENY``.
+Then one machine lists the environment variable names a sandbox receives. The run exits non-zero
+after writing its results when any of those names looks like a credential (``secret_names``): on
+CoreWeave, cluster ``task_env`` object-store keys reach every sandbox, which a model-controlled
+machine with network must not see.
 
 Everything goes to ``--results-dir`` (default ``$IRIS_OUTPUT_DIR/cluster_rollout_probe``, which
 Iris archives with the attempt): ``summary.json``, the trial evidence ``run_trials`` writes, and
@@ -49,33 +47,43 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
-from iris.client.workload import TaskState
-from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import ExponentialBackoff
-from shellbox.backends.iris import machine as iris_backend
-from shellbox.image import RegistryImage as ShellboxRegistryImage
-from shellbox.machine import Command, Machine, MachineFactory, MachineSpec, NetworkPolicy
-from taskcompendium.environment import EnvironmentKind, RegistryImage, StdoutReward
-from taskcompendium.execution import TaskExecution
-from taskcompendium.grading import numeric_answer
-from taskcompendium.models import AnswerType, Source, TaskSpec
+from rolloutengine.spec import LoweredTaskSpec
+from shellbox.image import RegistryImage
+from shellbox.machine import Backend, Command, Machine, MachineFactory, MachineSpec, NetworkPolicy
+from taskcompendium.models import AnswerType, Source
+from taskcompendium.shell_verifier import (
+    ArtifactKind,
+    MissingArtifactPolicy,
+    StdoutReward,
+    VerifierArtifact,
+)
 from taskcompendium.submission import PlainText
+from verifyit.spec import NumericSpec
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.llm.client import GlmClient, Pool, endpoint_in_task
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import IRIS_DOCKER, SHELLSIM, MachineHost, machine_factories
-from taskforge.spec.draft import assemble, environment, file, shell_verifier
+from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
+from taskforge.spec.draft import (
+    answer_verifier,
+    assemble,
+    file,
+    lower,
+    machine,
+    requirements,
+    session,
+    shell_verifier,
+)
 from taskforge.validate.evidence import Complete, Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
@@ -90,7 +98,8 @@ IMAGE_TAG = "python:3.12-slim (OCI index digest, resolved 2026-10-05)"
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
-CHECK_SCRIPT = f'v=$(tr -d " \\n" < /workspace/sum.txt)\nif [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
+SUM_PATH = "/workspace/sum.txt"
+CHECK_SCRIPT = f'v=$(tr -d " \\n" < {SUM_PATH})\nif [ "$v" = {NUMBERS_SUM} ]; then echo 1; else echo 0; fi\n'
 # Prints names only; `env | cut` would leak fragments of multi-line values into evidence.
 ENV_NAMES_SCRIPT = (
     f"awk 'BEGIN{{for(k in ENVIRON) print k}}' | sort | tr '\\n' ' '; echo; printenv {GLM_TOKEN_ENV} | wc -c"
@@ -102,24 +111,31 @@ SECRET_SUFFIXES = ("KEY_ID", "API_KEY", "ACCESS_KEY")
 POLICY = LLMPolicy(max_continuations=0)
 MAX_TURNS = 12
 COMMAND_TIMEOUT = 120
+TOOL_TURN_TIMEOUT = 240
+MODEL_TURN_TIMEOUT = 600
 CLEANUP_TIMEOUT = 120
-DEADLINES = Deadlines(agent_timeout=1800, attempt_timeout=2400)
+STARTUP_TIMEOUT = 900
+VERIFIER_TIMEOUT = 300
+DEADLINES = Deadlines(total_turn_timeout=1800, attempt_timeout=2400)
 TOKEN_CONTRACT_RETRIES = 2
-EXECUTION = TaskExecution()
-# The probe measures the shipped Iris backend, so it does not refuse docker tasks up front: the
-# DOCKER row is the backend's own create-time checks (registry images, network ALLOW only).
-PROBE_CAPABILITIES = {
-    EnvironmentKind.SHELLSIM: SHELLSIM,
-    EnvironmentKind.DOCKER: replace(IRIS_DOCKER, network=frozenset({NetworkPolicy.ALLOW}), unavailable=None),
-}
+# The builder's session; EngineSettings and DEADLINES replace all but the verifier deadline.
+SESSION = session(
+    max_turns=MAX_TURNS,
+    model_turn_timeout=MODEL_TURN_TIMEOUT,
+    command_timeout=COMMAND_TIMEOUT,
+    tool_turn_timeout=TOOL_TURN_TIMEOUT,
+    total_turn_timeout=DEADLINES.total_turn_timeout,
+    attempt_timeout=DEADLINES.attempt_timeout,
+    verifier_timeout=VERIFIER_TIMEOUT,
+    cleanup_timeout=CLEANUP_TIMEOUT,
+)
 # Characters of a result file per log line, so log storage keeps each line whole.
 PRINT_CHUNK = 4000
 
 
 class Phase(StrEnum):
     MATH = "math"
-    DOCKER_SHIPPED = "docker_shipped"
-    DOCKER_READINESS_FIX = "docker_readiness_fix"
+    DOCKER = "docker"
 
 
 @dataclass
@@ -128,6 +144,10 @@ class TimedFactory:
 
     factory: MachineFactory
     creates: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def backend(self) -> Backend:
+        return self.factory.backend
 
     async def create(self, spec: MachineSpec) -> Machine:
         started = time.monotonic()
@@ -151,59 +171,54 @@ def scrub_child_environment() -> str:
     return token
 
 
-def apply_readiness_fix() -> None:
-    """Make the shipped ``IrisMachineFactory._create_sync`` see ``RUNNING``, in this process only.
-
-    The shipped poll compares ``Task.status().state`` (``iris.client.workload.TaskState``) with
-    ``job_pb2.TASK_STATE_*`` ints, so it never matches. Rebinding those names in the backend module
-    to ``TaskState`` members is the patch's readiness change; nothing else in the backend changes.
-    It covers only the RUNNING and pending comparisons: the backend's failure branch still reads the
-    nonexistent ``status.error``, and any other ``job_pb2`` name it touches would raise
-    ``AttributeError``, so failure reporting still needs the upstream patch. Probe only.
-    """
-    states = {
-        "TASK_STATE_RUNNING": TaskState.RUNNING,
-        "TASK_STATE_PENDING": TaskState.PENDING,
-        "TASK_STATE_BUILDING": TaskState.BUILDING,
-        "TASK_STATE_ASSIGNED": TaskState.ASSIGNED,
-    }
-    patched = SimpleNamespace(CONTAINER_PROFILE_GVISOR=job_pb2.CONTAINER_PROFILE_GVISOR, **states)
-    setattr(iris_backend, "job_pb2", patched)  # noqa: B010 - module rebinding for this probe only
-
-
 def source(row: str) -> Source:
     return Source(dataset="taskforge-cluster-rollout-probe", revision="1", row=row, importer_revision="1")
 
 
-def math_task() -> TaskSpec:
-    return assemble(
+def math_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
+    task = assemble(
         "cluster-math",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
         AnswerType.NUMBER,
-        environment(EnvironmentKind.NULL),
-        numeric_answer(MATH_ANSWER, tolerance_abs=0, tolerance_rel=0),
+        answer_verifier(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
         source("math"),
-        execution=EXECUTION,
+        environment=None,
+    )
+    return lower(
+        task, host=MachineHost.IRIS, task_machine=None, verifier_machine=None, session=SESSION, factories=factories
     )
 
 
-def docker_task() -> TaskSpec:
-    return assemble(
+def docker_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
+    """A file task on ``IMAGE`` whose shell grader runs in a verifier machine from the same image."""
+    task = assemble(
         "cluster-docker-file",
         "The file /workspace/numbers.txt holds one integer per line. Use the shell tool to write their sum, "
-        "as a single integer, to /workspace/sum.txt. Say when you are done.",
+        f"as a single integer, to {SUM_PATH}. Say when you are done.",
         AnswerType.FILE,
-        environment(
-            EnvironmentKind.DOCKER,
-            image=RegistryImage(reference=IMAGE),
-            files=(file("/workspace/numbers.txt", NUMBERS),),
-            network=True,
-        ),
         shell_verifier(
-            ("sh", "/grader/check.sh"), StdoutReward(), timeout=60, files=(file("/grader/check.sh", CHECK_SCRIPT),)
+            ("sh", "/tests/check.sh"),
+            StdoutReward(),
+            image=IMAGE,
+            files=(file("check.sh", CHECK_SCRIPT),),
+            artifacts=(
+                VerifierArtifact(
+                    source=SUM_PATH, target=SUM_PATH, kind=ArtifactKind.FILE, missing=MissingArtifactPolicy.SKIP
+                ),
+            ),
         ),
         source("docker-file"),
-        execution=EXECUTION,
+        environment=requirements(image=IMAGE),
+        files=(file("workspace/numbers.txt", NUMBERS),),
+    )
+    settings = machine(startup_timeout=STARTUP_TIMEOUT)
+    return lower(
+        task,
+        host=MachineHost.IRIS,
+        task_machine=settings,
+        verifier_machine=settings,
+        session=SESSION,
+        factories=factories,
     )
 
 
@@ -275,22 +290,25 @@ def evidence_summary(outcomes: list[Outcome]) -> dict[str, Any]:
 
 async def run_phase(
     phase: Phase,
-    task: TaskSpec,
-    factories: dict[EnvironmentKind, MachineFactory],
+    lowered: LoweredTaskSpec,
+    factories: dict[str, MachineFactory],
     client: GlmClient,
     results: Path,
     k: int,
     max_retries: int,
 ) -> dict[str, Any]:
     directory = results / str(phase)
+    task = lowered.task
     ledger = JsonlLedger(directory / "ledger")
     model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
-    timed = {kind: TimedFactory(factory) for kind, factory in factories.items()}
+    timed = {backend: TimedFactory(factory) for backend, factory in factories.items()}
     settings = EngineSettings(
         factories=timed,
-        capabilities=PROBE_CAPABILITIES,
+        capabilities=factory_capabilities(MachineHost.IRIS),
         max_turns=MAX_TURNS,
         command_timeout=COMMAND_TIMEOUT,
+        tool_turn_timeout=TOOL_TURN_TIMEOUT,
+        model_turn_timeout=MODEL_TURN_TIMEOUT,
         cleanup_timeout=CLEANUP_TIMEOUT,
         conventions=(PlainText(id="plain"),),
     )
@@ -309,7 +327,7 @@ async def run_phase(
     )
     print(f"PHASE_START {phase} task={task.id} k={k} max_retries={max_retries}", flush=True)
     started = time.monotonic()
-    outcomes = await run_trials(task, EXECUTION, plan, settings, model)
+    outcomes = await run_trials(lowered, plan, settings, model)
     wall_time = time.monotonic() - started
     summary = {
         "phase": str(phase),
@@ -317,7 +335,7 @@ async def run_phase(
         "wall_time": wall_time,
         "trials": [outcome_summary(outcome) for outcome in outcomes],
         "evidence": evidence_summary(outcomes),
-        "machine_creates": {str(kind): factory.creates for kind, factory in timed.items() if factory.creates},
+        "machine_creates": {backend: factory.creates for backend, factory in timed.items() if factory.creates},
         "ledger": [entry.to_json() for path in ledger_files(directory / "ledger") for entry in read_entries(path)],
     }
     print(f"PHASE_END {phase} wall_time={wall_time:.1f}s evidence={json.dumps(summary['evidence'])}", flush=True)
@@ -327,7 +345,7 @@ async def run_phase(
 async def sandbox_environment(factory: MachineFactory) -> dict[str, Any]:
     """The environment variable names one Iris machine receives, and the GLM token's length there."""
     timed = TimedFactory(factory)
-    machine = await timed.create(MachineSpec(source=ShellboxRegistryImage(IMAGE), network=NetworkPolicy.ALLOW))
+    machine = await timed.create(MachineSpec(source=RegistryImage(IMAGE), network=NetworkPolicy.ALLOW))
     try:
         result = await machine.run(Command(argv=("sh", "-c", ENV_NAMES_SCRIPT), timeout=60))
     finally:
@@ -394,23 +412,20 @@ async def probe(args: argparse.Namespace, token: str, controller_url: str, resul
         "glm_base_url": endpoint.base_url,
         "image": IMAGE,
         "image_tag": IMAGE_TAG,
-        "network": "docker task network=true; shipped IrisMachineFactory refuses NetworkPolicy.DENY",
+        "network": "docker task and verifier machines NetworkPolicy.DENY; environment probe machine ALLOW",
         "controller_url": controller_url,
         "task_id": os.environ.get("IRIS_TASK_ID"),
         "phases": [],
     }
     async with GlmClient(endpoint) as client:
-        summary["phases"].append(await run_phase(Phase.MATH, math_task(), {}, client, results, args.k, 2))
         factories = dict(machine_factories(MachineHost.IRIS, controller_url, image_cache=None))
         summary["phases"].append(
-            await run_phase(Phase.DOCKER_SHIPPED, docker_task(), factories, client, results, args.k, 1)
+            await run_phase(Phase.MATH, math_task(factories), factories, client, results, args.k, 2)
         )
-        apply_readiness_fix()
-        factories = dict(machine_factories(MachineHost.IRIS, controller_url, image_cache=None))
         summary["phases"].append(
-            await run_phase(Phase.DOCKER_READINESS_FIX, docker_task(), factories, client, results, args.k, 2)
+            await run_phase(Phase.DOCKER, docker_task(factories), factories, client, results, args.k, 2)
         )
-        summary["sandbox_environment"] = await sandbox_environment(factories[EnvironmentKind.DOCKER])
+        summary["sandbox_environment"] = await sandbox_environment(factories[Backend.GVISOR.value])
     return summary
 
 
