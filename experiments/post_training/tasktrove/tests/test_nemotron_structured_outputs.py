@@ -29,6 +29,7 @@ pytest_plugins = ["lib.verifyit.tests.test_judge"]
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 TOOL_REF = "0123abc"
+FORMAT_VERIFIER_TOML = "tests/format/verifier.toml"
 
 _VALID_CANDIDATE = {
     "dishName": "Grilled Salmon",
@@ -77,7 +78,7 @@ def test_exemplar_converts_to_grounded_script_with_json_schema_gate():
     assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "json"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text("tests/format/verifier.toml"))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     assert spec.schema == "schema.json"
     assert "tests/format/schema.json" in task.files
@@ -112,7 +113,7 @@ def test_exemplar_schema_grades_valid_and_invalid_candidates():
     probe-less pass (json-schema has no built-in positive/negative candidate in verify.py)."""
     record = _convert()
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text("tests/format/verifier.toml"))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -138,7 +139,7 @@ def test_yaml_schema_type_maps_to_yaml_format():
     record = _convert(_mutate_verifier_data(schema_type="yaml"))
     assert record.status == ConvertStatus.CONVERTED
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text("tests/format/verifier.toml"))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     assert spec.format.value == "yaml"
     assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "yaml"]
@@ -151,7 +152,7 @@ def test_xml_schema_type_grades_required_element_or_attribute_names():
     assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "xml"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text("tests/format/verifier.toml"))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, XmlElementsSpec)
     assert spec.required == tuple(_VALID_CANDIDATE)
 
@@ -182,7 +183,7 @@ def test_csv_schema_type_grades_required_scalar_columns():
     assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "csv"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text("tests/format/verifier.toml"))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, CsvColumnsSpec)
     assert spec.required == (
         "dishName",
@@ -219,7 +220,7 @@ def test_toml_schema_type_grades_parsed_document_against_json_schema():
     assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "toml"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text("tests/format/verifier.toml"))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     assert spec.format is SchemaFormat.TOML
     assert "tests/format/schema.json" in task.files
