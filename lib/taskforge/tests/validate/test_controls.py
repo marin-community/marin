@@ -3,7 +3,6 @@
 
 """Control replay through the real engine with a deterministic stand-in for the server's chat template."""
 
-import json
 from dataclasses import dataclass, replace
 
 import pytest
@@ -20,32 +19,14 @@ from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.validate.controls import ControlPlan, ControlVerdict, ServerTokenizer, replay
 from taskforge.validate.outcome import Cause, Graded, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings
-
-ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
-
-
-def render(messages) -> tuple[int, ...]:
-    """Render like a chat template: a role marker, then the turn's bytes."""
-    ids: list[int] = []
-    for message in messages:
-        ids.append(ROLE_IDS[message["role"]])
-        ids.extend(json.dumps({key: message[key] for key in ("content", "tool_calls") if key in message}).encode())
-    return tuple(ids)
-
-
-class TemplateTokenizer:
-    async def prompt_ids(self, messages, options):
-        return (*render(messages), ROLE_IDS["assistant"])
-
-    async def rendered_ids(self, messages, options):
-        return render(messages)
+from tests.validate.conftest import TemplateTokenizer, render_ids
 
 
 class ReorderingTokenizer(TemplateTokenizer):
     """A template whose rendering of a finished conversation does not extend its prompt rendering."""
 
     async def rendered_ids(self, messages, options):
-        return render(messages)[::-1]
+        return render_ids(messages)[::-1]
 
 
 def settings(factory, max_turns: int = 6) -> EngineSettings:
