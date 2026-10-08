@@ -1,56 +1,66 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build task-curation images, push them, and record each as an artifact under MARIN_PREFIX.
+"""Build declared environments and record each as an artifact under MARIN_PREFIX.
 
-An image's identity is the SHA-256 of its recipe: every file in its context and package directories
-with its mode, the digest-pinned base image named by the Dockerfile's FROM line, and the target
-platform. The artifact ``images/<name>-<identity[:16]>`` records the pushed digest, so a run whose
-recipe is unchanged finds the artifact and starts no Docker build.
+An ``Environment`` without an image is built once, as the artifact ``images/env-<identity[:16]>``.
+Its identity is the SHA-256 of everything that determines the build: the pypi pins or the lock's
+bytes, the apt packages, the data, the Python version and platform, the digest-pinned base image,
+the files of the runtime packages every environment carries (verifyit), and where the environment
+runs. The build stores the environment's hash lock in the artifact. When the environment needs apt
+packages the worker image lacks, it also builds an image from a generated Dockerfile, pushes it,
+and records its digest. A run whose declaration is unchanged finds the artifact and builds nothing.
 """
 
 import hashlib
 import json
-import logging
 import os
-import re
 import shutil
 import stat
 import subprocess
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
-import click
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import ArtifactStep, StepContext, run
+from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.images.recipes import RECIPES, ImageRecipe
+from experiments.post_training.task_curation.environment import Environment, Placement, nltk_packages, placement
+
+HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[3]
+RUNTIME_PACKAGES = (REPO_ROOT / "lib" / "verifyit" / "src" / "verifyit",)
+"""Package directories every built environment puts on the import path; verifyit graders import them."""
 
 # New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
 # images are tagged into the public iris-task package until a public task-curation package exists.
 DEFAULT_REPOSITORY = "ghcr.io/marin-community/iris-task"
+BASE_IMAGE = "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab"
+"""The image built environments start from: iris-task as of 2026-10-07, python:3.12-slim with uv."""
 PLATFORM = "linux/amd64"
-IMAGE_ARTIFACT_VERSION = "2026.10.07"
+PYTHON_VERSION = "3.12"
+PYTHON_PLATFORM = "x86_64-unknown-linux-gnu"
+ENVIRONMENT_ARTIFACT_VERSION = "2026.10.08"
 IDENTITY_CHARS = 16
 LOCK_FILE = "requirements.lock"
+RUNTIME_PTH = "task-curation-runtime.pth"
+"""The ``.pth`` file that puts the runtime packages' directory on ``sys.path``."""
 REGULAR_MODE = "100644"
 EXECUTABLE_MODE = "100755"
-FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
-PINNED_BASE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
-BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --recipe {name}"
+BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --identity {identity}"
 
 
-class MissingImageArtifact(RuntimeError):
-    """A declaration names an image recipe whose current identity has no built artifact."""
+class MissingEnvironmentArtifact(RuntimeError):
+    """A declaration names an environment whose current identity has no built artifact."""
 
 
 class ContextFile(BaseModel):
-    """A file in a build context, by path relative to the context, git-style mode and content digest."""
+    """A file in a package directory, by path relative to the directory, git-style mode and content digest."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -59,22 +69,25 @@ class ContextFile(BaseModel):
     sha256: str
 
 
-class ImageArtifact(Artifact):
-    """The pushed image a recipe produced and the inputs it was built from."""
+class EnvironmentArtifact(Artifact):
+    """A built environment: its hash lock, stored beside the record, and the image built for it, if any."""
 
-    name: str
     identity: str
-    tag: str
-    image: str
-    base_image: str
     lock_sha256: str
-    context_files: list[ContextFile]
-    package_files: dict[str, list[ContextFile]]
-    platform: str
+    apt: list[str]
+    data: list[str]
+    python: str
+    base_image: str
+    image: str | None = None
+    tag: str | None = None
+
+    @property
+    def lock_url(self) -> str:
+        return str(StoragePath(self.path) / LOCK_FILE)
 
 
 @dataclass(frozen=True)
-class ImageBuild:
+class EnvironmentBuild:
     identity: str
     repository: str
     output_path: str
@@ -101,50 +114,120 @@ def context_files(root: Path) -> list[ContextFile]:
     ]
 
 
-def base_image(dockerfile: Path) -> str:
-    """The digest-pinned image a single-stage Dockerfile builds from."""
-    bases = FROM_LINE.findall(dockerfile.read_text())
-    if len(bases) != 1 or PINNED_BASE.fullmatch(bases[0]) is None:
-        raise ValueError(f"{dockerfile} must have one FROM line naming an image pinned by digest; found {bases}")
-    return bases[0]
+def runtime_files() -> dict[str, list[dict[str, str]]]:
+    """The files of every runtime package, by package name."""
+    return {package.name: [file.model_dump() for file in context_files(package)] for package in RUNTIME_PACKAGES}
 
 
-def recipe_identity(recipe: ImageRecipe) -> dict[str, Any]:
-    """Everything that determines the image a recipe builds."""
+def environment_identity(environment: Environment) -> dict[str, Any]:
+    """Everything that determines what building ``environment`` produces."""
+    if environment.image is not None:
+        raise ValueError(f"An image environment is used as-is, not built: {environment.image}")
     return {
-        "name": recipe.name,
-        "context": [file.model_dump() for file in context_files(recipe.context)],
-        "packages": {
-            package.name: [file.model_dump() for file in context_files(package)] for package in recipe.packages
-        },
-        "base_image": base_image(recipe.context / "Dockerfile"),
+        "pypi": sorted(environment.pypi),
+        "lock_sha256": hashlib.sha256(environment.lock.read_bytes()).hexdigest() if environment.lock else None,
+        "apt": sorted(environment.apt),
+        "data": sorted(environment.data),
+        "python": PYTHON_VERSION,
         "platform": PLATFORM,
+        "base_image": BASE_IMAGE,
+        "runtime": runtime_files(),
+        "placement": placement(environment).value,
     }
 
 
-def identity_digest(recipe: ImageRecipe) -> str:
-    return hashlib.sha256(canonical_json(recipe_identity(recipe)).encode()).hexdigest()
+def identity_digest(environment: Environment) -> str:
+    return hashlib.sha256(canonical_json(environment_identity(environment)).encode()).hexdigest()
 
 
-def image_tag(recipe: ImageRecipe, repository: str, identity: str) -> str:
-    return f"{repository}:task-curation-{recipe.name}-{identity[:IDENTITY_CHARS]}"
+def image_tag(repository: str, identity: str) -> str:
+    return f"{repository}:task-curation-env-{identity[:IDENTITY_CHARS]}"
 
 
-def _image_build(identity: str, ctx: StepContext) -> ImageBuild:
-    return ImageBuild(identity=identity, repository=ctx.runtime_arg("repository"), output_path=ctx.output_path)
+def _environment_build(identity: str, ctx: StepContext) -> EnvironmentBuild:
+    return EnvironmentBuild(identity=identity, repository=ctx.runtime_arg("repository"), output_path=ctx.output_path)
 
 
-def image_artifact(recipe: ImageRecipe, repository: str = DEFAULT_REPOSITORY) -> ArtifactStep[ImageArtifact]:
-    """The ``images/<name>-<identity[:16]>`` artifact; the repository is where a build pushes, not identity."""
-    identity = identity_digest(recipe)
+def environment_artifact(
+    environment: Environment, repository: str = DEFAULT_REPOSITORY
+) -> ArtifactStep[EnvironmentArtifact]:
+    """The ``images/env-<identity[:16]>`` artifact; the repository is where a build pushes, not identity."""
+    identity = identity_digest(environment)
     return ArtifactStep(
-        name=f"images/{recipe.name}-{identity[:IDENTITY_CHARS]}",
-        version=IMAGE_ARTIFACT_VERSION,
-        artifact_type=ImageArtifact,
-        run=partial(build_image, recipe),
-        build_config=partial(_image_build, identity),
+        name=f"images/env-{identity[:IDENTITY_CHARS]}",
+        version=ENVIRONMENT_ARTIFACT_VERSION,
+        artifact_type=EnvironmentArtifact,
+        run=partial(build_environment, environment),
+        build_config=partial(_environment_build, identity),
         runtime_args={"repository": repository},
     )
+
+
+def compile_lock(requirements: tuple[str, ...], output: Path) -> None:
+    """Compile exact pins into a lock with hashes for the workers' Python version and platform."""
+    with TemporaryDirectory() as directory:
+        source = Path(directory) / "requirements.in"
+        source.write_text("".join(f"{requirement}\n" for requirement in requirements))
+        # Running from an empty directory keeps uv from reading the settings of a project in the working directory.
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "compile",
+                "--generate-hashes",
+                "--no-header",
+                "--python-version",
+                PYTHON_VERSION,
+                "--python-platform",
+                PYTHON_PLATFORM,
+                "--output-file",
+                str(output),
+                str(source),
+            ],
+            check=True,
+            cwd=directory,
+        )
+
+
+def dockerfile(environment: Environment) -> str:
+    """A Dockerfile that installs ``environment`` on the base image from a context holding its lock.
+
+    The runtime packages arrive as named build contexts, ``--build-context <name>=<directory>``.
+    """
+    lines = [f"FROM {BASE_IMAGE}"]
+    if environment.apt:
+        lines.append(
+            "RUN apt-get update"
+            f" && apt-get install -y --no-install-recommends {' '.join(sorted(environment.apt))}"
+            " && rm -rf /var/lib/apt/lists/*"
+        )
+    lines.append(f"COPY {LOCK_FILE} /opt/task-curation/{LOCK_FILE}")
+    lines.append(f"RUN uv pip sync --system --no-cache --require-hashes /opt/task-curation/{LOCK_FILE}")
+    packages = nltk_packages(environment.data)
+    if packages:
+        # NLTK looks under /usr/local/share/nltk_data without an environment variable.
+        lines.append(f"RUN python3 -m nltk.downloader -d /usr/local/share/nltk_data {' '.join(packages)}")
+    lines.extend(
+        f"COPY --from={package.name} . /opt/task-curation/runtime/{package.name}" for package in RUNTIME_PACKAGES
+    )
+    lines.append(
+        "RUN find /opt/task-curation/runtime -name __pycache__ -prune -exec rm -rf {} +"
+        " && echo /opt/task-curation/runtime"
+        f' > "$(python3 -c \'import sysconfig; print(sysconfig.get_path("purelib"))\')/{RUNTIME_PTH}"'
+        " && python3 -c 'from verifyit.grade import main'"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def write_context(environment: Environment, directory: Path) -> None:
+    """Write the lock and the Dockerfile an image of ``environment`` builds from into ``directory``."""
+    directory.mkdir(parents=True, exist_ok=True)
+    lock = directory / LOCK_FILE
+    if environment.lock is not None:
+        shutil.copyfile(environment.lock, lock)
+    else:
+        compile_lock(environment.pypi, lock)
+    (directory / "Dockerfile").write_text(dockerfile(environment))
 
 
 def _docker_config() -> dict[str, Any]:
@@ -153,7 +236,10 @@ def _docker_config() -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def _require_login(repository: str) -> None:
+def _require_docker(repository: str) -> None:
+    if shutil.which("docker") is None:
+        raise RuntimeError("Building an image requires the docker CLI with buildx")
+    subprocess.run(["docker", "buildx", "version"], check=True, capture_output=True)
     host = repository.split("/", 1)[0]
     config = _docker_config()
     if host in config.get("auths", {}) or host in config.get("credHelpers", {}) or config.get("credsStore"):
@@ -161,44 +247,40 @@ def _require_login(repository: str) -> None:
     raise RuntimeError(f"Docker has no credentials for {host}; run `docker login {host}` before building")
 
 
-def _require_tracked(root: Path) -> None:
-    """The files the identity hashes must be exactly the git-tracked files, without exec bits.
+def _git_tracked(directory: Path, pathspec: str) -> set[str]:
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", pathspec], cwd=directory, check=True, capture_output=True, text=True
+    ).stdout
+    return {path for path in listed.split("\0") if path}
+
+
+def _require_tracked(environment: Environment) -> None:
+    """The files the identity hashes must be exactly git-tracked files, and package files have no exec bits.
 
     Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
     so an untracked or executable file here would give them a different identity.
     """
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", "."], cwd=root, check=True, capture_output=True, text=True
-    ).stdout
-    expected = {path for path in tracked.split("\0") if path}
-    files = context_files(root)
-    found = {file.path for file in files}
-    if found != expected:
-        raise ValueError(
-            f"{root} must contain exactly its git-tracked files; "
-            f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"
-        )
-    executable = [file.path for file in files if file.mode == EXECUTABLE_MODE]
-    if executable:
-        raise ValueError(f"{root} has executable files {executable}; set modes inside the Dockerfile instead")
+    if environment.lock is not None and environment.lock.name not in _git_tracked(
+        environment.lock.parent, environment.lock.name
+    ):
+        raise ValueError(f"{environment.lock} must be tracked by git")
+    for package in RUNTIME_PACKAGES:
+        files = context_files(package)
+        found = {file.path for file in files}
+        expected = _git_tracked(package, ".")
+        if found != expected:
+            raise ValueError(
+                f"{package} must contain exactly its git-tracked files; "
+                f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"
+            )
+        executable = [file.path for file in files if file.mode == EXECUTABLE_MODE]
+        if executable:
+            raise ValueError(f"{package} has executable files {executable}")
 
 
-def _preflight(recipe: ImageRecipe, repository: str) -> None:
-    if shutil.which("docker") is None:
-        raise RuntimeError("Building an image requires the docker CLI with buildx")
-    subprocess.run(["docker", "buildx", "version"], check=True, capture_output=True)
-    _require_login(repository)
-    for root in (recipe.context, *recipe.packages):
-        _require_tracked(root)
-
-
-def build_image(recipe: ImageRecipe, build: ImageBuild) -> ImageArtifact:
-    """Build ``recipe`` for linux/amd64, push it under its identity tag, and resolve the pushed digest."""
-    if identity_digest(recipe) != build.identity:
-        raise RuntimeError(f"The {recipe.name} recipe changed after its artifact was planned; rerun the build")
-    _preflight(recipe, build.repository)
-    tag = image_tag(recipe, build.repository, build.identity)
-    package_contexts = [f"--build-context={package.name}={package}" for package in recipe.packages]
+def _push_image(context: Path, tag: str) -> str:
+    """Build ``context`` for linux/amd64, push it as ``tag``, and return the pushed manifest digest."""
+    package_contexts = [f"--build-context={package.name}={package}" for package in RUNTIME_PACKAGES]
     # Without provenance the pushed reference is one platform manifest rather than an attestation index.
     subprocess.run(
         [
@@ -210,7 +292,7 @@ def build_image(recipe: ImageRecipe, build: ImageBuild) -> ImageArtifact:
             "--push",
             f"--tag={tag}",
             *package_contexts,
-            str(recipe.context),
+            str(context),
         ],
         check=True,
     )
@@ -220,53 +302,53 @@ def build_image(recipe: ImageRecipe, build: ImageBuild) -> ImageArtifact:
         capture_output=True,
         text=True,
     ).stdout
-    digest = json.loads(inspected)["digest"]
-    return ImageArtifact(
+    return json.loads(inspected)["digest"]
+
+
+def build_environment(environment: Environment, build: EnvironmentBuild) -> EnvironmentArtifact:
+    """Store ``environment``'s hash lock and, when it needs packages the worker image lacks, push its image."""
+    if identity_digest(environment) != build.identity:
+        raise RuntimeError("The environment changed after its artifact was planned; rerun the build")
+    builds_image = placement(environment) == Placement.BUILT_IMAGE
+    if builds_image:
+        _require_docker(build.repository)
+    _require_tracked(environment)
+    image = tag = None
+    with TemporaryDirectory() as directory:
+        context = Path(directory)
+        write_context(environment, context)
+        lock = (context / LOCK_FILE).read_bytes()
+        if builds_image:
+            tag = image_tag(build.repository, build.identity)
+            image = f"{build.repository}@{_push_image(context, tag)}"
+    (StoragePath(build.output_path) / LOCK_FILE).write_bytes(lock, auto_mkdir=True)
+    return EnvironmentArtifact(
         path=build.output_path,
-        name=recipe.name,
         identity=build.identity,
+        lock_sha256=hashlib.sha256(lock).hexdigest(),
+        apt=sorted(environment.apt),
+        data=list(environment.data),
+        python=PYTHON_VERSION,
+        base_image=BASE_IMAGE,
+        image=image,
         tag=tag,
-        image=f"{build.repository}@{digest}",
-        base_image=base_image(recipe.context / "Dockerfile"),
-        lock_sha256=hashlib.sha256((recipe.context / LOCK_FILE).read_bytes()).hexdigest(),
-        context_files=context_files(recipe.context),
-        package_files={package.name: context_files(package) for package in recipe.packages},
-        platform=PLATFORM,
     )
 
 
-# Built artifacts by path; every declaration that names a recipe reads the same record.
-_built_images: dict[str, ImageArtifact] = {}
+# Built artifacts by path; every declaration that names an environment reads the same record.
+_built_environments: dict[str, EnvironmentArtifact] = {}
 
 
-def built_image(recipe: ImageRecipe) -> ImageArtifact:
-    """The built artifact for the recipe's current identity under MARIN_PREFIX."""
-    path = image_artifact(recipe).path()
-    if path not in _built_images:
+def built_environment(environment: Environment) -> EnvironmentArtifact:
+    """The built artifact for the environment's current identity under MARIN_PREFIX."""
+    step = environment_artifact(environment)
+    path = step.path()
+    if path not in _built_environments:
         if read_record(path) is None:
-            raise MissingImageArtifact(
-                f"The {recipe.name} image for this recipe is not built ({path} has no artifact); "
-                f"run: {BUILD_COMMAND.format(name=recipe.name)}"
+            identity = step.name.removeprefix("images/env-")
+            raise MissingEnvironmentArtifact(
+                f"The environment {step.name} is not built ({path} has no artifact); "
+                f"run: {BUILD_COMMAND.format(identity=identity)}"
             )
-        _built_images[path] = ImageArtifact.raw_load(path)
-    return _built_images[path]
-
-
-@click.command(help=__doc__)
-@click.option(
-    "--recipe",
-    "names",
-    type=click.Choice(sorted(RECIPES)),
-    multiple=True,
-    help="Recipe to build; repeat to select several. Defaults to every recipe.",
-)
-@click.option(
-    "--repository", default=DEFAULT_REPOSITORY, show_default=True, help="Image repository the build pushes to."
-)
-def main(names: tuple[str, ...], repository: str) -> None:
-    logging.basicConfig(level=logging.INFO)
-    # A workstation reaches the CoreWeave artifact prefix through its ambient CW_KEY_* pair.
-    configure_coreweave_s3()
-    recipes = [RECIPES[name] for name in names or sorted(RECIPES)]
-    for image in run(*(image_artifact(recipe, repository) for recipe in recipes)):
-        click.echo(f"{image.name}: {image.image} ({image.path})")
+        _built_environments[path] = EnvironmentArtifact.raw_load(path)
+    return _built_environments[path]

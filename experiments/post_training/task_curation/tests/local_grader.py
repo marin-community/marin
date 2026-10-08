@@ -1,22 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade tasks in the locally built grader image, which stands in for the grader image a task pins.
+"""Grade tasks in a locally built image of the grader packages, which stands in for every grader environment.
 
-Build the image from the repository root with::
+A campaign grades most tasks in the worker, in a uv environment built from the grader lock; this image
+holds the same packages. Build it from the repository root with::
 
+    uv run python -c "from pathlib import Path; \\
+    from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES; \\
+    from experiments.post_training.task_curation.images.build import write_context; \\
+    write_context(GRADER_PACKAGES, Path('/tmp/grader-context'))"
     docker build --platform linux/amd64 --build-context verifyit=lib/verifyit/src/verifyit \\
-        -t local/task-curation-grader:test experiments/post_training/task_curation/images/grader
+        -t local/task-curation-grader:test /tmp/grader-context
 """
 
 import asyncio
 import shutil
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
-from shellbox.machine import Backend, DockerImage, MachineSpec
+from shellbox.machine import Backend, DockerImage, HostImage, MachineSpec
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, EnvironmentRequirements, GradingAttempt, TaskResource, TaskSpec
 from taskcompendium.pipeline.controls import FILE_SUBMISSION_MESSAGE
@@ -26,20 +31,29 @@ from taskcompendium.runtime.task_grading import sandbox_grade
 LOCAL_GRADER_IMAGE = "local/task-curation-grader:test"
 
 
-class LocalGraderMachines:
-    """Docker machines that run the local grader image whatever image a task names."""
+@dataclass(frozen=True)
+class LocalGraderFactory:
+    """Starts the local grader image as a machine of the backend the environment declares."""
 
-    backend = Backend.DOCKER
-
-    def identity(self) -> dict:
-        return {"backend": self.backend.value, "image": LOCAL_GRADER_IMAGE}
-
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple["LocalGraderMachines", MachineSpec]:
-        assert environment.docker_image is not None
-        return self, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
+    backend: Backend
 
     async def create(self, spec: MachineSpec) -> DockerMachine:
         return await DockerMachineFactory().create(replace(spec, source=DockerImage(LOCAL_GRADER_IMAGE)))
+
+
+class LocalGraderMachines:
+    """Docker machines that run the local grader image whatever environment a task names."""
+
+    def identity(self) -> dict:
+        return {"backend": Backend.DOCKER.value, "image": LOCAL_GRADER_IMAGE}
+
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[LocalGraderFactory, MachineSpec]:
+        if Backend.LOCAL in environment.compatible_backends:
+            return LocalGraderFactory(Backend.LOCAL), MachineSpec(HostImage(), memory_mb=memory_mb)
+        assert environment.docker_image is not None
+        return LocalGraderFactory(Backend.DOCKER), MachineSpec(
+            DockerImage(environment.docker_image), memory_mb=memory_mb
+        )
 
 
 def local_grader_machines() -> LocalGraderMachines:
