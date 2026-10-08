@@ -15,7 +15,8 @@ from pathlib import Path
 import taskforge
 
 ORDER = (
-    "canonical",
+    "content_hash",
+    "atomic_file",
     "ledger",
     "spec",
     "sandbox",
