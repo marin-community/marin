@@ -8,10 +8,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter
-from verifyit.candidate import candidate_spec, supports_candidate_mode
+from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
-from verifyit.spec import ExactSpec, PredictedActionSpec, Spec, StructuredExactSpec, spec_from_table
+from verifyit.spec import ExactSpec, Mode, PredictedActionSpec, Spec, StructuredExactSpec, spec_from_table
 
 from taskcompendium.models import (
     AssistantToolCalls,
@@ -68,6 +68,17 @@ type Submission = TextSubmission | ActionSubmission | JsonSubmission | StateSubm
 
 class SubmissionFailure(ValueError):
     """The agent ended the interaction without a valid submission."""
+
+
+# Modes the submission bridge grades in process. verifyit grades more modes in process (math,
+# ifeval, ...), but this bridge still routes those through file grading.
+CANDIDATE_MODES: frozenset[str] = frozenset(
+    {Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT}
+)
+
+
+def supports_candidate_mode(mode: str) -> bool:
+    return mode in CANDIDATE_MODES
 
 
 def resolve_verifier(specification: VerifierSpec) -> Spec:
