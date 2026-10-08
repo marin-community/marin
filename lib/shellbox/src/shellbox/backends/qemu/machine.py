@@ -14,12 +14,14 @@ import re
 import shlex
 import tarfile
 import tempfile
+from contextlib import aclosing
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
+from shellbox.file_transfer import file_chunks, write_download
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
@@ -431,7 +433,11 @@ class QemuMachine:
             await self.close()
             raise RuntimeError("QEMU upload timed_out") from error
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+        if max_bytes is not None:
+            async with aclosing(file_chunks(self, source, max_bytes, busybox="/harbor/busybox")) as chunks:
+                await write_download(chunks, target, max_bytes)
+            return
         check = await self.run(Command(("/bin/sh", "-c", f"test -d {shlex.quote(source)}")))
         if check.exit_code == 0:
             script = (

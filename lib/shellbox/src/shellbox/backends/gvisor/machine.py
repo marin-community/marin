@@ -36,7 +36,10 @@ class GvisorMachine(DockerMachine):
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+        if max_bytes is not None:
+            await super().download(source, target, max_bytes=max_bytes)
+            return
         probe = await docker("exec", "--user", "0", self.name, "test", "-d", source)
         if probe.exit_code == 0:
             result = await docker("exec", "--user", "0", self.name, "tar", "-cf", "-", "-C", source, ".")

@@ -143,6 +143,10 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class DownloadLimitExceeded(ValueError):
+    """A candidate file exceeds the requested download limit."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
@@ -150,7 +154,15 @@ class Machine(Protocol):
 
     async def upload(self, source: Path, target: str) -> None: ...
 
-    async def download(self, source: str, target: Path) -> None: ...
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+        """Download a file or directory.
+
+        A byte limit applies only to files. Exceeding it raises
+        DownloadLimitExceeded without replacing the target. Transfer buffers
+        stay bounded independently of the limit. Bounded directory downloads
+        raise UnsupportedMachineSpec.
+        """
+        ...
 
     async def close(self) -> None: ...
 

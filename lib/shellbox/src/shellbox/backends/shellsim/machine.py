@@ -9,10 +9,12 @@ import re
 import shlex
 import tarfile
 import uuid
+from contextlib import aclosing
 from pathlib import Path, PurePosixPath
 
 import shellsim
 
+from shellbox.file_transfer import file_chunks, write_download
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Backend,
@@ -143,9 +145,13 @@ class ShellSimMachine:
             self.simulation.mkdir(str(PurePosixPath(target).parent), parents=True)
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
+        if max_bytes is not None:
+            async with aclosing(file_chunks(self, source, max_bytes)) as chunks:
+                await write_download(chunks, target, max_bytes)
+            return
         async with self._lock:
             if target.exists() and target.is_dir():
                 archive = f"/__harbor_download_{uuid.uuid4().hex}.tar"

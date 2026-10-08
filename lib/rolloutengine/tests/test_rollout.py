@@ -4,18 +4,34 @@
 """Single-stage execution, private grading, deadlines, and exact token evidence."""
 
 import asyncio
+import errno
 import json
 import os
 import re
 import shutil
 import tarfile
+import tracemalloc
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import pytest
+from shellbox.backends.daytona.machine import DaytonaMachine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
+from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES, write_download
+from shellbox.machine import (
+    Command,
+    DownloadLimitExceeded,
+    ExitReason,
+    Machine,
+    MachineSpec,
+    NetworkPolicy,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -61,6 +77,12 @@ from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeS
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
+
+
+async def local_file_chunks(path):
+    with path.open("rb") as file:
+        while chunk := file.read(DOWNLOAD_CHUNK_BYTES):
+            yield chunk
 
 
 @pytest.fixture
@@ -116,15 +138,59 @@ def local_artifact_factory(tmp_path):
             else:
                 shutil.copy2(source, destination, follow_symlinks=False)
 
-        async def download(self, source, target):
+        async def download(self, source, target, *, max_bytes=None):
             origin = self.path(source)
+            if source.startswith("/tmp/taskcompendium-artifact-") and self.archive_growth:
+                machine = self
+
+                class Files:
+                    def grow(self):
+                        with origin.open("ab") as archive:
+                            for _ in range(machine.archive_growth // 65536):
+                                archive.write(b"x" * 65536)
+
+                    async def download_file(self, path):
+                        self.grow()
+                        data = Path(path).read_bytes()
+                        machine.downloaded_bytes = len(data)
+                        return data
+
+                    async def download_file_stream(self, path):
+                        self.grow()
+
+                        async def chunks():
+                            try:
+                                with Path(path).open("rb") as file:
+                                    while chunk := file.read(65536):
+                                        machine.downloaded_bytes += len(chunk)
+                                        yield chunk
+                            finally:
+                                machine.download_closed = True
+
+                        return chunks()
+
+                async def probe(command):
+                    return SimpleNamespace(exit_code=0 if origin.is_file() else 1)
+
+                self.downloaded_bytes = 0
+                self.download_closed = False
+                provider = DaytonaMachine(
+                    SimpleNamespace(fs=Files(), process=SimpleNamespace(exec=probe)),
+                    MachineSpec(ShellSimBuiltins()),
+                    AsyncExitStack(),
+                )
+                await provider.download(str(origin), target, max_bytes=max_bytes)
+                return
+            if max_bytes is not None:
+                if origin.is_dir():
+                    raise UnsupportedMachineSpec("A download byte limit requires a regular file")
+                async with aclosing(local_file_chunks(origin)) as chunks:
+                    await write_download(chunks, target, max_bytes)
+                return
             if origin.is_dir():
                 shutil.copytree(origin, target, symlinks=True, dirs_exist_ok=True)
             else:
                 shutil.copy2(origin, target, follow_symlinks=False)
-                if source.startswith("/tmp/taskcompendium-artifact-") and self.archive_growth:
-                    with target.open("ab") as archive:
-                        archive.write(b"x" * self.archive_growth)
 
         async def close(self):
             self.closed = True
@@ -163,6 +229,15 @@ def local_artifact_factory(tmp_path):
         "oversized_archive",
         "oversized_expanded",
         "grown_archive",
+        "too_many_members",
+        "long_member",
+        "conflicting_member",
+        "directory_file_conflict",
+        "file_directory_conflict",
+        "host_enospc",
+        "host_edquot",
+        "host_eio",
+        "host_emfile",
     ],
 )
 async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
@@ -191,14 +266,51 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
         if artifact_case == "excluded_link":
             (artifacts / "cache").mkdir()
             (artifacts / "cache/private").symlink_to("../../../tests/expected")
+        if artifact_case == "too_many_members":
+            for index in range(5):
+                (artifacts / str(index)).touch()
 
-    root = local_artifact_factory(prepare_artifacts, archive_growth=1024**2 if artifact_case == "grown_archive" else 0)
+    root = local_artifact_factory(
+        prepare_artifacts, archive_growth=32 * 1024**2 if artifact_case == "grown_archive" else 0
+    )
     if artifact_case == "oversized_archive":
         monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024)
     if artifact_case == "oversized_expanded":
         monkeypatch.setattr(grading, "MAX_ARTIFACT_EXPANDED_BYTES", 1)
     if artifact_case == "grown_archive":
         monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024**2)
+    if artifact_case == "too_many_members":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_MEMBERS", 3)
+    if artifact_case in {"long_member", "conflicting_member", "directory_file_conflict", "file_directory_conflict"}:
+        download = root.create
+
+        async def create(spec):
+            machine = await download(spec)
+            original = machine.download
+
+            async def crafted_archive(source, target, *, max_bytes=None):
+                await original(source, target, max_bytes=max_bytes)
+                if source.startswith("/tmp/taskcompendium-artifact-"):
+                    with tarfile.open(target, "w") as archive:
+                        if artifact_case in {"conflicting_member", "file_directory_conflict"}:
+                            archive.addfile(tarfile.TarInfo("file"))
+                        if artifact_case == "directory_file_conflict":
+                            directory = tarfile.TarInfo("file")
+                            directory.type = tarfile.DIRTYPE
+                            archive.addfile(directory)
+                        member = tarfile.TarInfo(
+                            "x" * 256
+                            if artifact_case == "long_member"
+                            else "file/child" if artifact_case == "conflicting_member" else "file"
+                        )
+                        if artifact_case == "file_directory_conflict":
+                            member.type = tarfile.DIRTYPE
+                        archive.addfile(member)
+
+            machine.download = crafted_archive
+            return machine
+
+        root.create = create
     is_file = artifact_case in {"file", "file_root", "parent_link"}
     source = "/logs/artifacts/answer" if is_file else "/logs/artifacts"
     artifact = VerifierArtifact(
@@ -224,14 +336,47 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
         }
     )
     model = ReplayModel([{"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": root}).run(
-        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    )
+    host_errors = {
+        "host_enospc": errno.ENOSPC,
+        "host_edquot": errno.EDQUOT,
+        "host_eio": errno.EIO,
+        "host_emfile": errno.EMFILE,
+    }
+    if artifact_case in host_errors:
+
+        def failed_extract(*args, **kwargs):
+            raise OSError(host_errors[artifact_case], "Host artifact extraction failed")
+
+        monkeypatch.setattr(tarfile.TarFile, "extract", failed_extract)
+        with pytest.raises(RolloutInterrupted) as caught:
+            await engine(model, {"local": root}).run(
+                lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+            )
+        assert isinstance(caught.value.__cause__, OSError)
+        assert caught.value.__cause__.errno == host_errors[artifact_case]
+        assert all(machine.closed for machine in root.machines)
+        return
+    if artifact_case == "grown_archive":
+        tracemalloc.start()
+    try:
+        record = await engine(model, {"local": root}).run(
+            lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+        )
+        if artifact_case == "grown_archive":
+            _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if artifact_case == "grown_archive":
+            tracemalloc.stop()
     valid = artifact_case in {"directory", "file", "excluded_link"}
     assert (record.grade.status, record.grade.reward) == (
         (Outcome.GRADED, 1.0) if valid else (Outcome.SUBMISSION_FAILURE, 0.0)
     )
     assert all(machine.closed for machine in root.machines)
+    if artifact_case == "grown_archive":
+        assert peak < 8 * 1024**2
+        actor = root.machines[0]
+        assert actor.downloaded_bytes <= 1024**2 + 65536
+        assert actor.download_closed
 
 
 @dataclass
@@ -491,8 +636,8 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target):
-            await self.machine.download(source, target)
+        async def download(self, source, target, *, max_bytes=None):
+            await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def close(self):
             await self.machine.close()
@@ -1189,11 +1334,11 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
                 raise OSError("Cannot remove artifact archive")
             return await self.machine.run(command)
 
-        async def download(self, source, target):
+        async def download(self, source, target, *, max_bytes=None):
             if source.startswith("/tmp/taskcompendium-artifact-"):
                 if download_failed:
                     raise ConnectionError("Artifact download failed")
-            await self.machine.download(source, target)
+            await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def upload(self, source, target):
             await self.machine.upload(source, target)
@@ -1296,11 +1441,14 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target):
+        async def download(self, source, target, *, max_bytes=None):
             if source == "/logs/verifier/verdict.json":
-                target.write_text(json.dumps(self.verdict))
+                data = json.dumps(self.verdict).encode()
+                if max_bytes is not None and len(data) > max_bytes:
+                    raise DownloadLimitExceeded("Candidate file exceeds the download limit")
+                target.write_bytes(data)
             else:
-                await self.machine.download(source, target)
+                await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def close(self):
             await self.machine.close()

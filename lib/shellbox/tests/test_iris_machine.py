@@ -6,6 +6,7 @@
 import asyncio
 import json
 import subprocess
+import tracemalloc
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +22,14 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy
+from shellbox.machine import (
+    Command,
+    DownloadLimitExceeded,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    UnsupportedMachineSpec,
+)
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -157,6 +165,42 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
             target = tmp_path / "download.bin"
             await machine.download(str(tmp_path / "remote.bin"), target)
             assert target.read_bytes() == source.read_bytes()
+        finally:
+            await machine.close()
+        assert job.cancelled
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+def test_iris_bounded_file_download_preserves_binary_data_and_target(tmp_path, oversized):
+    async def scenario():
+        payload = b"\x00\xffpayload" * 32768
+        source = tmp_path / "source"
+        source.write_bytes(payload)
+        target = tmp_path / "target"
+        target.write_bytes(b"existing")
+        machine, job = local_machine(tmp_path)
+        try:
+            if oversized:
+                with pytest.raises(DownloadLimitExceeded):
+                    await machine.download(str(source), target, max_bytes=len(payload) - 1)
+                assert target.read_bytes() == b"existing"
+            else:
+                await machine.download(str(source), target, max_bytes=len(payload))
+                assert target.read_bytes() == payload
+            tracemalloc.start()
+            try:
+                await machine.download(str(source), target, max_bytes=1024**3)
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            assert peak < 8 * 1024**2
+            assert target.read_bytes() == payload
+            with pytest.raises(UnsupportedMachineSpec, match="regular file"):
+                await machine.download(str(tmp_path), target, max_bytes=1024)
+            assert target.read_bytes() == payload
+            assert not list(tmp_path.glob(".shellbox-download-*"))
         finally:
             await machine.close()
         assert job.cancelled

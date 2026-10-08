@@ -4,6 +4,7 @@
 """Private grader execution and reward collection."""
 
 import asyncio
+import errno
 import json
 import math
 import tarfile
@@ -16,7 +17,14 @@ from typing import Any
 from uuid import uuid4
 
 from harbor_config.env import resolve_env_vars
-from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine, MachineFactory
+from shellbox.machine import (
+    DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    Command,
+    DownloadLimitExceeded,
+    ExitReason,
+    Machine,
+    MachineFactory,
+)
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import parse_grade_result
 from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission, resolve_verifier
@@ -46,6 +54,8 @@ LINKED_ARTIFACT_EXIT = 45
 MAX_ARTIFACT_ARCHIVE_BYTES = 1024**3
 # Sparse members can produce more bytes than the archive contains.
 MAX_ARTIFACT_EXPANDED_BYTES = 1024**3
+MAX_ARTIFACT_MEMBERS = 100_000
+INVALID_ARTIFACT_ERRNOS = {errno.ENAMETOOLONG, errno.ENOTDIR, errno.EISDIR, errno.EEXIST}
 SPEC_PATH = "/tests/verifier.toml"
 VERDICT_PATH = "/logs/verifier/verdict.json"
 
@@ -100,7 +110,7 @@ async def _grade_rollout(
                 path = Path(directory) / str(index)
                 if await _download_artifact(machine, artifact, path, timeout, cleanup, resources):
                     await grading_machine.upload(path, artifact.target)
-        except SubmissionFailure as error:
+        except (SubmissionFailure, DownloadLimitExceeded) as error:
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     return await _shell_grade(
         verifier,
@@ -222,7 +232,10 @@ async def _download_artifact(
         raise SubmissionFailure(f"Grading artifact path contains a link: {artifact.source}")
     if result.exit_code != 0 or result.stdout_truncated:
         raise RuntimeError(f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}")
-    kind = ArtifactKind(result.stdout.decode())
+    try:
+        kind = ArtifactKind(result.stdout.decode())
+    except ValueError as error:
+        raise SubmissionFailure(f"Invalid grading artifact kind: {artifact.source}") from error
     if artifact.kind != ArtifactKind.AUTO and artifact.kind != kind:
         raise SubmissionFailure(f"Grading artifact has the wrong kind: {artifact.source}")
     remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
@@ -247,29 +260,27 @@ async def _download_artifact(
     )
     if result.exit_code != 0:
         raise SubmissionFailure(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
-    measured = await machine.run(
-        Command(("sh", "-c", 'wc -c < "$1"', "archive-size", remote_archive), timeout=timeout, user="0")
-    )
-    if measured.exit_code != 0 or measured.stdout_truncated:
-        raise RuntimeError(f"Cannot measure grading artifact archive: {artifact.source}")
-    if int(measured.stdout) > MAX_ARTIFACT_ARCHIVE_BYTES:
-        raise SubmissionFailure(f"Grading artifact archive exceeds the size limit: {artifact.source}")
     archive_path = target.with_suffix(".tar")
-    await machine.download(remote_archive, archive_path)
-    if archive_path.stat().st_size > MAX_ARTIFACT_ARCHIVE_BYTES:
-        raise SubmissionFailure(f"Grading artifact archive exceeds the size limit: {artifact.source}")
+    await machine.download(remote_archive, archive_path, max_bytes=MAX_ARTIFACT_ARCHIVE_BYTES)
     extracted = target.with_suffix(".contents")
     extracted.mkdir()
     expanded_bytes = 0
     try:
         with tarfile.open(archive_path, "r:") as archive:
-            for member in archive:
+            for count, member in enumerate(archive, start=1):
+                if count > MAX_ARTIFACT_MEMBERS:
+                    raise SubmissionFailure(f"Grading artifact exceeds the member count limit: {artifact.source}")
                 if member.issym() or member.islnk():
                     raise SubmissionFailure(f"Grading artifact contains a link: {member.name}")
                 expanded_bytes += member.size
                 if expanded_bytes > MAX_ARTIFACT_EXPANDED_BYTES:
                     raise SubmissionFailure(f"Grading artifact exceeds the expanded size limit: {artifact.source}")
-                archive.extract(member, extracted, filter="data")
+                try:
+                    archive.extract(member, extracted, filter="data")
+                except OSError as error:
+                    if error.errno not in INVALID_ARTIFACT_ERRNOS:
+                        raise
+                    raise SubmissionFailure(f"Invalid grading artifact member: {member.name}") from error
     except tarfile.TarError as error:
         raise SubmissionFailure(f"Invalid grading artifact archive: {artifact.source}") from error
     if kind == ArtifactKind.DIRECTORY:

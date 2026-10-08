@@ -97,7 +97,8 @@ Collect commands execute on the task machine before artifact transfer.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
 Artifact transfer rejects symlinked source paths and all included symlink and hardlink archive members, including in-tree links.
-The archive and expanded contents each have a 1 GiB limit.
+The archive and expanded contents each have a 1 GiB limit. An archive can have at most 100,000 members.
+Downloads use fixed 64 KiB chunks, so a file that grows during transfer cannot bypass the byte limit.
 Invalid artifacts and missing required artifacts give `SUBMISSION_FAILURE` with reward zero.
 The `skip` missing-file policy omits absent artifacts. Provider I/O failures remain infrastructure errors.
 VerifyIT supplies shared verifier specifications and grading implementations.

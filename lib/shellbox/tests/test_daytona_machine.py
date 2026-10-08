@@ -20,11 +20,16 @@ pytest.importorskip("daytona")
 from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
+from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, ExitReason, MachineSpec, UnsupportedMachineSpec
 
 
 class LocalFiles:
+    def __init__(self):
+        self.downloaded_bytes = 0
+        self.download_closed = False
+
     async def upload_file_stream(self, data: bytes, target: str) -> None:
         path = Path(target)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +37,18 @@ class LocalFiles:
 
     async def download_file(self, source: str) -> bytes:
         return Path(source).read_bytes()
+
+    async def download_file_stream(self, source: str):
+        async def chunks():
+            try:
+                with Path(source).open("rb") as file:
+                    while data := file.read(DOWNLOAD_CHUNK_BYTES):
+                        self.downloaded_bytes += len(data)
+                        yield data
+            finally:
+                self.download_closed = True
+
+        return chunks()
 
 
 class LocalProcess:
