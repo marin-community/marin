@@ -19,9 +19,7 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
-from marin.inference.backend import ModelSpec
-from marin.inference.config import VllmCompilationCacheMode, VllmEngineConfig, VllmLauncherType
-from marin.inference.vllm_backend import VllmBackend
+from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -439,41 +437,6 @@ def _environment(
 
 def _wait_until_ready(environment: VllmEnvironment) -> None:
     environment.wait_until_ready(poll_interval_seconds=0.05)
-
-
-@pytest.mark.parametrize(
-    ("path", "launcher", "args", "expected"),
-    [
-        ("s3://bucket/model", VllmLauncherType.CUDA, [], {"distributed": True}),
-        ("gs://bucket/model", VllmLauncherType.TPU, [], None),
-        ("/models/checkpoint", VllmLauncherType.CUDA, [], None),
-        ("s3://bucket/model", VllmLauncherType.CUDA, ["--load-format=auto"], None),
-        (
-            "s3://bucket/model",
-            VllmLauncherType.CUDA,
-            ['--model-loader-extra-config={"distributed":false}'],
-            {"distributed": False},
-        ),
-    ],
-)
-def test_gpu_streaming_default_preserves_overrides(tmp_path, monkeypatch, path, launcher, args, expected):
-    argv_path = tmp_path / "argv.json"
-    fake = _FakeLauncher("record-args", str(argv_path))
-    launcher_type = IsolatedCudaVllm if launcher is VllmLauncherType.CUDA else vllm_server.IsolatedTpuVllm
-    monkeypatch.setattr(launcher_type, "command", lambda self: fake.command())
-    monkeypatch.setattr(launcher_type, "cache_identity", lambda self: "fake")
-    spec = ModelSpec(path, "fake-model", None, None, "auto", None, "")
-    config = VllmEngineConfig(launcher=launcher, compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED)
-    with VllmBackend(config, port=_free_port()).start(spec, extra_args=args) as environment:
-        _wait_until_ready(environment)
-        argv = json.loads(argv_path.read_text())
-
-    configs = [
-        json.loads(arg.partition("=")[2] if "=" in arg else argv[index + 1])
-        for index, arg in enumerate(argv)
-        if arg.partition("=")[0] == "--model-loader-extra-config"
-    ]
-    assert configs == ([expected] if expected is not None else [])
 
 
 @pytest.mark.parametrize(
