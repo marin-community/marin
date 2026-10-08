@@ -42,7 +42,7 @@ from taskforge.validate.adversary import (
     adversary_brief,
     run_adversaries,
 )
-from taskforge.validate.attempts import trial_files
+from taskforge.validate.attempts import load_adversary_attempt, trial_files
 from taskforge.validate.calibration import (
     CalibrationBand,
     CalibrationSummary,
@@ -258,16 +258,17 @@ def assert_round_reads_back_and_resumes(run: LiveRound) -> None:
     expected = f"{brief}{PREAMBLE_SEPARATOR}{first.content}" if task_system else brief
     entries = list(read_entries(run.site.ledger.path_for(draft.task.id)))
     submits = [e for e in entries if e.kind == EntryKind.STEP and e.attrs.get("tool") == SUBMIT_TOOL_NAME]
-    recorded = 0
     for trials in run.adversaries.values():
         for trial in trials:
             assert isinstance(trial.outcome, Graded), trial.outcome
             assert trial.system == expected
             assert len(trial.submissions) <= POLICY.adversary_submissions
             assert passing(trial.outcome.grade) == solved(trial.outcome)
-            recorded += len(trial.submissions)
-    # Settled trials are loaded on resume, so the ledger holds each submission's span exactly once.
-    assert len(submits) == recorded
+    # Every recorded submission, in every attempt, is a submit span; a call refused for the budget or a missing
+    # file is a span with no submission.
+    attempts = (run.site.evidence_dir / TrialKind.ADVERSARY).rglob("attempt-*.json")
+    recorded = sum(len(load_adversary_attempt(path).submissions) for path in attempts)
+    assert len(submits) >= recorded
 
 
 def utc_now() -> str:
