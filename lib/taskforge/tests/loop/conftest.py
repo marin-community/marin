@@ -47,6 +47,7 @@ from taskforge.validate.adversary import NO_SHORTCUT_LINE, SUBMIT_TOOL_NAME, Adv
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
+from tests.validate.conftest import TemplateTokenizer
 
 CORRECT = "ANSWER = 42"
 WRONG = "ANSWER = 41"
@@ -332,32 +333,6 @@ class RolloutFake:
         self.calls += 1
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
         return ModelTurn({"role": "assistant", "content": reply}, prompt, (20,), (-0.5,), "stop")
-
-
-ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
-
-
-def render_ids(messages) -> tuple[int, ...]:
-    ids: list[int] = []
-    for message in messages:
-        ids.append(ROLE_IDS[message["role"]])
-        ids.extend(json.dumps({key: message[key] for key in ("content", "tool_calls") if key in message}).encode())
-    return tuple(ids)
-
-
-@dataclass
-class TemplateTokenizer:
-    """The server's chat template, deterministically, for control replay; counts its calls."""
-
-    calls: int = 0
-
-    async def prompt_ids(self, messages, options):
-        self.calls += 1
-        return (*render_ids(messages), ROLE_IDS["assistant"])
-
-    async def rendered_ids(self, messages, options):
-        self.calls += 1
-        return render_ids(messages)
 
 
 def validation_policy() -> ValidationPolicy:
