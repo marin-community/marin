@@ -42,6 +42,10 @@ def canonical_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "canonical_task_count",
                 "component_selector",
                 "component_file_sha256",
+                "grading_revision",
+                "grading_manifest",
+                "grading_repositories",
+                "grading_scope",
             ):
                 row.pop(key, None)
         parents[parent_id] = row

@@ -200,8 +200,39 @@ The review page shows native outcomes, three independent model judgments per tas
 task/source syntheses, the MarinSkyRL commit, and linked evidence. Difficulty shows
 model solve rates; its report includes task counts,
 sampling scope, checkpoint revisions, and uncertainty. These curated columns are
-stored separately and survive refreshes. Changed source data or verifier revisions
-hide stale Quality and Difficulty values while retaining the historical review link.
+stored separately and survive refreshes. Changed source data hides stale Quality
+and Difficulty values while retaining the historical review link. MarinSkyRL
+grading applicability uses a source-specific `grading_revision`: selected
+environment methods, reachable helpers, selected verifyit modes, shared prompt
+files, and imported packages' locked dependency chains. Repository commits remain
+provenance; unrelated package adapters, sibling agent routes, documentation and
+uncalled metrics methods do not change the selected grading identity.
+
+`catalog_grading_reviews` binds a historical review to an archived grading
+applicability certificate. Its `source_id`, `source_revision`, `review_id` and
+`captured_verifier_revision` identify the data and original review;
+`grading_revision` identifies the current selected grader. `evidence_sha256`
+hashes the certificate artifact's UTF-8 content. This preserves the original
+review provenance.
+Missing or mismatched evidence keeps the rating stale. Code equality alone does
+not establish equivalence when prompt files or runtime dependencies differ.
+
+For a new review, fetch `api/sources` from the Atlas, select the entry with the
+desired `id`, and save that object as a JSON file. Set `source.grading_snapshot`
+to that file's path relative to the review config, use its exact Atlas ID as
+`source.source_id`, and preserve its data
+revision in `source.revision`. The review runner checks the selected code and
+prompt files against the actual native environment, records installed dependency
+versions, and rejects versions outside the captured runtime lock. The source
+payload's `grading_manifest.routes` records the relevant locked packages from
+the source runtime repository's pinned `uv.lock`; the saved JSON snapshot carries
+these records into the review. The runner checks the
+environment again after execution. Publication requires the captured grading
+identity to match the current source. `experiments/rl_data_reviews/publish_review.py`
+archives the certificate as `publication/grading-applicability.json` and inserts
+its binding. Historical reuse requires separately archived evidence of equivalent
+selected code, prompt files, dependencies and source input contracts; it never
+rewrites the original review's executed revision.
 Nemotron component identities and exact counts survive repository metadata changes
 when the selected blend file still matches the complete-file audit's SHA-256.
 The audit is bundled in `server/nemotron_counts.py` under the applet directory.
@@ -224,15 +255,16 @@ use the same task sample for three fixed models:
 | Role | Model | Reasoning setting |
 | --- | --- | --- |
 | Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
-| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
+| Large | Qwen/Qwen3.5-122B-A10B | Thinking disabled |
 | Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
 
-The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
+The `atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking` protocol gives each model 65,536 total context
 tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
 reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
 repetition penalty 1, and presence and frequency penalties 0. These explicit
 settings prevent checkpoint generation defaults from changing the comparison.
-Models retain their native reasoning controls; the shared token budget does not
+The Large model uses top-p 0.8 and presence penalty 1.5; its other listed settings
+remain the same. Models retain their native reasoning controls; the shared token budget does not
 make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
 with Low reasoning effort across all three arms. Their native output budgets
 and saved critic requests and responses appear with the run evidence.

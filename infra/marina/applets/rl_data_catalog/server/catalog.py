@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
+from .grading_dependencies import annotate_grading_revision, grading_modules
 from .nemotron_counts import NEMOTRON_COUNTS
 from .nemotron_records import SWE_AGENT, record_source
 from .source_annotations import (
@@ -633,6 +634,7 @@ def skyrl_snapshot(
             and row.get("harbor_verifier_revised_at")
             and row.get("verifier_path_revised_at")
             and "verifyit_adapter_revisions" in row
+            and row.get("grading_revision")
             for row in cached_rows
         )
     ):
@@ -647,6 +649,22 @@ def skyrl_snapshot(
                 for row in cached_rows
             ],
         )
+        previous = {row["id"]: row for row in cached_rows}
+        source = None
+        for row in rows:
+            agents = tuple(sorted(nemotron_component_agents(row))) if row["environment"] == NEMOTRON_ENV else ()
+            scope = {"entrypoint": row["gym_entrypoint"], "mode": row["verifier_mode"], "agents": list(agents)}
+            saved = previous.get(row["id"], {})
+            harbor_changed = (
+                row["verifier_mode"] == "harbor" and saved.get("harbor_verifier_revision") != harbor_commit["sha"]
+            )
+            if saved.get("grading_scope") == scope and not harbor_changed:
+                for key in ("grading_revision", "grading_manifest", "grading_repositories", "grading_scope"):
+                    row[key] = saved[key]
+                continue
+            if source is None:
+                source = grading_modules(client, revision, harbor_commit["sha"])
+            annotate_grading_revision(row, source, agents)
         return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
     raw = f"https://raw.githubusercontent.com/{SKYRL}/{revision}"
     source_text = get_text(client, f"{raw}/{SOURCE_PATH}")
@@ -693,6 +711,7 @@ def skyrl_snapshot(
         )
     verifier_by_env = {env["name"]: env for env in environments}
     metadata = datasets_metadata(client, {source["dataset_id"] for source in sources})
+    grading_source = grading_modules(client, revision, harbor_commit["sha"])
     previous_by_id = {row["id"]: row for row in cached_rows or []}
     rows = []
     for source in sources:
@@ -756,6 +775,8 @@ def skyrl_snapshot(
                 harbor_commit["sha"],
                 harbor_commit["commit"]["committer"]["date"],
             )
+            agents = tuple(sorted(nemotron_component_agents(component))) if env == NEMOTRON_ENV else ()
+            annotate_grading_revision(component, grading_source, agents)
             rows.append(component)
     return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
 

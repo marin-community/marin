@@ -3,6 +3,7 @@
 
 """Persistent source inventory with atomic, independently recoverable upstream refreshes."""
 
+import hashlib
 import json
 import logging
 from dataclasses import asdict
@@ -183,14 +184,43 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
         }
     )
     current_data = row.get("dataset_revision") or row.get("revision")
+    grading_revision = row.get("grading_revision")
+    grading_binding = record.get("grading_binding")
+    proof = record.get("grading_proof")
+    binding_valid = False
+    if grading_revision and grading_binding and proof:
+        content = proof["content"]
+        digest = hashlib.sha256(content.encode()).hexdigest()
+        try:
+            decoded = json.loads(content)
+        except json.JSONDecodeError:
+            decoded = None  # Invalid evidence keeps the source stale; other sources remain available.
+        claim = decoded if isinstance(decoded, dict) else {}
+        expected = {
+            "source_id": row["id"],
+            "review_id": row["review_id"],
+            "source_revision": current_data,
+            "captured_verifier_revision": row["review_verifier_revision"],
+            "grading_revision": grading_revision,
+        }
+        binding_valid = (
+            digest == proof["sha256"] == grading_binding["evidence_sha256"]
+            and claim.get("schema_version") == 1
+            and claim.get("equivalent") is True
+            and all(grading_binding.get(key) == value and claim.get(key) == value for key, value in expected.items())
+        )
+    row["review_grading_revision"] = grading_revision if binding_valid else None
+    verifier_changed = (
+        not binding_valid
+        if grading_revision
+        else row["review_verifier_revision"] is not None
+        and row["review_verifier_revision"] != row.get("verifier_revision")
+    )
     row["review_stale"] = bool(
         row["review_id"]
         and (
             (row["review_source_revision"] is not None and row["review_source_revision"] != current_data)
-            or (
-                row["review_verifier_revision"] is not None
-                and row["review_verifier_revision"] != row.get("verifier_revision")
-            )
+            or verifier_changed
         )
     )
     row["review_applicability"] = (
@@ -254,6 +284,19 @@ def migrate(connection: Connection) -> None:
             sha256 TEXT NOT NULL, PRIMARY KEY (review_id, path)
         )
     """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS catalog_grading_reviews (
+                source_id TEXT NOT NULL, review_id TEXT NOT NULL,
+                source_revision TEXT NOT NULL, captured_verifier_revision TEXT NOT NULL,
+                grading_revision TEXT NOT NULL, evidence_path TEXT NOT NULL,
+                evidence_sha256 TEXT NOT NULL,
+                PRIMARY KEY (source_id, review_id, source_revision, grading_revision)
+            )
+            """
         )
     )
     connection.execute(
@@ -401,7 +444,11 @@ def create_api(services: AppletServices) -> FastAPI:
                 for row in connection.execute(
                     text(
                         """
-                        SELECT s.*, a.content AS difficulty_report, COALESCE((
+                        SELECT s.*, a.content AS difficulty_report,
+                        to_jsonb(g) AS grading_binding,
+                        CASE WHEN p.path IS NOT NULL THEN jsonb_build_object(
+                            'content', p.content, 'sha256', p.sha256
+                        ) END AS grading_proof, COALESCE((
                             SELECT jsonb_agg(jsonb_build_object(
                                 'issue_url', i.issue_url, 'review_id', i.review_id,
                                 'status', i.status, 'created_at', i.created_at
@@ -411,6 +458,12 @@ def create_api(services: AppletServices) -> FastAPI:
                         ), '[]'::jsonb) AS verifier_issues
                         FROM catalog_sources s LEFT JOIN review_artifacts a
                         ON a.review_id = s.review_id AND a.path = 'difficulty.json'
+                        LEFT JOIN catalog_grading_reviews g ON g.source_id = s.id
+                        AND g.review_id = s.review_id
+                        AND g.source_revision = s.review_source_revision
+                        AND g.grading_revision = s.payload->>'grading_revision'
+                        LEFT JOIN review_artifacts p ON p.review_id = g.review_id
+                        AND p.path = g.evidence_path
                         WHERE s.active ORDER BY s.origin, s.id
                     """
                     )

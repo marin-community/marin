@@ -30,12 +30,14 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
     annotate_verifier_dependency,
     count_metadata,
     dataset_metadata,
+    nemotron_component_agents,
     registry_sources,
     shared_verifier_revision,
     skyrl_snapshot,
     source_row,
     split_count,
     tasktrove_snapshot,
+    verifier_mode,
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
@@ -47,15 +49,88 @@ def cached_refresh_transport(handler: Callable[[httpx.Request], httpx.Response])
             return httpx.Response(
                 200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
             )
+        response = grading_repository_response(request)
+        if response is not None:
+            return response
         return handler(request)
 
     return httpx.MockTransport(upstream)
 
 
+def grading_repository_response(request: httpx.Request) -> httpx.Response | None:
+    if request.url.host != "raw.githubusercontent.com" or not request.url.path.startswith("/marin-community/"):
+        return None
+    path = request.url.path
+    if path.endswith("skyrl-gym/pyproject.toml"):
+        return httpx.Response(
+            200,
+            text='[project]\ndependencies=["verifyit @ git+https://github.com/marin-community/marin.git@'
+            + "a" * 40
+            + '#subdirectory=lib/verifyit"]',
+        )
+    if path.endswith("lib/verifyit/pyproject.toml"):
+        return httpx.Response(
+            200,
+            text='[project]\ndependencies=["harbor-config @ git+https://github.com/marin-community/harbor@'
+            + "b" * 40
+            + '#subdirectory=packages/harbor-config"]',
+        )
+    if path.endswith("pyproject.toml"):
+        return httpx.Response(200, text="[project]\ndependencies=[]")
+    if path.endswith("uv.lock"):
+        return httpx.Response(200, text="package=[]")
+    if path.endswith("verifyit/spec.py"):
+        return httpx.Response(
+            200,
+            text='class Mode:\n SCRIPT="script"\n MATH="math"\n JUDGE="judge"\n EXACT="exact"\n'
+            ' REASONING_GYM="reasoning-gym"\n',
+        )
+    if path.endswith("harbor/verifier/verifier.py"):
+        return httpx.Response(
+            200,
+            text='class Verifier:\n def __init__(self):\n  self.expected="correct"\n'
+            " def verify(self,x):\n  return x == self.expected\n",
+        )
+    if path.endswith("base_text_env.py"):
+        return httpx.Response(
+            200,
+            text="class BaseTextEnv:\n def init(self,x):\n  return x\n def close(self):\n  pass\n"
+            " def set_rollout_evidence(self,x):\n  pass\n",
+        )
+    if path.endswith("skyrl_gym_contracts.py"):
+        return httpx.Response(
+            200, text="def verification_from_env_step(x):\n return x\ndef fold_verification_results(x):\n return x\n"
+        )
+    if path.endswith("aime/env.py"):
+        return httpx.Response(
+            200,
+            text='class AIMEEnv:\n def __init__(self):\n  self.expected="correct"\n'
+            " def step(self,x):\n  return x == self.expected\n"
+            "class AimeEnv(AIMEEnv):\n def step(self,x):\n  return x == self.expected\n",
+        )
+    if path.endswith(".py"):
+        return httpx.Response(
+            200,
+            text='class Env:\n def __init__(self):\n  self.expected="correct"\n'
+            " def step(self,x):\n  return x == self.expected\n"
+            'def _evaluate(x):\n return x == "correct"\ndef _compile(x):\n return x == "correct"\n'
+            'def _execute(x):\n return x == "correct"\ndef _check(x):\n return x == "correct"\n',
+        )
+    return httpx.Response(200, text="grading resource")
+
+
 def cached_verifier_metadata(rows: list[dict]) -> list[dict]:
     """Supply the previously resolved verifier identity for dataset-only refresh fixtures."""
     for row in rows:
-        row.setdefault("verifier_mode", "legacy")
+        row.setdefault("verifier_mode", verifier_mode(row))
+        row.setdefault("gym_entrypoint", "skyrl_gym.envs.fixture.env:Env")
+        agents = sorted(nemotron_component_agents(row)) if row["environment"] == "nemotron_ultra" else []
+        row.setdefault("grading_revision", "cached-grading")
+        row.setdefault(
+            "grading_scope", {"entrypoint": row["gym_entrypoint"], "mode": row["verifier_mode"], "agents": agents}
+        )
+        row.setdefault("grading_manifest", {"schema_version": 1, "routes": {}})
+        row.setdefault("grading_repositories", {})
         row.setdefault("verifier_path_revision", row.get("verifier_revision", "code1"))
         row.setdefault("verifier_path_revised_at", row["verifier_revised_at"])
         row.setdefault("verifyit_revision", "f" * 40)
@@ -222,6 +297,57 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
     assert row["review_stale"] == bool(changed_field)
     assert row["quality"] == (None if changed_field else "good")
     assert row["difficulty"] == (None if changed_field else "32/32")
+
+
+@pytest.mark.parametrize("change", [None, "data", "grader", "proof_hash", "source", "verdict", "malformed"])
+def test_grading_equivalence_preserves_ratings_only_for_matching_immutable_evidence(change) -> None:
+    claim = {
+        "schema_version": 1,
+        "equivalent": True,
+        "source_id": "MarinSkyRL:math",
+        "review_id": "review1",
+        "source_revision": "data1",
+        "captured_verifier_revision": "old-package",
+        "grading_revision": "selected-grader1",
+    }
+    binding = {**claim, "evidence_sha256": ""}
+    payload = {
+        "id": "MarinSkyRL:math",
+        "dataset_revision": "data1",
+        "verifier_revision": "new-package",
+        "grading_revision": "selected-grader1",
+    }
+    if change == "data":
+        payload["dataset_revision"] = "data2"
+    elif change == "grader":
+        payload["grading_revision"] = "selected-grader2"
+    elif change == "source":
+        claim["source_id"] = "other-source"
+    elif change == "verdict":
+        claim["equivalent"] = False
+    content = "invalid-json" if change == "malformed" else json.dumps(claim)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    binding["evidence_sha256"] = digest
+    proof = {"content": content, "sha256": "wrong-hash" if change == "proof_hash" else digest}
+    record = {
+        "payload": payload,
+        "quality": "good",
+        "difficulty": "32/32",
+        "traces": 3,
+        "review_id": "review1",
+        "review_date": "2026-09-28",
+        "review_source_revision": "data1",
+        "review_verifier_revision": "old-package",
+        "verifier_issues": [],
+        "grading_binding": binding,
+        "grading_proof": proof,
+    }
+    row = source_with_review(record)
+    assert row["review_stale"] == (change is not None)
+    assert row["quality"] == ("good" if change is None else None)
+    assert row["difficulty"] == ("32/32" if change is None else None)
+    assert row["review_verifier_revision"] == "old-package"
+    assert row["review_id"] == "review1"
 
 
 @pytest.mark.parametrize("quality,revision", [("good", "data1"), ("some_issues", "data1"), ("good", "data2")])
@@ -1284,7 +1410,7 @@ def test_verifyit_dependency_change_invalidates_quality_and_difficulty_only_on_a
         assert bool(reviewed["difficulty"]) != expected_stale
 
 
-def test_monorepo_grader_pin_refresh_invalidates_prior_review() -> None:
+def test_package_pin_change_keeps_grading_identity_but_requires_historical_binding() -> None:
     date = "2026-10-08T00:00:00Z"
     pin = "232f192a56b013fdc3f6914eb158c7bc2d231f94"
 
@@ -1301,13 +1427,17 @@ def math():
 SOURCES = {source.name: source for source in (math(),)}
 """,
                 )
-            if request.url.path.endswith("pyproject.toml"):
+            if request.url.path.endswith("skyrl-gym/pyproject.toml"):
                 return httpx.Response(
                     200,
                     text='[project]\ndependencies = ["verifyit[answer,judge] @ '
                     "git+https://github.com/marin-community/marin.git@" + pin + '#subdirectory=lib/verifyit"]\n',
                 )
-            return httpx.Response(200, text='register(id="aime", entry_point="skyrl_gym.envs.aime.env:AimeEnv")')
+            if request.url.path.endswith("envs/__init__.py"):
+                return httpx.Response(200, text='register(id="aime", entry_point="skyrl_gym.envs.aime.env:AimeEnv")')
+            response = grading_repository_response(request)
+            assert response is not None
+            return response
         assert request.url.host == "huggingface.co"
         return httpx.Response(
             200,
@@ -1336,6 +1466,7 @@ SOURCES = {source.name: source for source in (math(),)}
         }
     )
     assert after["task_count"] == before["task_count"] == 3
+    assert after["grading_revision"] == before["grading_revision"]
     assert reviewed["review_stale"] and reviewed["difficulty"] is None
 
 
@@ -1442,6 +1573,9 @@ def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_chang
             return httpx.Response(
                 200, json=[{"sha": "harbor2", "commit": {"committer": {"date": "2026-10-02T00:00:00Z"}}}]
             )
+        response = grading_repository_response(request)
+        if response is not None:
+            return response
         if request.url.path == f"/api/datasets/{composition.NEMOTRON}/tree/{revision}":
             return httpx.Response(200, json=[])
         if request.url.path == f"/datasets/{composition.NEMOTRON}/raw/{revision}/README.md":
@@ -1463,6 +1597,18 @@ def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_chang
     assert harbor_rows
     for row in snapshot.rows:
         assert row["harbor_verifier_revision"] == "harbor2"
+        original = next(saved for saved in cached if saved["id"] == row["id"])
+        claim = {
+            "schema_version": 1,
+            "equivalent": True,
+            "source_id": row["id"],
+            "review_id": "review1",
+            "source_revision": revision,
+            "captured_verifier_revision": before[row["id"]],
+            "grading_revision": original["grading_revision"],
+        }
+        content = json.dumps(claim)
+        digest = hashlib.sha256(content.encode()).hexdigest()
         reviewed = source_with_review(
             {
                 "payload": row,
@@ -1474,6 +1620,8 @@ def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_chang
                 "review_source_revision": revision,
                 "review_verifier_revision": before[row["id"]],
                 "verifier_issues": [],
+                "grading_binding": {**claim, "evidence_sha256": digest},
+                "grading_proof": {"content": content, "sha256": digest},
             }
         )
         assert reviewed["review_stale"] == (row["verifier_mode"] == "harbor")
