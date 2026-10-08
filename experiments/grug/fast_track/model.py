@@ -880,8 +880,7 @@ class GrugModelConfig:
     latent_orthogonal_init: bool = False
     router_history: bool = False
     expert_router_orthogonal: str = "off"
-    """``full`` / ``learned``: project each expert's reads off its own router direction
-    (``_orthogonalize_expert_reads``); ``off``: neither."""
+    """``full`` / ``learned``: project expert reads off the router direction; ``off``: neither."""
     router_mlp_hidden: int = 0
     """A tiny MLP router added to the linear one: ``logits += silu(x @ W_a) @ W_b`` with this many hidden neurons
     (``W_b`` zero-init, so it starts as the linear router). 0: off."""
@@ -1016,7 +1015,9 @@ class GrugModelConfig:
     mla_dcmha_hidden: int = 64
     mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
     mla_shared_kv: bool = False
-    """MLA keys and values are one 128-dim head each (MQA), broadcast to every query head."""
+    mla_shared_kv_tied: bool = False
+    """With ``mla_shared_kv``: the one cached vector is both key and value."""
+    """MLA keys and values are one head each (MQA), broadcast to every query head."""
     mla_dcmha_paper: bool = False
     """The released DCMHA network and init (``sparse_attention.DcmhaPaper``), not the tanh-bounded one."""
     mla_dcmha_static: str = "none"
@@ -2494,7 +2495,11 @@ class CausalSelfAttention(eqx.Module):
                     if match_dim > h // 2 and not appended
                     else None
                 ),
-                w_uv=reshard(_init_weight(k_uv, (kvl, n_v * h), std), P(None, "model")),
+                w_uv=(
+                    None
+                    if cfg.mla_shared_kv_tied
+                    else reshard(_init_weight(k_uv, (kvl, n_v * h), std), P(None, "model"))
+                ),
                 value_embed=(
                     reshard(_init_weight(k_ve, (cfg.vocab_size, n_v * h), std), P(None, None)) if use_ve else None
                 ),
@@ -2761,7 +2766,10 @@ class CausalSelfAttention(eqx.Module):
                 return rearrange(jnp.repeat(w, group, axis=1), "i n d -> i (n d)")
 
             second_qk = (project_q(tiled(self.w_qn)), project_k(tiled(self.w_ukn)))
-        v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
+        if self.w_uv is None:  # mla_shared_kv_tied: the value is the cached key vector itself
+            v = k
+        else:
+            v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
             ve = _embedding_gather(self.value_embed.astype(x.dtype), token_ids)
