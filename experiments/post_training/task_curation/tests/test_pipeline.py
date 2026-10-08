@@ -167,7 +167,7 @@ def test_a_grader_image_without_a_built_artifact_names_the_build_command(grader_
     pipeline = replace(math500(), grader_image=grader_recipe)
     with pytest.raises(
         MissingImageArtifact,
-        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images.build --recipe fixture"),
+        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --recipe fixture"),
     ):
         source_step(pipeline, config, CampaignRuntime())
 

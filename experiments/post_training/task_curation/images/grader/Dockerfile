@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The image every task-curation ScriptGrader and sandboxed verifyit grader runs in. Build it with
-# `python -m experiments.post_training.task_curation.images.build`, which also supplies the
+# `python -m experiments.post_training.task_curation.images`, which also supplies the
 # `verifyit` build context (lib/verifyit/src/verifyit); see ../README.md.
 # The base is iris-task:latest as of 2026-10-07 (Python 3.12.13, linux/amd64).
 FROM ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab

@@ -124,7 +124,7 @@ def test_build_requires_registry_credentials(recipe, docker_log, tmp_path):
 
 
 def test_a_declared_recipe_without_a_built_artifact_names_the_build_command(recipe):
-    with pytest.raises(MissingImageArtifact, match=re.escape("images.build --recipe fixture")):
+    with pytest.raises(MissingImageArtifact, match=re.escape("images --recipe fixture")):
         built_image(recipe)
 
 

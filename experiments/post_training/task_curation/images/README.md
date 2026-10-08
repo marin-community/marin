@@ -37,7 +37,7 @@ and its converter packages the files into each task.
 ## Building
 
 ```bash
-uv run python -m experiments.post_training.task_curation.images.build \
+uv run python -m experiments.post_training.task_curation.images \
   [--recipe grader] [--registry ghcr.io/marin-community]
 ```
 

@@ -40,7 +40,7 @@ REGULAR_MODE = "100644"
 EXECUTABLE_MODE = "100755"
 FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 PINNED_BASE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
-BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images.build --recipe {name}"
+BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --recipe {name}"
 
 
 class MissingImageArtifact(RuntimeError):
@@ -267,7 +267,3 @@ def main(names: tuple[str, ...], registry: str) -> None:
     recipes = [RECIPES[name] for name in names or sorted(RECIPES)]
     for image in run(*(image_artifact(recipe, registry) for recipe in recipes)):
         click.echo(f"{image.name}: {image.image} ({image.path})")
-
-
-if __name__ == "__main__":
-    main()

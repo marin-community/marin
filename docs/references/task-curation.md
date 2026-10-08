@@ -154,7 +154,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
 Build the grader image first, with the same `MARIN_PREFIX`:
 
 ```bash
-uv run python -m experiments.post_training.task_curation.images.build --recipe grader
+uv run python -m experiments.post_training.task_curation.images --recipe grader
 ```
 
 The build pushes `ghcr.io/marin-community/task-curation-grader:<identity>` and
