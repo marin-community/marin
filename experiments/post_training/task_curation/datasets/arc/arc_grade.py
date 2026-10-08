@@ -38,7 +38,7 @@ def main() -> None:
         reward, detail = grade_transductive_arc(submission(), record)
     elif mode == "inductive":
         CONFIG.unlink()
-        reward, detail = grade_inductive_arc(submission(), record, sandbox=LocalSandbox())
+        reward, detail = grade_inductive_arc(submission(), record, sandbox=LocalSandbox(user=None))
     else:
         raise ValueError(f"Unknown ARC mode: {mode}")
     print(json.dumps(detail, default=str), file=sys.stderr)
