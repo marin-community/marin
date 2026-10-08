@@ -95,10 +95,13 @@ _combine_rows.defvjp(_combine_rows_fwd, _combine_rows_bwd)
 
 
 class _DispatchCombine(NamedTuple):
-    """Moves rows from the gathered token buffer to this shard's dispatch slots, and sums them back per token."""
+    """Moves rows from the gathered token buffer to this shard's dispatch slots, and sums them back per token.
+
+    ``combine(rows, weights)`` scales each dispatch row by its routing weight before summing it into its token.
+    """
 
     dispatch: Callable[[Float[Array, "T H"]], Float[Array, "P H"]]
-    combine: Callable[[Float[Array, "P H"]], Float[Array, "T H"]]
+    combine: Callable[[Float[Array, "P H"], Float[Array, "P"]], Float[Array, "T H"]]
 
 
 # Builds a `_DispatchCombine` from the picked flat assignment positions, their validity, and the gathered
@@ -113,7 +116,9 @@ def _scatter_add_dispatch_combine(
     token = jnp.floor_divide(picked, topk)
     return _DispatchCombine(
         dispatch=lambda x: _take_valid_rows(x, token, valid),
-        combine=lambda rows: jnp.zeros((tokens, rows.shape[1]), rows.dtype).at[token].add(rows, mode="drop"),
+        combine=lambda rows, weights: jnp.zeros((tokens, rows.shape[1]), rows.dtype)
+        .at[token]
+        .add(rows * weights[:, None], mode="drop"),
     )
 
 
@@ -125,7 +130,7 @@ def _gather_dispatch_combine(
     slots = _assignment_slots(picked, valid, tokens=tokens, topk=topk)
     return _DispatchCombine(
         dispatch=lambda x: _dispatch_rows(x, token, valid, slots),
-        combine=lambda rows: _combine_rows(rows, token, valid, slots),
+        combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots),
     )
 
 
@@ -210,9 +215,9 @@ def _moe_mlp_ep_ring_local(
         selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
         _, local_idx = jax.lax.top_k(selection_key, physical_capacity)
 
+        dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
         x_dispatch = tree_checkpoint_name(dispatch_combine.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
@@ -230,7 +235,7 @@ def _moe_mlp_ep_ring_local(
         )
 
     with jax.named_scope("combine"):
-        out_global = dispatch_combine.combine(out_dispatch * weight_dispatch[:, None])
+        out_global = dispatch_combine.combine(out_dispatch, weight_dispatch)
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
