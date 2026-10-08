@@ -32,12 +32,12 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _prepare_moe_dispatch,
     _swiglu_gate_up_backward,
-    _unpack_pairs_u32,
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
 )
 from levanter.grug._moe.quack_moe_cute import (
     quack_gated_grouped_gemm,
+    quack_grouped_dswiglu_gemm,
     quack_grouped_gemm,
     quack_grouped_wgrad,
 )
@@ -77,7 +77,8 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
+    # The primal runs only when nothing differentiates it, so it skips the pre-activations' store.
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
     return _zero_inactive_grouped_rows(y, cu)
 
@@ -120,24 +121,28 @@ def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
+def _expert_mlp_quack_apply(x_dispatch, w13_il, moe_w2, cu):
+    """``_expert_mlp_quack_wgrad_fwd``'s output alone, without writing the pre-activations.
+
+    Returns ``(y, h)``: ``h`` is the gate/up stage's output, the last residual the fwd produces.
+    """
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, **_QUACK_GATED_KW)
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW), h
+
+
 def _expert_mlp_quack_wgrad_backward(res, dy):
     """The backward of ``_expert_mlp_quack_wgrad_fwd``, plus each row's ``<y, dy>``.
 
     ``y = h @ W2`` row by row, so ``<y, dy> = <h, dy @ W2^T> = <h, dh>``: the backward already
-    holds both factors and never needs ``y``. ``h`` is recomputed in fp32 from the gate/up
-    preactivations that the SwiGLU backward reads anyway, so XLA fuses the row dot into that
-    pass; reading the saved ``h`` instead costs a separate pass and more peak memory. The dot
-    accumulates in fp32. Rows past ``cu[-1]`` are unspecified in every row-indexed output.
+    holds both factors and never needs ``y``. The ``dh`` GEMM applies the SwiGLU backward and this
+    row dot in its epilogue, in fp32 on the fp32 accumulator, so ``dh`` is never written. Rows past
+    ``cu[-1]`` are unspecified in every row-indexed output.
 
     Returns ``(dx, dw13_il, dw2, output_dot_cotangent)``.
     """
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
-    gate, up = _unpack_pairs_u32(gu)
-    h_fp32 = jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
-    output_dot_cotangent = jnp.sum(dh.astype(jnp.float32) * h_fp32, axis=-1)
+    d_gu, output_dot_cotangent = quack_grouped_dswiglu_gemm(dy, moe_w2, gu, cu, **_QUACK_GROUPED_KW)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
-    d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
     return dx, dw13_il, dw2, output_dot_cotangent

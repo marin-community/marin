@@ -93,13 +93,45 @@ def test_expert_mlp_forward_and_all_gradients_match_reference(tail_rows):
         _assert_bfloat16_close(got, want)
 
 
-def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient():
+@pytest.mark.parametrize("tail_rows", [0, 32])
+# The row dot sums one partial per 128-column tile of dh; 320 columns end in a partial third tile.
+@pytest.mark.parametrize("intermediate", [64, 320])
+def test_dswiglu_gemm_matches_the_swiglu_backward_of_dh(tail_rows, intermediate):
+    _require_sm100()
+    kernels = importlib.import_module("levanter.grug._moe.quack_moe_cute")
+    rng = np.random.default_rng(13)
+    dy = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    gate_up = jnp.asarray(rng.normal(0, 1.0, (_NUM_TOKENS, 2 * intermediate)), dtype=jnp.bfloat16)
+    w2 = jnp.asarray(rng.normal(0, 0.2, (3, intermediate, 64)), dtype=jnp.bfloat16)
+    # Rows past the last group are unspecified input and must not reach the active rows.
+    dy = jnp.pad(dy, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    gate_up = jnp.pad(gate_up, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
+
+    d_gate_up, row_dot = jax.jit(lambda dy, gu: kernels.quack_grouped_dswiglu_gemm(dy, w2, gu, cu))(dy, gate_up)
+
+    rows = []
+    for expert, start, stop in [(0, 0, _EXPERT_SPLIT), (2, _EXPERT_SPLIT, _NUM_TOKENS)]:
+        rows.append(dy[start:stop].astype(jnp.float32) @ w2[expert].astype(jnp.float32).T)
+    dh = jnp.concatenate(rows)
+    gate = gate_up[:_NUM_TOKENS, 0::2].astype(jnp.float32)
+    up = gate_up[:_NUM_TOKENS, 1::2].astype(jnp.float32)
+    h, pullback = jax.vjp(lambda g, u: jax.nn.silu(g) * u, gate, up)
+    d_gate, d_up = pullback(dh)
+    expected = jnp.stack([d_gate, d_up], axis=-1).reshape(_NUM_TOKENS, 2 * intermediate)
+    _assert_bfloat16_close(d_gate_up[:_NUM_TOKENS], expected)
+    _assert_bfloat16_close(row_dot[:_NUM_TOKENS], jnp.sum(h * dh, axis=-1))
+
+
+# The production dh GEMM tiles 256 columns; 320 columns end in a partial second tile.
+@pytest.mark.parametrize("intermediate", [64, 320])
+def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient(intermediate):
     _require_sm100()
     sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
     rng = np.random.default_rng(11)
     x = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
-    w13 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 128)), dtype=jnp.bfloat16)
-    w2 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 64)), dtype=jnp.bfloat16)
+    w13 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 2 * intermediate)), dtype=jnp.bfloat16)
+    w2 = jnp.asarray(rng.normal(0, 0.2, (3, intermediate, 64)), dtype=jnp.bfloat16)
     dy = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
     cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
 
@@ -113,6 +145,18 @@ def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient():
     # The row dot is d/ds of <s * y, dy> for a per-row scale s, without reading y.
     expected = np.sum(np.asarray(y, np.float32) * np.asarray(dy, np.float32), axis=-1)
     _assert_bfloat16_close(row_dot, expected)
+
+
+def test_gated_grouped_gemm_without_preact_returns_the_same_swiglu():
+    _require_sm100()
+    kernels = importlib.import_module("levanter.grug._moe.quack_moe_cute")
+    rng = np.random.default_rng(5)
+    x = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    w = jnp.asarray(rng.normal(0, 0.2, (3, 64, 128)), dtype=jnp.bfloat16)
+    cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
+    _preact, with_preact = jax.jit(lambda a, b: kernels.quack_gated_grouped_gemm(a, b, cu, return_preact=True))(x, w)
+    without_preact = jax.jit(lambda a, b: kernels.quack_gated_grouped_gemm(a, b, cu))(x, w)
+    np.testing.assert_array_equal(np.asarray(without_preact), np.asarray(with_preact))
 
 
 def test_muon_symmetric_gemm_matches_gram_matrix():
