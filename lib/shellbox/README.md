@@ -75,7 +75,8 @@ Docker and Daytona stop the command's process group on a timeout. A successful s
 A failed stop raises an infrastructure error and closes the machine.
 Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
 
-Docker stops commands as the command user or the image's default user.
+Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
+Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
 Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
 Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
