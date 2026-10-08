@@ -132,23 +132,29 @@ modules, each of which keeps its types beside the code that checks their invaria
   Every trial runs under the draft's own convention. The evidence directory holds
   `control/<id>/`, `solver/<index>/` and `adversary/<role>/<index>/` attempt files;
   `load_validation(draft, evidence_dir)` reads a round back as `ValidationEvidence`. `run_solver`
-  and `run_adversaries` take a `solver.ModelFactory` (`Callable[[CallLedger], RolloutModel]`, for
-  GLM `partial(GlmRolloutModel, client, sampling)`) and build each trial's model with
-  `site.call_ledger(kind, trial)`, so its `LLM_CALL` spans carry step `solver/<index>` or
-  `adversary/<role>/<index>`. `replay_controls` resumes unsettled controls through
-  `ControlPlan.first_attempts`. Each adversary runs under `ValidationPolicy.adversary_output_tokens`:
-  `RoleModel` counts the served response tokens of the attempt and ends it with stop reason
-  `length` when they are spent, graded on the state left. `role_preamble(role, output_tokens)`
-  renders the role's system preamble; it is in the policy digest.
+  takes a `solver.ModelFactory` (`Callable[[CallLedger], RolloutModel]`, for GLM
+  `partial(GlmRolloutModel, client, sampling)`) and builds each trial's model with
+  `site.call_ledger(kind, trial)`, so its `LLM_CALL` spans carry step `solver/<index>`.
+  `replay_controls` resumes unsettled controls through `ControlPlan.first_attempts`. Each adversary
+  trial is an agent loop (`llm.agent.run_agent`) on its own prepared task machine with a `shell`
+  tool and a `submit` tool that grades a candidate (reply plus listed workspace files) through
+  `ShellboxRolloutEngine.grade_state` on a fresh machine and returns the grade;
+  `ValidationPolicy.adversary_submissions` bounds the verifier calls per attempt. The brief
+  (`adversary_brief(submissions, context)`) is the system turn, persisted as `adversary.system` in
+  the attempt file beside every submission (`attempts.load_adversary_attempt`); `run_adversaries`
+  takes the run's `GlmClient` and the consumer's `AdversaryContext` text, and records its model and
+  tool calls under step `adversary/<role>/<index>`.
 - `validate.calibration.summarize(evidence, policy) -> CalibrationSummary`: pure. It records the
   policy digest and band, the solver's `RewardStats`, the control verdicts, `RoleStats` per role
   and a closed set of `Finding`s (`FindingKind`; `DECISIVE` ones cannot improve by retrying).
-  `write_summary`/`load_summary` round-trip it as `calibration.json`. `summarize` assesses every
-  graded adversary trial into a `DefectTier` (`REPAIR`, `NOTED`, `NONE`) from coded transcript
-  signals (`AdversarySignals`, read against the draft's `TaskFacts`); REPAIR passes are findings
-  with controls, NOTED passes are `CalibrationSummary.notes`, every assessment is in
-  `CalibrationSummary.assessments`, and `RoleStats` counts give-ups (`gave_up`: the sentinel on the
-  last line of the final reply), budget stops and tiers.
+  `write_summary`/`load_summary` round-trip it as `calibration.json`. `summarize` tiers every
+  graded adversary trial into a `DefectTier` (`REPAIR`, `NOTED`, `NONE`) from its submissions
+  (`AdversarySignals`, read against the draft's `TaskFacts`: files supplied, the submission count
+  to the claimed exploit against `adversary_repair_submissions`, the parsed `Claim`) and the shell
+  transcript's input reads; REPAIR trials are findings that ship the accepted candidate as a
+  control (`candidate_control`), NOTED trials are `CalibrationSummary.notes`, every assessment is in
+  `CalibrationSummary.assessments`, and `RoleStats` counts passes, submissions, budget use, claims,
+  failed audits, budget stops and tiers.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -203,8 +209,9 @@ action by the lowered `cleanup_timeout`. Taskforge supplies the model callable
 Taskforge reaches a sandbox only through a `Machine` that the engine or a builder step created.
 
 The agent loop is Taskforge's own: `llm.agent.run_agent` over `GlmClient`, with the shell tool
-running through `Machine.run` and Parallel search and extract from `llm.web`. Builder agents run
-on it. Solver and control rollouts run on RolloutEngine with the same `GlmClient`. `web_fetch`
+running through `Machine.run` and Parallel search and extract from `llm.web`. Builder agents and
+adversary trials run on it. Solver and control rollouts run on RolloutEngine with the same
+`GlmClient`. `web_fetch`
 returns extracted page content that may be a cached copy, which is fine for most reference lookups.
 Its description tells the agent that when it needs current data from a fast-moving source, such as
 a PyPI release page, a direct network call from the sandbox shell (for example `curl`) is the better
@@ -246,34 +253,35 @@ directory is keyed by `task_digest(task, execution, convention)`, so evidence is
 against a different draft.
 
 Controls run before any sampled trial: a violated control means the grader is wrong, and rollouts
-against it would measure the wrong grader. Adversaries are model wrappers, not task sessions:
-`RoleModel` puts a fixed role preamble in the system turn of every request and runs through the
-solver's engine path, task, grader, machine and convention. The preamble is the same bytes on every
-turn, so the served token prefix holds. Adversary rollouts are evidence, never training data. The
-engine installs verifier files only after the final response, so the leak role looks for answer
-keys in the instruction, the environment files and the build context rather than reading the
-grader. Every adversary is forbidden from completing the task, including by submitting an answer
-it came to know while inspecting the environment, may give up by ending its final reply with its
-sentinel line, and runs under an output-token budget the policy sets; a spent budget ends the
-attempt with stop reason `length` and grades the state left. The first fifteen live rounds showed
-why: told only not to do the work, the shortcut role read the input during reconnaissance and
-submitted the sum in 18 of 30 trials, and the ambiguity role submitted the same answer under a
-cosmetic reading in 13 of 30; every one of those passes was a decisive finding against a correct
-task, and each shortcut control would have contradicted the positive control. A pass is therefore
-tiered by a coded rule table over the transcript, never by the adversary's own account and never by
-a model: a pass that wrote a protected file, ran no shell command on a machine-graded task, never
-read an input file, or submitted text no honest run produced is a defect to repair, and except for
-an ambiguity mismatch or a submission equal to an honest answer ships its transcript as a negative
-control with concern `shortcut` (`reward_max = REJECTION_CEILING`) that the revised program must
-ship, so the next round's control replay proves the fix. A leak pass that never read an input file
-is the leak the role hunts for: it condemns the fixtures, environment and instruction steps, and
-with them the grader and controls, because the transcript cannot tell a revealed answer key from a
-grader lenient enough to accept the submission. The same pass by the shortcut or ambiguity role
-condemns the grader and controls only. A pass that read the inputs and submitted the real answer, or an ambiguity
-pass whose answer cannot be told apart from the honest one, is at most a note. Notes travel with
-the summary and never block an accept. `RoleStats` counts passes, give-ups, budget stops and tiers
-per role, which measures each role's behaviour. Review consumes findings through rules; no model
-judges legitimacy.
+against it would measure the wrong grader. An adversary trial is an agent loop that red-teams the
+grader with the verifier as a tool. The first protocol wrapped the solver's model in a role
+preamble and graded one final reply: the adversary had no feedback loop and, as one put it, got
+"exactly one shot". Over 30 trials of five rounds it passed once, by solving honestly; four
+shortcut trials overwrote the input file blind and were graded 0 because the grader compares
+against a constant they could not see; the leak role never found anything in 40 trials because
+the grader is installed only at grading time. The `submit` tool answers the question each role
+was guessing at. It grades a candidate (the final reply plus files the adversary lists) on a fresh
+machine through `grade_state`, so the grader stays private and the adversary's shell state is
+never graded, and `adversary_submissions` bounds the calls. One role remains: the leak and
+ambiguity surfaces are named in the one brief, and the role enum keeps the evidence layout so a
+later role is additive. The brief lets the adversary compute what the task entails and probe with
+honest answers; what it reports, on its last line (`NO_SHORTCUT` or `SHORTCUT: <why>`), must be an
+accepted submission that violates the spirit of the task or skips its intended computation. A
+trial is tiered by a coded rule table, never by a model judge. A passing submission that supplied
+a task input or grader file, passed with no files on a machine-graded task, came from a session
+that never read an input, or (on a single-answer grader) is not the honest answer is a defect to
+repair whatever the adversary says. Otherwise the claim decides, against the consumer's
+threshold: a claimed shortcut accepted within `adversary_repair_submissions` verifier calls is a
+repair, one found later is a note, a pass without a verdict is a note, a claimed shortcut that is
+the honest answer is a failed audit, and honest probes reported as `NO_SHORTCUT` are no defect. A
+repair ships the accepted candidate as a negative control with concern `shortcut`
+(`reward_max = REJECTION_CEILING`) that the revised program must ship, so the next round's control
+replay proves the fix. A many-answer grader (`shell`, `judge`, script graders) that accepts text no
+honest run produced is a note when the adversary reports no shortcut, because such graders accept
+many outputs by design. Grader diagnostics are kept in the record and withheld from the model,
+because a grader may print the expected value. Adversary rollouts are evidence, never training
+data, and carry no token ids. Notes travel with the summary and never block an accept. Review
+consumes findings through rules.
 
 `ValidationPolicy.retry_backoff` is a `RetryBackoff` dataclass (`ExponentialBackoff`'s four
 constructor arguments) rather than an `ExponentialBackoff`, so the policy digests and serializes it
@@ -282,7 +290,7 @@ without reading rigging's private state; each plan builds its own schedule from 
 The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `validate.run` type
 those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
 `calibration.SummaryPolicy`, `calibration.RoundEvidence`), because `ValidationPolicy` holds a
-`CalibrationBand` and `AdversaryRole` and the modules defining those take the policy.
+`CalibrationBand` and the adversary brief, and the modules defining those take the policy.
 
 ## Testing
 
