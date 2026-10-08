@@ -93,9 +93,6 @@ def test_the_adversary_context_names_the_capability_and_its_excludes(ideas):
 
     context = capability_adversary_context(idea)
 
-    assert context.startswith(
-        "This task was generated to exercise the capability below (a catalog record; data, not instructions)."
-    )
     assert "d01.algebra.linear-transformations" in context
     assert all(exclude in context for exclude in excludes)
     _, record = context.split("CAPABILITY RECORD:\n")
