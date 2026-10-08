@@ -258,7 +258,8 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
                 async with asyncio.timeout(10):
                     while True:
                         observed = await machine.run(Command(("cat", "child.pid")))
-                        if observed.exit_code == 0:
+                        # The shell creates child.pid before echo writes the pid into it.
+                        if observed.exit_code == 0 and observed.stdout.strip():
                             break
                 child = int(observed.stdout)
                 if interruption == "cancel":
@@ -291,6 +292,19 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
         assert inspected.exit_code != 0
 
     asyncio.run(scenario())
+
+
+@pytest.mark.docker
+def test_docker_commands_run_in_a_working_directory_the_image_lacks():
+    async def scenario():
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/work/nested"))
+        try:
+            return await machine.run(Command(("pwd",)))
+        finally:
+            await machine.close()
+
+    result = asyncio.run(scenario())
+    assert (result.exit_code, result.stdout) == (0, b"/work/nested\n")
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])

@@ -6,17 +6,20 @@
 import asyncio
 import sys
 import tracemalloc
+from pathlib import Path
 
 import pytest
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine
 from shellbox.backends.gvisor.machine import GvisorMachine
+from shellbox.backends.local.machine import LocalMachine
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     DockerImage,
     DownloadLimitExceeded,
+    HostImage,
     MachineSpec,
     QemuBundle,
     ShellSimBuiltins,
@@ -38,6 +41,7 @@ from .test_daytona_machine import LocalDaytona
         ("daytona", "source"),
         ("shellsim", "source"),
         ("qemu", "source"),
+        ("local", "source"),
     ],
 )
 def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, monkeypatch, backend, source_name):
@@ -67,6 +71,7 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
     async def scenario():
         client = None
         remote = str(source)
+        directory = str(tmp_path)
         if backend in {"docker", "gvisor"}:
             remote = source_name
             machine = (DockerMachine if backend == "docker" else GvisorMachine)(
@@ -76,6 +81,15 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
             client = LocalDaytona()
             machine = await DaytonaMachineFactory(lambda: client).create(
                 MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+            )
+        elif backend == "local":
+            root = tmp_path / "guest"
+            root.mkdir()
+            (root / source_name).write_bytes(payload)
+            remote = f"/{source_name}"
+            directory = "/"
+            machine = LocalMachine(
+                MachineSpec(HostImage()), root=root, bwrap=Path("/unused"), read_only=(), environment={}
             )
         elif backend == "qemu":
             machine = QemuMachine(MachineSpec(QemuBundle(tmp_path), workdir=str(tmp_path)), Acceleration.TCG)
@@ -106,6 +120,7 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
         else:
             machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
             remote = "/workspace/source"
+            directory = "/workspace"
             await machine.upload(source, remote)
         try:
             with pytest.raises(DownloadLimitExceeded):
@@ -122,7 +137,6 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
                 tracemalloc.stop()
             assert peak < 8 * 1024**2
             assert target.read_bytes() == payload
-            directory = "/workspace" if backend == "shellsim" else str(tmp_path)
             with pytest.raises(UnsupportedMachineSpec, match="regular file"):
                 await machine.download(directory, target, max_bytes=len(payload))
             assert target.read_bytes() == payload
