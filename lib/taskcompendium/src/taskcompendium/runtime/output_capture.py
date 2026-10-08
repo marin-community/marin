@@ -91,7 +91,7 @@ def validate_output_directories(selections: tuple[OutputDirectory, ...], workspa
 
 
 def selected_directory_files(selection: OutputDirectory, files: dict[str, bytes]) -> dict[str, bytes]:
-    """Recheck submission membership and budgets before transferring files to a private grader."""
+    """Recheck submission membership and budgets before transferring files to the grader machine."""
     selected = {}
     total = 0
     root = PurePosixPath(selection.root)
