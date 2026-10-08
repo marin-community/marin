@@ -4,7 +4,8 @@
 """Live: author a builder program with GLM-5.3 and run it to a TaskSpec whose positive control passes.
 
 Takes the ``parallel_key`` fixture (skips without the Parallel key file) for the template's
-research step. Artifacts go to ``.evidence/build/live-test/<timestamp>/``.
+research step. Artifacts go to ``<evidence_root>/build/live-test/<timestamp>/``, where ``evidence_root``
+is the fixture in ``tests/conftest.py``.
 """
 
 import time
@@ -29,8 +30,6 @@ from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.spec.controls import ControlKind
 from taskforge.validate.controls import control_turns
 
-EVIDENCE = Path(__file__).resolve().parents[2] / ".evidence" / "build" / "live-test"
-
 
 def scripted(turns: tuple[dict, ...]):
     """A model that serves ``turns`` in order, with token ids that extend each request's prefix."""
@@ -45,12 +44,17 @@ def scripted(turns: tuple[dict, ...]):
     return model
 
 
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "build" / "live-test"
+
+
 @pytest.mark.live_glm
 @pytest.mark.timeout(5400)
 async def test_authored_program_builds_a_task_its_positive_control_passes(
-    glm_settings, parallel_key, image_cache, proposal
+    glm_settings, parallel_key, image_cache, proposal, evidence_dir
 ):
-    run_dir = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
+    run_dir = evidence_dir / time.strftime("%Y%m%d-%H%M%S")
     factories = machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=image_cache)
     endpoint = GlmEndpoint(base_url=glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
     async with GlmClient(endpoint) as client, httpx.AsyncClient() as http:
