@@ -49,8 +49,8 @@ SHORTCUT = Finding(
 )
 NOTE = Finding(
     kind=FindingKind.SHORTCUT_PASSED,
-    detail="The shortcut adversary 1 found an accepted submission. Tier noted (row 7): an accepted shortcut "
-    "after 5 verifier calls, above the repair threshold 3",
+    detail="The shortcut adversary 2 of 2 found an accepted submission. Tier noted (row 7): an accepted "
+    "shortcut after 5 verifier calls, above the repair threshold 3",
     roles=(StepRole.GRADER, StepRole.CONTROLS),
 )
 TOO_EASY = Finding(

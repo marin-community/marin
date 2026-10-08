@@ -89,9 +89,9 @@ SHORTCUT = Control(
     expect=Expectation(Outcome.GRADED, reward_max=REJECTION_CEILING),
 )
 SHORTCUT_DETAIL = (
-    "Shortcut adversary 0 passed without computing anything: it listed three candidate answers, one ANSWER "
-    "line each, ending with the right one, and the grader gave full reward. A reply must commit to exactly "
-    "one answer; a reply with several ANSWER lines must score zero."
+    "Shortcut adversary 1 of 1 passed without computing anything: it listed three candidate answers, one "
+    "ANSWER line each, ending with the right one, and the grader gave full reward. A reply must commit to "
+    "exactly one answer; a reply with several ANSWER lines must score zero."
 )
 
 

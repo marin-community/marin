@@ -61,13 +61,13 @@ def finding(kind: FindingKind, detail: str = "", new_controls: tuple[Control, ..
 NOTES = (
     finding(
         FindingKind.SHORTCUT_PASSED,
-        "The shortcut adversary 0 found an accepted submission. Tier noted (row 7): an accepted shortcut after "
-        "6 verifier calls, above the repair threshold 3; the adversary reports: any integer line passes",
+        "The shortcut adversary 1 of 2 found an accepted submission. Tier noted (row 7): an accepted shortcut "
+        "after 6 verifier calls, above the repair threshold 3; the adversary reports: any integer line passes",
     ),
     finding(
         FindingKind.SHORTCUT_PASSED,
-        "The shortcut adversary 1 found an accepted submission. Tier noted (row 8): 1 of 4 submissions accepted "
-        "and no verdict given (stop max_turns)",
+        "The shortcut adversary 2 of 2 found an accepted submission. Tier noted (row 8): 1 of 4 submissions "
+        "accepted and no verdict given (stop max_turns)",
     ),
 )
 
