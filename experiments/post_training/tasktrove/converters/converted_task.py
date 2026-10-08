@@ -41,6 +41,8 @@ class ConvertedTask:
     """Converter-specific ``task.toml`` metadata; the template's own ``metadata.json`` is merged by ``convert_one``."""
     agent_timeout: float = 900.0
     verifier_timeout: float = 600.0
+    verifier_extras: tuple[str, ...] = ()
+    """Optional verifier dependencies needed by a source-specific grading composition."""
 
 
 @dataclass(frozen=True)

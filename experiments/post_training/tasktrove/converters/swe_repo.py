@@ -4,6 +4,7 @@
 """Helpers shared by the SWE-bench-shaped converters (``swe_patched``, ``swe_trusted_paths``)."""
 
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -11,6 +12,9 @@ from pathlib import PurePosixPath
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus, Rejected
 
 PLUGIN = "pytest-json-report"
+SWESMITH_REPO = re.compile(r"https://github\.com/swesmith/(?P<repo>[^\s/]+)")
+PYTEST_CONSTRAINT = "/opt/verifyit-pytest-constraints.txt"
+SWESMITH_PYTEST = "pytest<9"
 CONFIG_JSON = "tests/config.json"
 TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
 TESTBED = "/testbed"
@@ -154,3 +158,23 @@ def ensure_pytest_json_report(dockerfile: str, conda_lines: tuple[str, ...] = ()
     else:
         install = f"RUN (pip install --no-cache-dir {PLUGIN} || pip3 install --no-cache-dir {PLUGIN})\n"
     return dockerfile.rstrip("\n") + "\n" + install
+
+
+def swe_test_environment(dockerfile: str, instruction: str) -> str:
+    """Return a Dockerfile with compatible pytest and SweSmith repository test dependencies."""
+    match = SWESMITH_REPO.search(instruction)
+    if match is None:
+        return dockerfile
+    packages = f'"{SWESMITH_PYTEST}"'
+    if match["repo"] == "marshmallow-code__marshmallow.9716fc62":
+        packages += " simplejson"
+    elif match["repo"] == "conan-io__conan.86f29e13":
+        packages += " mock webtest PyJWT bottle parameterized"
+    elif match["repo"] == "oauthlib__oauthlib.1fd52536":
+        packages += " PyJWT cryptography blinker"
+    return (
+        dockerfile.rstrip("\n")
+        + f"\nRUN printf '{SWESMITH_PYTEST}\\n' > {PYTEST_CONSTRAINT}\n"
+        + f"ENV PIP_CONSTRAINT={PYTEST_CONSTRAINT}\n"
+        + f"RUN python -m pip install --no-cache-dir {packages}\n"
+    )

@@ -27,6 +27,7 @@ from infra.marina.applets.rl_data_catalog.server.app import (
 )
 from infra.marina.applets.rl_data_catalog.server.catalog import (
     Snapshot,
+    annotate_verifier_dependency,
     count_metadata,
     dataset_metadata,
     registry_sources,
@@ -37,6 +38,23 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
+
+
+def cached_verifier_metadata(rows: list[dict]) -> list[dict]:
+    for row in rows:
+        date = row["verifier_revised_at"]
+        row.update(
+            revision=row.get("revision", "sky1"),
+            verifier_path=f"skyrl-gym/skyrl_gym/envs/{row['environment']}",
+            verifier_path_revision=row.get("verifier_revision", "code1"),
+            verifier_path_revised_at=date,
+            verifier_dependencies={
+                "verifyit": {"sha": "a" * 40, "date": date},
+                "harbor": {"sha": "harbor1", "date": date},
+                "adapters": {},
+            },
+        )
+    return rows
 
 
 @pytest.fixture
@@ -690,7 +708,7 @@ def test_unchanged_git_head_refreshes_hf_counts_and_reports_latest_change(verifi
         )
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        snapshot = skyrl_snapshot(client, head, cached)
+        snapshot = skyrl_snapshot(client, head, cached_verifier_metadata(cached))
     row = snapshot.rows[0]
     assert (row["revised_at"], row["task_count"], row["dataset_revision"]) == (expected, 9, "hf2")
     assert (row["verifier_revised_at"], row["dataset_revised_at"]) == (verifier_date, hf_date)
@@ -794,7 +812,7 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
         return httpx.Response(200, text=card)
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_precision"] == ("estimated" if environment == "nemotron_ultra" else "reported")
     assert row["canonical_source"] == dataset_id + display_suffix
@@ -846,7 +864,7 @@ def test_gpqa_gated_viewer_preserves_audited_count_only_for_same_revision(revisi
         return httpx.Response(401, json={"error": "Gated dataset"})
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_metadata_error"]
     assert row["display_name"] == "Idavidrein/gpqa · gpqa_diamond"
@@ -883,7 +901,7 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
         )
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["is_benchmark"] is True
     assert row["family"] == "math-answer"
     assert row["family_url"].startswith("https://huggingface.co/datasets/di-zhang-fdu/AIME_1983_2024/blob/")
@@ -923,7 +941,7 @@ def test_github_sources_resolve_counts_and_links_without_invalid_hf_requests(
         return httpx.Response(200, text=card)
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["url"] == f"https://github.com/{dataset_id}"
     assert row["dataset_revision"] == "data1"
@@ -1001,7 +1019,7 @@ def test_gym_duplicates_stay_merged_after_dataset_metadata_refresh() -> None:
         )
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        result = skyrl_snapshot(client, head, [dataset, adapter])
+        result = skyrl_snapshot(client, head, cached_verifier_metadata([dataset, adapter]))
     assert len(result.rows) == 1
     refreshed_dataset = result.rows[0]
     assert refreshed_dataset["task_count"] == 9
@@ -1185,3 +1203,196 @@ def test_unavailable_nemotron_metadata_keeps_the_canonical_population() -> None:
         dataset_id=composition.NEMOTRON, dataset_revision=None, task_count=None, metadata_error="HF metadata unavailable"
     )
     assert component_rows(parent, {"metadata_error": "HF metadata unavailable"}) == [parent]
+
+
+def source_with_prior_review(row: dict, verifier_revision: str) -> dict:
+    return source_with_review(
+        {
+            "payload": row,
+            "quality": "good",
+            "difficulty": "measured",
+            "traces": 0,
+            "review_id": "prior-review",
+            "review_date": "2026-10-01T00:00:00Z",
+            "review_source_revision": row["dataset_revision"],
+            "review_verifier_revision": verifier_revision,
+            "verifier_issues": [],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "environment,selector,dependency,stale",
+    [
+        ("aime", "", "verifyit", True),
+        ("preference", "", "verifyit", False),
+        ("nemotron_ultra", "ultra_sft_step3200_nvarc_inductive", "verifyit", False),
+        ("nemotron_ultra", "ultra_sft_step3200_nvarc_transductive", "verifyit", False),
+        ("nemotron_ultra", "ultra_sft_step3200_rdkit", "verifyit", False),
+        ("nemotron_ultra", "language_mixing_hs3_ultra_genrm_fmt", "verifyit", False),
+        ("nemotron_ultra", "makeshn_ultra_v3_ipi_train", "verifyit", True),
+        ("nemotron_ultra", "nvidia/Nemotron-RL-Math-v2", "verifyit", True),
+        ("nemotron_ultra", "SWE-Gym/SWE-Gym", "verifyit", False),
+        ("nemotron_ultra", "SWE-Gym/SWE-Gym", "route", True),
+        ("reasoning_gym", "", "verifyit_clients.py", True),
+        ("aime", "", "verifyit_clients.py", False),
+        ("nemotron_ultra", "ultra_sft_step3200_stem_mcqa", "verifyit_clients.py", True),
+        ("nemotron_ultra", "ultra_sft_step3200_reasoning_gym", "verifyit_clients.py", True),
+        ("nemotron_ultra", "ultra_sft_step3200_reasoning_gym", "reasoning_gym/scoring.py", True),
+        ("nemotron_ultra", "ultra_sft_step3200_comp_coding", "lcb", True),
+        ("nemotron_ultra", "ultra_sft_step3200_instruction_following", "instruction_verifyit.py", True),
+        ("searchcode", "", "gsm8k/utils.py", True),
+        ("text2sql", "", "sqlite_verifyit.py", True),
+        ("text2sql", "", "text_to_sql/scoring.py", True),
+        ("text_to_sql", "", "sqlite_verifyit.py", True),
+        ("ifeval", "", "instruction_verifyit.py", True),
+        ("lcb", "", "nemotron_ultra/sandbox.py", True),
+    ],
+)
+def test_grader_dependency_changes_invalidate_only_affected_reviews(environment, selector, dependency, stale) -> None:
+    date = "2026-10-01T00:00:00Z"
+    later = "2026-10-08T00:00:00Z"
+    row = cached_verifier_metadata(
+        [
+            {
+                "id": "MarinSkyRL:source",
+                "environment": environment,
+                "component_selector": "" if "/" in selector else selector,
+                "component_name": selector,
+                "dataset_revision": "data1",
+                "dataset_revised_at": date,
+                "verifier_revision": "native1",
+                "verifier_revised_at": date,
+            }
+        ]
+    )[0]
+    adapters = row["verifier_dependencies"]["adapters"]
+    adapters.update(
+        {
+            "skyrl-gym/skyrl_gym/envs/" + path: {"sha": "adapter1", "date": date}
+            for path in (
+                "verifyit_clients.py",
+                "instruction_verifyit.py",
+                "sqlite_verifyit.py",
+                "reasoning_gym/scoring.py",
+                "text_to_sql/scoring.py",
+                "gsm8k/utils.py",
+                "lcb",
+                "nemotron_ultra/sandbox.py",
+            )
+        }
+    )
+    annotate_verifier_dependency(row)
+    previous_revision = row["verifier_revision"]
+    if dependency == "route":
+        row.update(verifier_path_revision="native2", verifier_path_revised_at=later)
+    else:
+        changed = (
+            row["verifier_dependencies"]["verifyit"]
+            if dependency == "verifyit"
+            else adapters["skyrl-gym/skyrl_gym/envs/" + dependency]
+        )
+        changed.update(sha="changed", date=later)
+    annotate_verifier_dependency(row)
+    reviewed = source_with_prior_review(row, previous_revision)
+    assert reviewed["review_stale"] == stale
+    assert reviewed["quality"] == (None if stale else "good")
+    assert reviewed["difficulty"] == (None if stale else "measured")
+    assert reviewed["review_id"] == "prior-review"
+    assert row["verifier_revised_at"] == (later if stale else date)
+
+
+def test_skyrl_refresh_tracks_installed_graders_and_reuses_pinned_cache() -> None:
+    date = "2026-10-01T00:00:00Z"
+    later = "2026-10-08T00:00:00Z"
+    verifyit = "a" * 40
+    harbor = "a" * 40
+    harbor_head = "harbor-main1"
+    dataset_revision = composition.NEMOTRON_COUNTS["revision"]
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.github.com":
+            revision, revised_at = "native1", date
+            if request.url.path == "/repos/marin-community/harbor/commits":
+                installed = request.url.params.get("sha")
+                revision = {"a" * 40: "harbor1", "b" * 40: "harbor2"}.get(installed, harbor_head)
+                revised_at = date if revision == "harbor1" else later
+            return httpx.Response(200, json=[{"sha": revision, "commit": {"committer": {"date": revised_at}}}])
+        if request.url.host == "raw.githubusercontent.com":
+            if request.url.path.endswith("sources.py"):
+                return httpx.Response(
+                    200,
+                    text="""
+def math():
+    return Source("math", "org/math", "aime", "train", False, "two_sided", prepare)
+def blend():
+    return Source("nemotron_ultra_rlvr2", "nvidia/Nemotron-RL-Ultra-Training-Blends", "nemotron_ultra",
+                  "train", True, "row_selected", prepare)
+SOURCES = {source.name: source for source in (math(), blend())}
+""",
+                )
+            if request.url.path.endswith("pyproject.toml"):
+                return httpx.Response(
+                    200,
+                    text='[project]\ndependencies = ["verifyit[answer,judge] @ '
+                    "git+https://github.com/marin-community/marin.git@" + verifyit + '#subdirectory=lib/verifyit"]\n',
+                )
+            if request.url.path.endswith("uv.lock"):
+                return httpx.Response(
+                    200,
+                    text='[[package]]\nname = "harbor"\nsource = {git = "https://github.com/marin-community/harbor.git#'
+                    + harbor
+                    + '"}\n',
+                )
+            assert request.url.path.endswith("envs/__init__.py")
+            return httpx.Response(
+                200,
+                text='register(id="aime", entry_point="skyrl_gym.envs.aime.env:AimeEnv")\n'
+                'register(id="nemotron_ultra", entry_point="skyrl_gym.envs.nemotron_ultra.env:NemotronUltraEnv")',
+            )
+        assert request.url.host == "huggingface.co"
+        if request.url.path.endswith("/README.md"):
+            return httpx.Response(200, text="| rlvr2 | 99,116 | 5.0 GB |")
+        if "/tree/" in request.url.path:
+            return httpx.Response(200, json=[])
+        count = 99116 if request.url.path.endswith(composition.NEMOTRON) else 3
+        return httpx.Response(
+            200,
+            json={
+                "sha": dataset_revision,
+                "lastModified": date,
+                "cardData": {"dataset_info": {"splits": [{"name": "train", "num_examples": count}]}},
+            },
+        )
+
+    head = {"sha": "sky1", "commit": {"committer": {"date": date}}}
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+        before = skyrl_snapshot(client, head)
+        harbor_head = "harbor-main2"
+        cached_rows = sorted(before.rows, key=lambda row: row["verifier_mode"] != "harbor")
+        cached = skyrl_snapshot(client, head, cached_rows)
+        forced = skyrl_snapshot(client, head, before.rows, force=True)
+        harbor = "b" * 40
+        after_harbor = skyrl_snapshot(client, {**head, "sha": "sky2"}, cached.rows)
+        verifyit = "b" * 40
+        after_verifyit = skyrl_snapshot(client, {**head, "sha": "sky3"}, after_harbor.rows)
+    previous = {row["id"]: row for row in before.rows}
+    for snapshot in (cached, forced):
+        assert {row["id"]: row["verifier_revision"] for row in snapshot.rows} == {
+            row["id"]: row["verifier_revision"] for row in before.rows
+        }
+        for row in snapshot.rows:
+            repository = "harbor" if row["verifier_mode"] == "harbor" else "MarinSkyRL"
+            assert row["verifier_url"].startswith(f"https://github.com/marin-community/{repository}/")
+    for snapshot, prior, changed_mode in (
+        (after_harbor, previous, "harbor"),
+        (after_verifyit, {row["id"]: row for row in after_harbor.rows}, "verifyit"),
+    ):
+        for row in snapshot.rows:
+            reviewed = source_with_prior_review(row, prior[row["id"]]["verifier_revision"])
+            stale = row["verifier_mode"] == changed_mode
+            assert reviewed["review_stale"] == stale
+            assert reviewed["quality"] == (None if stale else "good")
+            assert reviewed["difficulty"] == (None if stale else "measured")
+            assert reviewed["review_id"] == "prior-review"
+            assert row["task_count"] == prior[row["id"]]["task_count"]
