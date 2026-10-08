@@ -6,11 +6,10 @@
 import asyncio
 import json
 import os
-import tarfile
+import subprocess
 import uuid
 from pathlib import Path
 
-from rigging.filesystem.buckets import filesystem_for
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 DURABLE_CAPTURE_ROOT = "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/routing-captures/durable-v1"
@@ -18,10 +17,11 @@ DURABLE_CAPTURE_ROOT = "s3://marin-us-east-02a/marin/experiments/weight-merging-
 
 def persist_exchange(destination: Path, uri: str) -> None:
     """Publish a completed exchange as one compressed object."""
-    fs, path = filesystem_for(uri)
-    with fs.open(path, "wb") as output, tarfile.open(fileobj=output, mode="w|gz") as archive:
-        for file in sorted(destination.iterdir()):
-            archive.add(file, arcname=file.name)
+    # vLLM runs in an isolated uvx environment; storage dependencies live in the worker venv.
+    worker_python = Path(__file__).resolve().parents[2] / ".venv/bin/python"
+    subprocess.run(
+        [str(worker_python), "-m", "experiments.weight_merging.persist_exchange", str(destination), uri], check=True
+    )
 
 
 class RecordRequests:
