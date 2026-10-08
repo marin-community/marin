@@ -17,6 +17,23 @@ class MergeMethod(StrEnum):
     TIES = "ties"
     DARE_LINEAR = "dare_linear"
     DARE_TIES = "dare_ties"
+    RAM = "ram"
+    RAM_PLUS_TL = "ramplus_tl"
+
+
+@dataclass(frozen=True)
+class RamParameters:
+    """Activity threshold and tensor-local unique-update amplification."""
+
+    epsilon: float
+    rescale: float
+    ratio_cap: float
+
+    def __post_init__(self) -> None:
+        if not all(math.isfinite(value) and value >= 0 for value in (self.epsilon, self.rescale, self.ratio_cap)):
+            raise ValueError("RAM parameters must be finite and nonnegative")
+        if self.epsilon == 0:
+            raise ValueError("RAM requires a positive activity threshold")
 
 
 @dataclass(frozen=True)
@@ -35,8 +52,16 @@ class MergeParameters:
     density: float
     scale: float
     seed: int
+    ram: RamParameters | None = None
 
     def __post_init__(self) -> None:
+        if self.method in (MergeMethod.RAM, MergeMethod.RAM_PLUS_TL):
+            if self.ram is None or self.density != 1 or self.scale != 1 or any(c != 1 for c in self.coefficients):
+                raise ValueError("RAM requires explicit RAM parameters, unit coefficients, density=1, scale=1")
+            if self.method == MergeMethod.RAM and self.ram.rescale != 0:
+                raise ValueError("Use ramplus_tl for unique-update amplification")
+        elif self.ram is not None:
+            raise ValueError("RAM parameters only apply to RAM methods")
         if not self.coefficients or any(not math.isfinite(c) or c < 0 for c in self.coefficients):
             raise ValueError("Provide finite nonnegative donor coefficients")
         if not 0 < self.density <= 1 or not math.isfinite(self.scale):
@@ -84,6 +109,9 @@ def merge_tensor(
             result.add_(donor.float(), alpha=coefficient)
         return _cast_result(result, anchor.dtype, tensor_name)
 
+    if parameters.ram is not None:
+        return _cast_result(_ram_merge(base, donors, parameters.ram), anchor.dtype, tensor_name)
+
     updates = []
     for index, (coefficient, donor) in enumerate(zip(parameters.coefficients, donors, strict=True)):
         update = donor.float() - base
@@ -120,4 +148,26 @@ def _cast_result(result: torch.Tensor, dtype: torch.dtype, tensor_name: str) -> 
     result = result.to(dtype)
     if not torch.isfinite(result).all():
         raise ValueError(f"Merge overflow: {tensor_name}")
+    return result
+
+
+def _ram_merge(base: torch.Tensor, donors: list[torch.Tensor], parameters: RamParameters) -> torch.Tensor:
+    # Count active donors without stacking all full-sized expert-bank tensors.
+    counts = torch.zeros_like(base, dtype=torch.int32)
+    for donor in donors:
+        counts.add_((donor.float() - base).abs() > parameters.epsilon)
+    shared = counts > 1
+    unique = counts == 1
+    denominator = counts.clamp_min(1)
+    result = base.clone()
+    for donor in donors:
+        delta = donor.float() - base
+        active = delta.abs() > parameters.epsilon
+        unique_count = (active & unique).sum().item()
+        shared_count = (active & shared).sum().item()
+        ratio = shared_count / max(unique_count, parameters.epsilon)
+        amplification = 1 + parameters.rescale * min(ratio, parameters.ratio_cap)
+        delta.mul_(active).div_(denominator)
+        delta.mul_(1 + unique * (amplification - 1))
+        result.add_(delta)
     return result

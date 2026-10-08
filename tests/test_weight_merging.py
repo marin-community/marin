@@ -7,7 +7,7 @@ import json
 import pytest
 import safetensors.torch
 import torch
-from marin.merging.arithmetic import MergeMethod, MergeParameters, merge_tensor
+from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource, RowMerge, merge_checkpoint
 from marin.merging.geometry import weight_update_gram
 
@@ -172,3 +172,22 @@ def test_checkpoint_row_merges_preserve_other_experts_and_router(tmp_path):
         {"row": 2, "coefficients": [0.5, 0.5]},
     ]
     assert manifest["tensor_count"] == 4
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize(
+    "method,rescale,expected",
+    [
+        (MergeMethod.RAM, 0, [12, 14, 10, 10, 16]),
+        (MergeMethod.RAM_PLUS_TL, 1, [13, 16, 10, 10, 16]),
+    ],
+)
+def test_ram_preserves_unique_updates_and_averages_shared_updates(dtype, method, rescale, expected):
+    anchor = torch.full((5,), 10, dtype=dtype)
+    donors = [
+        torch.tensor([12, 10, 14, 10.125, 14], dtype=dtype),
+        torch.tensor([10, 14, 6, 10, 18], dtype=dtype),
+    ]
+    parameters = MergeParameters(method, (1, 1), 1, 1, 42, RamParameters(0.25, rescale, 0.5))
+    result = merge_tensor(anchor, donors, parameters, tensor_name="weight")
+    torch.testing.assert_close(result, torch.tensor(expected, dtype=dtype), rtol=0, atol=0)

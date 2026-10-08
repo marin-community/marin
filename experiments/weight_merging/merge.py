@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 import torch
-from marin.merging.arithmetic import MergeMethod, MergeParameters
+from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters
 from marin.merging.checkpoint import CheckpointSource, RowMerge, merge_checkpoint
 
 
@@ -24,6 +24,8 @@ def main() -> None:
     parameters = recipe["parameters"]
     parameters["method"] = MergeMethod(parameters["method"])
     parameters["coefficients"] = tuple(parameters["coefficients"])
+    if parameters.get("ram") is not None:
+        parameters["ram"] = RamParameters(**parameters["ram"])
     merge_checkpoint(
         CheckpointSource(**recipe["anchor"]),
         [CheckpointSource(**source) for source in recipe["donors"]],
