@@ -17,6 +17,8 @@ from taskforge.proposal.sources.capability import (
     PlannedSlot,
     SlotStatus,
     author_proposal,
+    capability_idea_record,
+    capability_prompt_record,
     checked_proposal,
     document_template,
     load_capability_ideas,
@@ -65,6 +67,22 @@ def test_catalog_loads_capabilities_with_their_incoming_edges(ideas):
     idea = ideas["d01.algebra.linear-transformations"]
     assert idea.subject_id == "D01"
     assert idea.prerequisite_edges == (EDGE,)
+
+
+def test_the_idea_record_carries_the_identifiers_and_the_prompt_record(ideas):
+    idea = ideas["d01.algebra.linear-transformations"]
+
+    record = capability_idea_record(idea)
+
+    assert record == {
+        "capability_id": "d01.algebra.linear-transformations",
+        "subject_id": "D01",
+        "subject_name": "Mathematics",
+        "catalog_version": "v3",
+        "capability_hash": idea.capability_hash,
+        "record": capability_prompt_record(idea),
+    }
+    assert record["record"]["learning_progression"] == {"catalog_version": "v3", "edges": [EDGE]}
 
 
 def slot(number: int, environment: str, verification: str, status: str = "propose") -> dict:

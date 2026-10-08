@@ -4,7 +4,8 @@
 """Run an unattended Taskforge queue over the capability catalog.
 
 Every catalog capability (or each ``--capability`` named) becomes a ``CapabilityIdea``; the run
-proposes from it with ``CapabilitySource``, triages with the structural checks and a ``GlmRubric``
+proposes from it with ``CapabilitySource`` and records it in its ``idea.json`` with
+``capability_idea_record``, triages with the structural checks and a ``GlmRubric``
 of ``--rubric-samples`` samples that is shown each capability's catalog record, and carries every
 proposal through ``queue.run.run_queue``. ``CONFIG`` is a ``queue.config.RunConfig`` file
 (``docs/policy.example.json`` is the committed unattended configuration; set its ``relay_job``).
@@ -38,6 +39,7 @@ from taskforge.loop.events import Terminal
 from taskforge.proposal.sources.capability import (
     CapabilityIdea,
     CapabilitySource,
+    capability_idea_record,
     capability_prompt_record,
     load_capability_ideas,
     source_ref,
@@ -76,6 +78,7 @@ def capability_inputs(
     return RunInputs(
         ideas=ideas,
         source=CapabilitySource(client, PROPOSAL_POLICY),
+        describe_idea=capability_idea_record,
         checks=CHECKS,
         rubric=rubric,
         check_context=CheckContext(allowed_combinations=ALL_COMBINATIONS),
