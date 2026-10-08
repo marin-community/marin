@@ -6,7 +6,8 @@
 Each source ships one pytest file and, usually, a ``solution/solution.py`` oracle. The agent writes
 the Python files its instruction names; unitsyn's agent writes the fixed solution file instead. The
 hidden tests run in the grader image (``images.recipes.GRADER``). The sources differ only by
-configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies.
+configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies;
+the grader image installs the same packages, so a submission that imports one there grades here.
 """
 
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from taskcompendium.convert.tasktrove_python_unit_tests import convert as conver
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline

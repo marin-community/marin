@@ -23,7 +23,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 

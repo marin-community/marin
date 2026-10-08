@@ -25,7 +25,7 @@ from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 SHELL_PREAMBLE = "You are running in a shell-based sandbox."

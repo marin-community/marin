@@ -44,9 +44,17 @@ unreviewed, and without controls sandbox-graded rows stay out of `final/`.
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |
 | [tasktrove/repositories.py](tasktrove/repositories.py) | TaskTrove SWE repositories; no agent image covers their per-task repositories. |
 | [tasktrove/structured_outputs.py](tasktrove/structured_outputs.py), [tasktrove/instruction_following.py](tasktrove/instruction_following.py) | Structured-output and instruction-following tasks, graded in process. |
-| [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by the source scorers through `math_grade.py`. |
+| [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by each archive's SymPy scorer and `test.sh` in the grader image. |
 | [tasktrove/judged.py](tasktrove/judged.py), [tasktrove/qa.py](tasktrove/qa.py) | Judged responses and open QA (verifyit judge; not admitted until a judge runs), and knowledge MCQA. |
-| [tasktrove/calendar.py](tasktrove/calendar.py), [tasktrove/multichallenge.py](tasktrove/multichallenge.py), [tasktrove/puzzles.py](tasktrove/puzzles.py) | Calendar scheduling, multi-turn challenges and puzzles. |
+| [tasktrove/calendar.py](tasktrove/calendar.py), [tasktrove/multichallenge.py](tasktrove/multichallenge.py), [tasktrove/puzzles.py](tasktrove/puzzles.py) | Calendar scheduling (the archive's checker in the grader image), multi-turn challenges (verifyit judge) and puzzles. |
+
+## Judge-graded sources
+
+The judged, open-QA and MultiChallenge sources grade with verifyit's judge mode, so
+their rows are kept as `deferred:judge` and never reach `final/`. No judge runs yet:
+the grader image has no judge client (`openai`), and grading machines deny network
+access, so a sandboxed judge cannot reach an endpoint. Choosing where the judge runs
+and how it receives the endpoint and credentials is follow-up work.
 
 ## Sources not declared
 

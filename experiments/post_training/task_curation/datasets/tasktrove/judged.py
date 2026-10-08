@@ -25,7 +25,7 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, Normali
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 

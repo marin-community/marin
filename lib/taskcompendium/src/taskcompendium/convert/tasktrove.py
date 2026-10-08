@@ -45,6 +45,8 @@ TESTS_MOUNT = "/tests"
 """Where Harbor mounts a task's ``tests/`` directory, and only at grading time."""
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
+ANSWER_PATH = "/app/answer.txt"
+"""Where archived answer checkers read the answer; the runtime stages a conversation task's reply there."""
 
 
 @dataclass

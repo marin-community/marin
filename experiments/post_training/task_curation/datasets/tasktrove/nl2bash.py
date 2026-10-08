@@ -14,7 +14,7 @@ from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bas
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline

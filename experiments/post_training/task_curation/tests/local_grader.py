@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
-from shellbox.machine import Backend, DockerImage, MachineSpec
+from shellbox.machine import Backend, Command, DockerImage, MachineSpec
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, GradingAttempt, TaskResource, TaskSpec
 from taskcompendium.pipeline.controls import FILE_SUBMISSION_MESSAGE
@@ -38,7 +38,14 @@ class LocalGraderMachines:
         return self, MachineSpec(DockerImage(image), memory_mb=memory_mb)
 
     async def create(self, spec: MachineSpec) -> DockerMachine:
-        return await DockerMachineFactory().create(replace(spec, source=DockerImage(LOCAL_GRADER_IMAGE)))
+        machine = await DockerMachineFactory().create(replace(spec, source=DockerImage(LOCAL_GRADER_IMAGE)))
+        # Iris machines create their working directory, where oracle controls run; Docker machines do not, and
+        # the grader image has none at the default path.
+        created = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", user="0"))
+        if created.exit_code != 0:
+            await machine.close()
+            raise RuntimeError(f"Cannot create {spec.workdir}: {created.stderr.decode(errors='replace')}")
+        return machine
 
 
 def local_grader_machines() -> LocalGraderMachines:

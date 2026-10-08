@@ -4,4 +4,4 @@ Each family test module (`test_skyrl.py`, `test_nemotron_ultra.py`, `test_arc.py
 
 [`test_pipeline.py`](test_pipeline.py) covers artifact identity and downloads; [`test_images.py`](test_images.py) covers image identity and the build step with the `docker` stand-in from [`image_builds.py`](image_builds.py); [`test_driver.py`](test_driver.py) and [`test_campaign.py`](test_campaign.py) cover campaign planning, full-mode admission and the shared pool.
 
-[`fixtures/`](fixtures/README.md) holds representative archived tasks and source rows. These tests do not show that a grader image runs a source's scorer; a source's `verify/report.json` records that evidence. See the [experiment overview](../README.md).
+[`fixtures/`](fixtures/README.md) holds representative archived tasks and source rows. The `test_*_grading.py` modules grade fixtures in a locally built grader image through [`local_grader.py`](local_grader.py); they carry the `docker` marker, so the default test run skips them. Other tests do not show that a grader image runs a source's scorer; a source's `verify/report.json` records that evidence. See the [experiment overview](../README.md).

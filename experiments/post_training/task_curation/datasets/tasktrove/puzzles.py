@@ -18,7 +18,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
-from experiments.post_training.task_curation.datasets.tasktrove import ANSWER_FILE_DELIVERY, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import ANSWER_FILE_DELIVERY, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list", "number", "coords"})

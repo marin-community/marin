@@ -5,9 +5,11 @@
 
 The archive's verifier (``tests/verifier.py``, run by ``tests/test.sh``) accepts any schedule that
 meets the final event constraints. It needs only the Python standard library (the source ran it in
-``python:3.11-slim``), so it runs in the grader image (``images.recipes.GRADER``). A source
-witness (``solution/answer.json``) is the golden control, and the witness without its first event
-is the negative; an archive whose witness is not a nonempty JSON list of events is a source defect.
+``python:3.11-slim``), so it runs as archived in the grader image (``images.recipes.GRADER``). The
+archive asks for the calendar in ``/app/answer.txt``; the task asks for it in the reply, which the
+runtime writes to that file for the verifier. A source witness (``solution/answer.json``) is the
+golden control, and the witness without its first event is the negative; an archive whose witness
+is not a nonempty JSON list of events is a source defect.
 """
 
 import json
@@ -15,8 +17,7 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.source_scorer import ANSWER_PATH
-from taskcompendium.convert.tasktrove import archive_file, archive_resources, archive_script_grader
+from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_file, archive_resources, archive_script_grader
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -37,7 +38,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 

@@ -26,7 +26,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, required_grader_en
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline
 

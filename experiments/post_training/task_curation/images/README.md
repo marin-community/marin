@@ -16,7 +16,8 @@ names the image its agent works in with an `AgentImage` literal.
 - every package in [`grader/requirements.lock`](grader/requirements.lock), with
   hashes required: the math, chemistry, schema, instruction-following and
   Reasoning Gym scorer dependencies, `pytest` with `pytest-json-report` and
-  `hypothesis`, `harbor-config`, and `verifiable-instructions` at a pinned commit;
+  `hypothesis`, the packages the Stack Overflow Python-test tasks import,
+  `harbor-config`, and `verifiable-instructions` at a pinned commit;
 - the NLTK `punkt_tab` and `wordnet` data;
 - `verifyit` from this repository, which sandboxed `verifyit` graders import.
 

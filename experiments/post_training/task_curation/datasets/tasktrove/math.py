@@ -5,28 +5,26 @@
 
 An archive ships the scorer (``tests/verifier.py``), its runner (``tests/test.sh``) and the typed
 reference (``tests/verifier_data.json``). Only scorer and runner revisions seen before are
-accepted, and ``math_grade.py`` checks the interpreter and packages the scorer was pinned to before
-running it in the grader image (``images.recipes.GRADER``). The solver gets a conversation task:
-the prompt's answer-file delivery is rewritten to ask for the answer in the reply, which the grader
-writes to ``/app/answer.txt`` for the scorer.
+accepted; the runner runs as archived in the grader image (``images.recipes.GRADER``), which pins
+the SymPy and ANTLR versions the scorers parse LaTeX with. The gym scorer turns any exception, a
+missing package included, into reward 0, so the golden control is what shows the image runs it. The
+solver gets a conversation task: the prompt's answer-file delivery is rewritten to ask for the
+answer in the reply, which the runtime writes to ``/app/answer.txt`` for the scorer.
 """
 
 import hashlib
 import json
 from dataclasses import dataclass
-from pathlib import Path
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.source_scorer import ANSWER_PATH
-from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH_REWARD, archive_files
+from taskcompendium.convert.tasktrove import ANSWER_PATH, SOLVE_SH, archive_files, archive_script_grader
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
     ResourceGroups,
-    ScriptGrader,
     TaskSpec,
     TextMessage,
 )
@@ -44,22 +42,20 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import MathType
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
-GRADE_SCRIPT = "math_grade.py"
-GYM_SCORER = "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7"
 SCORER_RUNNERS = {
-    GYM_SCORER: "7a92019aeea76076ad02e4bbca717db3c3c9396f068126e08beab34e81c3fa66",
+    "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
+        "7a92019aeea76076ad02e4bbca717db3c3c9396f068126e08beab34e81c3fa66"
+    ),
     "703ea4d9abf2eb797c4e23ac6ff26c2f37699a62d9659d5af1475af7e8762f26": (
         "cc69c5b5b676f27249084dd101edfa2ca4dbf96c8d370bebb4f43922bde8943d"
     ),
 }
 """SHA-256 of each known ``tests/verifier.py`` mapped to the SHA-256 of the ``tests/test.sh`` that runs it."""
-SCORER_PINS = ("python==3.11", "sympy==1.13.3", "antlr4-python3-runtime==4.11.0")
-GYM_SCORER_PINS = ("numpy==2.1.3",)
-GRADER_TIMEOUT = 600.0
+GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
 REWRITE_REASON = "Replace the source's answer-file delivery with an answer in the assistant response"
 
 SUBMISSION = "\n## Submitting the answer\n"
@@ -133,12 +129,6 @@ distinctions matter, as do answer extraction and the source's unit handling.
 """
 
 
-def scorer_pins(scorer: bytes) -> tuple[str, ...]:
-    """The interpreter and package pins one known scorer revision was validated with."""
-    extra = GYM_SCORER_PINS if hashlib.sha256(scorer).hexdigest() == GYM_SCORER else ()
-    return (*SCORER_PINS, *extra)
-
-
 @dataclass(frozen=True)
 class MathConverter:
     """Convert a math archive, cutting ``sections`` from the prompt and applying ``phrases`` in order."""
@@ -170,14 +160,11 @@ class MathConverter:
         prompt = replace_phrases(prompt, self.phrases).strip()
         if not prompt:
             return source_defect("missing_instruction", "The instruction has no problem before its delivery section")
-        grader = ScriptGrader(
-            argv=("python3", f"/tests/{GRADE_SCRIPT}", *scorer_pins(scorer)),
-            cwd="/app",
-            environment=required_grader_environment(context),
-            answer_path=ANSWER_PATH,
-            reward=TEST_SH_REWARD,
-            timeout=GRADER_TIMEOUT,
+        grader = archive_script_grader(
+            row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=ANSWER_PATH
         )
+        if isinstance(grader, ImportRejection):
+            return grader
         task = TaskSpec(
             id=row.id,
             source=row.source,
@@ -188,7 +175,6 @@ class MathConverter:
                     inline_resource("verifier.py", scorer),
                     inline_resource("verifier_data.json", files["tests/verifier_data.json"]),
                     inline_resource("test.sh", runner),
-                    inline_resource(GRADE_SCRIPT, Path(__file__).with_name(GRADE_SCRIPT).read_bytes()),
                 ),
                 oracle=tuple(
                     inline_resource(path, content) for path, content in files.items() if path.startswith("solution/")

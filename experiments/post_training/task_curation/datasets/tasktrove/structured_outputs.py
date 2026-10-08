@@ -32,7 +32,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.verification import MALFORMED_JSON
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"

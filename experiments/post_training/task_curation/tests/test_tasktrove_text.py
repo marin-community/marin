@@ -5,9 +5,6 @@
 
 import io
 import json
-import shlex
-import subprocess
-import sys
 import tarfile
 import tomllib
 from pathlib import Path
@@ -33,14 +30,13 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
-from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec, ScriptSpec
+from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar as calendar_sources
 from experiments.post_training.task_curation.datasets.tasktrove import (
     instruction_following,
     judged,
     multichallenge,
-    multichallenge_grade,
     puzzles,
     qa,
 )
@@ -274,7 +270,7 @@ GRADER_MODES = {
     "tasktrove-if_calendar": "script",
     "tasktrove-ifeval": "ifeval",
     "tasktrove-structured": "json-schema",
-    "tasktrove-multichallenge": "script",
+    "tasktrove-multichallenge": "judge",
     "tasktrove-puzzles": "exact",
 }
 """Each source's grader: a verifyit mode, or ``script`` for a source scorer run by a ScriptGrader."""
@@ -356,14 +352,6 @@ def test_math_runs_the_source_scorer_and_its_oracle(name, files, golden):
         assert control == golden
 
 
-def test_math_pins_numpy_only_for_the_gym_scorer():
-    gym = task_of("tasktrove-math_gym", ROWS["tasktrove-math_gym"])
-    prism = task_of("tasktrove-math_prism", ROWS["tasktrove-math_prism"])
-    assert isinstance(gym.grader, ScriptGrader) and isinstance(prism.grader, ScriptGrader)
-    assert "numpy==2.1.3" in gym.grader.argv
-    assert "numpy==2.1.3" not in prism.grader.argv
-
-
 @pytest.mark.parametrize(
     "change,reason",
     [
@@ -390,26 +378,6 @@ def test_math_prompts_drop_the_file_submission_sections():
     reasoning = prompt_of(task_of("tasktrove-math_openreasoning", ROWS["tasktrove-math_openreasoning"]))
     assert reasoning.startswith("Solve the problem. Return your final answer as \\boxed{...}.")
     assert "Submitting the answer" not in reasoning
-
-
-def run_math_grade(tmp_path: Path, *pins: str) -> tuple[int, bool]:
-    """Run the grade script beside a stand-in ``test.sh``; return its exit code and whether test.sh ran."""
-    script = tmp_path / math_sources.GRADE_SCRIPT
-    script.write_bytes(Path(math_sources.__file__).with_name(math_sources.GRADE_SCRIPT).read_bytes())
-    marker = tmp_path / "ran"
-    (tmp_path / "test.sh").write_text(f"touch {shlex.quote(str(marker))}\nexit 3\n")
-    completed = subprocess.run([sys.executable, str(script), *pins], capture_output=True, check=False)
-    return completed.returncode, marker.exists()
-
-
-def test_math_grade_runs_the_source_runner_under_matching_pins(tmp_path):
-    python = f"python=={sys.version_info.major}.{sys.version_info.minor}"
-    assert run_math_grade(tmp_path, python, f"pytest=={pytest.__version__}") == (3, True)
-
-
-@pytest.mark.parametrize("pin", ["python==2.7", "pytest==0.0.1", "not-an-installed-distribution==1.0"])
-def test_math_grade_refuses_mismatched_pins_before_the_runner(tmp_path, pin):
-    assert run_math_grade(tmp_path, pin) == (2, False)
 
 
 def test_judged_task_keeps_source_criteria_question_and_judge_files():
@@ -592,95 +560,24 @@ def test_puzzles_reject_unusable_keys(gold):
     assert rejection_of("tasktrove-puzzles", puzzle_row(gold)).reason == "invalid_puzzle_key"
 
 
-def test_multichallenge_runs_the_source_suite_with_its_files_beside_the_grade_script():
+def test_multichallenge_judges_each_source_requirement_against_the_conversation():
     task = task_of("tasktrove-multichallenge", ROWS["tasktrove-multichallenge"])
     assert isinstance(task.grader, VerifyitGrader)
     spec = verifyit_spec(task.grader)
-    assert isinstance(spec, ScriptSpec)
-    assert (spec.path, spec.verdict_file) == (multichallenge.GRADE_PATH, multichallenge_grade.VERDICT_FILENAME)
-    assert task.grader.environment == FIXTURE_GRADER_ENVIRONMENT
+    assert isinstance(spec, JudgeSpec)
+    assert (spec.rubric, spec.context) == (RUBRIC_CHECKLIST, multichallenge.CONTEXT_FILE)
+    source = tomllib.loads(MULTICHALLENGE["tests/judge.toml"].decode())["criterion"]
+    assert len(spec.criteria) == len(source) == 4
+    assert spec.criteria[1] == "Does the response include exactly eight numbered preparation steps?"
+    assert all(criterion["description"].endswith(text) for criterion, text in zip(source, spec.criteria, strict=True))
     verifier = verifier_files(task)
-    for path, content in MULTICHALLENGE.items():
-        target = path.removeprefix("tests/") if path.startswith("tests/") else f"__source/{path}"
-        assert verifier[target] == content
-    # RewardKit reads a visible subdirectory instead of the flat suite, so added files hide under "__".
-    assert all("/" not in path or path.startswith("__") for path in verifier)
+    assert verifier[multichallenge.CONTEXT_FILE] == MULTICHALLENGE["tests/conversation.txt"]
+    assert verifier["source/judge.toml"] == MULTICHALLENGE["tests/judge.toml"]
     prompt = prompt_of(task)
     assert "heredoc" not in prompt and "[system]" in prompt
 
 
-@pytest.mark.parametrize(
-    "path,original,replacement",
-    [
-        (
-            "tests/judge.toml",
-            'files = ["/tests/conversation.txt", "/app/response.txt"]',
-            'files = ["/proc/self/environ"]',
-        ),
-        ("tests/judge.toml", "[judge]", '[judge]\napi_base = "https://unexpected.invalid"'),
-        ("tests/judge.toml", 'type = "numeric"', 'files = ["/proc/self/environ"]\ntype = "numeric"'),
-        ("tests/test.sh", "set -euo pipefail", 'set -euo pipefail\necho "$TOGETHER_API_KEY"'),
-        ("task.toml", "together_ai/Qwen/Qwen3.5-9B", "openai/gpt-4o"),
-    ],
-)
-def test_multichallenge_rejects_redirected_providers_files_and_scripts(path, original, replacement):
-    content = MULTICHALLENGE[path].decode()
-    assert original in content
-    row = tasktrove_row({**MULTICHALLENGE, path: content.replace(original, replacement).encode()})
-    assert rejection_of("tasktrove-multichallenge", row).reason in {
-        "unsupported_rewardkit_judge",
-        "unsupported_rewardkit_runtime",
-        "unsupported_rewardkit_provider",
-    }
-
-
-def test_multichallenge_rejects_an_extra_test_file():
-    row = tasktrove_row({**MULTICHALLENGE, "tests/extra.py": b"print('extra')\n"})
-    assert rejection_of("tasktrove-multichallenge", row).reason == "unsupported_rewardkit_layout"
-
-
-@pytest.mark.parametrize("value", [0.0, 0.125, 1.0])
-def test_multichallenge_grade_reports_the_source_reward_unchanged(tmp_path, value):
-    (tmp_path / "test.sh").write_text(
-        f"printf '%s' '{json.dumps({'reward': value})}' > {shlex.quote(str(tmp_path / 'reward.json'))}\n"
-    )
-    assert multichallenge_grade.run_source(tmp_path, tmp_path, 5) == {
-        "status": "scored",
-        "reward": value,
-        "detail": {"source": "harbor-rewardkit"},
-    }
-
-
-def test_multichallenge_grade_reports_a_failed_run_as_infrastructure_without_its_logs(tmp_path):
-    (tmp_path / "reward.json").write_text('{"reward": 1.0}')
-    (tmp_path / "test.sh").write_text("echo 'provider-header-secret-value' >&2\nexit 7\n")
-    verdict = multichallenge_grade.run_source(tmp_path, tmp_path, 5)
-    assert (verdict["status"], verdict["reward"], verdict["detail"]["exit_code"]) == ("infra_error", 0.0, 7)
-    assert "provider-header-secret-value" not in json.dumps(verdict)
-
-
-@pytest.mark.parametrize(
-    "name,content",
-    [
-        ("deterministic_gate", b"def broken(hidden_source_text\n"),
-        ("verifier.py", b"def broken(hidden_source_text\n"),
-        ("verifier_data.json", b'{"hidden_reference_text":'),
-        ("judge.toml", b'[judge]\nreference = "hidden_reference_text'),
-    ],
-)
-def test_multichallenge_grade_rejects_a_malformed_suite_before_running_it(tmp_path, name, content):
-    marker = tmp_path / "runner-started"
-    (tmp_path / "test.sh").write_text(f"touch {shlex.quote(str(marker))}\nexit 7\n")
-    (tmp_path / name).write_bytes(content)
-    verdict = multichallenge_grade.run_source(tmp_path, tmp_path, 5)
-    assert (verdict["status"], verdict["detail"]["file"]) == ("invalid_task", name)
-    assert not marker.exists()
-    assert "hidden_" not in json.dumps(verdict)
-
-
-@pytest.mark.parametrize("payload", [{"other": 1}, {"reward": 1, "extra": 0}, {"reward": True}, {"reward": 2}])
-def test_multichallenge_grade_refuses_a_malformed_source_reward(tmp_path, payload):
-    (tmp_path / "test.sh").write_text("exit 0\n")
-    (tmp_path / "reward.json").write_text(json.dumps(payload))
-    with pytest.raises(ValueError):
-        multichallenge_grade.run_source(tmp_path, tmp_path, 5)
+def test_multichallenge_rejects_a_judge_config_that_does_not_parse():
+    row = tasktrove_row({**MULTICHALLENGE, "tests/judge.toml": b'[judge]\njudge = "unterminated'})
+    rejection = rejection_of("tasktrove-multichallenge", row)
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "malformed_judge_config")
