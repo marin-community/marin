@@ -26,13 +26,27 @@ from shellbox.machine import (
 from .test_daytona_machine import LocalDaytona
 
 
-@pytest.mark.parametrize("backend", ["docker", "gvisor", "daytona", "shellsim", "qemu"])
-def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, monkeypatch, backend):
+@pytest.mark.parametrize(
+    "backend,source_name",
+    [
+        ("docker", "source"),
+        ("docker", "-"),
+        ("docker", "--help"),
+        ("gvisor", "source"),
+        ("gvisor", "-"),
+        ("gvisor", "--help"),
+        ("daytona", "source"),
+        ("shellsim", "source"),
+        ("qemu", "source"),
+    ],
+)
+def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, monkeypatch, backend, source_name):
     create_process = asyncio.create_subprocess_exec
 
     async def local_process(*args, **kwargs):
         if args[0] == "docker":
             args = args[args.index("download-fixture") + 1 :]
+            kwargs["cwd"] = tmp_path
         return await create_process(*args, **kwargs)
 
     async def local_docker(*args, **kwargs):
@@ -45,7 +59,7 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", local_docker)
     payload = b"\x00\xffanswer" * 32768
-    source = tmp_path / "source"
+    source = tmp_path / source_name
     source.write_bytes(payload)
     target = tmp_path / "download"
     target.write_bytes(b"existing")
@@ -54,6 +68,7 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
         client = None
         remote = str(source)
         if backend in {"docker", "gvisor"}:
+            remote = source_name
             machine = (DockerMachine if backend == "docker" else GvisorMachine)(
                 "download-fixture", MachineSpec(DockerImage("fixture"))
             )

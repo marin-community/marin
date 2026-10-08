@@ -112,6 +112,7 @@ async def docker(
 
 
 async def _download_chunks(name: str, source: str) -> AsyncGenerator[bytes, None]:
+    source = source if PurePosixPath(source).is_absolute() else f"./{source}"
     process = await asyncio.create_subprocess_exec(
         "docker",
         "exec",
