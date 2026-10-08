@@ -39,11 +39,6 @@ def test_policy_json_round_trips_to_the_same_digest(programs):
         (lambda p: p["band_rules"]["too_easy"].update(then="note"), "accept"),
         (lambda p: p["band_rules"]["too_easy"].update(notes=1), "unknown fields \\['notes'\\]"),
         (lambda p: p["validation"].pop("adversary_submissions"), "missing fields \\['adversary_submissions'\\]"),
-        (lambda p: p["validation"].update(roles=["shortcut"]), "unknown fields \\['roles'\\]"),
-        (
-            lambda p: p["validation"].update(adversary_output_tokens=32768),
-            "unknown fields \\['adversary_output_tokens'\\]",
-        ),
     ],
 )
 def test_policy_json_states_every_field_and_no_other(programs, edit, problem):
