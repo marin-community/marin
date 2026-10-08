@@ -20,12 +20,14 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-`download(source, target, max_bytes=limit)` supports regular files only.
-It reads fixed 64 KiB chunks and replaces the target only after a complete transfer.
-An oversized candidate file raises `DownloadLimitExceeded`, a candidate-input error,
-without replacing the target. Provider errors and caller cancellation also preserve
-the target and remove partial files. With no byte limit, directory downloads retain
-their existing behavior.
+`download(source, target, max_bytes=limit)` accepts regular files only and uses bounded transfer buffers.
+It replaces the target after the transfer succeeds.
+An oversized file raises `DownloadLimitExceeded` without replacing the target.
+Provider errors and cancellation also preserve the target and remove partial files.
+Without a byte limit, `download` also accepts directories.
+
+Iris, QEMU, and ShellSim execute a guest command for each 64 KiB download chunk.
+Large transfers can exceed their caller's deadline. Exclude unnecessary files from grading artifacts.
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
@@ -59,17 +61,13 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
-Daytona task images require `setsid` for command timeout recovery.
-A command timeout stops its process group and preserves the sandbox for later commands.
-If the stop command fails or times out, the adapter raises an infrastructure error and closes the sandbox.
-Caller cancellation also closes the sandbox.
+Command timeouts stop the command's process group. A successful stop preserves the machine for later commands.
+A failed stop raises an infrastructure error and closes the machine. Caller cancellation also closes the machine.
 
-Daytona records process-group leader PIDs as root, outside `su`, in a root-only directory.
-Non-root Daytona commands require a task-machine account and util-linux `su --session-command`.
-Docker stops commands with the command's user privileges, including the image
-default when no user is specified. A failed Docker stop disposes of the container.
-These boundaries prevent a non-root candidate from using a PID file to authorize
-a root kill. They do not isolate a root candidate from other root-owned processes.
+Docker stops commands as the command user or the image's default user.
+Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
+Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
+Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
