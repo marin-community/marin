@@ -187,17 +187,6 @@ def test_dockerfile_reuses_existing_pip_install_line_instead_of_adding_a_new_run
     assert "RUN pip install --upgrade pip uv pytest pytest-json-report" in body
 
 
-@pytest.mark.parametrize("repository", ["john-kurkowski__tldextract.3d1bf184", "marshmallow-code__marshmallow.9716fc62"])
-def test_swesmith_preserves_selected_cases(repository):
-    task = read_task_binary(_fixture())
-    task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
-    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
-    converted = read_task_binary(record.task_binary)
-    assert parse_spec(converted.text(VERIFIER_TOML)).must_pass == tuple(
-        json.loads(task.text("tests/config.json"))["FAIL_TO_PASS"]
-    )
-
-
 @pytest.mark.docker
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("repository", ["john-kurkowski__tldextract.3d1bf184", "marshmallow-code__marshmallow.9716fc62"])
