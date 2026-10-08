@@ -13,8 +13,9 @@ with the repair brief as ``Revision.failure`` and the build recomputes the steps
 A ``Retry`` re-enters validation after a backoff, re-running only unsettled trials. A build the machine
 host failed (``BuildInfrastructureFailure``) spends no revision and reaches no author: it records
 ``BUILD_INFRASTRUCTURE`` and rebuilds the same program after the same backoff. Either kind of retry,
-spent, ends the item ``ABANDONED``. A host failure no retry changes (``HOST_REJECTIONS``: the host
-has no factory for the machine kind) rejects the item as ``HOST`` at once. An unhandled exception,
+spent, ends the item ``ABANDONED`` with its causes. A host failure no retry changes (``HOST_REJECTIONS``:
+the host has no factory for the machine kind) abandons the item at once, so the next launch on a host
+with the factory builds it. An unhandled exception,
 ``GlmUnavailable`` included, records ``FAILED`` and propagates.
 
 Each loop iteration derives the item's state from its event log, runs the sub-phase the state names
@@ -554,10 +555,7 @@ async def _build(item: _Item, state: ItemState) -> None:
         except GlmUnavailable:
             raise
         except BuildInfrastructureFailure as failure:
-            if failure.cause in HOST_REJECTIONS:
-                _reject(item, state, RejectKind.HOST, f"the build cannot run on this host: {failure}")
-            else:
-                _host_failed(item, state, program.digest, failure)
+            _host_failed(item, state, program.digest, failure)
             return
         except Exception as error:
             # A BuildFailure or any other exception the program raised goes back to the author as a revision.
@@ -584,10 +582,14 @@ async def _build(item: _Item, state: ItemState) -> None:
 
 def _host_failed(item: _Item, state: ItemState, program_digest: str, failure: BuildInfrastructureFailure) -> None:
     policy = item.policy
-    retries = len(state.build_host_failures) + 1
-    abandon = retries > policy.max_build_retries
+    # A cause that holds while the host is unchanged abandons at once: no backoff ladder, no rebuild here.
+    at_once = failure.cause in HOST_REJECTIONS
+    retries = 0 if at_once else len(state.build_host_failures) + 1
+    abandon = at_once or retries > policy.max_build_retries
     not_before = time.time() + (0.0 if abandon else retry_wait(policy.retry_backoff, retries))
-    if abandon:
+    if at_once:
+        logger.warning("%s: the build cannot run on this host (%s); abandoning the item", item.item_id, failure)
+    elif abandon:
         logger.warning(
             "%s: the build host failed (%s) after %d rebuilds; abandoning the item",
             item.item_id,

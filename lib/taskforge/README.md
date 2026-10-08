@@ -92,7 +92,7 @@ or on a package the order does not name.
   `scheduling_timeout` or `host_unreachable`, even when the program wrapped it; it is never a
   `BuildFailure`, and the caller does not charge it to the program.
   `build.infrastructure.HOST_REJECTIONS` names the causes that hold for as long as the host is
-  unchanged (`no_factory`).
+  unchanged (`no_factory`); the loop abandons such an item without retrying.
 - `validate.trials.run_trials(task, execution, plan, settings, model)`: runs k trials through
   `ShellboxRolloutEngine`. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
   `validate.classify.classify` is the only failure classifier. `TrialPlan.first_attempt` numbers
@@ -345,13 +345,15 @@ call, a review repair is a whole validation round. A build failure, or any excep
 program raises, goes back to the author as a revision. A
 `build.infrastructure.BuildInfrastructureFailure` (no factory for the machine kind, a scheduling
 timeout, an unreachable host) is the machine host's failure, not the program's: it spends no
-revision and the author never sees it. A missing factory is deterministic on the host (a laptop
-without Docker stays without Docker), so it rejects the item as `HOST` at once, as review rejects a
-trial the host cannot run; retrying it would spend the backoff ladder on every launch and never
-reach a terminal. For a transient cause the loop records `BUILD_INFRASTRUCTURE` with the cause,
+revision and the author never sees it. The loop records `BUILD_INFRASTRUCTURE` with the cause,
 waits out the retry backoff without holding a slot and rebuilds the same program; a host failure
 after `max_build_retries` rebuilds ends the item `ABANDONED` with its cause counts, and the next
-launch rebuilds the same program with a fresh count. `GlmUnavailable` (the endpoint's failure) propagates
+launch rebuilds the same program with a fresh count. A missing factory is deterministic on the host
+(a laptop without Docker stays without Docker), so it abandons the item at once (`retries_used=0`,
+`abandon=true`): retrying would spend the backoff ladder for nothing. It is not a `HOST` rejection,
+because `REJECTED` is final and a run root moved to a host with the factory must still build the
+item; `ABANDONED` is re-entered on the next launch. A host failure never ends an item `REJECTED` or
+`FAILED`. `GlmUnavailable` (the endpoint's failure) propagates
 and records `FAILED`. A
 repair whose rebuild produces the same task digest counts as a failed revision whose failure text is
 the brief again, so the author cannot spend the repair budget returning the same program. The
