@@ -102,28 +102,32 @@ def gauss_values(g: Gauss, v: jax.Array, segment_ids: jax.Array, reach: int) -> 
 
 
 def _gauss_read(a, gv: GaussValues, v, segment_ids, qi, seg_q):
-    """``sum_j a_ij smooth_j / sum_j a_ij mass_j`` without the kernel mass that lands after the query: for keys within
-    the kernel's reach, subtract their spill onto tokens ``i + 1 .. i + K`` from the output and the normaliser."""
+    """``sum_{t <= i} [sum_j a_ij G(t - j)] v_t`` over the query's document, normalised by its total weight. Keys at
+    least ``K`` back use the smoothed values (their kernel lies entirely in the past); for the ``K`` nearest keys the
+    weights on raw past tokens ``i - 2K + 1 .. i`` are built explicitly, so no future value ever enters a sum (a
+    subtract-the-spill form leaks through rounding when the normaliser is small)."""
     batch, heads, chunk, seq = a.shape
     reach = (gv.kernel.shape[-1] - 1) // 2
-    main = jnp.einsum("bhqk,bkhd->bqhd", a, gv.smooth)
-    z = jnp.einsum("bhqk,bkh->bqh", a, gv.mass)
+    keys = jnp.arange(seq)
+    far = (qi[:, None] - keys[None, :]) >= reach  # [C, S]
+    a_far = jnp.where(far[None, None], a, 0.0)
+    num = jnp.einsum("bhqk,bkhd->bqhd", a_far, gv.smooth)
+    z = jnp.einsum("bhqk,bkh->bqh", a_far, gv.mass)
     m = jnp.arange(reach)
-    back = qi[:, None] - m[None, :]  # [C, K]: key i - m
+    back = qi[:, None] - m[None, :]  # [C, K]: near key i - m
     a_band = jnp.take_along_axis(a, jnp.broadcast_to(jnp.clip(back, 0, seq - 1), (batch, heads, chunk, reach)), axis=-1)
     a_band = jnp.where(back >= 0, a_band, 0.0)
-    u = jnp.arange(1, reach + 1)
-    o = m[None, :] + u[:, None]  # [K(u), K(m)]: the offset that lands on token i + u
-    spill_w = jnp.where(o <= reach, gv.kernel[:, jnp.clip(o + reach, 0, 2 * reach)], 0.0)  # [H, K, K]
-    c = jnp.einsum("bhcm,hum->bhcu", a_band, spill_w)
-    ahead = jnp.clip(qi[:, None] + u[None, :], 0, seq - 1)  # [C, K]
-    same_doc = segment_ids[:, ahead] == seg_q[:, :, None]  # [B, C, K]
-    ok = ((qi[:, None] + u[None, :]) < seq)[None] & same_doc
-    c = c * ok[:, None]
-    v_ahead = v.astype(jnp.float32)[:, ahead]  # [B, C, K, H, E]
-    corr = jnp.einsum("bhcu,bcuhd->bchd", c, v_ahead)
-    z = z - jnp.sum(c, axis=-1).transpose(0, 2, 1)
-    return (main - corr) / (z[..., None] + 1e-6)
+    r = jnp.arange(2 * reach)  # token t = i - r
+    o = m[None, :] - r[:, None]  # [2K(r), K(m)]: offset from key i - m to token i - r
+    near_w = jnp.where(jnp.abs(o) <= reach, gv.kernel[:, jnp.clip(o + reach, 0, 2 * reach)], 0.0)  # [H, 2K, K]
+    w = jnp.einsum("bhcm,hrm->bhcr", a_band, near_w)  # weight on token i - r
+    tok = qi[:, None] - r[None, :]  # [C, 2K]
+    tok_c = jnp.clip(tok, 0, seq - 1)
+    ok = (tok >= 0)[None] & (segment_ids[:, tok_c] == seg_q[:, :, None])  # [B, C, 2K]
+    w = w * ok[:, None]
+    num = num + jnp.einsum("bhcr,bcrhd->bchd", w, v.astype(jnp.float32)[:, tok_c])
+    z = z + jnp.sum(w, axis=-1).transpose(0, 2, 1)
+    return num / (z[..., None] + 1e-6)
 
 
 class DcmhaMode(NamedTuple):
