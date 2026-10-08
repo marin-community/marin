@@ -80,6 +80,12 @@ got = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().s
 verdict = {"status": "scored", "reward": float(got == "twelve"), "detail": {}}
 pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
 """
+KEY_GRADER = """import json, os, pathlib
+got = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
+key = pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "key/answer.txt").read_text().strip()
+verdict = {"status": "scored", "reward": float(got == key), "detail": {}}
+pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+"""
 
 
 @dataclass
@@ -209,6 +215,21 @@ async def test_script_verifier_grades_the_text_answer_of_a_task_without_a_machin
     result = await run(lowered, [{"role": "assistant", "content": answer}])
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected)
+
+
+@pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
+async def test_script_verifier_reads_its_private_files_from_the_tests_directory(answer, expected):
+    grader = script_verifier(KEY_GRADER, {}, timeout=20, files=(file("key/answer.txt", "twelve\n"),))
+    lowered = lower_here(answer_task(grader))
+
+    result = await run(lowered, [{"role": "assistant", "content": answer}])
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected)
+
+
+def test_script_verifier_refuses_a_file_that_shadows_the_grader():
+    with pytest.raises(ValueError, match="repeat a path"):
+        script_verifier(TEXT_GRADER, {}, timeout=20, files=(file("config.json", "{}"),))
 
 
 @pytest.mark.parametrize(

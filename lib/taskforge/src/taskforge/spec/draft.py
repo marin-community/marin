@@ -221,16 +221,27 @@ def shell_verifier(
     return GraderPackage(verifier, tuple(files))
 
 
-def script_verifier(script: str, config: Mapping[str, JsonValue], *, timeout: float) -> GraderPackage:
+def script_verifier(
+    script: str, config: Mapping[str, JsonValue], *, timeout: float, files: Sequence[TaskResource] = ()
+) -> GraderPackage:
     """A Python grader that verifyit's ``script`` mode runs on the host after the attempt.
 
-    ``script`` is ``grader.py`` and ``config`` its private ``config.json``. The
-    grader reads captured output under ``$VERIFYIT_WORKSPACE`` (the text answer at
+    ``script`` is ``grader.py`` and ``config`` its private ``config.json``; ``files``
+    are further private inputs, paths relative to the tests directory. The grader
+    reads captured output under ``$VERIFYIT_WORKSPACE`` (the text answer at
     ``answer.txt``, output paths under ``captured/``), its inputs under
     ``$VERIFYIT_TESTS_DIR``, writes ``$VERIFYIT_LOGS_DIR/verdict.json`` and exits 0.
     It runs under the host's ``python3`` with the standard library only.
+
+    Raises:
+        ValueError: a file is named ``grader.py`` or ``config.json``, or two files share a path.
     """
-    return script_package(script.encode(), dict(config), timeout=timeout)
+    package = script_package(script.encode(), dict(config), timeout=timeout)
+    resources = package.resources + tuple(files)
+    paths = [resource.path for resource in resources]
+    if len(set(paths)) != len(paths):
+        raise ValueError(f"Script grader files repeat a path: {sorted(paths)}")
+    return GraderPackage(package.verifier, resources)
 
 
 def answer_verifier(spec: Spec) -> GraderPackage:
