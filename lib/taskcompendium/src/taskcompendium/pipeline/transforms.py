@@ -15,6 +15,7 @@ from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
+    REJECTING_CHECK_STATUSES,
     RESOURCES_OVER_BUDGET,
     CheckResult,
     Confidence,
@@ -205,7 +206,7 @@ def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
     ):
         # These are source-level decisions, not missing per-task model responses.
         # Cheap failures always retain their own rejection evidence.
-        failed = [f"check:{check['check']}" for check in row["checks"] if check["status"] == "fail"]
+        failed = [f"check:{check['check']}" for check in row["checks"] if check["status"] in REJECTING_CHECK_STATUSES]
         if failed:
             return {**row, "filter_status": "reject", "filter_reasons": failed}
         if row["quality_basis"] == QualityBasis.INFERRED_FROM_SOURCE and policy.minimum_confidence == Confidence.HIGH:

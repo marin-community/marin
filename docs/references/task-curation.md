@@ -104,12 +104,19 @@ comparators or rewrite tests to accept a reference.
 Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
 when the declaration has no `golden` or it returns `None` because the task has no
-known answer, an empty submission, which must score 0. A grader that runs in a
-machine grades the empty submission in a fresh machine of its image, staged as for
-a rollout whose agent replied with empty text and wrote nothing: an empty answer
-file where the grader reads one, a conversation ending in the empty reply, and an
-empty workspace. The control passes when the grader runs and scores 0; a grader
-that crashes or writes no reward is an infrastructure error. An in-process grader
+known answer, an empty submission, which shows that the grader runs. A grader that
+runs in a machine grades the empty submission in a fresh machine of its image,
+staged as for a rollout whose agent replied with empty text and wrote nothing: an
+empty answer file where the grader reads one, a conversation ending in the empty
+reply, and an empty workspace. The empty control passes when the grader runs and
+scores 0 or rejects the submission. When the grader runs and gives the empty
+submission a positive reward, the task is defective: an empty reply satisfies it,
+as it satisfies an instruction-following constraint such as "use no commas". The
+control records `defect`, which rejects the row with reason `check:empty`; the
+trial still counts as checked and passed toward the source's pass fraction, and
+the verification report counts it under `defective`. A golden that does not score
+1 fails, which rejects the row and counts against the source. A grader that
+crashes or writes no reward is an infrastructure error. An in-process grader
 scores the empty reply directly. A golden is a `Reply`, `WorkspaceFiles`, or an
 `OracleCommand`, such as a TaskTrove `solution/solve.sh`,
 run with the task's worker and oracle files in a fresh machine of the task's agent

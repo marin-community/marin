@@ -4,8 +4,8 @@
 """Apply a policy to retained curation evidence without new model calls."""
 
 from taskcompendium.pipeline.models import (
+    REJECTING_CHECK_STATUSES,
     CheckResult,
-    CheckStatus,
     Confidence,
     Decision,
     Disposition,
@@ -21,7 +21,7 @@ CONFIDENCE_RANK = {Confidence.LOW: 0, Confidence.MEDIUM: 1, Confidence.HIGH: 2}
 
 def task_decision(task_id: str, checks: list[CheckResult], review: ReviewRecord, policy: FilterPolicy) -> Decision:
     """Separate quality decisions from incomplete review evidence."""
-    failed = [f"check:{check.check}" for check in checks if check.status == CheckStatus.FAIL]
+    failed = [f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES]
     if failed:
         return Decision(task_id=task_id, disposition=Disposition.REJECT, reasons=failed)
     if review.status != ReviewStatus.REVIEWED or review.verdict is None:

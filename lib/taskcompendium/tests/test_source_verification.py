@@ -446,6 +446,15 @@ def test_sample_failure_remains_rejected_outside_full_verification_sample(tmp_pa
     assert corrected_row["task_json"] == corrected.model_dump_json()
 
 
+def test_defective_task_row_is_rejected_when_its_source_passes():
+    row = {"task_id": "0", "filter_status": "keep", "filter_reasons": [], "grader_readiness": "unverified"}
+    checks = [CheckResult(check="empty", status=CheckStatus.DEFECT, detail="graded: reward=1.0; expected=0.0")]
+    gated = gate_source_row(row, status=SourceVerificationStatus.PASSED, results={"0": checks})
+    assert gated["filter_status"] == "reject"
+    assert gated["filter_reasons"] == ["check:empty"]
+    assert gated["grader_readiness"] == GraderReadiness.READY
+
+
 def test_sample_is_independent_of_partitions_and_ignores_rejected_rows():
     rows = [{"task_id": f"task-{i}", "filter_status": "keep" if i % 3 else "reject"} for i in range(100)]
     whole = sample_rows(iter(rows), size=11, seed=42)
@@ -464,6 +473,8 @@ def test_sample_is_independent_of_partitions_and_ignores_rejected_rows():
     "statuses, threshold, expected, passed, inconsistent",
     [
         ([("pass", "pass"), ("pass", "pass")], 1.0, "passed", 2, 0),
+        # A rewarded empty submission is a task defect; the grader ran, so the source still passes.
+        ([("pass", "pass"), ("defect", "defect"), ("pass", "defect")], 1.0, "passed", 3, 0),
         ([("pass", "pass"), ("pass", "fail")], 0.75, "rejected", 1, 1),
         ([("pass", "pass"), ("fail", "fail")], 0.5, "passed", 1, 0),
         ([("pass", "pass"), ("unsupported", "unsupported")], 0.5, "inconclusive", 1, 0),
@@ -498,6 +509,8 @@ def test_source_decision_counts_tasks_and_requires_complete_coverage(
     assert report.status == expected
     assert report.counts.passed == passed
     assert report.counts.inconsistent == inconsistent
+    assert report.counts.defective == sum("defect" in trials for trials in statuses)
+    assert report.counts.failed == sum("fail" in trials for trials in statuses)
     if expected == "skipped":
         assert report.pass_fraction is None
         row = {"task_id": "0", "filter_status": "keep", "filter_reasons": [], "grader_readiness": "unverified"}

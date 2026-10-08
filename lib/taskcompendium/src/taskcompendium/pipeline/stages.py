@@ -37,8 +37,8 @@ from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
+    REJECTING_CHECK_STATUSES,
     CheckResult,
-    CheckStatus,
     Decision,
     Disposition,
     FilterPolicy,
@@ -200,7 +200,7 @@ def task_checks(task: TaskSpec) -> list[CheckResult]:
 
 
 def _with_checks(audit: TaskAudit, checks: list[CheckResult]) -> dict[str, Any]:
-    failed = [f"check:{check.check}" for check in checks if check.status == CheckStatus.FAIL]
+    failed = [f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES]
     return audit.model_copy(
         update={
             "checks": checks,

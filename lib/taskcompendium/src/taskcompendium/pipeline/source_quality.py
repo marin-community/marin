@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader
 from taskcompendium.pipeline.models import (
-    CheckStatus,
+    REJECTING_CHECK_STATUSES,
     Confidence,
     Quality,
     ReferenceStatus,
@@ -106,7 +106,7 @@ def quality_exclusion(audit: TaskAudit) -> str | None:
         return f"normalization:{audit.normalization_rejection.kind}"
     if audit.decision is not None:
         return audit.decision.reasons[0]
-    if any(check.status == CheckStatus.FAIL for check in audit.checks):
+    if any(check.status in REJECTING_CHECK_STATUSES for check in audit.checks):
         return "check:failed"
     return None
 

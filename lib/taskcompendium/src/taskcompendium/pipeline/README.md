@@ -62,10 +62,13 @@ cannot convert.
    - `golden(task)`, a known-correct `Reply`, `WorkspaceFiles` or
      `OracleCommand`, which must score 1;
    - otherwise, when the declaration has no `golden` or it returns `None`, an
-     empty submission, which must score 0. A sandbox grader runs on it in a
-     fresh machine of its image, with an empty answer file where it reads one,
-     a conversation ending in an empty reply, and an empty workspace, so the
-     control also shows that the grader runs.
+     empty submission, which shows that the grader runs. A sandbox grader runs
+     on it in a fresh machine of its image, with an empty answer file where it
+     reads one, a conversation ending in an empty reply, and an empty
+     workspace. The control passes when the grader scores it 0 or rejects it.
+     A positive reward records a `defect`: an empty reply satisfies the task.
+     The row is rejected with `check:empty`, and because the grader ran, the
+     trial counts as checked and passed for the source.
 
    An `OracleCommand` runs with the task's worker and oracle resources
    installed in a fresh machine of the task's agent image, whose tools and
@@ -111,21 +114,22 @@ across all shards (the driver samples at most 20 tasks by default) and runs each
 task's control in a fresh environment once per attempt (the driver makes one
 attempt). An attempt
 whose control hits an infrastructure error runs again, up to two more times,
-before it is recorded. A task passes when its control passes on every attempt and
-no earlier trial failed; a task with both a pass and a definite failure counts as
-inconsistent. The source passes when the pass fraction meets
+before it is recorded. A task passes when its control passes or records a defect
+on every attempt and no earlier trial failed; a task with both a pass and a
+definite failure counts as inconsistent. The report's `counts.defective` records
+the sampled tasks with a defect. The source passes when the pass fraction meets
 `minimum_pass_fraction` (the driver uses 95%). Unsupported runtimes,
 infrastructure errors and an empty sample make the source inconclusive, which
-defers its eligible rows. Failed controls reject the affected tasks even when the
-source passes. Unsampled rows of a passing source get `source_sampled`
-readiness.
+defers its eligible rows. Failed and defective controls reject the affected tasks
+even when the source passes. Unsampled rows of a passing source get
+`source_sampled` readiness.
 
 Reruns reuse complete trials from a previous `verify/report.json`. Trial identity
 covers the whole task, the controls code, the machine backend and worker image,
 all TaskCompendium, VerifyIT and Shellbox Python files, and the verification
 settings. QEMU reuse requires a digest-pinned worker image carrying the bundle;
 network-enabled graders always run fresh. Infrastructure errors rerun the whole
-trial; definite failures survive successful retries.
+trial; definite failures and defects survive successful retries.
 
 ## Review execution
 

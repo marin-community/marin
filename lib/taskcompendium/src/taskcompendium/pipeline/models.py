@@ -151,11 +151,23 @@ class SourceRecipe:
 
 
 class CheckStatus(StrEnum):
+    """A check's outcome.
+
+    ``DEFECT``: the grader ran cleanly and rewarded a submission that should earn nothing, such as an
+    empty reply to a constraint an empty reply satisfies. The task is trivially satisfiable; the grader
+    is not at fault.
+    """
+
     PASS = "pass"
     FAIL = "fail"
+    DEFECT = "defect"
     SKIPPED = "skipped"
     UNSUPPORTED = "unsupported"
     INFRA_ERROR = "infra_error"
+
+
+REJECTING_CHECK_STATUSES = frozenset({CheckStatus.FAIL, CheckStatus.DEFECT})
+"""Check outcomes that reject the checked row with a ``check:<name>`` reason."""
 
 
 class GraderReadiness(StrEnum):

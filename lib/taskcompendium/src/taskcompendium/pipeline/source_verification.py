@@ -34,7 +34,14 @@ from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
-from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, GraderReadiness, VerificationReport
+from taskcompendium.pipeline.models import (
+    REJECTING_CHECK_STATUSES,
+    CheckResult,
+    CheckStatus,
+    CheckSuite,
+    GraderReadiness,
+    VerificationReport,
+)
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.stages import (
     ACCEPTED_SHARD_TEMPLATE,
@@ -46,11 +53,13 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "7"
+SOURCE_VERIFICATION_REVISION = "8"
 VERIFICATION_REPORT_FILENAME = "verification.json"
+"""The verified stage's report; a rerun reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
 """Extra runs of one attempt whose controls hit an infrastructure error, such as a sandbox that never started."""
-"""The verified stage's report; a rerun reuses its matching control trials."""
+GRADED_CHECK_STATUSES = frozenset({CheckStatus.PASS, *REJECTING_CHECK_STATUSES})
+"""Check outcomes that show whether the grader works, so their task counts as checked."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +139,8 @@ class VerifiedSample:
 
 @dataclass(frozen=True)
 class KnownFailure:
+    """The rejecting checks, failed or defective, of an exact task outside the current sample."""
+
     task_sha256: str
     checks: list[CheckResult]
 
@@ -242,7 +253,7 @@ def saved_trials(report_path: str, *, identity: str, attempts: int) -> dict[tupl
             or item.attempt != trial.attempt
             or item.attempt not in range(report["policy"]["attempts"])
             or trial.status != _trial_status(trial.checks)
-            or not any(check.status == CheckStatus.FAIL for check in trial.checks)
+            or not any(check.status in REJECTING_CHECK_STATUSES for check in trial.checks)
         ):
             raise ValueError("Prior failed evidence contradicts current sample membership or actual controls")
         execution_ids.add(item.execution_id)
@@ -256,11 +267,12 @@ def saved_trials(report_path: str, *, identity: str, attempts: int) -> dict[tupl
 
 
 def _failed_trials(saved: Mapping[tuple[str, int], SavedTrial]) -> list[HistoricalTrial]:
+    """Saved trials with a rejecting check; a failure or a defect is a definite property of its task."""
     return [
         record
         for item in saved.values()
         for record in (*item.history, HistoricalTrial(trial=item.trial, evidence=item.evidence))
-        if any(check.status == CheckStatus.FAIL for check in record.trial.checks)
+        if any(check.status in REJECTING_CHECK_STATUSES for check in record.trial.checks)
     ]
 
 
@@ -274,7 +286,7 @@ def _known_failures(trials: list[HistoricalTrial]) -> dict[str, KnownFailure]:
         checks = [] if previous is None else previous.checks
         failures[item.task_id] = KnownFailure(
             item.task_sha256,
-            [*checks, *(check for check in record.trial.checks if check.status == CheckStatus.FAIL)],
+            [*checks, *(check for check in record.trial.checks if check.status in REJECTING_CHECK_STATUSES)],
         )
     return failures
 
@@ -286,14 +298,14 @@ def _complete_trial(trial: VerificationTrial) -> bool:
 
 
 def sample_result_checks(result: SampleResult) -> list[CheckResult]:
-    """Keep definite historical failures visible without retaining resolved runtime blockers."""
+    """Keep definite historical failures and defects visible without retaining resolved runtime blockers."""
     return [
         *(check for trial in result.trials for check in trial.checks),
         *(
             check
             for previous in result.previous_trials
             for check in previous.trial.checks
-            if check.status == CheckStatus.FAIL
+            if check.status in REJECTING_CHECK_STATUSES
         ),
     ]
 
@@ -306,6 +318,8 @@ def _trial_status(checks: list[CheckResult]) -> CheckStatus:
         return CheckStatus.INFRA_ERROR
     if not statuses or CheckStatus.UNSUPPORTED in statuses:
         return CheckStatus.UNSUPPORTED
+    if CheckStatus.DEFECT in statuses:
+        return CheckStatus.DEFECT
     if statuses == {CheckStatus.SKIPPED}:
         return CheckStatus.SKIPPED
     return CheckStatus.PASS
@@ -313,9 +327,16 @@ def _trial_status(checks: list[CheckResult]) -> CheckStatus:
 
 @dataclass
 class VerificationCounts:
+    """Sampled tasks by outcome.
+
+    A ``defective`` task's grader ran and rewarded a submission that should earn nothing. It is
+    also ``checked`` and ``passed``, because the grader works; its row is rejected separately.
+    """
+
     checked: int = 0
     passed: int = 0
     failed: int = 0
+    defective: int = 0
     unsupported: int = 0
     infra_error: int = 0
     inconsistent: int = 0
@@ -441,15 +462,17 @@ def source_verification_report(
         ):
             raise ValueError("Verification result has incomplete trials")
         statuses = {trial.status for trial in result.trials}
-        historical_failure = any(
-            check.status == CheckStatus.FAIL for previous in result.previous_trials for check in previous.trial.checks
-        )
-        failed = CheckStatus.FAIL in statuses or historical_failure
-        counts.passed += statuses == {CheckStatus.PASS} and not historical_failure
+        historical = {check.status for previous in result.previous_trials for check in previous.trial.checks}
+        failed = CheckStatus.FAIL in statuses or CheckStatus.FAIL in historical
+        # A defect shows the grader ran, so it counts toward the source's pass fraction.
+        counts.passed += statuses <= {CheckStatus.PASS, CheckStatus.DEFECT} and not failed
         counts.failed += failed
+        counts.defective += CheckStatus.DEFECT in statuses or CheckStatus.DEFECT in historical
         counts.inconsistent += CheckStatus.PASS in statuses and failed
         all_checks = [check for trial in result.trials for check in trial.checks]
-        counts.checked += historical_failure or any(c.status in (CheckStatus.PASS, CheckStatus.FAIL) for c in all_checks)
+        counts.checked += bool(historical & REJECTING_CHECK_STATUSES) or any(
+            c.status in GRADED_CHECK_STATUSES for c in all_checks
+        )
         counts.unsupported += CheckStatus.UNSUPPORTED in statuses or any(
             c.status == CheckStatus.UNSUPPORTED for c in all_checks
         )
@@ -494,7 +517,7 @@ def gate_source_row(
             "checks": [check.model_dump(mode="json") for check in checks],
             "grader_readiness": grader_readiness(checks).value,
         }
-        failed = [f"check:{check.check}" for check in checks if check.status == CheckStatus.FAIL]
+        failed = [f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES]
         if failed:
             row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(set(failed))]}
     if not is_accepted(row):

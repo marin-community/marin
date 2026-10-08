@@ -40,7 +40,9 @@ DIAGNOSTIC_TAIL_CHARS = 1500
 def control_result(grade: GradeResult, name: str, expected_reward: float) -> CheckResult:
     """Require the expected reward, counting a rejected submission as zero, while retaining runtime errors.
 
-    A result that is not a pass keeps the grader's exit code and the tails of its stdout and stderr.
+    A positive reward where zero is expected is a ``DEFECT``: the grader ran, and the task accepts a
+    submission that should earn nothing. A result that is not a pass keeps the grader's exit code and
+    the tails of its stdout and stderr.
     """
     if grade.status == Outcome.UNAVAILABLE:
         status = CheckStatus.UNSUPPORTED
@@ -50,6 +52,8 @@ def control_result(grade: GradeResult, name: str, expected_reward: float) -> Che
         grade.status == Outcome.SUBMISSION_FAILURE and expected_reward == 0.0
     ):
         status = CheckStatus.PASS
+    elif grade.status == Outcome.GRADED and expected_reward == 0.0 and grade.reward is not None and grade.reward > 0.0:
+        status = CheckStatus.DEFECT
     else:
         status = CheckStatus.FAIL
     detail = f"{grade.status}: reward={grade.reward}; expected={expected_reward}"
@@ -68,10 +72,14 @@ def control_result(grade: GradeResult, name: str, expected_reward: float) -> Che
 
 
 def grader_readiness(checks: list[CheckResult]) -> GraderReadiness:
-    """Summarize control coverage independently of the static quality decision."""
+    """Summarize control coverage independently of the static quality decision.
+
+    A ``DEFECT`` check leaves the grader ready: the grader ran and produced a reward, and the filter
+    rejects the defective task's row on its own.
+    """
     if any(check.status == CheckStatus.FAIL for check in checks):
         return GraderReadiness.FAILED
-    if not checks or any(check.status != CheckStatus.PASS for check in checks):
+    if not checks or any(check.status not in (CheckStatus.PASS, CheckStatus.DEFECT) for check in checks):
         return GraderReadiness.UNVERIFIED
     return GraderReadiness.READY
 

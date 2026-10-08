@@ -33,7 +33,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
 
-PASS, FAIL = CheckStatus.PASS, CheckStatus.FAIL
+PASS, FAIL, DEFECT = CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.DEFECT
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})
 REFERENCE_CONTROLS = Controls(golden=reference_reply)
 AGENT_IMAGE = "agent@sha256:" + "a" * 64
@@ -176,20 +176,20 @@ def test_oracle_without_a_correct_submission_fails_the_golden_control(task, orac
 
 @pytest.mark.parametrize(
     "script, status",
-    [(b'test "$(cat answer.txt)" = 7\n', PASS), (b"test -f answer.txt && test ! -s answer.txt\n", FAIL)],
+    [(b'test "$(cat answer.txt)" = 7\n', PASS), (b"test -f answer.txt && test ! -s answer.txt\n", DEFECT)],
     ids=["grader_rejects_empty_answer", "grader_accepts_only_empty_answer"],
 )
 def test_empty_control_runs_the_script_grader_on_an_empty_answer_file(script, status):
-    # The second grader passes only an empty /app/answer.txt, so its failure shows the grader ran on one.
+    # The second grader rewards only an empty /app/answer.txt, so its defect shows the grader ran on one.
     images = RecordingImages()
     task = script_graded(answer_task(), script)
     assert checks(task, Controls(), FixtureGradingMachines(images)) == {"empty": status}
     assert [machine.image for machine in images.created] == [GRADER_IMAGE]
 
 
-def test_grader_that_accepts_any_submission_fails_the_empty_control():
+def test_grader_that_rewards_an_empty_submission_marks_the_task_defective():
     task = script_graded(file_task(), b"true\n", answer_path=None)
-    assert checks(task, Controls(), FixtureGradingMachines()) == {"empty": FAIL}
+    assert checks(task, Controls(), FixtureGradingMachines()) == {"empty": DEFECT}
 
 
 @pytest.mark.parametrize(
