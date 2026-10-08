@@ -11,6 +11,7 @@
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -535,6 +536,16 @@ def project_by_name(name: str) -> ExternalProject:
     return next(project for project in EXTERNAL_PROJECTS if project.config_name == name)
 
 
+def validate_marinskyrl_environment(project: ExternalProject) -> None:
+    """Check installed metadata that uv's rigging override replaces during resolution."""
+    with tempfile.TemporaryDirectory(prefix="marinskyrl-lock-") as temporary_directory:
+        directory = Path(temporary_directory)
+        for name in ("pyproject.toml", "uv.lock"):
+            shutil.copyfile(project.directory / name, directory / name)
+        subprocess.run(["uv", "sync", "--project", str(directory), "--frozen", "--no-dev", "--quiet"], check=True)
+        subprocess.run(["uv", "pip", "check", "--python", str(directory / ".venv" / "bin" / "python")], check=True)
+
+
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
     """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
 
@@ -638,6 +649,8 @@ def main() -> None:
                 ],
                 check=True,
             )
+            if project.config_name == "MarinSkyRL":
+                validate_marinskyrl_environment(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
