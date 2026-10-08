@@ -7,7 +7,8 @@ GLM-5.3 authors and builds a program, review turns a shortcut finding into a ``R
 to ``build.author.author`` as ``Revision.failure``, and the revised program is rebuilt with the repair's
 ``invalidate``. The revised draft must ship the shortcut control verbatim, and its grader must reject
 that control when RolloutEngine replays it. Takes ``parallel_key`` for the template's research step.
-Artifacts go to ``.evidence/review/live-test/<timestamp>/``.
+Artifacts go to ``<evidence_root>/review/live-test/<timestamp>/``, where ``evidence_root`` is the fixture in
+``tests/conftest.py``.
 """
 
 import time
@@ -44,7 +45,6 @@ from taskforge.spec.controls import (
 from taskforge.validate.calibration import FINDING_ROLES, Finding, FindingKind
 from taskforge.validate.controls import control_turns
 
-EVIDENCE = Path(__file__).resolve().parents[2] / ".evidence" / "review" / "live-test"
 BUILD_REVISIONS = 3
 
 PROPOSAL = """---
@@ -115,13 +115,18 @@ async def build_with_revisions(
     raise AssertionError(f"no buildable program in {BUILD_REVISIONS} authorings: {revision}")
 
 
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "review" / "live-test"
+
+
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
 async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortcut(
-    glm_settings, parallel_key, image_cache, summary, rules, scripted_model
+    glm_settings, parallel_key, image_cache, summary, rules, scripted_model, evidence_dir
 ):
     proposal = parse(PROPOSAL)
-    run_dir = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
+    run_dir = evidence_dir / time.strftime("%Y%m%d-%H%M%S")
     factories = machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=image_cache)
     endpoint = GlmEndpoint(base_url=glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
     async with GlmClient(endpoint) as client, httpx.AsyncClient() as http:
