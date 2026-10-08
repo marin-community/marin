@@ -83,7 +83,9 @@ function fromQuery(): string[] {
 }
 
 function load() {
-  if (comparing.value) refresh()
+  if (!comparing.value) return
+  if (data.value?.models.join(',') !== selected.value.join(',')) data.value = null
+  refresh()
 }
 
 onMounted(() => {
@@ -98,7 +100,10 @@ watch(
   },
   { deep: true },
 )
-watch(selectionQuery, refreshModels)
+watch(selectionQuery, () => {
+  data.value = null
+  refreshModels()
+})
 watch(selected, load)
 watch(
   () => meta.value?.default_cohort,
