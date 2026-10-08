@@ -168,6 +168,9 @@ def _landlock_ruleset(
         handled_net=launch.LANDLOCK_NET_TCP if abi >= 4 and network == NetworkPolicy.DENY else 0,
         scoped=launch.LANDLOCK_SCOPES if abi >= 6 else 0,
         rules=(
+            # Listing any directory is allowed so tools such as tar can open "/" as their extraction root;
+            # reading a file still needs a readable or writable root above it.
+            ("/", launch.LANDLOCK_READ_DIR),
             *((path, LANDLOCK_READ) for path in readable),
             *((path, LANDLOCK_DEVICE_WRITE & fs_rights) for path in WRITABLE_DEVICES),
             *((path, fs_rights) for path in writable),
