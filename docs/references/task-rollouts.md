@@ -96,6 +96,9 @@ A separate shell verifier receives `resources.all` and the declared artifacts fr
 Collect commands execute on the task machine before artifact transfer.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
+Artifact transfer rejects symlinked source paths and all symlink and hardlink archive members, including in-tree links.
+The archive and expanded contents each have a 1 GiB limit.
+Invalid artifacts give `SUBMISSION_FAILURE` with reward zero. Provider I/O failures remain infrastructure errors.
 VerifyIT supplies shared verifier specifications and grading implementations.
 A separate VerifyIT grader receives captured `output_paths`, common resources, and private verifier resources.
 Worker-only resources do not enter a separate verifier.

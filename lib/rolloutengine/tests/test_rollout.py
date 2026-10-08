@@ -5,6 +5,9 @@
 
 import asyncio
 import json
+import os
+import re
+import shutil
 import tarfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -40,6 +43,7 @@ from taskcompendium.submission import AnswerCall, FinalAction, PlainText
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import NumericSpec, StdioSpec, StructuredExactSpec, parse_spec
 
+import rolloutengine.grading as grading
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
@@ -57,6 +61,177 @@ from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeS
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
+
+
+@pytest.fixture
+def local_artifact_factory(tmp_path):
+    class Machine:
+        def __init__(self, root, spec, archive_growth):
+            self.root = root
+            self.spec = spec
+            self.archive_growth = archive_growth
+            self.closed = False
+            (root / "workspace").mkdir(parents=True)
+            (root / "tmp").mkdir()
+
+        def path(self, value):
+            assert value == "/" or value.split("/")[1] in {"workspace", "tests", "logs", "tmp"}
+            return self.root / value.lstrip("/")
+
+        async def run(self, command):
+            def rewrite(value):
+                for path in re.findall(r"(?<![\w/%*])/[^\s'\";)}]*", value):
+                    self.path(path)
+                return re.sub(r"/(workspace|tests|logs|tmp)(?=/|$)", lambda match: str(self.path(match[0])), value)
+
+            process = await asyncio.create_subprocess_exec(
+                *(rewrite(value) for value in command.argv),
+                cwd=self.path(command.cwd or "/workspace"),
+                env={**os.environ, **self.spec.env, **command.env},
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(command.stdin), timeout=command.timeout)
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            limit = command.output_limit_bytes
+            return Result(
+                process.returncode,
+                stdout[:limit],
+                stderr[:limit],
+                len(stdout) > limit,
+                len(stderr) > limit,
+                ExitReason.EXITED,
+            )
+
+        async def upload(self, source, target):
+            destination = self.path(target)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source, destination, follow_symlinks=False)
+
+        async def download(self, source, target):
+            origin = self.path(source)
+            if origin.is_dir():
+                shutil.copytree(origin, target, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(origin, target, follow_symlinks=False)
+                if source.startswith("/tmp/taskcompendium-artifact-") and self.archive_growth:
+                    with target.open("ab") as archive:
+                        archive.write(b"x" * self.archive_growth)
+
+        async def close(self):
+            self.closed = True
+
+    class Factory:
+        def __init__(self, prepare_artifacts, *, archive_growth=0):
+            self.machines = []
+            self.prepare_artifacts = prepare_artifacts
+            self.archive_growth = archive_growth
+
+        async def create(self, spec):
+            machine = Machine(tmp_path / str(len(self.machines)), spec, self.archive_growth)
+            self.machines.append(machine)
+            if spec.env.get("ARTIFACT_TASK_MACHINE") == "1":
+                self.prepare_artifacts(machine)
+            return machine
+
+    return Factory
+
+
+@pytest.mark.parametrize(
+    "artifact_case",
+    [
+        "directory",
+        "file",
+        "relative_private",
+        "absolute_private",
+        "in_tree",
+        "hardlink",
+        "directory_root",
+        "file_root",
+        "parent_link",
+        "missing",
+        "kind_mismatch",
+        "excluded_link",
+        "oversized_archive",
+        "oversized_expanded",
+        "grown_archive",
+    ],
+)
+async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
+    local_artifact_factory, artifact_case, monkeypatch
+):
+    def prepare_artifacts(machine):
+        if artifact_case == "missing":
+            return
+        artifacts = machine.path("/logs/artifacts")
+        artifacts.mkdir(parents=True)
+        answer = artifacts / "answer"
+        if artifact_case in {"directory_root", "parent_link"}:
+            artifacts.rename(artifacts.with_name("real"))
+            artifacts.symlink_to("real", target_is_directory=True)
+        if artifact_case in {"relative_private", "absolute_private"}:
+            answer.symlink_to("../../tests/expected" if artifact_case == "relative_private" else "/tests/expected")
+        elif artifact_case in {"in_tree", "hardlink", "file_root"}:
+            submitted = artifacts / "submitted"
+            submitted.write_bytes(b"secret")
+            if artifact_case == "hardlink":
+                os.link(submitted, answer)
+            else:
+                answer.symlink_to("submitted")
+        else:
+            answer.write_bytes(b"secret")
+        if artifact_case == "excluded_link":
+            (artifacts / "cache").mkdir()
+            (artifacts / "cache/private").symlink_to("../../../tests/expected")
+
+    root = local_artifact_factory(prepare_artifacts, archive_growth=1024**2 if artifact_case == "grown_archive" else 0)
+    if artifact_case == "oversized_archive":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024)
+    if artifact_case == "oversized_expanded":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_EXPANDED_BYTES", 1)
+    if artifact_case == "grown_archive":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024**2)
+    is_file = artifact_case in {"file", "file_root", "parent_link"}
+    source = "/logs/artifacts/answer" if is_file else "/logs/artifacts"
+    artifact = VerifierArtifact(
+        source=source,
+        target=source,
+        kind=ArtifactKind.FILE if is_file or artifact_case == "kind_mismatch" else ArtifactKind.DIRECTORY,
+        exclude=("cache",) if artifact_case == "excluded_link" else (),
+    )
+    verifier = ShellVerifierSpec(
+        argv=("sh", "-c", "cmp /logs/artifacts/answer /tests/expected"), reward=ExitCodeReward(), artifacts=(artifact,)
+    )
+    task = file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                capabilities=("shell", "filesystem"), environment_variables={"ARTIFACT_TASK_MACHINE": "1"}
+            ),
+            "verifier": VerifierSpec(
+                kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
+                parameters_json=verifier.model_dump_json(),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("expected", b"secret"),)),
+        }
+    )
+    model = ReplayModel([{"role": "assistant", "content": "Done."}])
+    record = await engine(model, {"local": root}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    valid = artifact_case in {"directory", "file", "excluded_link"}
+    assert (record.grade.status, record.grade.reward) == (
+        (Outcome.GRADED, 1.0) if valid else (Outcome.SUBMISSION_FAILURE, 0.0)
+    )
+    assert all(machine.closed for machine in root.machines)
 
 
 @dataclass
@@ -997,6 +1172,9 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
 async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(tmp_path, download_failed):
     answer = tmp_path / "answer"
     answer.write_bytes(b"12\n")
+    archive_path = tmp_path / "artifact.tar"
+    with tarfile.open(archive_path, "w") as archive:
+        archive.add(answer, arcname="answer")
     factory = RecordingShellSimFactory()
 
     class Machine:
@@ -1005,6 +1183,7 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
 
         async def run(self, command):
             if command.argv[:2] == ("tar", "-cf"):
+                await self.machine.upload(archive_path, command.argv[2])
                 return Result(0, b"", b"", False, False, ExitReason.EXITED)
             if command.argv[:2] == ("rm", "-f") and command.argv[2].startswith("/tmp/taskcompendium-artifact-"):
                 raise OSError("Cannot remove artifact archive")
@@ -1014,9 +1193,6 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
             if source.startswith("/tmp/taskcompendium-artifact-"):
                 if download_failed:
                     raise ConnectionError("Artifact download failed")
-                with tarfile.open(target, "w") as archive:
-                    archive.add(answer, arcname="answer")
-                return
             await self.machine.download(source, target)
 
         async def upload(self, source, target):
@@ -1027,7 +1203,10 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
 
     class Factory:
         async def create(self, spec):
-            return Machine(await factory.create(spec))
+            machine = await factory.create(spec)
+            await machine.run(Command(("mkdir", "-p", "/workspace/project")))
+            await machine.upload(answer, "/workspace/project/answer")
+            return Machine(machine)
 
     verifier = ShellVerifierSpec(
         argv=("sh", "-c", 'test "$(cat /workspace/project/answer)" = 12'),

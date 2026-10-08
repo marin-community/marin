@@ -42,6 +42,10 @@ from rolloutengine.machines import _install_resources, _prepare_machine
 from rolloutengine.spec import LoweredTaskSpec
 
 MISSING_FILE_EXIT = 44
+LINKED_ARTIFACT_EXIT = 45
+MAX_ARTIFACT_ARCHIVE_BYTES = 1024**3
+# Sparse members can produce more bytes than the archive contains.
+MAX_ARTIFACT_EXPANDED_BYTES = 1024**3
 SPEC_PATH = "/tests/verifier.toml"
 VERDICT_PATH = "/logs/verifier/verdict.json"
 
@@ -90,11 +94,14 @@ async def _grade_rollout(
     )
     assert grading_machine is not None
     with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
-        for index, artifact in enumerate(verifier.artifacts):
-            assert machine is not None
-            path = Path(directory) / str(index)
-            if await _download_artifact(machine, artifact, path, timeout, cleanup, resources):
-                await grading_machine.upload(path, artifact.target)
+        try:
+            for index, artifact in enumerate(verifier.artifacts):
+                assert machine is not None
+                path = Path(directory) / str(index)
+                if await _download_artifact(machine, artifact, path, timeout, cleanup, resources):
+                    await grading_machine.upload(path, artifact.target)
+        except SubmissionFailure as error:
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     return await _shell_grade(
         verifier,
         messages,
@@ -190,32 +197,34 @@ async def _download_artifact(
     resources: AsyncExitStack,
 ) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
-    kind = artifact.kind
-    if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
-        result = await machine.run(
-            Command(
-                argv=(
-                    "sh",
-                    "-c",
-                    'if [ -d "$1" ]; then printf directory; elif [ -f "$1" ]; then printf file; '
-                    f"else exit {MISSING_FILE_EXIT}; fi",
-                    "artifact-kind",
-                    artifact.source,
-                ),
-                timeout=timeout,
-                user="0",
-            )
+    result = await machine.run(
+        Command(
+            argv=(
+                "sh",
+                "-c",
+                'path=${1%/}; while [ "$path" ] && [ "$path" != / ]; do '
+                f'[ ! -L "$path" ] || exit {LINKED_ARTIFACT_EXIT}; '
+                'case "$path" in */*) path=${path%/*};; *) break;; esac; done; '
+                'if [ -d "$1" ]; then printf directory; elif [ -f "$1" ]; then printf file; '
+                f"else exit {MISSING_FILE_EXIT}; fi",
+                "artifact-kind",
+                artifact.source,
+            ),
+            timeout=timeout,
+            user="0",
         )
-        if result.exit_code == MISSING_FILE_EXIT and artifact.missing == MissingArtifactPolicy.SKIP:
-            return False
-        if result.exit_code != 0:
-            raise RuntimeError(f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}")
-        kind = ArtifactKind(result.stdout.decode())
-    if kind == ArtifactKind.DIRECTORY:
-        target.mkdir()
-    if not artifact.exclude or kind != ArtifactKind.DIRECTORY:
-        await machine.download(artifact.source, target)
-        return True
+    )
+    if result.exit_code == MISSING_FILE_EXIT and artifact.missing == MissingArtifactPolicy.SKIP:
+        return False
+    if result.exit_code == MISSING_FILE_EXIT:
+        raise SubmissionFailure(f"Grading artifact is missing: {artifact.source}")
+    if result.exit_code == LINKED_ARTIFACT_EXIT:
+        raise SubmissionFailure(f"Grading artifact path contains a link: {artifact.source}")
+    if result.exit_code != 0 or result.stdout_truncated:
+        raise RuntimeError(f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}")
+    kind = ArtifactKind(result.stdout.decode())
+    if artifact.kind != ArtifactKind.AUTO and artifact.kind != kind:
+        raise SubmissionFailure(f"Grading artifact has the wrong kind: {artifact.source}")
     remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
     resources.push_async_callback(
         cleanup.run, "artifact_archive_remove", partial(_remove_archive, machine, remote_archive, timeout)
@@ -226,21 +235,50 @@ async def _download_artifact(
                 "tar",
                 "-cf",
                 remote_archive,
-                *(f"--exclude={pattern}" for pattern in artifact.exclude),
+                *(f"--exclude={pattern}" for pattern in artifact.exclude if kind == ArtifactKind.DIRECTORY),
                 "-C",
-                artifact.source,
-                ".",
+                artifact.source if kind == ArtifactKind.DIRECTORY else str(PurePosixPath(artifact.source).parent),
+                "--",
+                "." if kind == ArtifactKind.DIRECTORY else PurePosixPath(artifact.source).name,
             ),
             timeout=timeout,
             user="0",
         )
     )
     if result.exit_code != 0:
-        raise RuntimeError(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
+        raise SubmissionFailure(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
+    measured = await machine.run(
+        Command(("sh", "-c", 'wc -c < "$1"', "archive-size", remote_archive), timeout=timeout, user="0")
+    )
+    if measured.exit_code != 0 or measured.stdout_truncated:
+        raise RuntimeError(f"Cannot measure grading artifact archive: {artifact.source}")
+    if int(measured.stdout) > MAX_ARTIFACT_ARCHIVE_BYTES:
+        raise SubmissionFailure(f"Grading artifact archive exceeds the size limit: {artifact.source}")
     archive_path = target.with_suffix(".tar")
     await machine.download(remote_archive, archive_path)
-    with tarfile.open(archive_path) as archive:
-        archive.extractall(target, filter="data")
+    if archive_path.stat().st_size > MAX_ARTIFACT_ARCHIVE_BYTES:
+        raise SubmissionFailure(f"Grading artifact archive exceeds the size limit: {artifact.source}")
+    extracted = target.with_suffix(".contents")
+    extracted.mkdir()
+    expanded_bytes = 0
+    try:
+        with tarfile.open(archive_path, "r:") as archive:
+            for member in archive:
+                if member.issym() or member.islnk():
+                    raise SubmissionFailure(f"Grading artifact contains a link: {member.name}")
+                expanded_bytes += member.size
+                if expanded_bytes > MAX_ARTIFACT_EXPANDED_BYTES:
+                    raise SubmissionFailure(f"Grading artifact exceeds the expanded size limit: {artifact.source}")
+                archive.extract(member, extracted, filter="data")
+    except tarfile.TarError as error:
+        raise SubmissionFailure(f"Invalid grading artifact archive: {artifact.source}") from error
+    if kind == ArtifactKind.DIRECTORY:
+        extracted.rename(target)
+    else:
+        file = extracted / PurePosixPath(artifact.source).name
+        if not file.is_file():
+            raise SubmissionFailure(f"Grading artifact archive has no regular file: {artifact.source}")
+        file.rename(target)
     return True
 
 
