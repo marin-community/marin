@@ -70,7 +70,6 @@ from taskcompendium.models import AnswerType, Source, TaskSpec
 from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
-from taskforge.ledger.records import entry_to_json
 from taskforge.llm.client import GlmClient, Pool, endpoint_in_task
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
@@ -319,9 +318,9 @@ async def run_phase(
         "trials": [outcome_summary(outcome) for outcome in outcomes],
         "evidence": evidence_summary(outcomes),
         "machine_creates": {str(kind): factory.creates for kind, factory in timed.items() if factory.creates},
-        "ledger": [entry_to_json(entry) for path in ledger_files(directory / "ledger") for entry in read_entries(path)],
+        "ledger": [entry.to_json() for path in ledger_files(directory / "ledger") for entry in read_entries(path)],
     }
-    print(f"PHASE_END {phase} wall={wall_time:.1f}s evidence={json.dumps(summary['evidence'])}", flush=True)
+    print(f"PHASE_END {phase} wall_time={wall_time:.1f}s evidence={json.dumps(summary['evidence'])}", flush=True)
     return summary
 
 
