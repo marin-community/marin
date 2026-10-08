@@ -3,7 +3,9 @@
 
 """The RL data catalog: every dataset declaration, keyed by name."""
 
-from experiments.post_training.task_curation.datasets import arc, nemotron_ultra, reasoning_gym
+from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
+from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
 from experiments.post_training.task_curation.datasets.skyrl import ifeval as skyrl_ifeval
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math

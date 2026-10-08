@@ -24,9 +24,8 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.pipeline.sources import staged_raw_file_rows
 
-from experiments.post_training.task_curation.datasets.nemotron_ultra import (
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
     BLENDS,
-    DAPO,
     PLACEHOLDER_INPUTS,
     SKYWORK,
     SWE_GYM,
@@ -35,8 +34,10 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra import (
 )
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     CODE_CONTROLS,
+    DAPO,
     MCQA_CONTROLS,
     RDKIT_CONTROLS,
+    REASONING_GYM_CONTROLS,
     TOOL_ACTION_CONTROLS,
     WRONG_TOOL,
 )
@@ -114,7 +115,8 @@ def preference_row(component: str, prompt: str) -> dict:
 
 
 def format_row(component: str, agent: str) -> dict:
-    return ultra_row(component, agent, "List three fruits as bullets.", verifier={"type": "regex", "pattern": "^- "})
+    verifier = {"type": "regex", "verify_regex": ["^- "], "verify_min_matches": 3}
+    return ultra_row(component, agent, "List three fruits as bullets.", verifier=verifier)
 
 
 def structured_row(component: str, agent: str) -> dict:
@@ -158,7 +160,9 @@ COMPONENT_ROWS: dict[str, dict] = {
         "ultra_sft_step3200_calendar_v2",
         "calendar_simple_agent",
         "Schedule event 0 after 10am.",
-        exp_cal_state={"0": {"duration": 30, "constraint": "after 10am", "min_time": "09:00", "max_time": "12:00"}},
+        exp_cal_state={
+            "0": {"event_id": 0, "duration": 30, "constraint": "after 10am", "min_time": "09:00", "max_time": "12:00"}
+        },
     ),
     "ultra_sft_step3200_comp_coding": ultra_row(
         "ultra_sft_step3200_comp_coding",
@@ -209,7 +213,9 @@ COMPONENT_ROWS: dict[str, dict] = {
         "ultra_sft_step3200_nvarc_inductive",
         "nvarc_inductive_simple_agent",
         "Write transform(grid).",
-        test_cases=[{"input": GRID, "output": GRID}],
+        train=[{"input": GRID, "output": GRID}],
+        test_input=GRID,
+        expected_output=GRID,
     ),
     "ultra_sft_step3200_nvarc_transductive": ultra_row(
         "ultra_sft_step3200_nvarc_transductive",
@@ -434,6 +440,12 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
             "unsupported_agent",
         ),
         (
+            "ultra_sft_step3200_ds2_freeform",
+            {"verifier": {"type": "llm_judge"}},
+            "unsupported",
+            "unsupported_format_verifier",
+        ),
+        (
             "ultra_sft_step3200_jailbreak",
             {"_hf_question_placeholder": {"dataset": DAPO, "split": "train", "row": 0}},
             "unsupported",
@@ -498,6 +510,13 @@ def test_tool_action_controls_call_the_expected_tool_and_an_unadvertised_one(sta
     negative = TOOL_ACTION_CONTROLS.negative(task).event
     assert isinstance(negative, AssistantToolCalls) and negative.calls[0].name == WRONG_TOOL
     assert WRONG_TOOL not in {tool.name for tool in task.final_tools}
+
+
+def test_reasoning_gym_golden_is_the_rows_answer(staged):
+    assert REASONING_GYM_CONTROLS.golden is not None
+    assert reply_text(REASONING_GYM_CONTROLS.golden(task_for("ultra_sft_step3200_reasoning_gym", staged))) == "42"
+    unanswered = task_for("ultra_sft_step3200_reasoning_gym", staged, answer=None)
+    assert REASONING_GYM_CONTROLS.golden(unanswered) is None
 
 
 def test_tool_action_expecting_a_message_accepts_a_text_reply(staged):

@@ -30,8 +30,8 @@ class LocalSandbox:
     """Drop-in for ``SandboxClient`` that runs each program in a fresh interpreter.
 
     ``user`` is the uid and gid the program runs as. A root grader should pass an unprivileged id such as
-    65534 (``nobody``) and make ``/tests`` unreadable to it, so the program cannot read the expected
-    output; ``None`` runs the program as the grader's own user.
+    65534 (``nobody``) and make the file holding the expected output unreadable to it; ``None`` runs the
+    program as the grader's own user.
     """
 
     user: int | None

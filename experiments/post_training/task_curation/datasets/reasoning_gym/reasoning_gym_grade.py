@@ -1,108 +1,63 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score a reply with the task's own Reasoning Gym scorer and write the reward JSON.
+"""Score a generated Reasoning Gym reply against its regenerated entry and print the reward.
 
-Usage: ``reasoning_gym_grade.py CONFIG ANSWER SCORE``. ``CONFIG`` holds ``{"mode", "contract"}``:
-
-- ``generated``: regenerate the entry from its recorded generator seed and index, refuse a contract
-  whose recorded entry or configuration differs from the regenerated one, and score the text after
-  the last ``Answer:`` marker against the regenerated entry (which keeps the generator's Python types).
-- ``ultra``: score the last ``<answer>`` block, else the last boxed answer, of a Nemotron Ultra
-  reply against the row's question, answer and metadata.
+``/tests/config.json`` holds the row's contract: the recorded entry and the generation that produced
+it. The script regenerates the entry with the grader image's ``reasoning_gym`` and the seeds and JSON
+encoding of ``generate.py`` (shipped beside it), exits nonzero when the regenerated entry or the
+generator configuration differs from the recorded one, and otherwise scores the text after the reply's
+last ``Answer:`` marker, or the whole reply, with the task's own scorer. The scorer sees the
+generator's Python values, not their JSON forms.
 """
 
+import contextlib
 import dataclasses
-import importlib
 import json
-import operator
 import os
-import re
 import sys
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import date, datetime, time
-from fractions import Fraction
-from numbers import Integral
 from pathlib import Path
-from typing import cast
+from typing import Any
 
-import numpy as np
+import reasoning_gym
 
-# These constants and json_value repeat generate.py: this script ships alone to /tests in the grader
-# image, where generate.py and its generator checkout are absent. A mismatch fails loudly, because
-# the locator and regenerated-entry checks in generated_input refuse the contract.
-ROWS_PER_TASK = 1000
-GENERATION_SEED = 42
+sys.path.insert(0, "/tests")
 
+from generate import ROWS_PER_TASK, encoded, task_seed
 
-@dataclass(frozen=True)
-class ScorerInput:
-    task_name: str
-    entry: dict
-    candidate: str
+CONFIG = Path("/tests/config.json")
+ANSWER = Path("/app/answer.txt")
 
 
-def json_value(value):
-    """The JSON form the generator records for values JSON cannot represent directly."""
-    if isinstance(value, Integral):
-        return operator.index(value)
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, date | datetime | time):
-        return {"python_type": "datetime." + type(value).__name__, "isoformat": value.isoformat()}
-    if isinstance(value, Fraction):
-        return {"python_type": "fractions.Fraction", "numerator": value.numerator, "denominator": value.denominator}
-    raise TypeError(f"Generated value of type {type(value).__name__} is not JSON serializable")
-
-
-def generated_input(reasoning_gym, contract, answer):
-    datasets = importlib.import_module("reasoning_gym.factory").DATASETS
-    generation = contract["generation"]
-    expected_seed = GENERATION_SEED + sorted(datasets).index(generation["task"])
-    if generation["seed"] != expected_seed or not 0 <= generation["index"] < ROWS_PER_TASK:
+def regenerated_entry(generation: dict[str, Any]) -> dict[str, Any]:
+    name, index = generation["task"], generation["index"]
+    if generation["seed"] != task_seed(name) or not 0 <= index < ROWS_PER_TASK:
         raise ValueError("Recorded locator differs from the generated source")
-    dataset = reasoning_gym.create_dataset(generation["task"], size=ROWS_PER_TASK, seed=expected_seed)
-    encoded_config = json.loads(json.dumps(dataclasses.asdict(dataset.config), default=json_value))
-    if encoded_config != generation["config"]:
+    dataset = reasoning_gym.create_dataset(name, size=ROWS_PER_TASK, seed=generation["seed"])
+    if encoded(dataclasses.asdict(dataset.config)) != generation["config"]:
         raise ValueError("Recorded generator configuration differs from the generator defaults")
-    entry = dataset[generation["index"]]
-    if json.loads(json.dumps(entry, default=json_value)) != contract["entry"]:
-        raise ValueError("Regenerated entry differs from the recorded entry")
-    _, marker, candidate = answer.rpartition("Answer:")
-    return ScorerInput(generation["task"], entry, candidate.strip() if marker else answer.strip())
+    return dataset[index]
 
 
-def ultra_input(contract, answer):
-    extraction = importlib.import_module("skyrl_gym.envs.nemotron_ultra.answer_extraction")
-    entry = {"question": contract["question"], "answer": contract.get("answer"), "metadata": contract["metadata"]}
-    text = extraction.final_answer_text(answer)
-    matches = list(re.finditer(r"<answer>(.*?)</answer>", text, re.DOTALL))
-    candidate = matches[-1].group(1).strip() if matches else extraction.last_boxed_answer(text) or text.strip()
-    return ScorerInput(contract["metadata"]["source_dataset"], entry, candidate)
+def candidate(reply: str) -> str:
+    _, marker, after = reply.rpartition("Answer:")
+    return after.strip() if marker else reply.strip()
 
 
-def main(config_path, answer_path, score_path):
-    config = json.loads(Path(config_path).read_text())
-    mode, contract = config["mode"], config["contract"]
-    if mode == "generated":
-        # Some generators iterate over sets, so regeneration needs the recorded hash seed.
-        seed = str(contract["generation"]["python_hash_seed"])
-        if os.environ.get("PYTHONHASHSEED") != seed:
-            os.execve(sys.executable, [sys.executable, *sys.argv], {**os.environ, "PYTHONHASHSEED": seed})
-    reasoning_gym = importlib.import_module("reasoning_gym")
-    answer = Path(answer_path).read_text(errors="replace")
-    if mode == "generated":
-        inputs = generated_input(reasoning_gym, contract, answer)
-    elif mode == "ultra":
-        inputs = ultra_input(contract, answer)
-    else:
-        raise ValueError(f"Unknown Reasoning Gym grading mode: {mode}")
-    # Upstream annotates the returned two-argument scorer as a zero-argument callable.
-    scorer = cast(Callable[[str, dict], float], reasoning_gym.get_score_answer_fn(inputs.task_name))
-    reward = float(scorer(inputs.candidate, inputs.entry))
-    Path(score_path).write_text(json.dumps({"reward": reward, "detail": {"task_name": inputs.task_name, "mode": mode}}))
+def main() -> None:
+    contract = json.loads(CONFIG.read_text())["contract"]
+    generation = contract["generation"]
+    # Some generators iterate over sets, so the entry regenerates only under the recorded hash seed.
+    if os.environ.get("PYTHONHASHSEED") != str(generation["python_hash_seed"]):
+        raise ValueError(f"PYTHONHASHSEED must be {generation['python_hash_seed']} to regenerate the entry")
+    with contextlib.redirect_stdout(sys.stderr):
+        entry = regenerated_entry(generation)
+        if encoded(entry) != contract["entry"]:
+            raise ValueError("Regenerated entry differs from the recorded entry")
+        scorer = reasoning_gym.get_score_answer_fn(generation["task"])
+        reward = float(scorer(candidate(ANSWER.read_text(errors="replace")), entry))
+    print(reward)
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    main()

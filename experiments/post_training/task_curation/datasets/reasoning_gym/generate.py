@@ -1,19 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Print deterministic Reasoning Gym rows as JSONL from the generator checkout on ``PYTHONPATH``.
+"""Print deterministic Reasoning Gym rows as JSONL from the ``reasoning_gym`` on ``PYTHONPATH``.
 
-Usage: ``generate.py GENERATOR_REVISION EXCLUDED_GENERATORS_JSON PYTHON_HASH_SEED``. Rows cycle the
-sorted task registry, ``ROWS_PER_TASK`` entries per task with a stable per-task seed, and record the
-scorer's reward for the task's known answer and for a fixed wrong answer.
+Usage: ``generate.py GENERATOR_VERSION EXCLUDED_GENERATORS_JSON``, with ``PYTHONHASHSEED`` set, since
+some generators iterate over sets; rows record the seed so the grader can regenerate with it.
+Rows cycle the sorted task registry, ``ROWS_PER_TASK`` entries per task with a stable per-task seed,
+and record the scorer's reward for the task's known answer and for a fixed wrong answer. Each row also
+records whether a fresh dataset regenerates its entry, as the grader does before scoring.
+
+The grader imports this module from ``/tests`` for the seeds and the JSON encoding.
 """
 
 import contextlib
 import dataclasses
 import json
 import operator
+import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date, datetime, time
 from fractions import Fraction
 from numbers import Integral
@@ -34,6 +39,7 @@ type Scorer = Callable[[str, dict[str, Any]], float]
 
 
 def json_value(value: object) -> object:
+    """The JSON form of generated values JSON cannot represent directly."""
     if isinstance(value, Integral):
         return operator.index(value)
     if isinstance(value, np.generic):
@@ -43,6 +49,16 @@ def json_value(value: object) -> object:
     if isinstance(value, Fraction):
         return {"python_type": "fractions.Fraction", "numerator": value.numerator, "denominator": value.denominator}
     raise TypeError(f"Generated value of type {type(value).__name__} is not JSON serializable")
+
+
+def encoded(value: object) -> Any:
+    """``value`` as it reads back from a JSONL row."""
+    return json.loads(json.dumps(value, default=json_value))
+
+
+def task_seed(name: str) -> int:
+    """The seed of a task's dataset; registry positions fix seeds even for excluded tasks."""
+    return GENERATION_SEED + sorted(DATASETS).index(name)
 
 
 def negative_control(scorer: Scorer, entry: dict[str, Any]) -> dict[str, Any]:
@@ -72,37 +88,35 @@ def positive_candidate(name: str, entry: dict[str, Any]) -> str | None:
     return None
 
 
-def generated_rows(generator_revision: str, excluded_generators: dict[str, str], python_hash_seed: int):
-    names = sorted(DATASETS)
-    datasets = {}
-    scorers: dict[str, Scorer] = {}
+def generated_rows(
+    generator_version: str, excluded_generators: dict[str, str], python_hash_seed: int
+) -> Iterator[dict[str, Any]]:
+    names = [name for name in sorted(DATASETS) if name not in excluded_generators]
+    datasets = {name: reasoning_gym.create_dataset(name, size=ROWS_PER_TASK, seed=task_seed(name)) for name in names}
+    scorers = {name: cast(Scorer, reasoning_gym.get_score_answer_fn(name)) for name in names}
     for index in range(ROWS_PER_TASK):
-        for task_index, name in enumerate(names):
-            # Registry positions determine seeds even for excluded tasks.
-            if name in excluded_generators:
-                continue
-            if name not in datasets:
-                datasets[name] = reasoning_gym.create_dataset(
-                    name, size=ROWS_PER_TASK, seed=GENERATION_SEED + task_index
-                )
-                scorers[name] = cast(Scorer, reasoning_gym.get_score_answer_fn(name))
+        for name in names:
             dataset = datasets[name]
             entry = dataset[index]
+            # The grader builds a fresh dataset and reads one index, so a generator whose entries
+            # depend on earlier reads or on process state cannot be graded.
+            fresh = reasoning_gym.create_dataset(name, size=ROWS_PER_TASK, seed=task_seed(name))[index]
             scorer = scorers[name]
             answer = positive_candidate(name, entry)
             # Scorers may compare tuple-valued metadata, so score the entry before its JSON round trip.
             positive = {"candidate": answer, "reward": float(scorer(answer, entry)) if answer is not None else None}
             yield {
-                "entry": json.loads(json.dumps(entry, default=json_value)),
+                "entry": encoded(entry),
+                "reproducible": encoded(fresh) == encoded(entry),
                 "generation": {
                     "task": name,
-                    "seed": GENERATION_SEED + task_index,
+                    "seed": task_seed(name),
                     "index": index,
                     "config": dataclasses.asdict(dataset.config),
                     "python_hash_seed": python_hash_seed,
                 },
                 "recorded_pinned_generator_controls": {
-                    "generator_revision": generator_revision,
+                    "generator_version": generator_version,
                     "positive": positive,
                     "negative": negative_control(scorer, entry),
                     "execution": "Pinned reasoning-gym scorer",
@@ -110,8 +124,9 @@ def generated_rows(generator_revision: str, excluded_generators: dict[str, str],
             }
 
 
-def main(generator_revision: str, excluded_generators_json: str, python_hash_seed: int) -> None:
-    rows = iter(generated_rows(generator_revision, json.loads(excluded_generators_json), python_hash_seed))
+def main(generator_version: str, excluded_generators_json: str) -> None:
+    python_hash_seed = int(os.environ["PYTHONHASHSEED"])
+    rows = iter(generated_rows(generator_version, json.loads(excluded_generators_json), python_hash_seed))
     while True:
         with contextlib.redirect_stdout(sys.stderr):
             try:
@@ -122,4 +137,4 @@ def main(generator_revision: str, excluded_generators_json: str, python_hash_see
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+    main(sys.argv[1], sys.argv[2])

@@ -1,90 +1,50 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a Nemotron Ultra inductive ARC reply with the scorer the grader image installs.
+"""Score an ARC submission with the vendored NVARC scorer and print the reward.
 
-The NVARC scorer runs the submitted transform through the NeMo Skills sandbox server.
-
-Usage: ``arc_grade.py CONFIG ANSWER SCORE``. Reads the row contract from ``CONFIG`` and the reply from
-``ANSWER``; writes the reward JSON to ``SCORE``.
+``/tests/config.json`` holds ``{"mode", "contract"}``: the NVARC record (``expected_output``, and
+``test_input`` for inductive tasks). The submission is ``/app/solution.py`` when present, else
+``/app/answer.txt``: a reply, or a file the agent wrote. A transductive submission is parsed as a
+grid. An inductive submission's ``transform`` runs on the test input in a fresh interpreter under uid
+65534 in the temporary directory; the script first makes the config readable by root alone, so the
+program cannot read the expected output.
 """
 
-import importlib
 import json
-import os
-import signal
-import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
-from uuid import uuid4
 
-nvarc = importlib.import_module("skyrl_gym.envs.nemotron_ultra.nvarc")
-sandbox = importlib.import_module("skyrl_gym.envs.nemotron_ultra.sandbox")
+sys.path.insert(0, "/tests")
 
-TESTS = Path("/tests")
-LOGS = Path("/logs/verifier")
-SERVER = "/opt/nemo_skills/local_sandbox_server.py"
+from local_sandbox import LocalSandbox
+from skyrl_gym.envs.nemotron_ultra.nvarc import grade_inductive_arc, grade_transductive_arc
 
-
-def wait_for_server(process, worker_id):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"Original NeMo Skills sandbox exited: {process.returncode}")
-        try:
-            with urllib.request.urlopen("http://127.0.0.1:6000/health", timeout=0.2) as response:
-                if response.status == 200 and json.load(response)["worker"] == worker_id:
-                    return
-        except (OSError, urllib.error.URLError):
-            time.sleep(0.05)
-    raise TimeoutError("Original NeMo Skills sandbox did not become ready")
+CONFIG = Path("/tests/config.json")
+SUBMISSIONS = (Path("/app/solution.py"), Path("/app/answer.txt"))
+UNPRIVILEGED_USER = 65534
 
 
-def grade_inductive(answer, contract):
-    # The original scorer runs submitted Python through its HTTP sandbox. Keep
-    # the server under a separate UID so it cannot read held-out grader files.
-    TESTS.chmod(0o700)
-    LOGS.chmod(0o700)
-    worker_id = uuid4().hex
-    process = subprocess.Popen(
-        (
-            "setpriv",
-            "--reuid",
-            "65534",
-            "--regid",
-            "65534",
-            "--clear-groups",
-            "--no-new-privs",
-            "python3",
-            SERVER,
-        ),
-        cwd="/tmp",
-        env={**os.environ, "WORKER_NUM": worker_id},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    try:
-        wait_for_server(process, worker_id)
-        return nvarc.grade_inductive_arc(answer, contract, sandbox=sandbox.SandboxClient())
-    finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+def submission() -> str:
+    for path in SUBMISSIONS:
+        if path.is_file():
+            return path.read_text(errors="replace")
+    return ""
 
 
-def main():
-    config_path, answer_path, score_path = map(Path, sys.argv[1:4])
-    contract = json.loads(config_path.read_text())["contract"]
-    reward, diagnostics = grade_inductive(answer_path.read_text(), contract)
-    score_path.write_text(json.dumps({"reward": reward, "detail": diagnostics}))
+def main() -> None:
+    config = json.loads(CONFIG.read_text())
+    mode, record = config["mode"], config["contract"]
+    if mode == "transductive":
+        reward, detail = grade_transductive_arc(submission(), record)
+    elif mode == "inductive":
+        CONFIG.chmod(0o600)
+        sandbox = LocalSandbox(user=UNPRIVILEGED_USER)
+        reward, detail = grade_inductive_arc(submission(), record, sandbox=sandbox)
+    else:
+        raise ValueError(f"Unknown ARC mode: {mode}")
+    print(json.dumps(detail, default=str), file=sys.stderr)
+    print(reward)
 
 
 if __name__ == "__main__":

@@ -1,18 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ARC tasks keep their archive's grader (TaskTrove) or the NVARC scorer (Nemotron Ultra)."""
+"""ARC tasks, from TaskTrove archives and Nemotron Ultra rows, ship the NVARC scorer and its grade script."""
 
 import json
 
 import pytest
 from taskcompendium.grader import grader_config
-from taskcompendium.models import AnswerType, ScriptGrader, Source, TextMessage
+from taskcompendium.models import AnswerType, ScriptGrader, Source, StdoutReward, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow, Reply, WorkspaceFiles
-from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets import arc
+from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_ENVIRONMENT,
     FIXTURE_GRADER_IMAGE,
@@ -25,22 +24,33 @@ PIPELINES = {pipeline.name: pipeline for pipeline in arc.pipelines()}
 # The Nemotron Ultra declarations that use convert_ultra_arc name the grader image.
 ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]
-TASK_TOML = b"[verifier]\ntimeout_sec = 600.0\n"
-GRADER_FILES = {
-    "task.toml": TASK_TOML,
+ARCHIVE_FILES = {
+    "task.toml": b"[verifier]\ntimeout_sec = 600.0\n",
     "tests/test.sh": b"#!/bin/bash\npython3 /tests/verifier.py > /logs/verifier/reward.txt\n",
     "tests/verifier.py": b"print(1)\n",
     "environment/Dockerfile": b"FROM python:3.11\nRUN pip install numpy scipy\n",
 }
+SHIPPED = {
+    "grade.py",
+    "config.json",
+    "local_sandbox.py",
+    "skyrl_gym/__init__.py",
+    "skyrl_gym/envs/__init__.py",
+    "skyrl_gym/envs/aime/utils.py",
+    "skyrl_gym/envs/nemotron_ultra/__init__.py",
+    "skyrl_gym/envs/nemotron_ultra/answer_extraction.py",
+    "skyrl_gym/envs/nemotron_ultra/nvarc.py",
+    "skyrl_gym/envs/nemotron_ultra/sandbox.py",
+}
+"""The grade script, the row's record, and the NVARC scorer with the modules and package markers it imports."""
 
 
-def archive(instruction: str, verifier_data: dict, **files: bytes) -> dict:
+def archive(instruction: str, verifier_data: dict) -> dict:
     return tasktrove_row(
         {
             "instruction.md": instruction.encode(),
             "tests/verifier_data.json": json.dumps(verifier_data).encode(),
-            **GRADER_FILES,
-            **files,
+            **ARCHIVE_FILES,
         }
     )
 
@@ -51,34 +61,42 @@ ROWS: dict[str, dict] = {
     ),
     "tasktrove-arc_transductive": archive("Write the output grid to /app/answer.txt.", {"expected_output": GRID}),
 }
-OUTPUT_PATHS = {
-    "tasktrove-arc_inductive": ("/app/solution.py", "/app/answer.txt"),
-    "tasktrove-arc_transductive": ("/app/answer.txt",),
-}
-NEGATIVES = {
-    "tasktrove-arc_inductive": "/app/solution.py",
-    "tasktrove-arc_transductive": "/app/answer.txt",
+TASKTROVE = {
+    "tasktrove-arc_inductive": (
+        ("/app/solution.py", "/app/answer.txt"),
+        {"mode": "inductive", "contract": {"test_input": GRID, "expected_output": GRID}},
+        {"/app/solution.py": arc.literal_transform(GRID).encode()},
+        {"/app/solution.py": arc.FAILING_TRANSFORM.encode()},
+    ),
+    "tasktrove-arc_transductive": (
+        ("/app/answer.txt",),
+        {"mode": "transductive", "contract": {"expected_output": GRID}},
+        {"/app/answer.txt": b"0 1\n2 9\n"},
+        {"/app/answer.txt": b"__incorrect_grid__\n"},
+    ),
 }
 
 
 @pytest.mark.parametrize("name", sorted(ROWS))
-def test_tasktrove_arc_runs_the_archive_grader_on_the_agents_files(name):
+def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
+    output_paths, config, golden, negative = TASKTROVE[name]
     task = converted_task(PIPELINES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert (grader.argv, grader.cwd, grader.answer_path, grader.timeout) == (
-        ("bash", "/tests/test.sh"),
+    assert (grader.argv, grader.cwd, grader.answer_path, grader.reward) == (
+        ("python3", "/tests/grade.py"),
         "/",
         None,
-        600.0,
+        StdoutReward(),
     )
     assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
-    assert (task.answer_type, task.output_paths) == (AnswerType.FILE, OUTPUT_PATHS[name])
-    assert {"test.sh", "verifier.py", "verifier_data.json"} <= {resource.path for resource in task.resources.verifier}
+    assert (task.answer_type, task.output_paths) == (AnswerType.FILE, output_paths)
+    assert {resource.path for resource in task.resources.verifier} == SHIPPED
+    assert grader_config(task) == config
     controls = PIPELINES[name].controls
-    assert controls is not None and controls.negative is not None and controls.golden is None
-    negative = controls.negative(task)
-    assert isinstance(negative, WorkspaceFiles) and set(negative.files) == {NEGATIVES[name]}
+    assert controls is not None and controls.golden is not None and controls.negative is not None
+    assert controls.golden(task) == WorkspaceFiles(golden)
+    assert controls.negative(task) == WorkspaceFiles(negative)
 
 
 @pytest.mark.parametrize(
@@ -86,7 +104,7 @@ def test_tasktrove_arc_runs_the_archive_grader_on_the_agents_files(name):
     [
         (
             "tasktrove-arc_transductive",
-            tasktrove_row({"instruction.md": b"Solve.", **GRADER_FILES}),
+            tasktrove_row({"instruction.md": b"Solve.", **ARCHIVE_FILES}),
             ImportFailureKind.SOURCE_DEFECT,
             "missing_input",
         ),
@@ -94,29 +112,29 @@ def test_tasktrove_arc_runs_the_archive_grader_on_the_agents_files(name):
             "tasktrove-arc_transductive",
             archive("Solve.", {"expected_output": [[0, 10]]}),
             ImportFailureKind.SOURCE_DEFECT,
-            "invalid_verifier_data",
+            "reference_conflict",
         ),
         (
             "tasktrove-arc_inductive",
             archive("Solve.", {"test_cases": [{"input": GRID, "output": [[1], [1, 2]]}]}),
             ImportFailureKind.SOURCE_DEFECT,
+            "reference_conflict",
+        ),
+        (
+            "tasktrove-arc_inductive",
+            archive("Solve.", {"test_cases": [{"input": GRID}]}),
+            ImportFailureKind.SOURCE_DEFECT,
             "invalid_verifier_data",
         ),
         (
             "tasktrove-arc_inductive",
-            tasktrove_row(
-                {
-                    "instruction.md": b"Solve.",
-                    "tests/verifier_data.json": json.dumps({"test_cases": [{"input": GRID, "output": GRID}]}).encode(),
-                    "task.toml": TASK_TOML,
-                }
-            ),
+            archive("Solve.", {"test_cases": [{"input": GRID, "output": GRID}] * 2}),
             ImportFailureKind.UNSUPPORTED,
-            "missing_archive_grader",
+            "multiple_test_cases",
         ),
     ],
 )
-def test_tasktrove_arc_rejects_rows_without_a_valid_reference_or_grader(name, row, kind, reason):
+def test_tasktrove_arc_rejects_rows_nvarc_cannot_score(name, row, kind, reason):
     result = convert_row(PIPELINES[name], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
@@ -132,29 +150,32 @@ def ultra_row(agent: str, **fields) -> RawRow:
     return RawRow("nvarc", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), data)
 
 
+def reply(content: str) -> Reply:
+    return Reply(TextMessage(role="assistant", content=content))
+
+
 def test_ultra_transductive_controls_submit_the_expected_grid_and_a_changed_grid():
     result = arc.convert_ultra_arc(ultra_row(arc.TRANSDUCTIVE_AGENT, expected_output=GRID), ULTRA_CONTEXT)
     assert not isinstance(result, ImportRejection)
     task = result.task
-    assert grader_config(task)["contract"]["expected_output"] == GRID
-    assert arc.ultra_arc_golden(task) == Reply(TextMessage(role="assistant", content="0 1\n2 9"))
-    assert arc.ultra_arc_negative(task) == Reply(TextMessage(role="assistant", content="1 1\n2 9"))
+    assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path == "/app/answer.txt"
+    assert grader_config(task)["mode"] == "transductive"
+    assert arc.ultra_arc_golden(task) == reply("0 1\n2 9")
+    assert arc.ultra_arc_negative(task) == reply("1 1\n2 9")
 
 
-def test_ultra_inductive_ships_the_grade_script_and_has_no_known_program():
-    row = ultra_row(arc.INDUCTIVE_AGENT, test_cases=[{"input": GRID, "output": GRID}])
+def test_ultra_inductive_controls_submit_a_literal_transform_and_a_raising_one():
+    row = ultra_row(arc.INDUCTIVE_AGENT, test_input=GRID, expected_output=GRID)
     result = arc.convert_ultra_arc(row, ULTRA_CONTEXT)
     assert not isinstance(result, ImportRejection)
     task = result.task
-    assert isinstance(task.grader, ScriptGrader) and task.grader.argv == (
-        "python3",
-        f"/tests/{arc.ARC_GRADE}",
-        "/tests/config.json",
-        "/app/answer.txt",
-        "/logs/verifier/score.json",
-    )
-    scripts = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
-    assert scripts[arc.ARC_GRADE] == arc.ARC_GRADE_BYTES
-    assert arc.ultra_arc_golden(task) is None
+    assert {resource.path for resource in task.resources.verifier} == SHIPPED
+    assert arc.ultra_arc_golden(task) == reply(f"```python\n{arc.literal_transform(GRID)}```")
     negative = arc.ultra_arc_negative(task)
     assert isinstance(negative.event, TextMessage) and "raise RuntimeError" in negative.event.content
+
+
+def test_ultra_inductive_row_without_a_test_input_is_rejected():
+    result = arc.convert_ultra_arc(ultra_row(arc.INDUCTIVE_AGENT, expected_output=GRID), ULTRA_CONTEXT)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "invalid_verifier_data")
