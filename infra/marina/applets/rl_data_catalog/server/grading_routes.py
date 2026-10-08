@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from .grading_code import VERIFYIT_MODES_BINDING, PythonModuleSource
+from .composition import NEMOTRON_ENV
+from .grading_code import DEFINITION_BINDINGS, VERIFYIT_MODES_BINDING, PythonModuleSource
 
 ENVIRONMENT_METHODS = {"__init__", "init", "step", "set_rollout_evidence", "close"}
 NEMOTRON_PREFIX = "skyrl_gym.envs.nemotron_ultra."
@@ -77,7 +78,7 @@ def skyrl_grading_routes(
     ]
     bindings = {"self.verifyit_enabled": mode == GradingMode.VERIFYIT, "verifyit_enabled": mode == GradingMode.VERIFYIT}
     environment = row["environment"]
-    if environment != "nemotron_ultra":
+    if environment != NEMOTRON_ENV:
         if environment == "mcq":
             bindings[VERIFYIT_MODES_BINDING] = [VerifyitMode.MCQ]
         elif environment == "lcb" and mode == GradingMode.VERIFYIT:
@@ -106,7 +107,7 @@ def skyrl_grading_routes(
                 if agent == "abstention_simple_agent"
                 else "multichallenge" if agent == "multichallenge_simple_agent" else "jailbreak"
             )
-            values["__definition_bindings__"] = {
+            values[DEFINITION_BINDINGS] = {
                 NEMOTRON_PREFIX + "env:NemotronUltraEnv._grade_judge_profile": {"kind": kind},
                 NEMOTRON_PREFIX + "judge_profiles_verifyit:_evaluate": {"kind": kind},
             }

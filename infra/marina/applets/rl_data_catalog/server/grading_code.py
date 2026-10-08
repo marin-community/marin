@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 VERIFYIT_MODES_BINDING = "__verifyit_modes__"
+DEFINITION_BINDINGS = "__definition_bindings__"
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,16 @@ class PythonGradingProgram:
     digest: str
     modules: tuple[tuple[str, str], ...]
     external_imports: tuple[str, ...]
+
+
+def mode_literal_bindings(mode: ast.ClassDef) -> dict[str, Any]:
+    return {
+        mode.name + "." + member.targets[0].id: member.value.value
+        for member in mode.body
+        if isinstance(member, ast.Assign)
+        and isinstance(member.targets[0], ast.Name)
+        and isinstance(member.value, ast.Constant)
+    }
 
 
 class GradingBranches(ast.NodeTransformer):
@@ -190,13 +201,7 @@ def python_grading_code(
     values = dict(bindings or {})
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == "Mode":
-            for member in node.body:
-                if (
-                    isinstance(member, ast.Assign)
-                    and isinstance(member.targets[0], ast.Name)
-                    and isinstance(member.value, ast.Constant)
-                ):
-                    values[node.name + "." + member.targets[0].id] = member.value.value
+            values.update(mode_literal_bindings(node))
     definitions: dict[str, ast.stmt] = {}
     imports: dict[str, tuple[str, str]] = {}
     initialization = []
@@ -271,7 +276,7 @@ def python_grading_code(
             dependencies.add(imports[name])
             continue
         key = values.get("__name__", "") + ":" + name
-        definition_values = {**values, **values.get("__definition_bindings__", {}).get(key, {})}
+        definition_values = {**values, **values.get(DEFINITION_BINDINGS, {}).get(key, {})}
         node = GradingBranches(definition_values, preserve_documentation).visit(copy.deepcopy(definitions[name]))
         normalized = ast.Module(body=node, type_ignores=[]) if isinstance(node, list) else node
         selected[name] = normalized
@@ -368,13 +373,7 @@ def python_grading_program(
     if route_bindings.get(VERIFYIT_MODES_BINDING):
         spec = ast.parse(source.read("verifyit.spec"))
         mode = next(node for node in spec.body if isinstance(node, ast.ClassDef) and node.name == "Mode")
-        for member in mode.body:
-            if (
-                isinstance(member, ast.Assign)
-                and isinstance(member.targets[0], ast.Name)
-                and isinstance(member.value, ast.Constant)
-            ):
-                route_bindings["Mode." + member.targets[0].id] = member.value.value
+        route_bindings.update(mode_literal_bindings(mode))
     pending = list(selected)
     resolved: dict[str, PythonGradingCode] = {}
     retained_state: set[str] = set()
