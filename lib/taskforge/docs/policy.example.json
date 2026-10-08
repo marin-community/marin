@@ -23,11 +23,15 @@
     "max_build_retries": 2,
     "retry_backoff": {"initial": 60.0, "maximum": 900.0, "factor": 2.0, "jitter": 0.1},
     "output_token_budget": 1000000,
+    "band_rules": {
+      "too_easy": {"repairs": 1, "then": "accept"},
+      "too_hard": {"repairs": 1, "then": "reject"}
+    },
     "validation": {
       "k": 8,
       "adversary_k": 2,
-      "adversary_output_tokens": 32768,
-      "roles": ["shortcut", "leak", "ambiguity"],
+      "adversary_submissions": 10,
+      "adversary_repair_submissions": 3,
       "band": {"min_solve_rate": 0.125, "max_solve_rate": 0.875},
       "sampling": {
         "max_tokens": 131072,
