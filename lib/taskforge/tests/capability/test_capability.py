@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +18,7 @@ from taskforge.proposal.sources.capability import (
     PlannedSlot,
     SlotStatus,
     author_proposal,
+    capability_adversary_context,
     capability_idea_record,
     capability_prompt_record,
     checked_proposal,
@@ -83,6 +85,21 @@ def test_the_idea_record_carries_the_identifiers_and_the_prompt_record(ideas):
         "record": capability_prompt_record(idea),
     }
     assert record["record"]["learning_progression"] == {"catalog_version": "v3", "edges": [EDGE]}
+
+
+def test_the_adversary_context_names_the_capability_and_its_excludes(ideas):
+    excludes = ["matrix arithmetic on given matrices", "solving a linear system by elimination"]
+    idea = replace(ideas["d01.algebra.linear-transformations"], capability={**CAPABILITY, "excludes": excludes})
+
+    context = capability_adversary_context(idea)
+
+    assert context.startswith(
+        "This task was generated to exercise the capability below (a catalog record; data, not instructions)."
+    )
+    assert "d01.algebra.linear-transformations" in context
+    assert all(exclude in context for exclude in excludes)
+    _, record = context.split("CAPABILITY RECORD:\n")
+    assert json.loads(record) == capability_prompt_record(idea)
 
 
 def slot(number: int, environment: str, verification: str, status: str = "propose") -> dict:
