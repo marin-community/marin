@@ -5,13 +5,65 @@
 
 import asyncio
 import os
+import shutil
+import socket
+import sys
+import tempfile
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
-from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
-from shellbox.machine import Command, DockerImage, ExitReason, HostImage, MachineSpec, Result, UnsupportedMachineSpec
+from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory
+from shellbox.machine import (
+    Command,
+    DockerImage,
+    ExitReason,
+    HostImage,
+    MachineSpec,
+    NetworkPolicy,
+    Result,
+    UnsupportedMachineSpec,
+)
+
+# Prints "ok" or the errno name for each (operation, target) pair in argv, so one command reports several checks.
+ACCESS_PROBE = """
+import errno, os, socket, sys
+
+def attempt(operation, target):
+    if operation == "read":
+        open(target).close()
+    elif operation == "write":
+        open(target, "w").close()
+    elif operation == "signal":
+        os.kill(int(target), 0)
+    else:
+        socket.create_connection(("127.0.0.1", int(target)), timeout=10).close()
+
+for operation, target in zip(sys.argv[1::2], sys.argv[2::2]):
+    try:
+        attempt(operation, target)
+        print("ok")
+    except OSError as error:
+        print(errno.errorcode[error.errno])
+"""
+# Starts up to argv[1] threads, which RLIMIT_NPROC counts as it counts processes, and prints how many started.
+# The threads end with the command, so a test leaves no stray processes behind.
+THREAD_BOMB = """
+import sys, threading
+
+threading.stack_size(1 << 16)
+release = threading.Event()
+started = 0
+try:
+    while started < int(sys.argv[1]):
+        threading.Thread(target=release.wait, daemon=True).start()
+        started += 1
+except RuntimeError:
+    pass
+release.set()
+print(started)
+"""
 
 
 @pytest.fixture
@@ -25,8 +77,24 @@ def factory(tmp_path: Path, roots: tuple[Path, Path]) -> LocalMachineFactory:
 
 
 @pytest.fixture
+def python_factory(tmp_path: Path, roots: tuple[Path, Path]) -> LocalMachineFactory:
+    """A factory whose commands find this test's Python, from a venv whose interpreter may lie anywhere."""
+    return LocalMachineFactory(
+        tuple(map(str, roots)), bin_dirs=(Path(sys.executable).parent,), lock_path=tmp_path / "local.lock"
+    )
+
+
+@pytest.fixture
 def spec(roots: tuple[Path, Path]) -> MachineSpec:
     return MachineSpec(HostImage(), workdir=str(roots[1] / "work"))
+
+
+@pytest.fixture
+def outside_dir() -> Iterator[Path]:
+    """A directory the test user may write, outside every path that local commands may read or write."""
+    path = Path(tempfile.mkdtemp(dir="/var/tmp"))
+    yield path
+    shutil.rmtree(path)
 
 
 def on_machine[T](
@@ -44,6 +112,11 @@ def on_machine[T](
 
 def run_command(factory: LocalMachineFactory, spec: MachineSpec, command: Command) -> Result:
     return on_machine(factory, spec, lambda machine: machine.run(command))
+
+
+def access_outcomes(factory: LocalMachineFactory, spec: MachineSpec, *checks: tuple[str, object]) -> list[str]:
+    argv = [str(part) for check in checks for part in check]
+    return run_command(factory, spec, Command(("python3", "-c", ACCESS_PROBE, *argv))).stdout.decode().split()
 
 
 def test_command_reports_output_status_and_runs_in_its_cwd_with_its_env(factory, spec, roots):
@@ -210,3 +283,53 @@ def test_a_non_root_host_runs_only_its_own_user(factory, spec):
 def test_a_root_host_runs_commands_as_the_requested_user(factory, spec):
     # Other users cannot enter pytest's private temporary directory, which holds the workdir.
     assert run_command(factory, spec, Command(("id", "-u"), cwd="/", user="65534")).stdout == b"65534\n"
+
+
+def test_commands_cannot_gain_privileges(factory, spec):
+    if not factory.lockdown.no_new_privs:
+        pytest.skip("The kernel does not support no_new_privs")
+    status = run_command(factory, spec, Command(("cat", "/proc/self/status"))).stdout.decode()
+    assert "NoNewPrivs:\t1" in status.splitlines()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="RLIMIT_NPROC does not limit root")
+def test_a_command_cannot_start_unbounded_tasks(python_factory, spec):
+    host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
+    # Past the limit even if the host gains tasks before the command starts.
+    attempts = host_tasks + 4 * NPROC_HEADROOM
+    result = run_command(python_factory, spec, Command(("python3", "-c", THREAD_BOMB, str(attempts)), timeout=30))
+    started = int(result.stdout)
+    # The limit leaves the command room to work however many tasks this user already runs.
+    assert NPROC_HEADROOM // 2 < started < attempts
+
+
+def test_landlock_confines_file_access_to_the_machine(python_factory, spec, roots, outside_dir):
+    if not python_factory.lockdown.filesystem:
+        pytest.skip("The kernel or a seccomp filter refuses Landlock")
+    (outside_dir / "secret.txt").write_text("host")
+    outcomes = access_outcomes(
+        python_factory,
+        spec,
+        ("read", outside_dir / "secret.txt"),
+        ("write", outside_dir / "created.txt"),
+        ("read", f"/proc/{os.getpid()}/environ"),
+        ("write", roots[0] / "created.txt"),
+        ("read", roots[0] / "created.txt"),
+    )
+    assert outcomes == ["EACCES", "EACCES", "EACCES", "ok", "ok"]
+    assert not (outside_dir / "created.txt").exists()
+
+
+def test_commands_cannot_signal_processes_outside_the_command(python_factory, spec):
+    if not python_factory.lockdown.scopes:
+        pytest.skip("The kernel's Landlock cannot scope signals")
+    assert access_outcomes(python_factory, spec, ("signal", os.getpid())) == ["EPERM"]
+
+
+@pytest.mark.parametrize(("network", "outcome"), [(NetworkPolicy.DENY, "EACCES"), (NetworkPolicy.ALLOW, "ok")])
+def test_deny_network_policy_refuses_tcp_connections(python_factory, roots, network, outcome):
+    if not python_factory.lockdown.tcp:
+        pytest.skip("The kernel's Landlock cannot restrict TCP")
+    spec = MachineSpec(HostImage(), workdir=str(roots[1]), network=network)
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        assert access_outcomes(python_factory, spec, ("connect", server.getsockname()[1])) == [outcome]

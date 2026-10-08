@@ -5,16 +5,35 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import fcntl
+import json
+import logging
+import math
 import os
 import pwd
+import resource
 import shutil
 import signal
+import sys
 import tempfile
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.machine import Backend, Command, ExitReason, HostImage, MachineSpec, Result, UnsupportedMachineSpec
+from shellbox.backends.local import launch
+from shellbox.machine import (
+    Backend,
+    Command,
+    ExitReason,
+    HostImage,
+    MachineSpec,
+    NetworkPolicy,
+    Result,
+    UnsupportedMachineSpec,
+)
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_LOCK_PATH = Path("/tmp/shellbox-local-machine.lock")
 SCRATCH_ROOT = PurePosixPath("/tmp")
@@ -25,6 +44,58 @@ READ_CHUNK_BYTES = 64 * 1024
 # Resolve the program through sh, as the container backends do: a missing or unexecutable program
 # or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
 RUN_SCRIPT = 'cd "$1" || exit; shift; exec "$@"'
+LAUNCH_SOURCE = Path(launch.__file__).read_text()
+NPROC_HEADROOM = 256
+"""Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
+FILE_SIZE_LIMIT = 1 << 30
+CPU_GRACE = 5
+"""CPU seconds a command may use beyond the most its timeout allows on the CPUs it may run on."""
+# Commands may read and execute these, and the venvs and interpreters of the factory's bin_dirs, but not write them.
+SYSTEM_READ_ROOTS = (
+    "/bin",
+    "/dev",
+    "/etc",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/opt",
+    "/proc",
+    "/run/systemd/resolve",  # The target of /etc/resolv.conf on hosts that run systemd-resolved.
+    "/sbin",
+    "/sys",
+    "/usr",
+)
+WRITABLE_DEVICES = ("/dev/null", "/dev/zero", "/dev/full")
+SHARED_MEMORY = "/dev/shm"
+"""Python's multiprocessing creates its semaphores here."""
+LANDLOCK_READ = launch.LANDLOCK_EXECUTE | launch.LANDLOCK_READ_FILE | launch.LANDLOCK_READ_DIR
+LANDLOCK_DEVICE_WRITE = launch.LANDLOCK_WRITE_FILE | launch.LANDLOCK_TRUNCATE
+
+
+@dataclass(frozen=True)
+class Lockdown:
+    """The confinement this host's kernel lets the local backend apply to commands, beyond resource limits."""
+
+    no_new_privs: bool
+    """Setuid programs and file capabilities cannot raise a command's privileges."""
+    filesystem: bool
+    """Landlock limits writes to the owned roots, ``HOME``, ``/tmp`` and ``/dev/shm``, and reads to system and
+    interpreter directories. It also stops commands from reading or tracing processes outside the command."""
+    tcp: bool
+    """Landlock refuses TCP bind and connect under ``NetworkPolicy.DENY``."""
+    scopes: bool
+    """Landlock stops commands from signalling processes outside the command or reaching their abstract sockets."""
+
+
+@dataclass(frozen=True)
+class LandlockRuleset:
+    """The keyword arguments of the launcher's ``restrict``."""
+
+    handled_fs: int
+    handled_net: int
+    scoped: int
+    rules: tuple[tuple[str, int], ...]
 
 
 def _absolute_path(path: str) -> PurePosixPath:
@@ -67,6 +138,53 @@ def _reset_roots(roots: Iterable[PurePosixPath], workdir: PurePosixPath | None) 
         Path(root).mkdir(parents=True)
     if workdir is not None:
         Path(workdir).mkdir(parents=True, exist_ok=True)
+
+
+def _landlock_fs_rights(abi: int) -> int:
+    """Every filesystem right Landlock ABI ``abi`` handles: ABI 1 has 13; 2 adds REFER, 3 TRUNCATE, 5 IOCTL_DEV."""
+    return (1 << {1: 13, 2: 14, 3: 15, 4: 15}.get(abi, 16)) - 1
+
+
+def _interpreter_roots(bin_dirs: Iterable[Path]) -> tuple[str, ...]:
+    """Directories to read for the programs in ``bin_dirs``: each venv and the Python it links to, or the directory."""
+    roots: list[str] = []
+    for directory in bin_dirs:
+        venv = directory.parent
+        if (venv / "pyvenv.cfg").exists():
+            roots += [str(venv), str(Path(os.path.realpath(directory / "python3")).parent.parent)]
+        else:
+            roots.append(str(directory))
+    return tuple(roots)
+
+
+def _landlock_ruleset(
+    abi: int, *, readable: Iterable[str], writable: Iterable[str], network: NetworkPolicy
+) -> LandlockRuleset:
+    fs_rights = _landlock_fs_rights(abi)
+    return LandlockRuleset(
+        handled_fs=fs_rights,
+        handled_net=launch.LANDLOCK_NET_TCP if abi >= 4 and network == NetworkPolicy.DENY else 0,
+        scoped=launch.LANDLOCK_SCOPES if abi >= 6 else 0,
+        rules=(
+            *((path, LANDLOCK_READ) for path in readable),
+            *((path, LANDLOCK_DEVICE_WRITE & fs_rights) for path in WRITABLE_DEVICES),
+            *((path, fs_rights) for path in writable),
+        ),
+    )
+
+
+def _resource_limits(timeout: float | None) -> list[tuple[int, int]]:
+    host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
+    limits = [
+        (resource.RLIMIT_NPROC, host_tasks + NPROC_HEADROOM),
+        (resource.RLIMIT_FSIZE, FILE_SIZE_LIMIT),
+        (resource.RLIMIT_CORE, 0),
+    ]
+    if timeout is not None:
+        # A process's CPU time accrues on every CPU it runs on, so only a process that escapes the timeout's
+        # kill, for example by leaving the process group, can reach this limit.
+        limits.append((resource.RLIMIT_CPU, math.ceil(timeout * len(os.sched_getaffinity(0))) + CPU_GRACE))
+    return limits
 
 
 def _command_account(user: str | None) -> pwd.struct_passwd | None:
@@ -135,12 +253,16 @@ class LocalMachine:
         environment: dict[str, str],
         home: Path,
         lock: int,
+        no_new_privs: bool,
+        landlock: LandlockRuleset | None,
     ):
         self.spec = spec
         self.owned_roots = owned_roots
         self.environment = environment
         self.home = home
         self._lock = lock
+        self._no_new_privs = no_new_privs
+        self._landlock = landlock
         self._scratch: list[Path] = []
         self._closed = False
 
@@ -155,7 +277,21 @@ class LocalMachine:
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
         account = _command_account(command.user)
+        launch_config = {
+            "rlimits": _resource_limits(command.timeout),
+            "no_new_privs": self._no_new_privs,
+            "landlock": None if self._landlock is None else dataclasses.asdict(self._landlock),
+            # The launcher switches users after confining itself, so the command's user needs no access to
+            # this process's interpreter, which may lie in a private home directory.
+            "account": None if account is None else (account.pw_uid, account.pw_gid),
+        }
         process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            LAUNCH_SOURCE,
+            json.dumps(launch_config),
             "/bin/sh",
             "-c",
             RUN_SCRIPT,
@@ -167,10 +303,6 @@ class LocalMachine:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
-            # Popen switches users in its forked child without running Python there, unlike preexec_fn.
-            user=None if account is None else account.pw_uid,
-            group=None if account is None else account.pw_gid,
-            extra_groups=None if account is None else [],
         )
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
         limit = command.output_limit_bytes
@@ -227,13 +359,15 @@ class LocalMachine:
 class LocalMachineFactory:
     """Run commands as subprocesses of this host process, one machine per host at a time.
 
-    Use this backend only for trusted commands: they share the host's filesystem, processes,
-    and network. ``NetworkPolicy.DENY`` is accepted but not enforced, and ``memory_mb`` is
-    ignored. Each machine owns ``owned_roots``: ``create`` empties them and ``close`` removes
-    them with the machine's uploads. An exclusive ``flock`` on ``lock_path`` lets only one
-    machine exist at a time, across processes that share the path. Commands never inherit the
-    host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``, a private ``HOME``,
-    ``LANG``, the host's ``PYTHONHASHSEED`` if set, and the spec's and command's variables.
+    Use this backend only for trusted commands: they share the host's kernel, processes, and
+    network. Each command runs under resource limits and whatever confinement ``lockdown``
+    reports this host's kernel allows; a command may escape where the kernel does not.
+    ``memory_mb`` is ignored. Each machine owns ``owned_roots``: ``create`` empties them and
+    ``close`` removes them with the machine's uploads. An exclusive ``flock`` on ``lock_path``
+    lets only one machine exist at a time, across processes that share the path. Commands
+    never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
+    a private ``HOME``, ``LANG``, the host's ``PYTHONHASHSEED`` if set, and the spec's and
+    command's variables.
     """
 
     backend: Backend = Backend.LOCAL
@@ -251,6 +385,16 @@ class LocalMachineFactory:
         self.owned_roots = roots
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
         self.lock_path = lock_path
+        no_new_privs = launch.no_new_privs_available()
+        # Landlock needs no_new_privs to confine an unprivileged process.
+        self._landlock_abi = launch.landlock_abi() if no_new_privs else 0
+        self.lockdown = Lockdown(
+            no_new_privs=no_new_privs,
+            filesystem=self._landlock_abi >= 1,
+            tcp=self._landlock_abi >= 4,
+            scopes=self._landlock_abi >= 6,
+        )
+        logger.info("Local backend lockdown on this host: %s", self.lockdown)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
         if not isinstance(spec.source, HostImage):
@@ -274,4 +418,20 @@ class LocalMachineFactory:
         }
         if "PYTHONHASHSEED" in os.environ:
             environment["PYTHONHASHSEED"] = os.environ["PYTHONHASHSEED"]
-        return LocalMachine(spec, owned_roots=self.owned_roots, environment=environment, home=home, lock=lock)
+        landlock = None
+        if self.lockdown.filesystem:
+            landlock = _landlock_ruleset(
+                self._landlock_abi,
+                readable=(*SYSTEM_READ_ROOTS, *_interpreter_roots(self.bin_dirs)),
+                writable=(*map(str, self.owned_roots), str(home), str(SCRATCH_ROOT), SHARED_MEMORY),
+                network=spec.network,
+            )
+        return LocalMachine(
+            spec,
+            owned_roots=self.owned_roots,
+            environment=environment,
+            home=home,
+            lock=lock,
+            no_new_privs=self.lockdown.no_new_privs,
+            landlock=landlock,
+        )
