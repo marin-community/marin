@@ -129,7 +129,8 @@ of that image. `apt` packages that the worker image lacks (`WORKER_IMAGE_APT`)
 run in a sandbox of an image built for the environment. Every other environment,
 including `GRADER_PACKAGES`, runs in a bubblewrap sandbox on the Zephyr
 worker (which needs the privileged container profile, `--container-profile`),
-in a uv environment the worker builds once from the environment's lock
+in a self-contained Python environment (a uv-managed CPython and a venv) the
+worker builds once from the environment's lock and mounts read-only
 ([environment_runtime.py](environment_runtime.py)).
 `--verification-backend` selects how sandbox graders run. `iris`, the default,
 schedules each grader machine as an Iris task; inside an Iris job the driver uses

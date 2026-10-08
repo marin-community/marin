@@ -120,14 +120,16 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
     (artifact,) = run(environment_artifact(environment, REPOSITORY))
     built = []
-    monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: built.append(self.root))
+    monkeypatch.setattr(
+        LocalRuntime, "ensure_built", lambda self: (self.root.mkdir(parents=True), built.append(self.root))
+    )
     machines = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL)
     factory, spec = machines.machine(environment_requirements(environment, artifact), 2048)
     runtime = local_runtime(artifact.lock_url)
     assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)
     assert isinstance(factory, LocalMachineFactory)
     assert built == [runtime.root]
-    assert factory.bin_dirs == (runtime.bin_dir,)
+    assert factory.read_only == (runtime.root,) and factory.bin_dirs == (runtime.root / "env" / "venv" / "bin",)
     assert spec.source == HostImage() and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
     assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
 

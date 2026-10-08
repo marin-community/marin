@@ -4,10 +4,12 @@
 """Run environments that declare ``Backend.LOCAL`` in bubblewrap sandboxes on the Zephyr worker.
 
 A local environment carries the storage URL of its built hash lock (``packages_lock``). The worker
-builds a uv virtual environment from it once, with the NLTK data the environment's artifact names and
-the runtime packages (verifyit) on its import path, so graders find there what a built image gives
-them. Apt packages come from the worker image itself; ``placement`` in ``environment.py`` sends an
-environment that needs others to a sandbox of an image built for it.
+builds a self-contained Python environment from it once (``build_python_environment``: a uv-managed
+CPython and a venv under one directory), with the NLTK data the environment's artifact names and the
+runtime packages (verifyit) on its import path, so graders find there what a built image gives them.
+The sandbox mounts that directory read-only and nothing else of the host beyond its system
+directories. Apt packages come from the worker image itself; ``placement`` in ``environment.py``
+sends an environment that needs others to a sandbox of an image built for it.
 """
 
 import fcntl
@@ -22,6 +24,7 @@ from typing import Any
 from marin.execution.fingerprint import canonical_json
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.python_environment import PythonEnvironment, build_python_environment
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
 
@@ -36,7 +39,12 @@ from experiments.post_training.task_curation.images.build import (
     runtime_files,
 )
 
+LOCAL_PYTHON_VERSION = "3.12.13"
+"""The CPython the worker installs for local graders; the minor version the locks are compiled for."""
+assert LOCAL_PYTHON_VERSION.startswith(f"{PYTHON_VERSION}.")
+
 COMPLETE_MARKER = ".complete"
+ENVIRONMENT_DIRECTORY = "env"
 RUNTIME_DIRECTORY = "runtime"
 NLTK_DATA_DIRECTORY = Path("share") / "nltk_data"
 RUNTIME_PARENT = Path("/tmp")
@@ -44,7 +52,7 @@ RUNTIME_PARENT = Path("/tmp")
 
 @dataclass(frozen=True)
 class LocalRuntime:
-    """A uv virtual environment under ``parent`` built from the lock at ``lock_url``.
+    """A Python environment under ``parent`` built from the lock at ``lock_url``.
 
     ``lock_sha256`` is the digest the environment's artifact records for the lock and ``data`` the
     downloads it names. The environment's directory is named by its identity, so a changed lock builds
@@ -64,7 +72,7 @@ class LocalRuntime:
                 {
                     "lock_sha256": self.lock_sha256,
                     "data": sorted(self.data),
-                    "python": PYTHON_VERSION,
+                    "python": LOCAL_PYTHON_VERSION,
                     "runtime": runtime_files(),
                 }
             ).encode()
@@ -75,8 +83,12 @@ class LocalRuntime:
         return self.parent / f"task-curation-env-{self.identity[:IDENTITY_CHARS]}"
 
     @property
+    def environment(self) -> PythonEnvironment:
+        return PythonEnvironment(self.root / ENVIRONMENT_DIRECTORY)
+
+    @property
     def bin_dir(self) -> Path:
-        return self.root / "bin"
+        return self.environment.bin_dir
 
     @property
     def variables(self) -> dict[str, str]:
@@ -100,19 +112,13 @@ class LocalRuntime:
             (self.root / COMPLETE_MARKER).write_text(self.identity)
 
     def _build(self) -> None:
-        python = str(self.bin_dir / "python")
-        # Running from the parent keeps uv from reading the settings of a project in the working directory.
-        subprocess.run(
-            ["uv", "venv", "--no-project", "--python", PYTHON_VERSION, str(self.root)], check=True, cwd=self.parent
-        )
+        self.root.mkdir(parents=True)
         lock = self.root / LOCK_FILE
         lock.write_bytes(StoragePath(self.lock_url).read_bytes())
         digest = hashlib.sha256(lock.read_bytes()).hexdigest()
         if digest != self.lock_sha256:
             raise RuntimeError(f"{self.lock_url} has SHA-256 {digest}; its artifact records {self.lock_sha256}")
-        subprocess.run(
-            ["uv", "pip", "sync", "--python", python, "--require-hashes", str(lock)], check=True, cwd=self.parent
-        )
+        python = str(build_python_environment(self.environment.root, lock, LOCAL_PYTHON_VERSION).python)
         # A built image copies each runtime package into its runtime directory and puts that on sys.path.
         runtime = self.root / RUNTIME_DIRECTORY
         for package in RUNTIME_PACKAGES:
@@ -138,8 +144,8 @@ def local_runtime(lock_url: str) -> LocalRuntime:
 
 
 @cache
-def _local_factory(bin_dir: Path) -> LocalMachineFactory:
-    return LocalMachineFactory(bin_dirs=(bin_dir,))
+def _local_factory(runtime: LocalRuntime) -> LocalMachineFactory:
+    return LocalMachineFactory(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
 
 
 @dataclass(frozen=True)
@@ -147,7 +153,7 @@ class LocalGraderMachines:
     """Grading machines for environments that declare ``Backend.LOCAL``: subprocesses of this worker."""
 
     def identity(self) -> dict[str, Any]:
-        return {"backend": Backend.LOCAL.value, "python": PYTHON_VERSION}
+        return {"backend": Backend.LOCAL.value, "python": LOCAL_PYTHON_VERSION}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         """A bubblewrap sandbox with the environment's packages; ``memory_mb`` is not enforced."""
@@ -157,4 +163,4 @@ class LocalGraderMachines:
         runtime = local_runtime(environment.packages_lock)
         runtime.ensure_built()
         spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, env=runtime.variables)
-        return _local_factory(runtime.bin_dir), spec
+        return _local_factory(runtime), spec

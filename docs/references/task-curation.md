@@ -229,8 +229,10 @@ command that builds it.
 Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
 private root, so the worker pods need Iris's privileged container profile
 (`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
-uv environment under `/tmp/task-curation-env-<identity>`, with the NLTK data and
-`verifyit`; concurrent graders on one host build it once.
+self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
+`/tmp/task-curation-env-<identity>`, with the NLTK data and `verifyit`; the
+sandbox mounts only that directory and the system directories, and concurrent
+graders on one host build it once.
 `--verification-backend` is where sandbox graders run: `iris` (the default) or
 `gvisor`. Iris schedules each grader machine on the controller of the enclosing
 Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
