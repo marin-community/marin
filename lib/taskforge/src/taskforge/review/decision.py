@@ -3,7 +3,8 @@
 
 """The decision review makes about one validation round, and its ``decision.json`` file.
 
-A decision is one of four outcomes. ``Accept`` ends the item with a calibrated task. ``Reject`` ends it
+A decision is one of four outcomes. ``Accept`` ends the item with its task: calibrated (``band`` is
+``IN_BAND``), or outside the band where the consumer's band rule chose to accept it. ``Reject`` ends it
 for a typed reason: the task cannot be made valid (``TASK``), the repair budget is spent (``BUDGET``), or
 this host cannot run it (``HOST``). ``Repair`` sends the builder program back to the author with the
 findings as the revision brief and names the memoized steps to recompute. ``Retry`` re-runs the trials
@@ -14,6 +15,7 @@ brief.failure)``, so the author is the only model that writes builder code.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -21,7 +23,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from taskforge.canonical import pretty_json, write_atomic
-from taskforge.validate.calibration import CalibrationSummary, Finding
+from taskforge.validate.calibration import CalibrationSummary, Finding, FindingKind
 from taskforge.validate.outcome import Cause
 
 DECISION_FILE = "decision.json"
@@ -37,9 +39,26 @@ class RejectKind(StrEnum):
     """This host's factories or conventions cannot run the task; another host may."""
 
 
+class BandOutcome(StrEnum):
+    """Where an accepted task's solve rate fell against the calibration band."""
+
+    IN_BAND = "in_band"
+    TOO_EASY = "too_easy"
+    TOO_HARD = "too_hard"
+
+
+BAND_OUTCOMES: Mapping[FindingKind, BandOutcome] = {
+    FindingKind.TOO_EASY: BandOutcome.TOO_EASY,
+    FindingKind.TOO_HARD: BandOutcome.TOO_HARD,
+}
+"""The ``BandOutcome`` of an accept outside the band, by the band finding's kind."""
+
+
 @dataclass(frozen=True)
 class Accept:
     summary: CalibrationSummary
+    band: BandOutcome
+    """Where the solve rate fell: ``IN_BAND``, or the kind the consumer's ``BandRule`` accepted outside it."""
 
 
 @dataclass(frozen=True)

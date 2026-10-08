@@ -9,6 +9,7 @@ from taskcompendium.grading_result import Outcome
 from taskforge.build.step import StepRole
 from taskforge.review.decision import (
     Accept,
+    BandOutcome,
     Reject,
     RejectKind,
     Repair,
@@ -30,17 +31,17 @@ from taskforge.spec.controls import (
 from taskforge.validate.calibration import Finding, FindingKind
 from taskforge.validate.outcome import Cause
 
-LEAK = Finding(
-    kind=FindingKind.LEAK_PASSED,
-    detail="read /workspace/.answer and submitted 395",
-    roles=(StepRole.FIXTURES, StepRole.ENVIRONMENT),
+SHORTCUT = Finding(
+    kind=FindingKind.SHORTCUT_PASSED,
+    detail="submission 1 passed after supplying /workspace/numbers.txt",
+    roles=(StepRole.GRADER, StepRole.CONTROLS),
     new_controls=(
         Control(
-            id="adv-leak-0",
+            id="adv-shortcut-0-1",
             kind=ControlKind.NEGATIVE,
             category=ControlCategory.REWARD_HACK,
             concern=ControlConcern.SHORTCUT,
-            author="adversary/leak/0",
+            author="adversary/shortcut/0#1",
             payload=Transcript((reply("395"),)),
             expect=Expectation(Outcome.GRADED, reward_max=REJECTION_CEILING),
         ),
@@ -48,14 +49,21 @@ LEAK = Finding(
 )
 NOTE = Finding(
     kind=FindingKind.SHORTCUT_PASSED,
-    detail="The shortcut adversary 1 was graded as passing. Tier noted (row 7): solved against orders",
+    detail="The shortcut adversary 1 found an accepted submission. Tier noted (row 7): an accepted shortcut "
+    "after 5 verifier calls, above the repair threshold 3",
     roles=(StepRole.GRADER, StepRole.CONTROLS),
+)
+TOO_EASY = Finding(
+    kind=FindingKind.TOO_EASY,
+    detail="8 of 8 solved",
+    roles=(StepRole.GRADER, StepRole.CONTROLS, StepRole.INSTRUCTIONS),
 )
 
 
 def decisions(summary):
     return [
-        Accept(summary=summary(notes=(NOTE,))),
+        Accept(summary=summary(notes=(NOTE,)), band=BandOutcome.IN_BAND),
+        Accept(summary=summary((TOO_EASY,), solved=8), band=BandOutcome.TOO_EASY),
         Reject(
             kind=RejectKind.HOST,
             reasons=("machine_unsupported: 8",),
@@ -64,7 +72,7 @@ def decisions(summary):
         Reject(kind=RejectKind.BUDGET, reasons=("build revisions exhausted",), summary=None),
         Repair(
             program_digest="abc",
-            brief=RepairBrief(findings=(LEAK,), notes=(NOTE,), failure="fix the leak"),
+            brief=RepairBrief(findings=(SHORTCUT,), notes=(NOTE,), failure="fix the grader"),
             invalidate=("fixtures",),
         ),
         Retry(cause=Cause.TOKEN_CONTRACT, count=2),

@@ -15,8 +15,9 @@ from taskcompendium.submission import PlainText
 
 from taskforge.build.run import Provenance, TaskDraft
 from taskforge.build.step import Blob, CacheStatus, StepRecord, StepRole
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.spec.draft import assemble, environment, shell_verifier, stage, staged, task_execution
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.adversary import AdversaryRole, ClaimKind
 from taskforge.validate.calibration import CalibrationBand, CalibrationSummary, DefectTier, Finding, RoleStats
 from taskforge.validate.evidence import Complete, Incomplete, RewardStats
 from taskforge.validate.outcome import Cause
@@ -93,12 +94,16 @@ def staged_draft() -> TaskDraft:
 
 
 def role_stats(passes: int) -> RoleStats:
-    """Two graded trials of one role: ``passes`` noted passes, the rest given up."""
+    """Two graded trials of one role: ``passes`` claimed shortcuts noted past the threshold, the rest
+    reporting no shortcut."""
     return RoleStats(
         required=2,
         graded=2,
         passes=passes,
-        gave_up=2 - passes,
+        submissions=8,
+        budget_spent=0,
+        claims={ClaimKind.SHORTCUT: passes, ClaimKind.NO_SHORTCUT: 2 - passes, ClaimKind.NONE: 0},
+        failed_audits=0,
         exhausted=0,
         output_tokens=3000,
         tiers={DefectTier.REPAIR: 0, DefectTier.NOTED: passes, DefectTier.NONE: 2 - passes},
@@ -129,6 +134,12 @@ def make_summary(
         assessments=(),
         notes=notes,
     )
+
+
+@pytest.fixture
+def rules() -> BandRules:
+    """Taskforge's own band rules: one repair per kind, then reject."""
+    return BandRules(too_easy=BandRule(1, BandChoice.REJECT), too_hard=BandRule(1, BandChoice.REJECT))
 
 
 @pytest.fixture

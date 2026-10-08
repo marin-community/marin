@@ -118,7 +118,7 @@ async def build_with_revisions(
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
 async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortcut(
-    glm_settings, parallel_key, image_cache, summary, scripted_model
+    glm_settings, parallel_key, image_cache, summary, rules, scripted_model
 ):
     proposal = parse(PROPOSAL)
     run_dir = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
@@ -141,7 +141,7 @@ async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortc
             roles=FINDING_ROLES[FindingKind.SHORTCUT_PASSED],
             new_controls=(SHORTCUT,),
         )
-        decision = decide(draft, summary((finding,)), ItemHistory(0, 2, frozenset()))
+        decision = decide(draft, summary((finding,)), ItemHistory(0, 2, {}), rules)
         assert isinstance(decision, Repair)
         condemned = {r.name for r in draft.provenance.steps if r.role in {StepRole.GRADER, StepRole.CONTROLS}}
         assert decision.program_digest == program.digest
