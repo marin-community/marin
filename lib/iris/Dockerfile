@@ -27,7 +27,7 @@ RUN npm run build
 # ── Stage: iris-native-wheel ────────────────────────────────────────
 # Build the PyO3 companion once per target architecture without carrying a Rust
 # toolchain into the controller or worker images.
-FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.10.3 AS iris-native-uv
+FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.12.3 AS iris-native-uv
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
 
 COPY --from=iris-native-uv /uv /uvx /bin/
@@ -121,7 +121,7 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETA
     && kubectl version --client
 
 # uv
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
 
 
 # ── Stage: deps ──────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal

@@ -270,6 +270,7 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         must_pass=selection.must_pass,
         must_not_break=selection.must_not_break,
         setup=python_setup + restore_setup(trusted_commit, (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS), patch=TEST_PATCH),
+        protected_paths_files=(TRUSTED_TEST_PATHS.removeprefix("tests/"), TRUSTED_PATCH_PATHS.removeprefix("tests/")),
         python=python,
         workspace=workspace,
     )

@@ -228,6 +228,8 @@ class PytestSpec:
     """Shell command run in the workspace after restore and before the tests, with
     ``VERIFYIT_TESTS_DIR`` and ``VERIFYIT_WORKSPACE`` in its environment."""
     restore: tuple[str, ...] = ()
+    protected_paths_files: tuple[str, ...] = ()
+    """Tests-directory manifests of workspace paths restored by setup."""
     python: str = "python3"
     timeout: float = 600.0
     workspace: str = DEFAULT_WORKSPACE
