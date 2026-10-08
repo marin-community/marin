@@ -9,7 +9,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import replace
 from functools import cache
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
@@ -23,6 +23,7 @@ from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
     LevanterEngineConfig,
+    ObjectStoreLoadMode,
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
@@ -38,7 +39,8 @@ DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
 _QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
-DEFAULT_SERVE_DISK = "100g"
+_SERVE_RUNTIME_DISK_GIB = 100
+DEFAULT_SERVE_DISK = f"{_SERVE_RUNTIME_DISK_GIB}g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
@@ -152,12 +154,16 @@ def _checkpoint_file_sizes(location: str, revision: str | None) -> dict[str, int
 
     ``location`` is an object-store export directory, a local directory, or a Hugging Face repo id,
     matching :func:`auto_serve_overrides`. Reads metadata only: a directory listing or the Hub's
-    file-metadata API, never the weights themselves. The two directory listings are shallow; the Hub
-    reports a repo's whole tree, so its names can carry a subdirectory prefix.
+    file-metadata API, never the weights themselves. Object-store and Hub listings include nested
+    files because staging downloads the whole tree; host-memory sizing counts only top-level weights.
     """
     if "://" in location:
         fs, path = filesystem_for(location)
-        return {PurePosixPath(entry["name"]).name: entry.get("size") or 0 for entry in fs.ls(path, detail=True)}
+        return {
+            name.removeprefix(path.rstrip("/") + "/"): entry.get("size") or 0
+            for name, entry in fs.find(path, detail=True).items()
+            if entry["type"] == "file"
+        }
     directory = Path(location)
     if directory.is_dir():
         return {child.name: child.stat().st_size for child in directory.iterdir() if child.is_file()}
@@ -271,6 +277,9 @@ def inference_config_for_model(
     cpu = hint.cpu or DEFAULT_SERVE_CPU
     memory = _serve_memory(model, accelerator)
     disk = hint.disk or DEFAULT_SERVE_DISK
+    if hint.disk is None and serve.object_store_load_mode is ObjectStoreLoadMode.STAGE_LOCAL:
+        checkpoint_bytes = sum(_checkpoint_file_sizes(model.location, model.revision).values())
+        disk = f"{math.ceil(checkpoint_bytes / _BYTES_PER_GIB) + _SERVE_RUNTIME_DISK_GIB}g"
     regions = [accelerator.region] if accelerator.region else None
 
     if accelerator.platform is Platform.GPU:

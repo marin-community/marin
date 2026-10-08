@@ -357,7 +357,10 @@ Set `resource_hint.hbm_gb` to a portable serving footprint, or set
 that requirement to a cluster. Host memory is sized from the checkpoint's weight files and the
 slice's rank count, so set `resource_hint.memory` only when a model needs more than its weights
 imply. Set `tokenizer` when `location` is an object-store export because the eval client loads
-its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
+its tokenizer through Hugging Face. Eval workers stage object-store weights on local disk before
+starting inference. This uses retried downloads instead of RunAI's streaming reads. The default
+disk request covers the checkpoint plus 100 GiB for runtime files; `resource_hint.disk` overrides it.
+Set `serve.object_store_load_mode: stream` to opt into streaming.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.

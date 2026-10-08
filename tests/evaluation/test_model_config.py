@@ -20,8 +20,10 @@ from marin.evaluation.model_config import (
     serve_config_vllm_args,
 )
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
-from marin.inference.config import BrokerConfig, LevanterEngineConfig, VllmSource
+from marin.inference.config import BrokerConfig, LevanterEngineConfig, ObjectStoreLoadMode, VllmSource
+from marin.inference.iris import _staged_model
 from marin.inference.vllm_backend import vllm_launcher
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -207,7 +209,7 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
     model = ModelConfig(
         name="large-s3-model",
         location="s3://models/large",
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g", disk="500g"),
         serve=ServeConfig(
             runai_streamer_concurrency=4,
             runai_streamer_s3_request_timeout_ms=60_000,
@@ -296,13 +298,65 @@ def test_explicit_memory_hint_wins_without_measuring_the_checkpoint():
     model = ModelConfig(
         name="hinted",
         location="s3://marin-us-east-02a/marin/exports/absent/",
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g", disk="500g"),
         serve=ServeConfig(auto_overrides=False),
     )
     choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
 
     lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
     assert lowered.iris.worker_resources.ram == "512g"
+    assert lowered.iris.worker_resources.disk == "500g"
+
+
+@pytest.mark.parametrize("mode", [None, "stream"])
+def test_eval_model_stages_remote_weights_unless_streaming_is_explicit(tmp_path, mode):
+    source = StoragePath("memory://eval-staging/model")
+    (source / "config.json").write_text("{}")
+    mode_yaml = "" if mode is None else f"  object_store_load_mode: {mode}\n"
+    model = load_model_config(
+        _write(
+            tmp_path,
+            "model.yaml",
+            "name: staging\nlocation: memory://eval-staging/model\n"
+            "resource_hint:\n  gpu: {H100: 1}\n  memory: 32g\n  disk: 100g\n"
+            f"serve:\n  auto_overrides: false\n{mode_yaml}",
+        )
+    )
+    lowered = inference_config_for_model(
+        model,
+        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
+        env_vars={},
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    with _staged_model(lowered.model) as staged:
+        if mode is None:
+            assert (StoragePath(staged.weights) / "config.json").read_text() == "{}"
+            assert not StoragePath(staged.weights).is_remote
+        else:
+            assert staged.weights == str(source)
+
+
+def test_eval_staging_disk_request_covers_large_checkpoint(tmp_path):
+    nested = tmp_path / "original"
+    nested.mkdir()
+    with (nested / "model.safetensors").open("wb") as weights:
+        weights.truncate(120 * 1024**3)
+    model = ModelConfig(
+        name="large",
+        location=tmp_path.as_uri(),
+        resource_hint=ResourceHint(gpu={"H100": 1}, memory="256g"),
+        serve=ServeConfig(auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1)
+    staged = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+    streamed = inference_config_for_model(
+        replace(model, serve=replace(model.serve, object_store_load_mode=ObjectStoreLoadMode.STREAM)),
+        choice,
+        env_vars={},
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    assert _gib(staged.iris.worker_resources.disk) >= 220
+    assert _gib(streamed.iris.worker_resources.disk) < 120
 
 
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):

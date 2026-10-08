@@ -103,7 +103,7 @@ class ServeConfig:
     vllm_source: VllmSource | None = None
     vllm_version: str | None = None
     vllm_plugin_requirements: tuple[str, ...] = ()
-    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STAGE_LOCAL
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
