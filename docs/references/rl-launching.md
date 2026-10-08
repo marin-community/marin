@@ -55,6 +55,11 @@ The runtime executes tasks through `TaskSession` and sends token requests to mod
 Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
+The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
+This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
+The launch document records that revision in `runtime.launcher_commit`.
+The launcher requires a Marin workspace with these project files.
+
 ```text
 Marin experiment
   SkyRLSpec + IrisSkyRLExecution + resolved artifacts
