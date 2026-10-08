@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from typing import NamedTuple, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -21,7 +22,6 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
-from levanter.utils.jax_utils import is_rocm_backend
 
 
 def _assignment_slots(
@@ -94,6 +94,41 @@ def _combine_rows_bwd(residuals, g):
 _combine_rows.defvjp(_combine_rows_fwd, _combine_rows_bwd)
 
 
+class _DispatchCombine(NamedTuple):
+    """Moves rows from the gathered token buffer to this shard's dispatch slots, and sums them back per token."""
+
+    dispatch: Callable[[Float[Array, "T H"]], Float[Array, "P H"]]
+    combine: Callable[[Float[Array, "P H"]], Float[Array, "T H"]]
+
+
+# Builds a `_DispatchCombine` from the picked flat assignment positions, their validity, and the gathered
+# token count and top-k.
+_DispatchCombineFactory: TypeAlias = Callable[[Int[Array, "P"], Bool[Array, "P"], int, int], _DispatchCombine]
+
+
+def _scatter_add_dispatch_combine(
+    picked: Int[Array, "P"], valid: Bool[Array, "P"], tokens: int, topk: int
+) -> _DispatchCombine:
+    """Dispatch with a take and combine with a scatter-add; autodiff transposes each into the other."""
+    token = jnp.floor_divide(picked, topk)
+    return _DispatchCombine(
+        dispatch=lambda x: _take_valid_rows(x, token, valid),
+        combine=lambda rows: jnp.zeros((tokens, rows.shape[1]), rows.dtype).at[token].add(rows, mode="drop"),
+    )
+
+
+def _gather_dispatch_combine(
+    picked: Int[Array, "P"], valid: Bool[Array, "P"], tokens: int, topk: int
+) -> _DispatchCombine:
+    """Dispatch and combine, forward and backward, as gathers through the inverse map from assignments to slots."""
+    token = jnp.floor_divide(picked, topk)
+    slots = _assignment_slots(picked, valid, tokens=tokens, topk=topk)
+    return _DispatchCombine(
+        dispatch=lambda x: _dispatch_rows(x, token, valid, slots),
+        combine=lambda rows: _combine_rows(rows, token, valid, slots),
+    )
+
+
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -102,12 +137,16 @@ def _moe_mlp_ep_ring_local(
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
+    dispatch_combine: _DispatchCombineFactory,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
-    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
+    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
+
+    ``dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
+    """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
@@ -171,17 +210,10 @@ def _moe_mlp_ep_ring_local(
         selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
         _, local_idx = jax.lax.top_k(selection_key, physical_capacity)
 
-        token_local = jnp.floor_divide(local_idx, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        # ROCm only: TPU and NVIDIA keep the scatter-add combine until the gather form is measured there.
-        gather_combine = is_rocm_backend()
-        if gather_combine:
-            slots = _assignment_slots(local_idx, valid, tokens=tokens, topk=topk)
-            x_dispatch = _dispatch_rows(x_global, token_local, valid, slots)
-        else:
-            x_dispatch = _take_valid_rows(x_global, token_local, valid)
-        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        rows = dispatch_combine(local_idx, valid, tokens, topk)
+        x_dispatch = tree_checkpoint_name(rows.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
@@ -198,11 +230,7 @@ def _moe_mlp_ep_ring_local(
         )
 
     with jax.named_scope("combine"):
-        weighted = out_dispatch * weight_dispatch[:, None]
-        if gather_combine:
-            out_global = _combine_rows(weighted, token_local, valid, slots)
-        else:
-            out_global = jnp.zeros_like(x_global).at[token_local].add(weighted, mode="drop")
+        out_global = rows.combine(out_dispatch * weight_dispatch[:, None])
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)

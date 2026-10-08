@@ -1027,7 +1027,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
 
 @pytest.mark.parametrize(
     "implementation",
-    ["ring", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+    ["ring", "ring_gather_combine", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
 )
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
@@ -1403,7 +1403,9 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     assert int(overflow.receiver_dropped) == 3
 
 
-@pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
+@pytest.mark.parametrize(
+    "implementation", ["ring", "ring_gather_combine", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"]
+)
 @pytest.mark.parametrize(
     "token_valid",
     [[True, True, True, True], [True, False, True, True]],
@@ -1530,17 +1532,18 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     ids=["all_valid", "padded"],
 )
 def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: list[bool]):
-    """The ROCm gather combine gives the scatter-add combine's values, drops and gradients, without scatter-adds."""
+    """`ring_gather_combine` gives `ring`'s values, drops and gradients without token-buffer scatter-adds."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
     script = """
+        import functools
+
         import jax
         import jax.numpy as jnp
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-        from levanter.grug._moe import ep_ring
         from levanter.grug.grug_moe import moe_mlp
 
         mesh = Mesh(
@@ -1568,8 +1571,8 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
         token_valid = jax.device_put(token_valid, NamedSharding(mesh, P(("data", "expert"))))
         w_up_gate, w_down = jax.device_put(w_up_gate, expert), jax.device_put(w_down, expert)
 
-        def run(x, combine_weights, w_up_gate, w_down):
-            return moe_mlp(
+        def loss(implementation, x, combine_weights, w_up_gate, w_down):
+            out, counts = moe_mlp(
                 x,
                 selected_experts,
                 combine_weights,
@@ -1577,14 +1580,11 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
                 w_down,
                 token_valid=token_valid,
                 activation=jax.nn.silu,
-                implementation="ring",
+                implementation=implementation,
                 mesh=mesh,
                 capacity_factor=0.5,
                 report_capacity_overflow=True,
             )
-
-        def loss(*args):
-            out, counts = run(*args)
             return jnp.sum(out * cotangent), counts.dropped
 
         def token_row_scatter_adds(jaxpr):
@@ -1601,17 +1601,17 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
             return count
 
         results = {}
-        for gather in (False, True):
-            ep_ring.is_rocm_backend = lambda gather=gather: gather
-            jax.clear_caches()
+        for implementation in ("ring", "ring_gather_combine"):
             with jax.set_mesh(mesh):
-                grad_fn = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)
+                grad_fn = jax.value_and_grad(
+                    functools.partial(loss, implementation), argnums=(0, 1, 2, 3), has_aux=True
+                )
                 args = (x, combine_weights, w_up_gate, w_down)
                 scatter_adds = token_row_scatter_adds(jax.make_jaxpr(grad_fn)(*args).jaxpr)
-                results[gather] = (grad_fn(*args), scatter_adds)
+                results[implementation] = (grad_fn(*args), scatter_adds)
 
-        ((value_s, dropped_s), grads_s), scatter_adds_s = results[False]
-        ((value_g, dropped_g), grads_g), scatter_adds_g = results[True]
+        ((value_s, dropped_s), grads_s), scatter_adds_s = results["ring"]
+        ((value_g, dropped_g), grads_g), scatter_adds_g = results["ring_gather_combine"]
         assert scatter_adds_s > 0, scatter_adds_s
         assert scatter_adds_g == 0, scatter_adds_g
         assert int(dropped_s) > 0, int(dropped_s)
