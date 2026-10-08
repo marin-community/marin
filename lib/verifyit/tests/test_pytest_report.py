@@ -117,6 +117,57 @@ def test_pytest_empty_workspace_scores_zero_with_no_tests(tmp_path):
     assert reward.detail["reason"] == "no_tests"
 
 
+@pytest.mark.parametrize("configuration", ["conftest.py", "pytest.ini"])
+def test_pytest_candidate_startup_syntax_error_scores_zero(tmp_path, configuration):
+    workspace = _project(tmp_path, "def add(\n")
+    text = (
+        "from calc import add\n"
+        if configuration == "conftest.py"
+        else "[pytest]\nfilterwarnings = ignore::calc.CustomWarning\n"
+    )
+    (workspace / configuration).write_text(text)
+    reward = grade_pytest.grade(_spec(must_pass=(PASSING,)), tmp_path, workspace)
+    assert (reward.status, reward.reward) == (Status.SCORED, 0.0)
+    assert reward.detail["reason"] == "startup_error"
+    assert reward.detail["files"] == ["calc.py"]
+
+
+@pytest.mark.parametrize(
+    "implementation", ["def add(\n", "raise RuntimeError('broken trusted source')\n", "import missing_dependency\n"]
+)
+@pytest.mark.parametrize("phase", ["startup", "collection"])
+def test_pytest_restored_source_failure_stays_unscored(tmp_path, implementation, phase):
+    workspace = _project(tmp_path, FIXED)
+    if phase == "startup":
+        (workspace / "conftest.py").write_text("from calc import add\n")
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "calc.py").write_text(implementation)
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(restore=("calc.py",)), trusted, workspace)
+
+
+def test_pytest_candidate_missing_dependency_stays_unscored(tmp_path):
+    workspace = _project(tmp_path, "import missing_dependency\n")
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(), tmp_path, workspace)
+
+
+def test_pytest_setup_manifest_source_failure_stays_unscored(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "conftest.py").write_text("from calc import add\n")
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "calc.py").write_text("def add(\n")
+    (trusted / "protected-paths.txt").write_text("calc.py\n")
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(
+            _spec(protected_paths_files=("protected-paths.txt",), setup='cp "$VERIFYIT_TESTS_DIR/calc.py" calc.py'),
+            trusted,
+            workspace,
+        )
+
+
 def test_pytest_paths_limit_the_run(tmp_path):
     workspace = _project(tmp_path, FIXED)
     (workspace / "tests" / "test_other.py").write_text("def test_other():\n    assert False\n")
@@ -180,6 +231,15 @@ def test_pytest_candidate_shlex_bootstrap_failures_are_task_errors(tmp_path, can
     if not expected:
         assert reward.detail["reason"] == "startup_error"
         assert reward.detail["category"] == "agent"
+
+
+def test_pytest_trusted_shlex_bootstrap_failure_stays_unscored(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "shlex.py").write_text("")
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(restore=("shlex.py",)), trusted, workspace)
 
 
 def test_pytest_missing_interpreter_remains_infrastructure_failure(tmp_path):
@@ -275,15 +335,62 @@ def test_pytest_failclosed_collection_error_cannot_be_hidden_by_passing_required
     assert reward.detail["category"] == "agent"
 
 
-@pytest.mark.parametrize("implementation", ["def malformed(\n", "raise RuntimeError('candidate import failed')\n"])
+@pytest.mark.parametrize(
+    "implementation",
+    ["def malformed(\n", "raise RuntimeError('candidate import failed')\n", "import os\nos.missing_method()\n"],
+)
 def test_candidate_collection_failure_scores_zero_but_golden_runs(tmp_path, implementation):
     workspace = _project(tmp_path, implementation)
-    spec = _spec(must_pass=(PASSING,))
-    failure = grade_pytest.grade(spec, tmp_path, workspace)
+    trusted = tmp_path / "trusted"
+    (trusted / "tests").mkdir(parents=True)
+    (trusted / "tests/test_calc.py").write_text(REAL_TESTS)
+    spec = _spec(must_pass=(PASSING,), restore=("tests",))
+    failure = grade_pytest.grade(spec, trusted, workspace)
     assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
     assert failure.detail["reason"] == "collection_error"
+    assert failure.detail["files"] == ["calc.py"]
     (workspace / "calc.py").write_text(FIXED)
-    assert grade_pytest.grade(spec, tmp_path, workspace).reward == 1.0
+    assert grade_pytest.grade(spec, trusted, workspace).reward == 1.0
+
+
+def test_pytest_candidate_added_file_in_restored_directory_scores_zero(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "tests/test_new.py").write_text("def malformed(\n")
+    trusted = tmp_path / "trusted"
+    (trusted / "tests").mkdir(parents=True)
+    (trusted / "tests/test_calc.py").write_text(REAL_TESTS)
+    reward = grade_pytest.grade(_spec(restore=("tests",)), trusted, workspace)
+    assert (reward.status, reward.reward) == (Status.SCORED, 0.0)
+    assert reward.detail["files"] == ["tests/test_new.py"]
+
+
+@pytest.mark.parametrize("candidate_phase", ["startup", "collection", "no_tests"])
+def test_pytest_early_candidate_failure_cannot_hide_later_trusted_failure(tmp_path, candidate_phase):
+    workspace = _project(tmp_path, FIXED)
+    if candidate_phase == "startup":
+        (workspace / "early").mkdir()
+        (workspace / "early/conftest.py").write_text("raise RuntimeError('candidate startup failed')\n")
+        first = "early"
+    else:
+        (workspace / "test_bad.py").write_text("def malformed(\n" if candidate_phase == "collection" else "")
+        first = "test_bad.py"
+    trusted = tmp_path / "trusted"
+    (trusted / "tests").mkdir(parents=True)
+    (trusted / "tests/test_protected.py").write_text("import missing_task_dependency\n")
+    spec = _spec(paths=(first, "tests/test_protected.py"), batch_size=1, restore=("tests",))
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(spec, trusted, workspace)
+
+
+@pytest.mark.parametrize(
+    "interruption", ["raise KeyboardInterrupt\n", "def test_interrupt():\n raise KeyboardInterrupt\n"]
+)
+def test_pytest_interrupt_with_candidate_collection_error_stays_unscored(tmp_path, interruption):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "test_bad.py").write_text("def malformed(\n")
+    (workspace / "test_interrupt.py").write_text(interruption)
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(args=("--continue-on-collection-errors",)), tmp_path, workspace)
 
 
 def test_pytest_failclosed_summary_cannot_hide_a_missing_failed_record(tmp_path):
