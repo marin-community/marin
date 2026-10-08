@@ -9,14 +9,13 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
-from marin.execution.lazy import StepContext, run
+from marin.execution.lazy import run
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import HostImage, NetworkPolicy
 from taskcompendium.convert.environment import grading_environment
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import (
     VerificationBackend,
@@ -77,33 +76,6 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     unknown = runner.invoke(main, [*arguments(tmp_path), "--source", "unknown", "--run"])
     assert unknown.exit_code == 2
     assert "Unknown source: unknown" in unknown.output
-
-
-def test_full_run_depends_on_the_source_sample_and_reuses_its_trials(tmp_path, monkeypatch, catalog):
-    captured = {}
-    monkeypatch.setattr(
-        "experiments.post_training.task_curation.driver.run_campaign",
-        lambda steps, **kwargs: captured.update(steps=steps, **kwargs),
-    )
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
-    runner = CliRunner()
-    sampled = runner.invoke(main, [*arguments(tmp_path), "--source", "first"])
-    assert sampled.exit_code == 0, sampled.output
-    (sample,) = json.loads(sampled.output)["sources"]
-    result = runner.invoke(
-        main,
-        [*arguments(tmp_path), "--source", "first", "--mode", "full", "--base-url", "https://fixture.invalid", "--run"],
-    )
-    assert result.exit_code == 0, result.output
-    (full,) = captured["steps"]
-    assert captured["mode"] == "full"
-    (previous,) = [dep for dep in full.deps if dep.name.startswith("data/rl/")]
-    assert (previous.name, previous.fingerprint()) == (sample["name"], sample["fingerprint"])
-    run = full.build_config(
-        StepContext.for_run(str(tmp_path / "full-source"), str(tmp_path / "artifacts"), deps=full.deps)
-    )
-    assert run.previous_verification_report == previous.path() + "/verify/report.json"
 
 
 def test_iris_schedules_each_grader_image_on_the_controller_without_network():

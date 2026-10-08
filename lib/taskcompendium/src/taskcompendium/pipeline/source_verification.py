@@ -53,9 +53,9 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "8"
+SOURCE_VERIFICATION_REVISION = "9"
 VERIFICATION_REPORT_FILENAME = "verification.json"
-"""The verified stage's report; a rerun reuses its matching control trials."""
+"""The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
 """Extra runs of one attempt whose controls hit an infrastructure error, such as a sandbox that never started."""
 GRADED_CHECK_STATUSES = frozenset({CheckStatus.PASS, *REJECTING_CHECK_STATUSES})
@@ -135,14 +135,6 @@ class SavedTrial:
 class VerifiedSample:
     result: SampleResult
     evidence: tuple[TrialEvidence, ...]
-
-
-@dataclass(frozen=True)
-class KnownFailure:
-    """The rejecting checks, failed or defective, of an exact task outside the current sample."""
-
-    task_sha256: str
-    checks: list[CheckResult]
 
 
 def verification_identity(suite: CheckSuite, policy: SourceVerificationPolicy) -> str:
@@ -244,51 +236,7 @@ def saved_trials(report_path: str, *, identity: str, attempts: int) -> dict[tupl
             item.model_copy(update={"reused_from": report_path}),
             tuple(previous for previous in result.previous_trials if previous.trial.attempt == item.attempt),
         )
-    for value in report.get("prior_failed_trials", []):
-        previous = HistoricalTrial.model_validate(value)
-        item, trial = previous.evidence, previous.trial
-        if (
-            item.task_id in by_task
-            or item.execution_id in execution_ids
-            or item.attempt != trial.attempt
-            or item.attempt not in range(report["policy"]["attempts"])
-            or trial.status != _trial_status(trial.checks)
-            or not any(check.status in REJECTING_CHECK_STATUSES for check in trial.checks)
-        ):
-            raise ValueError("Prior failed evidence contradicts current sample membership or actual controls")
-        execution_ids.add(item.execution_id)
-        if item.verification_identity != identity or item.attempt >= attempts:
-            continue
-        key = item.task_sha256, item.attempt
-        old = reused.get(key)
-        history = () if old is None else (*old.history, HistoricalTrial(trial=old.trial, evidence=old.evidence))
-        reused[key] = SavedTrial(trial, item.model_copy(update={"reused_from": report_path}), history)
     return reused
-
-
-def _failed_trials(saved: Mapping[tuple[str, int], SavedTrial]) -> list[HistoricalTrial]:
-    """Saved trials with a rejecting check; a failure or a defect is a definite property of its task."""
-    return [
-        record
-        for item in saved.values()
-        for record in (*item.history, HistoricalTrial(trial=item.trial, evidence=item.evidence))
-        if any(check.status in REJECTING_CHECK_STATUSES for check in record.trial.checks)
-    ]
-
-
-def _known_failures(trials: list[HistoricalTrial]) -> dict[str, KnownFailure]:
-    failures = {}
-    for record in trials:
-        item = record.evidence
-        previous = failures.get(item.task_id)
-        if previous is not None and previous.task_sha256 != item.task_sha256:
-            raise ValueError("Prior failed controls disagree on their exact task identity")
-        checks = [] if previous is None else previous.checks
-        failures[item.task_id] = KnownFailure(
-            item.task_sha256,
-            [*checks, *(check for check in record.trial.checks if check.status in REJECTING_CHECK_STATUSES)],
-        )
-    return failures
 
 
 def _complete_trial(trial: VerificationTrial) -> bool:
@@ -503,13 +451,7 @@ def gate_source_row(
     *,
     status: SourceVerificationStatus,
     results: dict[str, list[CheckResult]],
-    previous_failures: Mapping[str, KnownFailure] | None = None,
 ) -> dict[str, Any]:
-    previous = None if previous_failures is None else previous_failures.get(row["task_id"])
-    if previous is not None and row["task_json"] is not None:
-        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
-        if digest == previous.task_sha256:
-            results = {**results, row["task_id"]: [*results.get(row["task_id"], []), *previous.checks]}
     if row["task_id"] in results:
         checks = results[row["task_id"]]
         row = {
@@ -551,17 +493,6 @@ class _VerificationRun:
     @property
     def report_path(self) -> StoragePath:
         return self.output / VERIFICATION_REPORT_FILENAME
-
-
-def _prior_trials(
-    output: StoragePath, previous_report_path: str | None, *, identity: str, attempts: int
-) -> dict[tuple[str, int], SavedTrial]:
-    """Trials saved by an earlier attempt at this output, or else by ``previous_report_path``."""
-    local_report = output / VERIFICATION_REPORT_FILENAME
-    previous = str(local_report) if local_report.exists() else previous_report_path
-    if previous is None:
-        return {}
-    return saved_trials(previous, identity=identity, attempts=attempts)
 
 
 def _select_sample(run: _VerificationRun, policy: SourceVerificationPolicy) -> VerificationSample:
@@ -627,7 +558,6 @@ def _write_report(
     suite: CheckSuite,
     decision: SourceReport,
     verified: list[VerifiedSample],
-    outside_failures: list[HistoricalTrial],
 ) -> dict[str, Any]:
     report = {
         **decision.model_dump(mode="json"),
@@ -635,19 +565,13 @@ def _write_report(
         "suite": {"id": suite.id, "revision": suite.revision, "parameters": suite.parameters},
         "implementation_revision": SOURCE_VERIFICATION_REVISION,
         "evidence": [evidence.model_dump(mode="json") for item in verified for evidence in item.evidence],
-        "prior_failed_trials": [previous.model_dump(mode="json") for previous in outside_failures],
     }
     with run.report_path.open("wt", auto_mkdir=True) as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     return report
 
 
-def _gate_rows(
-    run: _VerificationRun,
-    decision: SourceReport,
-    results: list[SampleResult],
-    outside_failures: list[HistoricalTrial],
-) -> None:
+def _gate_rows(run: _VerificationRun, decision: SourceReport, results: list[SampleResult]) -> None:
     """Rewrite every audit row with its source gate, then export the accepted rows."""
     execute_phase(
         run.context,
@@ -658,7 +582,6 @@ def _gate_rows(
                 gate_source_row,
                 status=decision.status,
                 results={result.task_id: sample_result_checks(result) for result in results},
-                previous_failures=_known_failures(outside_failures),
             )
         )
         .write_parquet(str(run.output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA),
@@ -698,12 +621,14 @@ def verify_source(
     *,
     telemetry: PhaseTelemetry | None = None,
     context: ZephyrContext | None = None,
-    previous_report_path: str | None = None,
 ) -> dict[str, Any]:
-    """Verify an output sample and retain the full audit when publication is denied."""
+    """Verify an output sample and retain the full audit when publication is denied.
+
+    Complete trials that an earlier attempt at ``output_path`` saved are reused.
+    """
     source, output = StoragePath(source_path), StoragePath(output_path)
     identity = verification_identity(suite, policy)
-    prior = _prior_trials(output, previous_report_path, identity=identity, attempts=policy.attempts)
+    prior = saved_trials(str(output / VERIFICATION_REPORT_FILENAME), identity=identity, attempts=policy.attempts)
     with (
         nullcontext(context)
         if context is not None
@@ -713,10 +638,8 @@ def verify_source(
         sample = _select_sample(run, policy)
         verified = _run_trials(run, sample, prior, suite, policy, identity)
         results = [item.result for item in verified]
-        sampled_ids = {result.task_id for result in results}
-        outside_failures = [record for record in _failed_trials(prior) if record.evidence.task_id not in sampled_ids]
         decision = source_verification_report(sample, results, policy)
-        report = _write_report(run, suite, decision, verified, outside_failures)
-        _gate_rows(run, decision, results, outside_failures)
+        report = _write_report(run, suite, decision, verified)
+        _gate_rows(run, decision, results)
         counts = manifest_counts(output, context, telemetry=telemetry)
     return _write_manifest(run, counts, report)

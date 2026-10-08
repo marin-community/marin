@@ -18,7 +18,7 @@ from taskcompendium.convert.answers import json_schema_task
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
-from taskcompendium.pipeline.controls import answer_reply, control_suite
+from taskcompendium.pipeline.controls import control_suite
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -26,7 +26,6 @@ from taskcompendium.pipeline.models import (
     Controls,
     GraderReadiness,
     RawRow,
-    Reply,
     VerificationReport,
 )
 from taskcompendium.pipeline.source_verification import (
@@ -52,17 +51,9 @@ from taskcompendium.pipeline.verification import DIAGNOSTIC_TAIL_CHARS, control_
 from .pipeline_stages import FixtureGradingMachines
 
 OBJECT_SCHEMA = {"type": "object"}
-# Requires a "count" property while forbidding every property, so no reply satisfies it.
-CONTRADICTORY_SCHEMA = {"type": "object", "required": ["count"], "properties": {}, "additionalProperties": False}
-
-
-def count_reply(task: TaskSpec) -> Reply:
-    return answer_reply(task, json.dumps({"count": 1}))
-
 
 # A JSON schema grader has no reference instance, so these controls grade an empty submission.
 SCHEMA_CONTROLS = Controls()
-COUNT_CONTROLS = Controls(golden=count_reply)
 
 
 def schema_task(task_id: str, schema: dict) -> TaskSpec:
@@ -142,7 +133,7 @@ def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_
     suite = control_suite(SCHEMA_CONTROLS, None)
     policy = SourceVerificationPolicy(1, 0, 2, 1.0)
     identity = verification_identity(suite, policy)
-    original_path = tmp_path / "sample-verification.json"
+    original_path = tmp_path / "verification.json"
     with ZephyrContext(max_workers=1, name="verification-reuse") as context:
         fresh = context.execute(
             Dataset.from_list([reusable_schema_row]).map(
@@ -166,7 +157,7 @@ def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_
                     suite=suite,
                     attempts=2,
                     identity=identity,
-                    report_path=str(tmp_path / "full-verification.json"),
+                    report_path=str(original_path),
                 )
             )
         )
@@ -313,22 +304,6 @@ def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_sche
     with ZephyrContext(max_workers=1, name="persisted-verification-reuse") as context:
         first = verify_source(str(source.parent), str(output), policy, suite, 1, context=context)
         second = verify_source(str(source.parent), str(output), policy, suite, 1, context=context)
-        if reusable:
-            sample_report = output / "verification.json"
-            original_bytes = sample_report.read_bytes()
-            full = verify_source(
-                str(source.parent),
-                str(tmp_path / "full"),
-                policy,
-                suite,
-                1,
-                context=context,
-                previous_report_path=str(sample_report),
-            )
-            assert sample_report.read_bytes() == original_bytes
-            assert {item["execution_id"] for item in full["verification"]["evidence"]} == {
-                item["execution_id"] for item in first["verification"]["evidence"]
-            }
     first = first["verification"]
     second = second["verification"]
     assert first["results"][0]["trials"] == second["results"][0]["trials"]
@@ -341,109 +316,6 @@ def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_sche
     else:
         assert first_ids.isdisjoint(second_ids)
         assert all(item["reused_from"] is None for item in second["evidence"])
-
-
-def test_sample_failure_remains_rejected_outside_full_verification_sample(tmp_path):
-    ids = [{"task_id": f"task-{i}", "filter_status": "keep"} for i in range(101)]
-    selected = {row["task_id"] for row in sample_rows(iter(ids), size=100, seed=0).rows}
-    bad_id = next(row["task_id"] for row in ids if row["task_id"] not in selected)
-    extra_id = min(selected)
-    rows = []
-    for row in ids:
-        task = schema_task(row["task_id"], CONTRADICTORY_SCHEMA if row["task_id"] == bad_id else OBJECT_SCHEMA)
-        rows.append({**row, "task_json": task.model_dump_json(), "filter_reasons": []})
-    sample_source, full_source = tmp_path / "sample-source", tmp_path / "full-source"
-    for source, records in (
-        (sample_source, [row for row in rows if row["task_id"] != extra_id]),
-        (full_source, rows),
-    ):
-        (source / "audit").mkdir(parents=True)
-        pq.write_table(pa.Table.from_pylist(records, schema=TASK_SCHEMA), source / "audit/part-00000.parquet")
-        (source / "manifest.json").write_text(json.dumps({"input_rows": len(records)}))
-    suite = control_suite(COUNT_CONTROLS, None)
-    policy = SourceVerificationPolicy(100, 0, 2, 0.95)
-    sample_output, full_output = tmp_path / "sample", tmp_path / "full"
-    with ZephyrContext(max_workers=2, name="sample-failure-provenance") as context:
-        sample = verify_source(str(sample_source), str(sample_output), policy, suite, 2, context=context)
-        sample_report = sample_output / "verification.json"
-        original_bytes = sample_report.read_bytes()
-        full = verify_source(
-            str(full_source),
-            str(full_output),
-            policy,
-            suite,
-            2,
-            context=context,
-            previous_report_path=str(sample_report),
-        )
-        assert sample_report.read_bytes() == original_bytes
-        resumed = verify_source(str(full_source), str(full_output), policy, suite, 2, context=context)
-        invalid_rows = [
-            (
-                {**row, "task_json": None, "filter_status": "reject", "filter_reasons": ["source_defect:converter"]}
-                if row["task_id"] == bad_id
-                else row
-            )
-            for row in rows
-        ]
-        pq.write_table(pa.Table.from_pylist(invalid_rows, schema=TASK_SCHEMA), full_source / "audit/part-00000.parquet")
-        invalid_output = tmp_path / "invalid"
-        verify_source(
-            str(full_source),
-            str(invalid_output),
-            policy,
-            suite,
-            2,
-            context=context,
-            previous_report_path=str(full_output / "verification.json"),
-        )
-        corrected = schema_task(bad_id, OBJECT_SCHEMA)
-        corrected_rows = [
-            {**row, "task_json": corrected.model_dump_json()} if row["task_id"] == bad_id else row for row in rows
-        ]
-        pq.write_table(
-            pa.Table.from_pylist(corrected_rows, schema=TASK_SCHEMA), full_source / "audit/part-00000.parquet"
-        )
-        corrected_output = tmp_path / "corrected"
-        verify_source(
-            str(full_source),
-            str(corrected_output),
-            policy,
-            suite,
-            2,
-            context=context,
-            previous_report_path=str(full_output / "verification.json"),
-        )
-    assert sample["verification"]["status"] == "passed"
-    assert sample["verification"]["counts"]["failed"] == 1
-    for report in (full, resumed):
-        assert report["verification"]["status"] == "passed"
-        assert report["verification"]["sample_count"] == 100
-        assert report["verification"]["counts"]["failed"] == 0
-        assert bad_id not in {result["task_id"] for result in report["verification"]["results"]}
-        assert {item["evidence"]["task_id"] for item in report["verification"]["prior_failed_trials"]} == {bad_id}
-    output_rows = [row for file in (full_output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()]
-    failed = next(row for row in output_rows if row["task_id"] == bad_id)
-    assert failed["filter_status"] == "reject"
-    assert any(check["status"] == "fail" for check in failed["checks"])
-    assert sum(row["filter_status"] == "keep" for row in output_rows) == 100
-    invalid = next(
-        row
-        for file in (invalid_output / "audit").glob("*.parquet")
-        for row in pq.read_table(file).to_pylist()
-        if row["task_id"] == bad_id
-    )
-    assert invalid["task_json"] is None
-    assert invalid["filter_status"] == "reject"
-    assert invalid["filter_reasons"] == ["source_defect:converter"]
-    corrected_row = next(
-        row
-        for file in (corrected_output / "audit").glob("*.parquet")
-        for row in pq.read_table(file).to_pylist()
-        if row["task_id"] == bad_id
-    )
-    assert corrected_row["filter_status"] == "keep"
-    assert corrected_row["task_json"] == corrected.model_dump_json()
 
 
 def test_defective_task_row_is_rejected_when_its_source_passes():

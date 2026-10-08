@@ -140,10 +140,12 @@ backend and whether a controller is present, not the controller's address. Add `
 execute, with `GLM_BULK_TOKEN` set; the driver resolves the review endpoint
 from the Iris GLM relay job (`--relay-job`, default
 `DEFAULT_GLM_RELAY_JOB` in `experiments/post_training/glm.py`) unless `--base-url` is given.
-For full execution, pass `--mode full` and a new `--report-path`. Each source's
-full step depends on its own sample artifact (built or reused from the cache),
-reuses the sample's control trials, and ends `gated` when the sample's quality or
-verification gate rejected the source. Repeat `--source NAME` to run a subset.
+The default, `--mode sample`, is a test run that converts and gates only each
+source's panel. For a full run, pass `--mode full` and a new `--report-path`.
+A full run processes each source on its own: it makes its own panel quality
+decision, converts every row of an accepted source, draws its control sample
+from all kept rows, and ends `gated` when its quality or verification gate
+rejects the source. Repeat `--source NAME` to run a subset.
 
 Keep `--review-cache` stable across campaigns: reviews are cached by the
 complete request and the declared model revision, so a changed artifact can be

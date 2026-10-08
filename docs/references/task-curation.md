@@ -240,10 +240,12 @@ Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
 Docker daemon.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
-`--base-url` overrides it. `--mode full` processes each source after its own
-sample: the full step depends on the source's sample artifact, reuses its
-control trials, and ends `gated` when the sample's quality or verification gate
-rejected the source. Repeat `--source NAME` to run a subset.
+`--base-url` overrides it. `--mode sample`, the default, is a test run that
+converts and gates only each source's panel. `--mode full` runs each source on
+its own: it makes its own panel quality decision, converts every row of an
+accepted source, draws its control sample from all kept rows, and ends `gated`
+when its quality or verification gate rejects the source. Repeat
+`--source NAME` to run a subset.
 
 ## Outputs
 

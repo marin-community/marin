@@ -5,14 +5,13 @@
 
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import click
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import get_job_info
-from marin.execution.lazy import ArtifactStep
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
@@ -32,7 +31,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.environment_runtime import LocalGraderMachines
-from experiments.post_training.task_curation.pipeline import RlDataArtifact, RlDataPipeline, source_step
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
@@ -205,16 +204,6 @@ def _pipeline_config(
     )
 
 
-def _source_step(
-    pipeline: RlDataPipeline, config: SourcePipelineConfig, runtime: CampaignRuntime
-) -> ArtifactStep[RlDataArtifact]:
-    """The source's step for ``config.mode``; a full step depends on the source's sample step and reuses its trials."""
-    if config.mode == SourceProcessingMode.SAMPLE:
-        return source_step(pipeline, config, runtime)
-    sample = source_step(pipeline, replace(config, mode=SourceProcessingMode.SAMPLE), runtime)
-    return source_step(pipeline, config, runtime, previous=sample)
-
-
 @click.command(help=__doc__)
 @click.option("--model", default=GLM_MODEL, show_default=True)
 @click.option("--model-revision", required=True)
@@ -303,7 +292,7 @@ def main(
         normalized_shards=normalized_shards,
     )
     runtime = CampaignRuntime()
-    steps = [_source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
+    steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
     pool = CampaignPool(
         max_workers,
         concurrent_sources,

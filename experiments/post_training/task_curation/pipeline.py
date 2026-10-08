@@ -48,7 +48,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
-    VERIFY_REPORT_PATH,
     SourcePipelineConfig,
     run_source_pipeline,
 )
@@ -383,7 +382,6 @@ class SourceRun:
     source_input: str
     inputs: dict[str, str]
     output_path: str
-    previous_verification_report: str | None
     grader_artifact: str | None
 
 
@@ -391,7 +389,6 @@ def _source_run(
     identity: dict[str, Any],
     downloaded: ArtifactStep[Artifact],
     inputs: Mapping[str, ArtifactStep[Artifact]],
-    previous: ArtifactStep[Artifact] | None,
     grader: ArtifactStep[EnvironmentArtifact] | None,
     ctx: StepContext,
 ) -> SourceRun:
@@ -401,9 +398,6 @@ def _source_run(
         inputs={name: ctx.artifact_path(step) for name, step in inputs.items()},
         output_path=ctx.output_path,
         grader_artifact=ctx.artifact_path(grader) if grader is not None else None,
-        previous_verification_report=(
-            str(StoragePath(ctx.artifact_path(previous)) / VERIFY_REPORT_PATH) if previous is not None else None
-        ),
     )
 
 
@@ -420,7 +414,6 @@ def _run_source(
         run.source_input,
         run.output_path,
         config,
-        previous_verification_report=run.previous_verification_report,
         canonical_source=pipeline.name,
     )
     if result.status == SourceStatus.INCOMPLETE:
@@ -429,16 +422,11 @@ def _run_source(
 
 
 def source_step(
-    pipeline: RlDataPipeline,
-    config: SourcePipelineConfig,
-    campaign: CampaignRuntime,
-    *,
-    previous: ArtifactStep[Artifact] | None = None,
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, campaign: CampaignRuntime
 ) -> ArtifactStep[RlDataArtifact]:
     """The ``data/rl/<name>-<hash>`` artifact for one declaration.
 
-    ``previous`` is an earlier output of the same source whose control trials are reused. A
-    ``grader`` without a declared image requires its environment's artifact to be built already; see
+    A ``grader`` without a declared image requires its environment's artifact to be built already; see
     ``images.build``.
     """
     downloaded = download_step(pipeline.source, campaign)
@@ -449,22 +437,12 @@ def source_step(
         grader_built = built_environment(pipeline.grader)
         grader_step = environment_artifact(pipeline.grader)
     identity = pipeline_identity(pipeline, config, grader_built)
-    identity["previous"] = (
-        {"name": previous.name, "version": previous.version, "fingerprint": previous.fingerprint()}
-        if previous is not None
-        else None
-    )
     digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]
     return ArtifactStep(
         name=f"data/rl/{pipeline.name}-{digest}",
         version=PIPELINE_VERSION,
         artifact_type=RlDataArtifact,
         run=partial(_run_source, pipeline, config, campaign=campaign),
-        build_config=partial(_source_run, identity, downloaded, inputs, previous, grader_step),
-        deps=(
-            downloaded,
-            *inputs.values(),
-            *((grader_step,) if grader_step is not None else ()),
-            *((previous,) if previous is not None else ()),
-        ),
+        build_config=partial(_source_run, identity, downloaded, inputs, grader_step),
+        deps=(downloaded, *inputs.values(), *((grader_step,) if grader_step is not None else ())),
     )

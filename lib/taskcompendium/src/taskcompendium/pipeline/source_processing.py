@@ -84,7 +84,7 @@ SIDECAR_SHARD = "part-{shard:05d}.parquet"
 UNPROCESSED_REVIEW_TEMPLATE = "review/unprocessed-{shard:05d}.parquet"
 SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified")
 VERIFY_REPORT_PATH = "verify/report.json"
-"""A source's verification report, relative to its output; a later run of the source reuses its trials."""
+"""A source's verification report, relative to its output."""
 NO_CONTROLS_REASON = "The source declares no controls"
 JUDGE_GRADED_REASON = "judge grader; no control path yet"
 EXPANDED_QUALITY = frozenset({SourceQualityStatus.UNREVIEWED, SourceQualityStatus.TRUST, SourceQualityStatus.CENSUS})
@@ -590,9 +590,7 @@ def _judge_graded(panel: _Panel) -> bool:
     return bool(tasks) and all(_judge_grader(TaskSpec.model_validate(task).grader) for task in tasks)
 
 
-def _verify(
-    run: _SourceRun, panel: _Panel, previous_verification_report: str | None
-) -> tuple[dict[str, Any], StoragePath]:
+def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath]:
     """Run the recipe's controls on the filtered rows; return the verified manifest and its stage directory."""
     filtered = run.scratch("filtered")
     # TODO(rl-data): judge test path. A judge control would verify judge-graded sources here
@@ -611,7 +609,6 @@ def _verify(
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,
-            previous_report_path=previous_verification_report,
             telemetry=phase,
         )
     return verification, verified
@@ -858,7 +855,7 @@ def _finish_scratch(run: _SourceRun, status: SourceStatus) -> None:
             _write_json(path, phase_manifest)
 
 
-def _run_source_pipeline(run: _SourceRun, *, previous_verification_report: str | None) -> SourcePipelineResult:
+def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     """Review bounded raw tasks, gate full conversion, and persist joined source sidecars.
 
     The caller owns the entered context and reviewer. Reading the raw
@@ -878,7 +875,7 @@ def _run_source_pipeline(run: _SourceRun, *, previous_verification_report: str |
     prepared = _expand_full(run, panel) if expanded and not panel.census else run.scratch("sample")
     unavailable_reviews = _audit(run, prepared, review)
     _filter(run)
-    verification, checked = _verify(run, panel, previous_verification_report)
+    verification, checked = _verify(run, panel)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
@@ -916,15 +913,10 @@ def run_source_pipeline(
     output_path: str,
     config: SourcePipelineConfig,
     *,
-    previous_verification_report: str | None = None,
     canonical_source: str,
 ) -> SourcePipelineResult:
-    """Run one source and persist final execution counters and partial phase evidence.
-
-    ``previous_verification_report`` names an earlier source's ``VERIFY_REPORT_PATH`` whose
-    matching control trials are reused.
-    """
+    """Run one source and persist final execution counters and partial phase evidence."""
     telemetry = SourceTelemetry(canonical_source, output_path)
     run = _SourceRun(recipe, context, source_input, StoragePath(output_path), config, telemetry)
     with telemetry.record():
-        return _run_source_pipeline(run, previous_verification_report=previous_verification_report)
+        return _run_source_pipeline(run)

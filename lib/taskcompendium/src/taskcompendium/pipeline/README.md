@@ -130,12 +130,13 @@ defers its eligible rows. Failed and defective controls reject the affected task
 even when the source passes. Unsampled rows of a passing source get
 `source_sampled` readiness.
 
-Reruns reuse complete trials from a previous `verify/report.json`. Trial identity
-covers the whole task, the controls code, the machine backend and worker image,
-all TaskCompendium, VerifyIT and Shellbox Python files, and the verification
-settings. QEMU reuse requires a digest-pinned worker image carrying the bundle;
-network-enabled graders always run fresh. Infrastructure errors rerun the whole
-trial; definite failures and defects survive successful retries.
+A rerun of the same source artifact reuses the complete trials that its earlier
+attempt saved. Trial identity covers the whole task, the controls code, the
+machine backend and worker image, all TaskCompendium, VerifyIT and Shellbox
+Python files, and the verification settings. QEMU reuse requires a
+digest-pinned worker image carrying the bundle; network-enabled graders always
+run fresh. Infrastructure errors rerun the whole trial; definite failures and
+defects survive successful retries.
 
 ## Review execution
 
