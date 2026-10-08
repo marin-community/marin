@@ -8,7 +8,7 @@ import pytest
 import safetensors.torch
 import torch
 from marin.merging.arithmetic import MergeMethod, MergeParameters, merge_tensor
-from marin.merging.checkpoint import CheckpointReader, CheckpointSource, merge_checkpoint
+from marin.merging.checkpoint import CheckpointReader, CheckpointSource, RowMerge, merge_checkpoint
 from marin.merging.geometry import weight_update_gram
 
 
@@ -105,6 +105,7 @@ def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_mani
         code_revision="code-revision",
         preserve_rows={"a": (1,)},
         tensor_coefficients=tensor_coefficients,
+        row_overrides={},
     )
     reader = CheckpointReader(CheckpointSource(str(output), "merged"))
     torch.testing.assert_close(reader.tensor("a"), torch.tensor(expected_a), rtol=0, atol=0)
@@ -124,4 +125,50 @@ def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_mani
             code_revision="code-revision",
             preserve_rows={"a": (1,)},
             tensor_coefficients=tensor_coefficients,
+            row_overrides={},
         )
+
+
+def test_checkpoint_row_merges_preserve_other_experts_and_router(tmp_path):
+    names = [f"model.layers.0.mlp.experts.{projection}.weight" for projection in ("gate_proj", "up_proj", "down_proj")]
+    router = "model.layers.0.mlp.gate.weight"
+    sources = []
+    weights = []
+    for source_index, offset in enumerate((0, 10, 20)):
+        folder = tmp_path / f"source-{source_index}"
+        folder.mkdir()
+        tensors = {
+            name: torch.arange(12).reshape(3, 2, 2).float() + offset + index * 100 for index, name in enumerate(names)
+        }
+        tensors[router] = torch.arange(9).reshape(3, 3).float() + offset
+        safetensors.torch.save_file(tensors, folder / "weights.safetensors")
+        (folder / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {name: "weights.safetensors" for name in tensors}})
+        )
+        (folder / "config.json").write_text('{"model_type":"fixture"}')
+        sources.append(CheckpointSource(str(folder), str(source_index)))
+        weights.append(tensors)
+    output = tmp_path / "merged"
+    manifest = merge_checkpoint(
+        sources[0],
+        sources[1:],
+        str(output),
+        MergeParameters(MergeMethod.AVERAGE, (1, 0), 1, 1, 0),
+        code_revision="fixture",
+        preserve_rows={},
+        tensor_coefficients={},
+        row_overrides={name: (RowMerge(1, (0, 1)), RowMerge(2, (0.5, 0.5))) for name in names},
+    )
+    reader = CheckpointReader(CheckpointSource(str(output), "merged"))
+    for name in names:
+        merged = reader.tensor(name)
+        torch.testing.assert_close(merged[0], weights[1][name][0], rtol=0, atol=0)
+        torch.testing.assert_close(merged[1], weights[2][name][1], rtol=0, atol=0)
+        torch.testing.assert_close(merged[2], weights[1][name][2] + 5, rtol=0, atol=0)
+    torch.testing.assert_close(reader.tensor(router), weights[1][router], rtol=0, atol=0)
+    saved_manifest = json.loads((output / "merge-manifest.json").read_text())
+    assert saved_manifest["row_overrides"][names[0]] == [
+        {"row": 1, "coefficients": [0, 1]},
+        {"row": 2, "coefficients": [0.5, 0.5]},
+    ]
+    assert manifest["tensor_count"] == 4

@@ -37,6 +37,14 @@ class CheckpointSource:
     revision: str
 
 
+@dataclass(frozen=True)
+class RowMerge:
+    """Donor coefficients for one first-axis slice of a tensor."""
+
+    row: int
+    coefficients: tuple[float, ...]
+
+
 class CheckpointReader:
     """Keep only the most recently requested shard of one checkpoint in memory."""
 
@@ -65,13 +73,15 @@ def merge_checkpoint(
     code_revision: str,
     preserve_rows: dict[str, tuple[int, ...]],
     tensor_coefficients: dict[str, tuple[float, ...]],
+    row_overrides: dict[str, tuple[RowMerge, ...]],
 ) -> dict[str, Any]:
     """Write an immutable merged checkpoint, publishing its manifest last.
 
     Inputs must already be aligned and their tokenizer/config semantics reviewed.
     Each output tensor is one safetensors shard, bounding output serialization
     memory independently of input shard layout. A partial failure is retained
-    for audit and must not be served without the completion manifest.
+    for audit and must not be served without the completion manifest. Row
+    overrides merge first-axis slices independently and cannot overlap protected rows.
     """
     readers = [CheckpointReader(source) for source in [anchor, *donors]]
     names = set(readers[0].weight_map)
@@ -83,6 +93,16 @@ def merge_checkpoint(
         raise ValueError("Each donor needs one coefficient")
     if not set(tensor_coefficients) <= names:
         raise ValueError("Tensor coefficients refer to missing tensors")
+    if not set(row_overrides) <= names:
+        raise ValueError("Row overrides refer to missing tensors")
+    for name, overrides in row_overrides.items():
+        rows = [override.row for override in overrides]
+        if len(rows) != len(set(rows)) or any(row < 0 for row in rows):
+            raise ValueError(f"Row overrides must have unique nonnegative indices: {name}")
+        if set(rows) & set(preserve_rows.get(name, ())):
+            raise ValueError(f"Row overrides overlap protected rows: {name}")
+        if any(len(override.coefficients) != len(donors) for override in overrides):
+            raise ValueError(f"Each row override needs one coefficient per donor: {name}")
     selected_parameters = {}
     for name, coefficients in tensor_coefficients.items():
         if len(coefficients) != len(donors):
@@ -99,6 +119,9 @@ def merge_checkpoint(
         "code_revision": code_revision,
         "preserve_rows": preserve_rows,
         "tensor_coefficients": tensor_coefficients,
+        "row_overrides": {
+            name: [asdict(override) for override in overrides] for name, overrides in row_overrides.items()
+        },
         "objects": [],
     }
 
@@ -118,6 +141,15 @@ def merge_checkpoint(
             selected_parameters.get(name, parameters),
             tensor_name=name,
         )
+        for override in row_overrides.get(name, ()):
+            if merged.ndim == 0 or override.row >= merged.shape[0]:
+                raise ValueError(f"Row override outside tensor shape: {name}[{override.row}]")
+            merged[override.row] = merge_tensor(
+                readers[0].tensor(name)[override.row],
+                [reader.tensor(name)[override.row] for reader in readers[1:]],
+                replace(parameters, coefficients=override.coefficients),
+                tensor_name=f"{name}[{override.row}]",
+            )
         if name in preserve_rows:
             rows = list(preserve_rows[name])
             merged[rows] = readers[0].tensor(name)[rows]

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import torch
 from marin.merging.arithmetic import MergeMethod, MergeParameters
-from marin.merging.checkpoint import CheckpointSource, merge_checkpoint
+from marin.merging.checkpoint import CheckpointSource, RowMerge, merge_checkpoint
 
 
 def main() -> None:
@@ -32,6 +32,10 @@ def main() -> None:
         code_revision=args.code_revision,
         preserve_rows={name: tuple(rows) for name, rows in recipe["preserve_rows"].items()},
         tensor_coefficients={name: tuple(values) for name, values in recipe["tensor_coefficients"].items()},
+        row_overrides={
+            name: tuple(RowMerge(row=entry["row"], coefficients=tuple(entry["coefficients"])) for entry in entries)
+            for name, entries in recipe.get("row_overrides", {}).items()
+        },
     )
 
 
