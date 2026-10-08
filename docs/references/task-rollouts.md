@@ -94,6 +94,8 @@ Completion, a generation limit, the turn limit, or the cumulative turn deadline 
 A session does not call the model.
 The default session exposes `shell(command: string)` when the task declares the shell capability.
 Each command starts a fresh shell. Files persist between commands.
+`rolloutengine.shell_tool` defines this contract: `SHELL_TOOL_NAME`, the function definition from `shell_tool_definition()`, and the tool message content from `shell_observation(result)`.
+The content is a JSON object with `stdout`, `stderr`, `exit_code`, `reason` (the Shellbox `ExitReason` value), and `truncated`.
 Native interaction tools and tool-provider contracts require a registered custom session.
 
 The model receives only public context, answer-format instructions, tool definitions, and task observations.
@@ -104,6 +106,7 @@ When the grader has an environment, the Shellbox session stages grading inputs o
 The verifier machine receives verifier resources under `/tests`, `resources.all`, `resources.worker`, captured `output_paths`, and the extracted answer.
 A `ScriptGrader`'s collect commands run as root on the task machine, then its artifacts are copied from the task machine.
 Collect commands and artifacts require a task machine.
+Shell-tool commands run as the task machine's `MachineRuntimeSpec.user`, and the grader command runs as the verifier machine's.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
 
@@ -225,8 +228,14 @@ Final grading receives the new conversation and its subsequent turns.
 A custom session can use this operation after a failed proof attempt.
 
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
-The engine grades completed state with stop reason `length`.
+A server that rejects the prompt without rendering it supplies no tokens, so the adapter passes an empty tuple.
+The engine records these tokens only when no turn completed.
+Otherwise, the engine grades completed state with stop reason `length`.
 It does not add an oversized observation to retained response evidence.
+
+A model adapter reports `stop_reason="length"` for every response that ends on its output token budget.
+This includes a response that the server's tool parser reports as tool calls; vLLM's GLM tool parser reports such a response with finish reason `tool_calls`.
+The default session does not execute tool calls from a `length` response.
 
 ## Use
 
@@ -254,6 +263,32 @@ async def run_task(
         {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
     )
     return await engine.run(lowered)
+```
+
+`rolloutengine.machines.prepare_machine(requirements, runtime, resources, factories, cleanup_timeout=...)` prepares a machine outside a rollout, as the engine prepares a task or verifier machine.
+It is an async context manager.
+It creates the machine from `factories[runtime.backend]`, installs `resources` under `/`, and runs the setup commands within `runtime.startup_timeout`.
+Leaving the context closes the machine within the machine or default cleanup deadline.
+A close failure raises unless the body raised first.
+
+```python
+from rolloutengine.machines import prepare_machine
+from rolloutengine.spec import LoweredTaskSpec
+from shellbox.machine import Command
+
+
+async def inspect_workspace(lowered: LoweredTaskSpec, factories) -> bytes:
+    task = lowered.task
+    assert lowered.runtime.task_machine is not None
+    async with prepare_machine(
+        task.environment_requirements,
+        lowered.runtime.task_machine,
+        task.resources.all + task.resources.worker,
+        factories,
+        cleanup_timeout=lowered.session.cleanup_timeout,
+    ) as machine:
+        result = await machine.run(Command(("ls", "-la"), timeout=5))
+    return result.stdout
 ```
 
 From the Marin repository root, with the test environment installed:
