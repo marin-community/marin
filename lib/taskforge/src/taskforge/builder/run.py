@@ -255,25 +255,7 @@ async def run_build(
             raise failure from error
         if not isinstance(output, BuildOutput):
             raise BuildFailure(f"build(b) returned {type(output).__name__}, not BuildOutput", None)
-        outputs = [_output(step_cache, record) for record in step_cache.records]
-        check_roles(output, step_cache.records, outputs)
-        graded = [
-            _GRADED.validate_json(b.read(r.blob)) for r in b.resources if r.name.startswith(GRADED_RESOURCE_PREFIX)
-        ]
-        check_controls_not_graded(output.controls, [o for o in outputs if isinstance(o, Grader)], graded)
-        if output.lowered.task != output.task:
-            raise BuildFailure("lowered: BuildOutput.lowered is not b.lower(...) of BuildOutput.task", None)
-        try:
-            validate_lowered_task(
-                output.lowered, factories=host_checked_factories(services.factories, services.host), sessions={}
-            )
-        except (ValueError, NotImplementedError) as error:
-            raise BuildFailure(f"lowered: {error}", None) from error
-        check_convention(output.task, output.convention)
-        try:
-            validate_controls(output.task, output.controls)
-        except ValueError as error:
-            raise BuildFailure(f"controls: {error}", None) from error
+        _check_output(output, b, step_cache, services)
         draft = TaskDraft(
             task=output.task,
             lowered=output.lowered,
@@ -295,6 +277,32 @@ async def run_build(
         fields.attrs["hits"] = str(sum(record.status == CacheStatus.HIT for record in step_cache.records))
         fields.attrs["steps"] = str(len(step_cache.records))
     return draft
+
+
+def _check_output(output: BuildOutput, b: Build, step_cache: StepCache, services: BuildServices) -> None:
+    """The library rules a program's output must keep: step roles, ungraded controls, a lowering of the
+    task its host can run, the submission convention, and well-formed controls.
+
+    Raises:
+        BuildFailure: the first rule ``output`` breaks.
+    """
+    outputs = [_output(step_cache, record) for record in step_cache.records]
+    check_roles(output, step_cache.records, outputs)
+    graded = [_GRADED.validate_json(b.read(r.blob)) for r in b.resources if r.name.startswith(GRADED_RESOURCE_PREFIX)]
+    check_controls_not_graded(output.controls, [o for o in outputs if isinstance(o, Grader)], graded)
+    if output.lowered.task != output.task:
+        raise BuildFailure("lowered: BuildOutput.lowered is not b.lower(...) of BuildOutput.task", None)
+    try:
+        validate_lowered_task(
+            output.lowered, factories=host_checked_factories(services.factories, services.host), sessions={}
+        )
+    except (ValueError, NotImplementedError) as error:
+        raise BuildFailure(f"lowered: {error}", None) from error
+    check_convention(output.task, output.convention)
+    try:
+        validate_controls(output.task, output.controls)
+    except ValueError as error:
+        raise BuildFailure(f"controls: {error}", None) from error
 
 
 def _output(cache: StepCache, record: StepRecord) -> object:
