@@ -12,7 +12,9 @@ from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
 from taskforge.loop.events import Terminal
 from taskforge.loop.program import LEDGER_DIR
-from taskforge.queue.run import BandOutcome, FailedItems, item_terminal
+from taskforge.queue.run import FailedItems, item_terminal
+from taskforge.review.decision import BandOutcome
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.triage.verdict import TriageDecision
 from taskforge.validate.adversary import AdversaryRole
 from taskforge.validate.outcome import Cause
@@ -22,9 +24,10 @@ SHORTCUT = AdversaryRole.SHORTCUT
 
 
 async def test_a_run_takes_every_item_to_a_terminal_and_a_relaunch_runs_none_again(
-    queue_run, author_replies, fake_glm, fakes
+    queue_run, author_replies, no_shortcut, fake_glm, fakes
 ):
     author_replies(2)
+    no_shortcut(2)
     run = queue_run(rubric=fakes.rubric(ACCEPT, decisions={"b/0": REJECT}))
     policy = fakes.policy()
 
@@ -32,14 +35,14 @@ async def test_a_run_takes_every_item_to_a_terminal_and_a_relaunch_runs_none_aga
 
     assert first.items == {"a--0": Terminal.ACCEPTED, "b--0": Terminal.REJECTED, "c--0": Terminal.ACCEPTED}
     assert first.failed == {}
-    assert len(fake_glm.requests) == 2
+    assert (fakes.author_requests(fake_glm), len(fake_glm.requests)) == (2, 4)
     calls = (list(run.source.calls), list(run.rubric.assessed), run.model.requests)
 
     second = await run({"a": "a", "b": "b", "c": "c"}, policy, width=8)
 
     assert second.items == first.items
     assert (run.source.calls, run.rubric.assessed, run.model.requests) == calls
-    assert len(fake_glm.requests) == 2
+    assert len(fake_glm.requests) == 4
 
 
 async def test_width_bounds_the_phases_running_at_once(queue_run, fakes):
@@ -88,9 +91,10 @@ async def test_a_failed_item_is_skipped_until_a_launch_retries_it(queue_run, fak
 
 
 async def test_an_abandoned_item_re_enters_validation_on_the_next_launch_without_rebuilding(
-    queue_run, author_replies, fake_glm, fakes
+    queue_run, author_replies, no_shortcut, fake_glm, fakes
 ):
     author_replies(1)
+    no_shortcut(2)  # the adversary trial settles in the first launch; a spare in case it is re-entered
     model = fakes.model(unavailable=lambda: GlmUnavailable("router drained", ()))
     run = queue_run(model=model)
     policy = fakes.policy(max_validation_retries=1)
@@ -105,13 +109,14 @@ async def test_an_abandoned_item_re_enters_validation_on_the_next_launch_without
     second = await run({"a": "a"}, policy, width=4)
 
     assert second.items == {"a--0": Terminal.ACCEPTED}
-    assert len(fake_glm.requests) == 1
+    assert fakes.author_requests(fake_glm) == 1
 
 
 async def test_a_run_killed_mid_validation_resumes_without_reproposing_or_rebuilding(
-    queue_run, author_replies, fake_glm, fakes
+    queue_run, author_replies, no_shortcut, fake_glm, fakes
 ):
     author_replies(1)
+    no_shortcut(2)  # the kill may land before or after the adversary trial settles
     model = fakes.model(hang=True)
     run = queue_run(model=model)
     policy = fakes.policy()
@@ -128,7 +133,7 @@ async def test_a_run_killed_mid_validation_resumes_without_reproposing_or_rebuil
     assert resumed.items == {"a--0": Terminal.ACCEPTED}
     assert run.source.calls == ["a"]
     assert run.rubric.assessed == ["a/0"]
-    assert len(fake_glm.requests) == 1
+    assert fakes.author_requests(fake_glm) == 1
 
 
 class UnreachableHost:
@@ -139,9 +144,10 @@ class UnreachableHost:
 
 
 async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch_rebuilds(
-    queue_run, author_replies, fake_glm, fakes
+    queue_run, author_replies, no_shortcut, fake_glm, fakes
 ):
     author_replies(1, fakes.machine_program)
+    no_shortcut(1)
     unreachable = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={EnvironmentKind.SHELLSIM: UnreachableHost()})
     policy = fakes.policy(max_build_retries=1)
 
@@ -156,13 +162,14 @@ async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch
 
     assert relaunched.items == {"a--0": Terminal.ACCEPTED}
     assert relaunched.build_infrastructure == {InfrastructureCause.HOST_UNREACHABLE: 2}
-    assert len(fake_glm.requests) == 1
+    assert fakes.author_requests(fake_glm) == 1
 
 
 async def test_a_build_this_host_has_no_factory_for_is_abandoned_at_once_and_re_entered(
-    queue_run, author_replies, fake_glm, fakes
+    queue_run, author_replies, no_shortcut, fake_glm, fakes
 ):
     author_replies(1, fakes.machine_program)
+    no_shortcut(1)
     hostless = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={})
     policy = fakes.policy(max_build_retries=1)
 
@@ -175,7 +182,7 @@ async def test_a_build_this_host_has_no_factory_for_is_abandoned_at_once_and_re_
 
     assert relaunched.items == {"a--0": Terminal.ACCEPTED}
     assert relaunched.build_infrastructure == {InfrastructureCause.NO_FACTORY: 1}
-    assert len(fake_glm.requests) == 1
+    assert fakes.author_requests(fake_glm) == 1
 
 
 async def test_an_idea_whose_source_fails_is_recorded_and_its_siblings_finish(queue_run, fakes):
@@ -201,10 +208,12 @@ async def test_an_item_with_an_inconsistent_log_is_recorded_and_its_siblings_fin
 
 
 async def test_an_accepted_item_exports_its_synthesis_pass_rate_and_noted_passes_across_relaunches(
-    queue_run, author_replies, fakes
+    queue_run, author_replies, adversary_turns, fakes
 ):
     author_replies(1)
-    run = queue_run(rubric=fakes.rubric(ACCEPT, decisions={"b/0": REJECT}), model=fakes.model(solves={SHORTCUT}))
+    # An honest solve the grader accepts, then no verdict: a pass the calibration notes (row 8).
+    adversary_turns(("shell", "cat /workspace/question.txt"), ("submit", "ANSWER = 42"), "The grader took 42.")
+    run = queue_run(rubric=fakes.rubric(ACCEPT, decisions={"b/0": REJECT}))
     policy = fakes.policy(k=4)
 
     first = await run({"a": "a", "b": "b"}, policy, width=4)
@@ -215,7 +224,7 @@ async def test_an_accepted_item_exports_its_synthesis_pass_rate_and_noted_passes
     assert load_draft(run.root / accepted.draft).task.id == "a--0"
     assert list(first.accepted) == ["a--0"]
     [note] = first.noted["a--0"]
-    assert (note.role, note.trial, note.rule) == (SHORTCUT, 0, "7")
+    assert (note.role, note.trial, note.rule) == (SHORTCUT, 0, "8")
     assert "b--0" not in first.noted
 
     exported = first.summary_json()
@@ -230,8 +239,45 @@ async def test_an_accepted_item_exports_its_synthesis_pass_rate_and_noted_passes
             "band": "in_band",
         }
     }
-    assert exported["noted"] == {"a--0": [{"role": "shortcut", "trial": 0, "rule": "7", "reason": note.reason}]}
+    assert exported["noted"] == {"a--0": [{"role": "shortcut", "trial": 0, "rule": "8", "reason": note.reason}]}
 
     relaunched = await run({"a": "a", "b": "b"}, policy, width=4)
 
     assert (relaunched.accepted, relaunched.noted) == (first.accepted, first.noted)
+
+
+def too_easy_twice(author_replies, no_shortcut, program: str) -> None:
+    """Round 0 builds ``program``, is too easy and is repaired once; the rebuilt round 1 is still too easy."""
+    author_replies(1, program)
+    no_shortcut(1)
+    author_replies(1, program.replace("Compute the product in", "Compute the product written in"))
+    no_shortcut(1)
+
+
+async def test_a_too_easy_item_accepted_under_the_consumer_choice_exports_its_band(
+    queue_run, author_replies, no_shortcut, fakes
+):
+    too_easy_twice(author_replies, no_shortcut, fakes.program)
+    run = queue_run(model=fakes.model(replies=("ANSWER = 42",)))
+    accept_too_easy = BandRules(BandRule(1, BandChoice.ACCEPT), BandRule(1, BandChoice.REJECT))
+
+    summary = await run({"a": "a"}, fakes.policy(k=4, band_rules=accept_too_easy), width=2)
+
+    assert summary.items == {"a--0": Terminal.ACCEPTED}
+    accepted = summary.accepted["a--0"]
+    assert (accepted.round, accepted.solved, accepted.k, accepted.solve_rate) == (1, 4, 4, 1.0)
+    assert accepted.band is BandOutcome.TOO_EASY
+    assert load_draft(run.root / accepted.draft).task.id == "a--0"
+    assert summary.summary_json()["accepted"]["a--0"]["band"] == "too_easy"
+
+
+async def test_a_too_easy_item_rejected_under_the_default_choice_is_not_exported(
+    queue_run, author_replies, no_shortcut, fakes
+):
+    too_easy_twice(author_replies, no_shortcut, fakes.program)
+    run = queue_run(model=fakes.model(replies=("ANSWER = 42",)))
+
+    summary = await run({"a": "a"}, fakes.policy(k=4), width=2)
+
+    assert summary.items == {"a--0": Terminal.REJECTED}
+    assert summary.accepted == {}

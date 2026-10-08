@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """A whole run on fakes at the I/O boundary: a fake proposal source and rubric, a scripted GLM server
-for the author, a builder program without model calls on ShellSim, and a scripted rollout model and
-tokenizer for validation.
+for the author and the adversary agent loops, a builder program without model calls on ShellSim, and a
+scripted solver rollout model and tokenizer for validation.
+
+The GLM server answers in the order replies are queued, so a test queues each item's author replies
+before its adversary turns: an item's adversary trials start only after its build.
 
 ``queue_run`` builds ``LoopServices`` over a run root the way ``queue.job.run_job`` does and runs
 ``run_queue``; the fakes are handed to tests through fixtures because test modules cannot import each
@@ -35,11 +38,12 @@ from taskforge.loop.program import LEDGER_DIR, LoopServices
 from taskforge.proposal.model import TaskProposal, parse
 from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.queue.run import FailedItems, RunSummary, run_queue
+from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
 from taskforge.triage.program import RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
-from taskforge.validate.adversary import SENTINEL_REPLIES, AdversaryRole
+from taskforge.validate.adversary import NO_SHORTCUT_LINE, SUBMIT_TOOL_NAME
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
@@ -250,18 +254,17 @@ class TemplateTokenizer:
 
 @dataclass
 class SolverModel:
-    """Replies ``ANSWER = 42`` to every other solver request and ``ANSWER = 41`` to the rest; each adversary
-    role replies its sentinel (the ambiguity role a wrong answer), so a round is calibrated.
+    """The solver: cycles through ``replies``, by default ``ANSWER = 42`` then ``ANSWER = 41``, so a round
+    solves half its trials and is in the band.
 
-    A role in ``solves`` instead reads the question with a shell command and submits ``ANSWER = 42``: an
-    honest solve against its orders, which the calibration tiers ``NOTED``. While ``unavailable`` is set
-    every request raises it instead. With ``hang`` set, every request waits until the test cancels the run.
+    While ``unavailable`` is set every request raises it instead. With ``hang`` set, every request waits
+    until the test cancels the run.
     """
 
     unavailable: Callable[[], Exception] | None = None
     hang: bool = False
-    solves: frozenset[AdversaryRole] = frozenset()
-    solver_calls: int = 0
+    replies: tuple[str, ...] = ("ANSWER = 42", "ANSWER = 41")
+    served: int = 0
     requests: int = 0
     started: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -272,43 +275,27 @@ class SolverModel:
             await asyncio.Event().wait()
         if self.unavailable is not None:
             raise self.unavailable()
-        first = request.messages[0]
-        role = next(
-            (r for r in AdversaryRole if first["role"] == "system" and SENTINEL_REPLIES[r] in str(first["content"])),
-            None,
-        )
-        if role is None:
-            self.solver_calls += 1
-            text = "ANSWER = 42" if self.solver_calls % 2 else "ANSWER = 41"
-        elif role in self.solves:
-            text = "ANSWER = 42"
-        else:
-            text = SENTINEL_REPLIES.get(role, "ANSWER = 7")
+        text = self.replies[self.served % len(self.replies)]
+        self.served += 1
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
-        if role in self.solves and request.messages[-1]["role"] != "tool":
-            return ModelTurn(READ_QUESTION, prompt, (21,), (-0.5,), "tool_calls")
         return ModelTurn({"role": "assistant", "content": text}, prompt, (20,), (-0.5,), "stop")
 
 
-READ_QUESTION = {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-        {
-            "id": "c1",
-            "type": "function",
-            "function": {"name": "shell", "arguments": json.dumps({"command": "cat /workspace/question.txt"})},
-        }
-    ],
-}
+# Taskforge's own band policy: one repair per band kind, then reject.
+REJECT_OUTSIDE_BAND = BandRules(BandRule(1, BandChoice.REJECT), BandRule(1, BandChoice.REJECT))
 
 
-def loop_policy(k: int = 4, max_validation_retries: int = 0, max_build_retries: int = 0) -> LoopPolicy:
+def loop_policy(
+    k: int = 4,
+    max_validation_retries: int = 0,
+    max_build_retries: int = 0,
+    band_rules: BandRules = REJECT_OUTSIDE_BAND,
+) -> LoopPolicy:
     validation = ValidationPolicy(
         k=k,
         adversary_k=1,
-        adversary_output_tokens=32768,
-        roles=tuple(AdversaryRole),
+        adversary_submissions=4,
+        adversary_repair_submissions=2,
         band=CalibrationBand(0.125, 0.875),
         sampling=LLMPolicy(max_continuations=0),
         deadlines=Deadlines(agent_timeout=30, attempt_timeout=60),
@@ -326,8 +313,13 @@ def loop_policy(k: int = 4, max_validation_retries: int = 0, max_build_retries: 
         max_build_retries=max_build_retries,
         retry_backoff=FAST,
         output_token_budget=1_000_000,
+        band_rules=band_rules,
         validation=validation,
     )
+
+
+def no_context(proposal: TaskProposal) -> str:
+    return ""
 
 
 @dataclass
@@ -355,6 +347,7 @@ class QueueRun:
                 client=client,
                 source=self.source,
                 describe_idea=lambda idea: {"idea": idea},
+                adversary_context=no_context,
                 checks=(),
                 rubric=self.rubric,
                 check_context=CheckContext(allowed_combinations=ALL_COMBINATIONS),
@@ -404,6 +397,48 @@ def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
     return make
 
 
+type AdversaryTurn = tuple[str, str] | str
+"""``("shell", command)`` or ``("submit", reply)`` is a tool-call turn; a ``str`` is the final reply."""
+
+
+@pytest.fixture
+def adversary_turns(fake_glm) -> Callable[..., None]:
+    """``adversary_turns(*turns)`` queues one adversary trial's agent turns as streamed GLM replies."""
+
+    def queue(*turns: AdversaryTurn) -> None:
+        for turn in turns:
+            match turn:
+                case ("shell", command):
+                    fake_glm.stream(tool_calls=(("shell", json.dumps({"command": command})),), finish="tool_calls")
+                case ("submit", reply):
+                    fake_glm.stream(tool_calls=((SUBMIT_TOOL_NAME, json.dumps({"reply": reply})),), finish="tool_calls")
+                case str(final):
+                    fake_glm.stream(content=final, finish="stop")
+                case _:
+                    raise ValueError(f"not an adversary turn: {turn!r}")
+
+    return queue
+
+
+@pytest.fixture
+def no_shortcut(adversary_turns) -> Callable[[int], None]:
+    """``no_shortcut(n)`` queues ``n`` adversary trials that submit nothing and report no shortcut."""
+
+    def queue(n: int) -> None:
+        for _ in range(n):
+            adversary_turns(f"I found no way past the grader.\n{NO_SHORTCUT_LINE}")
+
+    return queue
+
+
+def author_requests(fake_glm: Any) -> int:
+    """How many requests the GLM server answered for the author, which alone offers ``SUBMIT_TOOL``."""
+    return sum(
+        any(tool["function"]["name"] == SUBMIT_TOOL for tool in request.get("tools", ()))
+        for request in fake_glm.requests
+    )
+
+
 @pytest.fixture
 def author_replies(fake_glm) -> Callable[[int], None]:
     """``author_replies(n, source=PROGRAM)`` queues ``n`` author completions that submit ``source``."""
@@ -424,7 +459,9 @@ class Fakes:
     source: type[FakeSource] = FakeSource
     model: type[SolverModel] = SolverModel
     policy: Callable[..., LoopPolicy] = loop_policy
+    program: str = PROGRAM
     machine_program: str = MACHINE_PROGRAM
+    author_requests: Callable[[Any], int] = author_requests
 
 
 @pytest.fixture
