@@ -82,7 +82,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.fast_track.sparse_attention import SparseIndex, mla_sparse_attention, mla_sparse_params
+from experiments.grug.fast_track.sparse_attention import Dcmha, SparseIndex, mla_sparse_attention, mla_sparse_params
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -1006,6 +1006,10 @@ class GrugModelConfig:
     """MLA heads' scores composed before the softmax from every head's offset-channel and current-channel score
     (``sparse_attention``, identity-pair init; needs ``mla_sparse_window``). Dynamic: also a rank-1 query-wise mix."""
     mla_logit_compose_dynamic: bool = False
+    mla_dcmha: bool = False
+    """Full DCMHA (``sparse_attention.Dcmha``) on the MLA layers; needs ``mla_sparse_window`` (the emulation)."""
+    mla_dcmha_rank: int = 2
+    mla_dcmha_hidden: int = 64
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -2357,6 +2361,7 @@ class CausalSelfAttention(eqx.Module):
     logit_mix: Float[Array, "N N2"] | None  # mla_logit_compose: [N, 2N] mix of the offset / current scores
     logit_mix_u: Float[Array, "D N"] | None  # mla_logit_compose_dynamic: rank-1 query-wise mix
     logit_mix_w: Float[Array, "D N2"] | None
+    dcmha: Dcmha | None
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2626,6 +2631,7 @@ class CausalSelfAttention(eqx.Module):
             logit_mix=None,
             logit_mix_u=None,
             logit_mix_w=None,
+            dcmha=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),

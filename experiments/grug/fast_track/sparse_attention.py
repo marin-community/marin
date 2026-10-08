@@ -17,6 +17,7 @@ from collections.abc import Callable
 from enum import StrEnum
 from typing import NamedTuple
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax import random
@@ -63,6 +64,34 @@ class Compose(NamedTuple):
     u: Float[Array, "B S H"] | None
     w: Float[Array, "B S H2"] | None
     offset_mask: jax.Array  # [H, D] channels whose key is the previous token's
+
+
+class DcmhaWeights(NamedTuple):
+    """DCMHA's per-token composition weights (``dcmha_weights``), one set per side (query ``q``, key ``k``):
+    ``[B, S, 2 (pre/post), H, R]`` low-rank factors ``f1`` / ``f2`` and ``[B, S, 2, H]`` gates; plus the static
+    ``[2, H, H]`` mixes."""
+
+    static: Float[Array, "2 H H"]
+    q1: jax.Array
+    q2: jax.Array
+    qg: jax.Array
+    k1: jax.Array
+    k2: jax.Array
+    kg: jax.Array
+
+
+def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: int) -> jax.Array:
+    """DCMHA ``Compose`` (arXiv 2405.08553 eq. 4) of one chunk's ``[B, H, C, S]`` scores or probabilities:
+    ``a'_h = sum_g a_g (W_gh + sum_r q1_gr q2_hr + sum_r k1_gr k2_hr) + a_h (tanh qg_h + tanh kg_h)`` with the
+    query-wise terms from query ``i`` and the key-wise terms from key ``j``."""
+    take = lambda x: jax.lax.dynamic_slice_in_dim(x, c0, chunk, axis=1)[:, :, stage].astype(jnp.float32)  # noqa: E731
+    q1, q2, qg = take(dw.q1), take(dw.q2), take(dw.qg)  # [B, C, H, R], [B, C, H]
+    k1, k2, kg = (x[:, :, stage].astype(jnp.float32) for x in (dw.k1, dw.k2, dw.kg))  # [B, S, H, R], [B, S, H]
+    out = jnp.einsum("bgqk,gh->bhqk", a, dw.static[stage].astype(jnp.float32))
+    out = out + jnp.einsum("bgqk,bqgr,bqhr->bhqk", a, q1, q2)
+    out = out + jnp.einsum("bgqk,bkgr,bkhr->bhqk", a, k1, k2)
+    gate = jnp.tanh(qg).transpose(0, 2, 1)[..., None] + jnp.tanh(kg).transpose(0, 2, 1)[:, :, None, :]
+    return out + a * gate
 
 
 class Lightning(NamedTuple):
@@ -113,6 +142,7 @@ def _sparse_math(
     lightning,
     tap_weights,
     compose,
+    dcmha,
     *,
     spec: "IndexSpec",
     tap_offsets: tuple[int, ...],
@@ -237,9 +267,14 @@ def _sparse_math(
             allowed = chosen | sink
         else:
             logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
+        if dcmha is not None:
+            logits = _dcmha_compose(logits, dcmha, 0, c0, chunk)
         dense = logits
         logits = jnp.where(allowed, logits, -1e9)
-        if compress:
+        if dcmha is not None:
+            weights = _dcmha_compose(jax.nn.softmax(logits, axis=-1), dcmha, 1, c0, chunk)
+            out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
+        elif compress:
             joint = jax.nn.softmax(jnp.concatenate([logits, c_logits], axis=-1), axis=-1)
             weights, c_weights = joint[..., :seq], joint[..., seq:]
             out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32))
@@ -289,6 +324,7 @@ def sparse_index_attention(
     lightning: Lightning | None = None,
     tap_weights: jax.Array | None = None,
     compose: Compose | None = None,
+    dcmha: DcmhaWeights | None = None,
     *,
     window: int,
     topk: int,
@@ -317,10 +353,10 @@ def sparse_index_attention(
     )
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose)
+        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
-    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose)
+    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha)
 
 
 def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
@@ -374,6 +410,7 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         light,
         attn.sparse_taps,
         compose,
+        None if attn.dcmha is None else dcmha_weights(attn.dcmha, x, q.shape[2], cfg.mla_dcmha_rank),
         window=cfg.mla_sparse_window,
         spec=spec,
         tap_offsets=cfg.mla_sparse_taps,
@@ -384,6 +421,38 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         compress=cfg.mla_sparse_compress,
         block_select=cfg.mla_sparse_index == SparseIndex.BLOCK,
     )
+
+
+class Dcmha(eqx.Module):
+    """DCMHA parameters: static ``[2, H, H]`` mixes (identity init; pre- and post-softmax) and, per side, a
+    ``GELU(x W_a) W_b`` network giving each token's low-rank factors and gates (the second factors and the gates
+    are zero-init, so the layer starts as plain attention). Trained with Adam (``.dcmha.``)."""
+
+    static: jax.Array
+    q_a: jax.Array
+    q_b1: jax.Array
+    q_b2: jax.Array
+    q_bg: jax.Array
+    k_a: jax.Array
+    k_b1: jax.Array
+    k_b2: jax.Array
+    k_bg: jax.Array
+
+
+def dcmha_weights(p: Dcmha, x: jax.Array, heads: int, rank: int) -> DcmhaWeights:
+    """Each token's DCMHA composition weights from its attention input ``x``."""
+    xf = x.astype(jnp.float32)
+
+    def side(a, b1, b2, bg):
+        hidden = jax.nn.gelu(xf @ a)
+        shape = (*x.shape[:2], 2, heads)
+        return (
+            (hidden @ b1).reshape(*shape, rank),
+            (hidden @ b2).reshape(*shape, rank),
+            (hidden @ bg).reshape(shape),
+        )
+
+    return DcmhaWeights(p.static, *side(p.q_a, p.q_b1, p.q_b2, p.q_bg), *side(p.k_a, p.k_b1, p.k_b2, p.k_bg))
 
 
 def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, init_weight) -> dict:
@@ -415,4 +484,27 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         ),
         logit_mix_u=jnp.zeros((d, n), jnp.float32) if cfg.mla_logit_compose_dynamic else None,
         logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
+        dcmha=(
+            _dcmha_init(random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden)
+            if cfg.mla_dcmha
+            else None
+        ),
+    )
+
+
+def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> Dcmha:
+    ka, kb, kc, kd = random.split(key, 4)
+    width = 2 * heads * rank  # pre- and post-softmax
+    a = lambda k: random.normal(k, (d, hidden)) / math.sqrt(d)  # noqa: E731
+    b1 = lambda k: random.normal(k, (hidden, width)) / math.sqrt(hidden)  # noqa: E731
+    return Dcmha(
+        static=jnp.broadcast_to(jnp.eye(heads), (2, heads, heads)).astype(jnp.float32),
+        q_a=a(ka),
+        q_b1=b1(kb),
+        q_b2=jnp.zeros((hidden, width)),
+        q_bg=jnp.zeros((hidden, 2 * heads)),
+        k_a=a(kc),
+        k_b1=b1(kd),
+        k_b2=jnp.zeros((hidden, width)),
+        k_bg=jnp.zeros((hidden, 2 * heads)),
     )
