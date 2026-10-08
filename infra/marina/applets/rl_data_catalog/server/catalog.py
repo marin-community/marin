@@ -11,7 +11,8 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, TypedDict
 
 import httpx
 
@@ -90,6 +91,23 @@ TASKTROVE_CLASSIFICATION = {
     "turns": "Multi-turn",
     "classification_basis": "Task Trove tasks run as Agentic interactions in Harbor",
 }
+
+
+class VerifierMode(StrEnum):
+    LEGACY = "legacy"
+    VERIFYIT = "verifyit"
+    HARBOR = "harbor"
+
+
+class GraderRevision(TypedDict):
+    sha: str
+    date: str
+
+
+class VerifierDependencies(TypedDict):
+    verifyit: GraderRevision
+    harbor: GraderRevision
+    adapters: dict[str, GraderRevision]
 
 
 @dataclass(frozen=True)
@@ -485,19 +503,19 @@ def harbor_pin(lock_text: str) -> str:
     return revision
 
 
-def verifier_mode(row: dict[str, Any]) -> str:
-    """Return the scorer selected for the Atlas verifyit review campaign."""
+def verifier_mode(row: dict[str, Any]) -> VerifierMode:
+    """Return the grader used for this source's reviews."""
     environment = row["environment"]
     if environment == NEMOTRON_ENV:
         agents = nemotron_component_agents(row)
         if SWE_AGENT in agents:
-            return "harbor"
+            return VerifierMode.HARBOR
         if agents - NEMOTRON_NATIVE_AGENTS:
-            return "verifyit"
-        return "legacy"
+            return VerifierMode.VERIFYIT
+        return VerifierMode.LEGACY
     if environment in VERIFYIT_CAPABLE_ENVS:
-        return "verifyit"
-    return "legacy"
+        return VerifierMode.VERIFYIT
+    return VerifierMode.LEGACY
 
 
 def nemotron_component_agents(row: dict[str, Any]) -> set[str]:
@@ -531,15 +549,15 @@ def annotate_verifier_dependency(row: dict[str, Any]) -> None:
         verifier_revised_at=row["verifier_path_revised_at"],
         verifier_url=f"https://github.com/{SKYRL}/tree/{row['revision']}/{row['verifier_path']}",
     )
-    if mode == "legacy":
+    if mode == VerifierMode.LEGACY:
         set_revision_date(row)
         return
-    dependencies = row["verifier_dependencies"]
+    dependencies: VerifierDependencies = row["verifier_dependencies"]
     components: dict[str, Any] = {"mode": mode, "route": row["environment"], "path": row["verifier_path_revision"]}
     if row["environment"] == NEMOTRON_ENV:
         components["component"] = row.get("component_name", "")
     dates = [row["verifier_revised_at"]]
-    if mode == "harbor":
+    if mode == VerifierMode.HARBOR:
         harbor = dependencies["harbor"]
         components["framework"] = harbor["sha"]
         dates.append(harbor["date"])
@@ -641,7 +659,7 @@ def skyrl_snapshot(
         sha=revision,
         per_page="1",
     )[0]
-    dependencies = {
+    dependencies: VerifierDependencies = {
         "verifyit": {"sha": pin, "date": dependency_commit["commit"]["committer"]["date"]},
         "harbor": {"sha": harbor_commit["sha"], "date": harbor_commit["commit"]["committer"]["date"]},
         "adapters": {
