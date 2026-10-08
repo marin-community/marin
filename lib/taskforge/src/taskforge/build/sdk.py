@@ -42,7 +42,7 @@ from taskforge.build.step import (
     StepRole,
     step,
 )
-from taskforge.canonical import canonical_json, digest
+from taskforge.content_hash import canonical_json, digest
 from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentRun, AgentTool, run_agent
 from taskforge.llm.agent import shell_tool as agent_shell_tool

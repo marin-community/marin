@@ -38,7 +38,8 @@ from typing import Any, Protocol
 from pydantic import TypeAdapter
 from pydantic_core import PydanticSerializationError
 
-from taskforge.canonical import canonical_json, digest, sha256_hex, write_atomic
+from taskforge.atomic_file import write_atomic
+from taskforge.content_hash import canonical_json, digest, sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, check_item_id, span
 
 SDK_VERSION = "taskforge.build/5"

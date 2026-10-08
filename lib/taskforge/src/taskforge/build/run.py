@@ -38,6 +38,7 @@ from taskcompendium.submission import (
     submission_compatibility,
 )
 
+from taskforge.atomic_file import write_atomic
 from taskforge.build.infrastructure import BuildInfrastructureFailure, infrastructure_failure
 from taskforge.build.sdk import (
     GRADED_RESOURCE_PREFIX,
@@ -49,7 +50,7 @@ from taskforge.build.sdk import (
     Grader,
 )
 from taskforge.build.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole
-from taskforge.canonical import pretty_json, write_atomic
+from taskforge.content_hash import pretty_json
 from taskforge.ledger.records import EntryKind, span
 from taskforge.proposal.model import TaskProposal
 from taskforge.spec.controls import Control, Workspace, controls_json, validate_controls
