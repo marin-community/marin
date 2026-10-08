@@ -84,6 +84,7 @@ from experiments.grug.fast_track.router_metrics import (
 )
 from experiments.grug.fast_track.sparse_attention import (
     Dcmha,
+    DcmhaPaper,
     Gauss,
     SparseIndex,
     mla_sparse_attention,
@@ -992,15 +993,15 @@ class GrugModelConfig:
     mla_sparse_index_heads: int = 4
     mla_sparse_kl_weight: float = 1.0
     mla_sparse_dsa_topk: int = 0
-    """With the follow index: also the top this many keys of a lightning indexer (the union of both)."""
+    """With the follow index: also a lightning indexer's top this many keys."""
     mla_sparse_index_per_head: bool = False
     mla_sparse_select_match: bool = False
     """Also attend to the matched tokens themselves, not only their followers."""
     mla_sparse_compress: bool = False
-    """Also attend to every visible block's mean key / value (NSA's compressed branch)."""
+    """Also attend to every visible block's mean key / value (NSA compression)."""
     mla_sparse_block: int = 32
     mla_sparse_taps: tuple[int, ...] = ()
-    """Value-tap offsets around each pick (``sparse_attention``, identity-init at offset 0); empty: off."""
+    """Value-tap offsets around each pick (identity-init at offset 0); empty: off."""
     mla_sparse_taps_per_channel: bool = False
     mla_sparse_untied: bool = False
     mla_sparse_anchor_match: bool = False
@@ -1017,8 +1018,11 @@ class GrugModelConfig:
     mla_dcmha_rank: int = 2
     mla_dcmha_hidden: int = 64
     mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
+    mla_dcmha_paper: bool = False
+    """The released DCMHA network and init (``sparse_attention.DcmhaPaper``), not the tanh-bounded one."""
+    mla_dcmha_static: str = "none"
     mla_gauss: bool = False
-    """MLA values read through a learned per-head shifted Gaussian (``sparse_attention.Gauss``; the emulation)."""
+    """MLA values read through a learned per-head shifted Gaussian (``sparse_attention.Gauss``)."""
     mla_gauss_mu_init: tuple[float, ...] = ()
     mla_gauss_sigma_init: float = 0.5
     mla_gauss_reach: int = 16
@@ -2374,7 +2378,7 @@ class CausalSelfAttention(eqx.Module):
     logit_mix: Float[Array, "N N2"] | None  # mla_logit_compose: [N, 2N] mix of the offset / current scores
     logit_mix_u: Float[Array, "D N"] | None  # mla_logit_compose_dynamic: rank-1 query-wise mix
     logit_mix_w: Float[Array, "D N2"] | None
-    dcmha: Dcmha | None
+    dcmha: Dcmha | DcmhaPaper | None
     gauss: Gauss | None
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)

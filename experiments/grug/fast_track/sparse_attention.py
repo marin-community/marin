@@ -538,8 +538,45 @@ class Dcmha(eqx.Module):
     k_bg: jax.Array
 
 
-def dcmha_weights(p: Dcmha, x: jax.Array, heads: int, rank: int) -> DcmhaWeights:
+class DcmhaPaper(eqx.Module):
+    """DCMHA as released (``Caiyun-AI/DCFormer`` ``DynamicWeightProjection``): per branch (pre/post x query/key) a
+    ``GELU(x W1)`` hidden layer of width K, factors ``w = hidden W2`` split into ``w1`` (RMS-normed over heads, no
+    gain) and ``w2``, gates ``tanh(x Wd)``; static ``I + sw`` with ``sw`` absent, zero or Xavier-initialised."""
+
+    dw1: jax.Array  # [D, 4, K]
+    qkw: jax.Array  # [4, K, 2R, H]
+    dd: jax.Array  # [D, 4H]
+    sw: jax.Array | None  # [2, H, H]
+
+
+def _dcmha_paper_weights(p: DcmhaPaper, x: jax.Array, heads: int, rank: int) -> DcmhaWeights:
+    xf = x.astype(jnp.float32)
+    hidden = jax.nn.gelu(jnp.einsum("btd,dck->btck", xf, p.dw1.astype(jnp.float32)))
+    w = jnp.einsum("btck,ckjh->btcjh", hidden, p.qkw.astype(jnp.float32))  # [B, T, 4, 2R, H]
+    w1, w2 = w[..., :rank, :], w[..., rank:, :]
+    w1 = w1 * jax.lax.rsqrt(jnp.mean(jnp.square(w1), axis=-1, keepdims=True) + 1e-6)
+    w1, w2 = jnp.swapaxes(w1, -1, -2), jnp.swapaxes(w2, -1, -2)  # [B, T, 4, H, R]
+    dd = (xf @ p.dd.astype(jnp.float32)).reshape(*x.shape[:2], 4, heads)  # tanh is applied in the compose
+    pre_q, pre_k, post_q, post_k = 0, 1, 2, 3
+    stack = lambda t, a, b: jnp.stack([t[:, :, a], t[:, :, b]], axis=2)  # noqa: E731
+    eye = jnp.eye(heads, dtype=jnp.float32)
+    static = eye[None] + (0.0 if p.sw is None else p.sw.astype(jnp.float32))
+    static = jnp.broadcast_to(static, (2, heads, heads))
+    return DcmhaWeights(
+        static,
+        stack(w1, pre_q, post_q),
+        stack(w2, pre_q, post_q),
+        stack(dd, pre_q, post_q),
+        stack(w1, pre_k, post_k),
+        stack(w2, pre_k, post_k),
+        stack(dd, pre_k, post_k),
+    )
+
+
+def dcmha_weights(p: "Dcmha | DcmhaPaper", x: jax.Array, heads: int, rank: int) -> DcmhaWeights:
     """Each token's DCMHA composition weights from its attention input ``x``."""
+    if isinstance(p, DcmhaPaper):
+        return _dcmha_paper_weights(p, x, heads, rank)
     xf = x.astype(jnp.float32)
 
     def side(a, b1, b2, bg):
@@ -588,7 +625,13 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
         gauss=_gauss_init(cfg, n) if cfg.mla_gauss else None,
         dcmha=(
-            _dcmha_init(random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden)
+            (
+                _dcmha_paper_init(
+                    random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden, cfg.mla_dcmha_static
+                )
+                if cfg.mla_dcmha_paper
+                else _dcmha_init(random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden)
+            )
             if cfg.mla_dcmha
             else None
         ),
@@ -602,6 +645,24 @@ def _gauss_init(cfg, heads: int) -> Gauss:
     rho = jnp.full((heads,), math.log(math.expm1(cfg.mla_gauss_sigma_init - 0.05)), jnp.float32)
     qscale = jnp.full((heads,), cfg.qk_mult, jnp.float32) if cfg.mla_gauss_tied else None
     return Gauss(mu=mu, rho=rho, qscale=qscale)
+
+
+def _dcmha_paper_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int, static: str) -> DcmhaPaper:
+    """The released initialisation: ``dw1 ~ N(0, 2/(D+K))``, ``qkw ~ N(0, (0.02 / (sqrt(2HR)(H+R)))^2)``,
+    ``dd ~ N(0, (0.05 sqrt(2/(H+D)))^2)``; ``sw`` (``static``): ``none`` (identity only), ``zero`` or ``xavier``."""
+    k1, k2, k3, k4 = random.split(key, 4)
+    dw1 = random.normal(k1, (d, 4, hidden)) * math.sqrt(2 / (d + hidden))
+    qkw = random.normal(k2, (4, hidden, 2 * rank, heads)) * (0.02 / (math.sqrt(2 * heads * rank) * (heads + rank)))
+    dd = random.normal(k3, (d, 4 * heads)) * (0.05 * math.sqrt(2 / (heads + d)))
+    if static == "none":
+        sw = None
+    elif static == "zero":
+        sw = jnp.zeros((2, heads, heads), jnp.float32)
+    elif static == "xavier":
+        sw = random.normal(k4, (2, heads, heads)) * math.sqrt(2 / (2 * heads))
+    else:
+        raise ValueError(f"mla_dcmha_static must be none, zero or xavier, got {static!r}")
+    return DcmhaPaper(dw1=dw1, qkw=qkw, dd=dd, sw=sw)
 
 
 def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> Dcmha:

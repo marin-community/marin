@@ -1695,6 +1695,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     hyperball at the MuonH LR, like AdamH)."""
     """LR group of ``token_embed``: ``adam`` or ``adamh``."""
     adam_paths: tuple[str, ...] = ()
+    dcmha_lr_mult: float = 1.0
+    """LR multiplier of the ``dcmha`` group (the MLA DCMHA and Gaussian-kernel weights) on the Adam LR."""
+    dcmha_adamw: bool = False
+    """The ``dcmha`` group uses the DCMHA paper's AdamW (beta 0.9 / 0.95, weight decay 0.1, its own global-norm clip at
+    1.0) instead of the Adam group's optimizer."""
     """Parameter-path suffixes (e.g. ``attn.w_lq``) trained in the ``adam`` group instead of MuonH."""
     muon_free_families: tuple[str, ...] = ()
     """Matrix families (keys of ``_OKLS_FAMILIES``, e.g. ``attn_q``, ``attn_k``) that drop the hyperball:
@@ -2012,6 +2017,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh": muonh_transform_at(learning_rate, 0),
                 "adamh": adamh_transform_at(learning_rate, self.lm_head_beta1),
                 "adam": adam_transform_at(adam_lr),
+                "dcmha": (
+                    optax.chain(
+                        optax.clip_by_global_norm(1.0),
+                        optax.scale_by_adam(0.9, 0.95, eps=1e-8),
+                        optax.add_decayed_weights(0.1),
+                        optax.scale(-adam_lr * self.dcmha_lr_mult),
+                    )
+                    if self.dcmha_adamw
+                    else adam_transform_at(adam_lr * self.dcmha_lr_mult)
+                ),
                 "mix_bias": optax.chain(optax.scale_by_sign(), optax.scale(-self.latent_mix_bias_rate)),
                 **{
                     f"adam_{category}": adam_transform_at(adam_lr, beta1)
@@ -2332,7 +2347,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if any(path_lower.endswith(suffix.lower()) for suffix in self.adam_paths):
                 return "adam"
             if ".dcmha." in path_lower or ".gauss." in path_lower:
-                return "adam"
+                return "dcmha"
             if ".rel_pos." in path_lower or re.search(
                 r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|expert_visit_bias|bias_\w+|dyt_alpha|dyt_beta|qk_mult|match_scale|match_gate|v_ahead|v_self|k_null|sparse_lam|sparse_taps|prev_gate|logit_mix|logit_mix_u|logit_mix_w|diff_lambda|diff_lambda_init|gda_lambda|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up|forget_gate_[wb]|lm_head_bias|router_tok_[ab]|router_tie_alpha|router_hist_w|router_mlp_[ab]|expert_router_alpha)$",
                 path_lower,
