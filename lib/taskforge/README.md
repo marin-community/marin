@@ -12,7 +12,8 @@ path dependencies on the sibling `lib/` packages.
 
 ```
 src/taskforge/
-  canonical.py  canonical JSON, sha256 digests, atomic file replacement
+  content_hash.py  canonical JSON and its sha256 digests
+  atomic_file.py   atomic file replacement
   llm/        GLM-5.3 transport, structured calls, call cache, agent loop, web tools, RolloutEngine model
   ledger/     timed spans to per-item JSONL and, on Iris, Finelog
 scripts/      ledger summary
@@ -22,7 +23,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-canonical -> ledger -> llm
+content_hash -> atomic_file -> ledger -> llm
 ```
 
 ## Seams
@@ -38,6 +39,26 @@ canonical -> ledger -> llm
   `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
   with it. Use it to force an output format such as proposal front matter.
   `llm.client.prefill_request_fields(policy, request_fields)` returns the request fields it sends.
+
+A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
+
+```
+run_agent (builder turn)          GlmRolloutModel (RolloutEngine rollout)
+        |                                     |
+        +---------> recorded_complete <-------+
+                    (record: CallLedger)
+                      |              |
+                      v              v
+          GlmClient.complete      span(LLM_CALL) -> Ledger.record(LedgerEntry)
+          retries, holds,                            |-> JsonlLedger   <root>/<item_id>.jsonl
+          context probe                              '-> FinelogLedger taskforge.ledger (under Iris)
+                      |
+                      v
+          GLM-5.3 router, POST /v1/chat/completions (streamed)
+```
+
+`CallStore` sits beside this path: it wraps `GlmClient.complete` and `complete_structured` with a
+content-addressed cache and does not record to the ledger.
 
 ## Decisions
 

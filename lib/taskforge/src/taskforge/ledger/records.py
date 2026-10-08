@@ -33,7 +33,7 @@ class LedgerEntry:
     """One timed unit of work for one item.
 
     ``started`` is Unix seconds. ``span`` sets ``ended`` to ``started`` plus a monotonic duration,
-    so ``wall`` is not skewed by a wall-clock step.
+    so ``wall_time`` is not skewed by a wall-clock step.
     """
 
     item_id: str
@@ -54,17 +54,16 @@ class LedgerEntry:
     attrs: dict[str, str] = field(default_factory=dict)
 
     @property
-    def wall(self) -> float:
+    def wall_time(self) -> float:
         return self.ended - self.started
 
+    def to_json(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
 
-def entry_to_json(entry: LedgerEntry) -> dict[str, Any]:
-    return dataclasses.asdict(entry)
-
-
-def entry_from_json(obj: dict[str, Any]) -> LedgerEntry:
-    fields: dict[str, Any] = {**obj, "kind": EntryKind(obj["kind"])}
-    return LedgerEntry(**fields)
+    @classmethod
+    def from_json(cls, obj: dict[str, Any]) -> "LedgerEntry":
+        fields: dict[str, Any] = {**obj, "kind": EntryKind(obj["kind"])}
+        return cls(**fields)
 
 
 def check_item_id(item_id: str) -> None:

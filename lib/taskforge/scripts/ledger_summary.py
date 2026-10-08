@@ -37,7 +37,7 @@ class Totals:
     def add(self, entry: LedgerEntry) -> None:
         self.count += 1
         self.failed += entry.cause is not None
-        self.busy += entry.wall
+        self.busy += entry.wall_time
         self.first_start = min(self.first_start, entry.started)
         self.last_end = max(self.last_end, entry.ended)
         self.tokens_in += entry.tokens_in or 0

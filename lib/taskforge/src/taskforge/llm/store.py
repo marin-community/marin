@@ -3,7 +3,7 @@
 
 """Content-addressed cache of GLM calls.
 
-Each call lives at ``<root>/items/<stage>/<hash>/`` where ``hash`` is the ``taskforge.canonical.digest`` of
+Each call lives at ``<root>/items/<stage>/<hash>/`` where ``hash`` is the ``taskforge.content_hash.digest`` of
 the request: model, messages, policy fields that change the output, the structured-output tool,
 and the sample index. Callers that draw several independent samples of one request pass a distinct
 ``sample`` for each, so each sample has its own entry; ``sample`` defaults to 0 for a request drawn
@@ -20,7 +20,8 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from taskforge.canonical import digest, pretty_json, write_atomic
+from taskforge.atomic_file import write_atomic
+from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import Completion, GlmClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import OutputT, StructuredResult, StructuredTool, complete_structured

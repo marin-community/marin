@@ -63,7 +63,7 @@ def ledger_row(entry: LedgerEntry, run_id: str) -> LedgerRow:
         kind=entry.kind.value,
         started_ms=int(entry.started * 1000),
         ended_ms=ended_ms,
-        wall=entry.wall,
+        wall=entry.wall_time,
         model=entry.model,
         tokens_in=entry.tokens_in,
         tokens_out=entry.tokens_out,

@@ -16,7 +16,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from taskforge.ledger.records import LedgerEntry, check_item_id, entry_from_json, entry_to_json
+from taskforge.ledger.records import LedgerEntry, check_item_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class JsonlLedger:
 
     def record(self, entry: LedgerEntry) -> None:
         path = self.path_for(entry.item_id)
-        line = (json.dumps(entry_to_json(entry), sort_keys=True) + "\n").encode()
+        line = (json.dumps(entry.to_json(), sort_keys=True) + "\n").encode()
         self.root.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
         try:
@@ -70,7 +70,7 @@ def read_entries(path: Path) -> Iterator[LedgerEntry]:
             if not raw.endswith(b"\n"):
                 logger.warning("skipping torn trailing line in %s (%d bytes)", path, len(raw))
                 return
-            yield entry_from_json(json.loads(raw))
+            yield LedgerEntry.from_json(json.loads(raw))
 
 
 def ledger_files(root: Path) -> list[Path]:
