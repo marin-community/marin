@@ -218,8 +218,7 @@ def capability_prompt_record(idea: CapabilityIdea) -> dict[str, object]:
 
 
 def capability_idea_record(idea: CapabilityIdea) -> dict[str, object]:
-    """The idea record ``run_idea`` writes to ``items/idea--<id>/idea.json``: the identifiers the viewer lists
-    and the record the models were shown."""
+    """A capability idea's catalog identifiers and the capability record its prompts show the models."""
     return {
         "capability_id": idea.capability_id,
         "subject_id": idea.subject_id,
