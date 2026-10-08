@@ -11,6 +11,7 @@ the venv's ``bin`` directory in ``bin_dirs`` runs that interpreter with no other
 import fcntl
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -43,8 +44,21 @@ def _marker_text(lock: Path, python_version: str) -> str:
     return f"python {python_version}\nlock sha256 {hashlib.sha256(lock.read_bytes()).hexdigest()}\n"
 
 
+class UvError(RuntimeError):
+    """A uv command failed; the message holds the command and uv's error output."""
+
+
 def _uv(*args: str, environment: dict[str, str] | None = None) -> None:
-    subprocess.run(["uv", *args], check=True, env=None if environment is None else {**os.environ, **environment})
+    command = ["uv", *args]
+    result = subprocess.run(
+        command,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=None if environment is None else {**os.environ, **environment},
+        check=False,
+    )
+    if result.returncode != 0:
+        raise UvError(f"{shlex.join(command)} exited with status {result.returncode}:\n{result.stderr}")
 
 
 def _build(environment: PythonEnvironment, lock: Path, python_version: str) -> None:
@@ -84,7 +98,7 @@ def build_python_environment(root: Path, lock: Path, python_version: str) -> Pyt
     Concurrent callers on one host build the root once: an exclusive ``flock`` beside it serializes
     builders, and a completion marker records a finished build. A root without the marker is a failed
     or interrupted build and is rebuilt. A finished root built from another lock or version raises
-    ``ValueError``.
+    ``ValueError``. A failed uv command raises ``UvError`` with uv's error output.
     """
     root = root.absolute()
     environment = PythonEnvironment(root)

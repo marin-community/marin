@@ -7,7 +7,6 @@ import asyncio
 import os
 import shutil
 import socket
-import subprocess
 import tarfile
 import tempfile
 import uuid
@@ -16,7 +15,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory, SandboxUnavailable
-from shellbox.backends.local.python_environment import PythonEnvironment, build_python_environment
+from shellbox.backends.local.python_environment import PythonEnvironment, UvError, build_python_environment
 from shellbox.machine import (
     Command,
     DockerImage,
@@ -94,8 +93,9 @@ def python_environment(tmp_path_factory) -> PythonEnvironment:
     lock.write_text(LOCK)
     try:
         return build_python_environment(tmp_path_factory.mktemp("environment") / "root", lock, PYTHON_VERSION)
-    except subprocess.CalledProcessError as error:
-        if error.cmd[1:3] != ["python", "install"]:
+    except UvError as error:
+        # uv reports an unreachable or failed fetch this way; any other failure is a bug in the builder.
+        if not str(error).startswith("uv python install") or "Failed to download" not in str(error):
             raise
         pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
 
