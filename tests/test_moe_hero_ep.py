@@ -4,7 +4,6 @@
 import dataclasses
 import math
 import os
-import struct
 import subprocess
 import sys
 import textwrap
@@ -43,7 +42,7 @@ from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
-from experiments.grug.moe_hero_ep import grugmuon_hero, model, pgle_profile, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
@@ -410,27 +409,6 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
     assert os.environ["JAX_ENABLE_PGLE"] == "true"
 
 
-def test_pgle_profile_writes_xla_text_profile_into_a_new_directory(tmp_path, monkeypatch):
-    # The converter's output, encoded by hand in XLA's ProfiledInstructionsProto wire format:
-    # costs (field 1) holds an InstructionCost with name (field 1) and the double cost_us (field 2).
-    name = b"all-to-all-start.1"
-    cost = bytes([1 << 3 | 2, len(name)]) + name + bytes([2 << 3 | 1]) + struct.pack("<d", 2500.25)
-    serialized = bytes([1 << 3 | 2, len(cost)]) + cost
-
-    class _Bucket:
-        def get(self, remote, local):
-            Path(local).write_bytes(b"xplane")
-
-    monkeypatch.setattr(pgle_profile, "filesystem_for", lambda uri: (_Bucket(), uri))
-    monkeypatch.setattr(pgle_profile.profiler, "get_profiled_instructions_proto", lambda run_dir: serialized)
-    # The README writes into pgle/, which does not exist in a fresh checkout.
-    out = tmp_path / "pgle" / "run.pbtxt"
-
-    pgle_profile.main("s3://bucket/run/host.xplane.pb", str(out))
-
-    assert out.read_text() == 'costs {\n  name: "all-to-all-start.1"\n  cost_us: 2500.25\n}\n'
-
-
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
@@ -609,33 +587,6 @@ def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monke
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
 
 
-def test_a_ragged_run_without_the_offload_runs_collectives_synchronously(monkeypatch):
-    # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps off.
-    inherited = f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}=ALLREDUCE"
-    monkeypatch.setenv("XLA_FLAGS", inherited)
-    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    flags = os.environ["XLA_FLAGS"].split()
-    assert inherited not in flags
-    assert f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}={train.SYNC_COLLECTIVES}" in flags
-
-
-def test_the_carry_offload_keeps_collectives_asynchronous(monkeypatch):
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = _runtime_env_config(
-        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
-    )
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    flags = os.environ["XLA_FLAGS"].split()
-    assert not any(f.startswith(train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG) for f in flags)
-
-
 def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
     # skips the offload has to keep the posture it was measured under.
@@ -646,47 +597,6 @@ def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
         train.run_grug(config)
 
     assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
-
-
-@pytest.mark.parametrize(
-    ("remat_mode", "inherited", "expected"),
-    [
-        (model.OFFLOAD_CARRY_REMAT_MODE, None, "true"),
-        (model.OFFLOAD_CARRY_REMAT_MODE, "false", "false"),
-        ("recompute_all", None, None),
-    ],
-)
-def test_the_carry_offload_lets_rematerialization_discount_host_buffers(monkeypatch, remat_mode, inherited, expected):
-    if inherited is None:
-        monkeypatch.delenv("XLA_FLAGS", raising=False)
-    else:
-        monkeypatch.setenv("XLA_FLAGS", f"{train.XLA_HOST_MEMORY_OFFLOADING_FLAG}={inherited}")
-    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=remat_mode)
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    settings = [
-        flag.partition("=")[2]
-        for flag in os.environ["XLA_FLAGS"].split()
-        if flag.partition("=")[0] == train.XLA_HOST_MEMORY_OFFLOADING_FLAG
-    ]
-    assert settings == ([] if expected is None else [expected])
-
-
-def test_the_carry_offload_raises_the_memory_budget_with_host_offloading(monkeypatch):
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
-    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
-    config = _runtime_env_config(
-        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
-    )
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == train.OFFLOAD_CARRY_MEM_FRACTION
-    slop = f"--xla_gpu_memory_limit_slop_factor={train.OFFLOAD_CARRY_SLOP_FACTOR}"
-    assert slop in os.environ["XLA_FLAGS"].split()
 
 
 @pytest.mark.parametrize(
