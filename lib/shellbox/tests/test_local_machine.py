@@ -7,7 +7,6 @@ import asyncio
 import os
 import shutil
 import socket
-import sys
 import tarfile
 import tempfile
 import uuid
@@ -16,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory, SandboxUnavailable
+from shellbox.backends.local.python_environment import PythonEnvironment, UvError, build_python_environment
 from shellbox.machine import (
     Command,
     DockerImage,
@@ -66,6 +66,13 @@ release.set()
 print(started)
 """
 SPEC = MachineSpec(HostImage(), workdir="/app")
+PYTHON_VERSION = "3.12.13"
+# A hash lock as ``uv pip compile --generate-hashes`` writes it, for a small pure-Python package.
+LOCK = """\
+six==1.17.0 \\
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \\
+    --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
+"""
 
 
 def make_factory(**options) -> LocalMachineFactory:
@@ -80,10 +87,23 @@ def factory() -> LocalMachineFactory:
     return make_factory()
 
 
+@pytest.fixture(scope="session")
+def python_environment(tmp_path_factory) -> PythonEnvironment:
+    lock = tmp_path_factory.mktemp("lock") / "requirements.lock"
+    lock.write_text(LOCK)
+    try:
+        return build_python_environment(tmp_path_factory.mktemp("environment") / "root", lock, PYTHON_VERSION)
+    except UvError as error:
+        # uv reports an unreachable or failed fetch this way; any other failure is a bug in the builder.
+        if not str(error).startswith("uv python install") or "Failed to download" not in str(error):
+            raise
+        pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
+
+
 @pytest.fixture
-def python_factory() -> LocalMachineFactory:
-    """A factory whose commands find this test's Python, from a venv whose interpreter may lie anywhere."""
-    return make_factory(bin_dirs=(Path(sys.executable).parent,))
+def python_factory(python_environment) -> LocalMachineFactory:
+    """A factory whose commands find python3 in a self-contained environment that it mounts read-only."""
+    return make_factory(read_only=(python_environment.root,), bin_dirs=(python_environment.bin_dir,))
 
 
 @pytest.fixture
@@ -145,7 +165,7 @@ def test_bin_dirs_win_path_lookup_and_host_environment_is_not_inherited(tmp_path
     fake = bin_dir / "python3"
     fake.write_text("#!/bin/sh\necho fake-python\n")
     fake.chmod(0o755)
-    factory = make_factory(bin_dirs=(bin_dir,))
+    factory = make_factory(read_only=(bin_dir,), bin_dirs=(bin_dir,))
 
     async def scenario(machine: LocalMachine) -> tuple[Result, Result]:
         return await machine.run(Command(("python3",))), await machine.run(Command(("env",)))
@@ -335,3 +355,24 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
 
     asyncio.run(scenario())
     assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()
+
+
+def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(python_environment, python_factory):
+    script = "import sys, six; print(sys.prefix); print(sys.base_prefix)"
+    result = run_command(python_factory, Command(("python3", "-c", script)))
+    assert result.exit_code == 0, result.stderr.decode()
+    prefix, base_prefix = map(Path, result.stdout.decode().split())
+    assert prefix == python_environment.bin_dir.parent
+    assert base_prefix.is_relative_to(python_environment.root)
+
+
+def test_every_symlink_in_a_python_environment_resolves_inside_its_root(python_environment):
+    root = python_environment.root
+    links = [
+        Path(directory, name)
+        for directory, directories, files in os.walk(root)
+        for name in (*directories, *files)
+        if os.path.islink(Path(directory, name))
+    ]
+    assert python_environment.python in links
+    assert [link for link in links if not Path(os.path.realpath(link)).is_relative_to(root)] == []
