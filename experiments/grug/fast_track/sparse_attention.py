@@ -12,6 +12,7 @@ the ``topk`` keys with the best ``I(i, s) = sum_h w_h(x_i) relu(q_h(x_i) . k(x_s
 this measures quality, not speed.
 """
 
+import functools
 import math
 from collections.abc import Callable
 from enum import StrEnum
@@ -721,7 +722,7 @@ def gauss_attention_fast(q, k, v, rel_bias, segment_ids, g: Gauss, reach: int, a
     values, and the two parts merge by log-sum-exp. No value after the query enters any sum.
 
     ``attend_with_lse(q, k, v, lower_bounds, valid, rel_bias) -> (out [B, S, H, E], lse [B, H, S])``."""
-    batch, seq, heads, head_dim = q.shape
+    seq = q.shape[1]
     kernel = gauss_kernel(g, reach)  # [H, 2K + 1]
     starts = _document_starts(segment_ids)  # [B, S]
     pos = jnp.arange(seq)
@@ -743,6 +744,21 @@ def gauss_attention_fast(q, k, v, rel_bias, segment_ids, g: Gauss, reach: int, a
     lower = starts + reach
     far_ok = pos[None, :] >= lower  # [B, S]
     out_far, lse_far = attend_with_lse(q, reshard_like(k_far, k), reshard_like(v_far, v), lower, far_ok, band)
+    out_sharding = named_sharding_of(q)
+    near = functools.partial(_gauss_near_merge, reach=reach)
+    if out_sharding is None:
+        return near(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far)
+    # The near band's gathers and contractions run under Auto axes (explicit sharding cannot infer them).
+    # pyrefly: ignore[bad-assignment]
+    wrapped: Callable[..., jax.Array] = auto_axes(near, out_sharding=out_sharding)
+    return wrapped(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far)
+
+
+def _gauss_near_merge(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far, *, reach: int):
+    """The ``K`` nearest keys of :func:`gauss_attention_fast`, merged with the far part by log-sum-exp."""
+    batch, seq, heads, head_dim = q.shape
+    pos = jnp.arange(seq)
+    vf = v.astype(jnp.float32)
     lse_far = jnp.where(far_ok[:, None, :], lse_far.astype(jnp.float32), -jnp.inf)  # [B, H, S]
     # Near keys j = i - m (m < K): explicit scores, and smoothed values clipped at the query.
     m = jnp.arange(reach)
