@@ -1,19 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import subprocess
 import sys
-import uuid
-from pathlib import Path
 
-import pytest
 from verifyit.grade import Status, run
 from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.converters.e2egit_test_contracts import INVENTORY_TESTS
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML, VERIFY_TEST_SH
@@ -121,118 +115,3 @@ def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tm
     solution.write_text("def add(left, right):\n    return left + right\n")
     oracle = run(spec_path, workspace)
     assert (oracle.status, oracle.reward) == (Status.SCORED, 1.0)
-
-
-@pytest.mark.parametrize("variant", ["correct", "missing-price", "wrong-price"])
-def test_inventory_contract_checks_price_fields(tmp_path, variant):
-    # Only authored assertions and control programs execute on the host.
-    fixtures = Path(__file__).parents[1] / "fixtures"
-    program = (fixtures / "inventory_control.py").read_text()
-    if variant == "missing-price":
-        program = program.replace("quantity=i.quantity, price=i.price", "quantity=i.quantity")
-    elif variant == "wrong-price":
-        program = program.replace("price=i.price", "price=0.0")
-    tests = tmp_path / "tests"
-    tests.mkdir()
-    (tests / "test_inventory.py").write_text("import pytest\nfrom inventory import Item, Inventory\n" + INVENTORY_TESTS)
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    (workspace / "inventory.py").write_text(program)
-    spec = PytestSpec(paths=(str(tests / "test_inventory.py"),), python=sys.executable)
-    spec_path = tests / "verifier.toml"
-    spec_path.write_text(render_spec(spec))
-    verdict = run(spec_path, workspace)
-    assert (verdict.status, verdict.reward) == (Status.SCORED, float(variant == "correct"))
-
-
-@pytest.mark.docker
-@pytest.mark.timeout(300)
-@pytest.mark.parametrize("module", ["inventory", "calculator", "factorial"])
-def test_e2egit_contracts_accept_valid_implementations_and_reject_reported_defects(tmp_path, module):
-    fixtures = Path(__file__).parents[1] / "fixtures"
-    info = SourceInfo("DCAgent__exp_rpt_e2egit-v2", SourceVerdict.KEEP, FAMILY, "")
-    record = convert_one(
-        info, module, (fixtures / f"e2egit_{module}.tar.gz").read_bytes(), converter_index(), "e9859a4e80"
-    )
-    assert record.status == ConvertStatus.CONVERTED
-    task = read_task_binary(record.task_binary)
-    task.write_to(tmp_path)
-    (tmp_path / "Dockerfile").write_text(task.text(DOCKERFILE) + "\nCOPY tests /tests\n")
-    program = (fixtures / f"{module}_control.py").read_text()
-    controls = [("correct", program, 1.0)]
-    if module == "inventory":
-        controls += [
-            ("no-op", program.replace('raise ValueError("underflow")', "return"), 1.0),
-            ("clamps", program.replace('raise ValueError("underflow")', "self.quantity = 0; return"), 0.0),
-            ("missing-price", program.replace("quantity=i.quantity, price=i.price", "quantity=i.quantity"), 0.0),
-            ("wrong-price", program.replace("price=i.price", "price=0.0"), 0.0),
-        ]
-    elif module == "calculator":
-        controls += [
-            ("wrong-multiply", program.replace("return float(a * b)", "return 0.0"), 0.0),
-            ("wrong-divide", program.replace("return float(a / b)", "return 0.0"), 0.0),
-            ("no-docstrings", "\n".join(line for line in program.splitlines() if '"""' not in line), 0.0),
-        ]
-    else:
-        controls += [
-            (
-                "iterative",
-                program.replace(
-                    "return number * calculate_factorial(number - 1)",
-                    "result = 1\n    for value in range(1, number + 1):\n        result *= value\n    return result",
-                ),
-                0.0,
-            ),
-            ("no-zero-test", program, 0.0),
-            ("no-student-tests", program, 0.0),
-        ]
-    image = f"atlas-e2egit-regression:{uuid.uuid4().hex}"
-    subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
-    try:
-        # Benchmark tests execute only inside this owned container; controls are authored fixtures.
-        for name, candidate, expected in controls:
-            workspace = tmp_path / name
-            workspace.mkdir()
-            (workspace / f"{module}.py").write_text(candidate)
-            if module == "factorial" and name != "no-student-tests":
-                student_tests = (fixtures / "factorial_student_tests.py").read_text()
-                if name == "no-zero-test":
-                    student_tests = student_tests.replace("(0, 1),", "")
-                (workspace / "tests").mkdir()
-                (workspace / "tests/test_factorial.py").write_text(student_tests)
-            result = subprocess.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--cpus",
-                    "1",
-                    "--memory",
-                    "512m",
-                    "--pids-limit",
-                    "128",
-                    "--cap-drop",
-                    "ALL",
-                    "--security-opt",
-                    "no-new-privileges",
-                    "-v",
-                    f"{workspace}:/app:ro",
-                    "-e",
-                    "PYTHONPATH=/app",
-                    "-e",
-                    "PYTHONDONTWRITEBYTECODE=1",
-                    image,
-                    "bash",
-                    "-c",
-                    "verifyit /tests/verifier.toml && cat /logs/verifier/reward.json",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            assert json.loads(result.stdout)["reward"] == expected, name
-    finally:
-        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)

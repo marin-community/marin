@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Implementation tasks with Python tests, including the misclassified JavaScript todo contract."""
+"""Self-contained Python implementation tasks graded by one pytest file."""
 
 import ast
 
@@ -14,9 +14,6 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.e2egit_test_contracts import repair_contract
-from experiments.post_training.tasktrove.converters.factorial_test_contract import repair_contract as repair_factorial
-from experiments.post_training.tasktrove.converters.todo_list import convert_todo_list, matches_todo_contract
 from experiments.post_training.tasktrove.task_format import TESTS_MOUNT
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TaskFiles
 
@@ -73,9 +70,7 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
 
 
 def convert(task: TaskFiles) -> ConvertedTask | Rejected:
-    """Convert an implementation task without preserving its legacy shell grader."""
-    if matches_todo_contract(task):
-        return convert_todo_list(task)
+    """Convert one self-contained Python task without preserving its legacy shell grader."""
     test_file = _test_file(task)
     if isinstance(test_file, Rejected):
         return test_file
@@ -83,11 +78,9 @@ def convert(task: TaskFiles) -> ConvertedTask | Rejected:
     if isinstance(solution_files, Rejected):
         return solution_files
 
-    test, instruction = repair_contract(task.files[test_file], task.text(INSTRUCTION))
-    contract = repair_factorial(test, instruction)
-    data_files = {test_file: contract.test, **contract.extra_files, **task.under("setup_files/")}
+    data_files = {test_file: task.files[test_file], **task.under("setup_files/")}
     return ConvertedTask(
-        instruction=contract.instruction,
+        instruction=task.text(INSTRUCTION),
         spec=PytestSpec(paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",), python=PYTEST_PYTHON),
         dockerfile=task.text(DOCKERFILE).rstrip() + "\n" + PYTEST_INSTALL,
         tags=("code", "python", "unit-test", "kata"),
