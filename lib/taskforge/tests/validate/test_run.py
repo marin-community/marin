@@ -5,15 +5,13 @@
 candidate turned into a control that proves the grader fix. Adversaries run against ``fake_glm``."""
 
 import asyncio
-import json
 import shutil
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 
 import pytest
 from shellbox.machine import Backend
 from taskcompendium.submission import PlainText
 
-from taskforge.llm.client import GlmUnavailable
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.validate.adversary import AdversaryRole, ClaimKind, run_adversaries
 from taskforge.validate.calibration import DefectTier, FindingKind, summarize
@@ -22,43 +20,14 @@ from taskforge.validate.outcome import Cause, Ungraded
 from taskforge.validate.run import controls_passed, load_validation, replay_controls
 from taskforge.validate.solver import run_solver
 from taskforge.validate.trials import EngineSettings, task_digest
+from tests.validate.conftest import TemplateTokenizer
 
 PLAIN = PlainText(id="plain")
-ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
 SUM = "/workspace/sum.txt"
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
 FLOOD = f"cat /workspace/numbers.txt; seq 0 100 > {SUM}"
 SOLVE = f"awk '{{s+=$1}} END{{print s}}' /workspace/numbers.txt > {SUM}"
 SHORTCUT = AdversaryRole.SHORTCUT
-
-
-def render(messages) -> tuple[int, ...]:
-    ids: list[int] = []
-    for message in messages:
-        ids.append(ROLE_IDS[message["role"]])
-        ids.extend(json.dumps({key: message[key] for key in ("content", "tool_calls") if key in message}).encode())
-    return tuple(ids)
-
-
-@dataclass
-class TemplateTokenizer:
-    """The server's chat template, deterministically; fails the first ``failures`` calls as a drained router."""
-
-    failures: int = 0
-    calls: list[int] = field(default_factory=list)
-
-    async def prompt_ids(self, messages, options):
-        self._count()
-        return (*render(messages), ROLE_IDS["assistant"])
-
-    async def rendered_ids(self, messages, options):
-        self._count()
-        return render(messages)
-
-    def _count(self) -> None:
-        self.calls.append(len(self.calls))
-        if len(self.calls) <= self.failures:
-            raise GlmUnavailable("router drained", ())
 
 
 def settings(fakes) -> EngineSettings:
@@ -143,7 +112,7 @@ async def test_re_entered_controls_replay_only_the_unsettled_ones(tmp_path, math
     second = await replay_controls(draft, policy, site, settings(fakes), tokenizer)
 
     assert [c.verdict for c in second] == [ControlVerdict.MET] * len(math_controls)
-    assert len(tokenizer.calls) == 2
+    assert tokenizer.calls == 2
     attempts = sorted(p.name for p in (site.evidence_dir / "control" / unsettled.control.id).iterdir())
     assert attempts == ["attempt-0.json", "attempt-1.json"]
 
