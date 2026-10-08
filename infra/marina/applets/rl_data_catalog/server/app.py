@@ -167,6 +167,35 @@ def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def grading_binding_valid(record: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Check the archived proof against the current source and historical review."""
+    grading_revision = row.get("grading_revision")
+    grading_binding = record.get("grading_binding")
+    proof = record.get("grading_proof")
+    if not grading_revision or not grading_binding or not proof:
+        return False
+    content = proof["content"]
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    try:
+        decoded = json.loads(content)
+    except json.JSONDecodeError:
+        decoded = None  # Invalid evidence keeps the source stale; other sources remain available.
+    claim = decoded if isinstance(decoded, dict) else {}
+    expected = {
+        "source_id": row["id"],
+        "review_id": row["review_id"],
+        "source_revision": row.get("dataset_revision") or row.get("revision"),
+        "captured_verifier_revision": row["review_verifier_revision"],
+        "grading_revision": grading_revision,
+    }
+    return (
+        digest == proof["sha256"] == grading_binding["evidence_sha256"]
+        and claim.get("schema_version") == 1
+        and claim.get("equivalent") is True
+        and all(grading_binding.get(key) == value and claim.get(key) == value for key, value in expected.items())
+    )
+
+
 def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     row = dict(record["payload"])
     row.update(
@@ -185,30 +214,7 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     )
     current_data = row.get("dataset_revision") or row.get("revision")
     grading_revision = row.get("grading_revision")
-    grading_binding = record.get("grading_binding")
-    proof = record.get("grading_proof")
-    binding_valid = False
-    if grading_revision and grading_binding and proof:
-        content = proof["content"]
-        digest = hashlib.sha256(content.encode()).hexdigest()
-        try:
-            decoded = json.loads(content)
-        except json.JSONDecodeError:
-            decoded = None  # Invalid evidence keeps the source stale; other sources remain available.
-        claim = decoded if isinstance(decoded, dict) else {}
-        expected = {
-            "source_id": row["id"],
-            "review_id": row["review_id"],
-            "source_revision": current_data,
-            "captured_verifier_revision": row["review_verifier_revision"],
-            "grading_revision": grading_revision,
-        }
-        binding_valid = (
-            digest == proof["sha256"] == grading_binding["evidence_sha256"]
-            and claim.get("schema_version") == 1
-            and claim.get("equivalent") is True
-            and all(grading_binding.get(key) == value and claim.get(key) == value for key, value in expected.items())
-        )
+    binding_valid = grading_binding_valid(record, row)
     row["review_grading_revision"] = grading_revision if binding_valid else None
     verifier_changed = (
         not binding_valid

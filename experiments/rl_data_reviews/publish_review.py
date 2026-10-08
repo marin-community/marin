@@ -186,6 +186,46 @@ def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
         upload_artifacts(batch)
 
 
+def publish_grading_applicability(publication: ReviewPublication, review_id: str) -> str | None:
+    """Archive and bind the executed grading proof, or return None for an untracked source."""
+    root, payload, atlas_id = publication.root, publication.payload, publication.atlas_id
+    if not payload.get("grading_revision"):
+        return None
+    claim = {
+        "schema_version": 1,
+        "equivalent": True,
+        "source_id": atlas_id,
+        "review_id": review_id,
+        "source_revision": publication.subject["dataset_revision"],
+        "captured_verifier_revision": payload["verifier_revision"],
+        "grading_revision": payload["grading_revision"],
+        "evidence_kind": "current_native_execution",
+        "execution_grading": json.loads((root / "run.json").read_text())["grading"],
+    }
+    content = json.dumps(claim, sort_keys=True)
+    proof_path = "publication/grading-applicability.json"
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    upload_artifacts([{"review_id": review_id, "path": proof_path, "content": content, "sha256": sha}])
+    sql(
+        """INSERT INTO catalog_grading_reviews
+        (source_id,review_id,source_revision,captured_verifier_revision,grading_revision,evidence_path,evidence_sha256)
+        SELECT :source,:review,:revision,:verifier,:grading,:path,:sha FROM catalog_sources
+        WHERE id=:source AND active AND review_id=:review AND payload->>'grading_revision'=:grading
+        AND review_source_revision=:revision AND review_verifier_revision=:verifier
+        ON CONFLICT DO NOTHING""",
+        {
+            "source": atlas_id,
+            "review": review_id,
+            "revision": claim["source_revision"],
+            "verifier": claim["captured_verifier_revision"],
+            "grading": claim["grading_revision"],
+            "path": proof_path,
+            "sha": sha,
+        },
+    )
+    return sha
+
+
 def publish_review(root: Path, atlas_id: str) -> dict:
     publication = validated_publication(root, atlas_id)
     collection, payload = publication.collection, publication.payload
@@ -219,39 +259,7 @@ def publish_review(root: Path, atlas_id: str) -> dict:
             "source": atlas_id,
         },
     )
-    if payload.get("grading_revision"):
-        claim = {
-            "schema_version": 1,
-            "equivalent": True,
-            "source_id": atlas_id,
-            "review_id": review_id,
-            "source_revision": publication.subject["dataset_revision"],
-            "captured_verifier_revision": payload["verifier_revision"],
-            "grading_revision": payload["grading_revision"],
-            "evidence_kind": "current_native_execution",
-            "execution_grading": json.loads((root / "run.json").read_text())["grading"],
-        }
-        content = json.dumps(claim, sort_keys=True)
-        proof_path = "publication/grading-applicability.json"
-        sha = hashlib.sha256(content.encode()).hexdigest()
-        upload_artifacts([{"review_id": review_id, "path": proof_path, "content": content, "sha256": sha}])
-        sql(
-            """INSERT INTO catalog_grading_reviews
-            (source_id,review_id,source_revision,captured_verifier_revision,grading_revision,evidence_path,evidence_sha256)
-            SELECT :source,:review,:revision,:verifier,:grading,:path,:sha FROM catalog_sources
-            WHERE id=:source AND active AND review_id=:review AND payload->>'grading_revision'=:grading
-            AND review_source_revision=:revision AND review_verifier_revision=:verifier
-            ON CONFLICT DO NOTHING""",
-            {
-                "source": atlas_id,
-                "review": review_id,
-                "revision": claim["source_revision"],
-                "verifier": claim["captured_verifier_revision"],
-                "grading": claim["grading_revision"],
-                "path": proof_path,
-                "sha": sha,
-            },
-        )
+    sha = publish_grading_applicability(publication, review_id)
     live = sql("SELECT review_id FROM catalog_sources WHERE id=:source AND active", {"source": atlas_id})["rows"]
     if live != [{"review_id": review_id}]:
         raise ValueError(
