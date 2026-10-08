@@ -569,9 +569,9 @@ def moe_mlp(
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         if resolved_implementation == "ring":
-            shard_local_fn = partial(_moe_mlp_ep_ring_local, dispatch_combine=_scatter_add_dispatch_combine)
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
         elif resolved_implementation == "ring_gather_combine":
-            shard_local_fn = partial(_moe_mlp_ep_ring_local, dispatch_combine=_gather_dispatch_combine)
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":

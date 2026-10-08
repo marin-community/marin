@@ -137,7 +137,7 @@ def _moe_mlp_ep_ring_local(
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
-    dispatch_combine: _DispatchCombineFactory,
+    make_dispatch_combine: _DispatchCombineFactory,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
@@ -145,7 +145,7 @@ def _moe_mlp_ep_ring_local(
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
 
-    ``dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
+    ``make_dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
     """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -212,8 +212,8 @@ def _moe_mlp_ep_ring_local(
 
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        rows = dispatch_combine(local_idx, valid, tokens, topk)
-        x_dispatch = tree_checkpoint_name(rows.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
+        dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
+        x_dispatch = tree_checkpoint_name(dispatch_combine.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
@@ -230,7 +230,7 @@ def _moe_mlp_ep_ring_local(
         )
 
     with jax.named_scope("combine"):
-        out_global = rows.combine(out_dispatch * weight_dispatch[:, None])
+        out_global = dispatch_combine.combine(out_dispatch * weight_dispatch[:, None])
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
