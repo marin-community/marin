@@ -7,7 +7,8 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,20 @@ from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES, Bat
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class CachedRequests:
+    """Cache envelopes read ahead of one batch of requests.
+
+    ``keys`` are the cache keys that were looked up and ``saved`` holds the envelopes found for
+    them. One read can serve several batches; ``lookup`` carries that read's diagnostics on the
+    one batch that records them.
+    """
+
+    keys: frozenset[str]
+    saved: Mapping[str, bytes]
+    lookup: Mapping[str, float] | None = None
+
+
 def cached_batch_output(
     client: BatchClient,
     requests: Sequence[dict[str, Any]],
@@ -30,6 +45,7 @@ def cached_batch_output(
     poll_seconds: float,
     valid_completion: Callable[[str, str], bool],
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
+    cached: CachedRequests | None = None,
 ) -> str:
     return cached_request_output(
         requests,
@@ -44,6 +60,7 @@ def cached_batch_output(
             poll_seconds=poll_seconds,
             max_batch_bytes=max_batch_bytes,
         ),
+        cached=cached,
     )
 
 
@@ -55,18 +72,50 @@ def _cache_key(identity: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def _record_lookup_diagnostics(cache: PersistentKvCache, lookup_seconds: float) -> None:
+def _lookup(cache: PersistentKvCache, keys: Sequence[str]) -> tuple[dict[str, bytes], dict[str, float]]:
+    """Read ``keys`` in one cache read and return the saved envelopes with the read's diagnostics."""
+    started = time.monotonic()
+    # PersistentKvCache already treats unreadable storage as misses.
+    saved = cache.load_many(keys)
+    reads = cache.read_diagnostics().blob_reads
+    return saved, {
+        "lookup_seconds": time.monotonic() - started,
+        "descriptor_seconds": reads.descriptor_seconds,
+        "payload_seconds": reads.payload_seconds,
+        "descriptor_lookups": reads.descriptor_lookups,
+        "selected_shards": reads.selected_shards,
+        "bytes_returned": reads.bytes_returned,
+    }
+
+
+def _record_lookup(diagnostics: Mapping[str, float]) -> None:
     metrics = counters.current_stage()
-    metrics.update_counter("review/cache/lookup_seconds", lookup_seconds)
-    diagnostics = cache.read_diagnostics().blob_reads
-    for name, value in (
-        ("descriptor_seconds", diagnostics.descriptor_seconds),
-        ("payload_seconds", diagnostics.payload_seconds),
-        ("descriptor_lookups", diagnostics.descriptor_lookups),
-        ("selected_shards", diagnostics.selected_shards),
-        ("bytes_returned", diagnostics.bytes_returned),
-    ):
+    for name, value in diagnostics.items():
         metrics.update_counter(f"review/cache/{name}", value)
+
+
+def read_cached_requests(
+    batches: Sequence[Sequence[dict[str, Any]]], *, cache_root: str, model_revision: str
+) -> list[CachedRequests]:
+    """Look up every batch's requests in one cache read and split the envelopes by batch.
+
+    A read scans the cache's descriptor shards, so one read for a source's batches replaces one
+    scan per batch.
+    """
+    keys = [[_cache_key(_request_identity(request, model_revision)) for request in batch] for batch in batches]
+    cache = PersistentKvCache.at(cache_root)
+    try:
+        saved, diagnostics = _lookup(cache, [key for batch_keys in keys for key in batch_keys])
+    finally:
+        _close_cache(cache)
+    return [
+        CachedRequests(
+            frozenset(batch_keys),
+            {key: saved[key] for key in batch_keys if key in saved},
+            diagnostics if index == 0 else None,
+        )
+        for index, batch_keys in enumerate(keys)
+    ]
 
 
 def _cached_output(
@@ -85,7 +134,7 @@ def _cached_output(
 
 
 def _cached_completions(
-    cache: PersistentKvCache,
+    saved_queries: Mapping[str, bytes],
     requests: Sequence[dict[str, Any]],
     keys: dict[str, str],
     *,
@@ -95,10 +144,6 @@ def _cached_completions(
 ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     """Valid cached outputs by task ID, copied to ``evidence``, and the requests the cache cannot answer."""
     metrics = counters.current_stage()
-    started = time.monotonic()
-    # PersistentKvCache already treats unreadable storage as misses.
-    saved_queries = cache.load_many(list(keys.values()))
-    _record_lookup_diagnostics(cache, time.monotonic() - started)
     completed = {}
     misses = {}
     for request in requests:
@@ -178,8 +223,12 @@ def cached_request_output(
     model_revision: str,
     valid_completion: Callable[[str, str], bool],
     submit: Callable[[Sequence[dict[str, Any]], Path], str],
+    cached: CachedRequests | None = None,
 ) -> str:
-    """Submit uncached queries and retain successful raw completions as evidence."""
+    """Submit uncached queries and retain successful raw completions as evidence.
+
+    ``cached`` answers the lookup when it covers every request; otherwise the cache is read here.
+    """
     metrics = counters.current_stage()
     metrics.update_counter("review/cache/request_observations", len(requests))
     cache = PersistentKvCache.at(cache_root)
@@ -187,8 +236,14 @@ def cached_request_output(
     evidence.mkdir(parents=True, exist_ok=True)
     try:
         keys = {request["custom_id"]: _cache_key(_request_identity(request, model_revision)) for request in requests}
+        if cached is not None and cached.keys.issuperset(keys.values()):
+            saved_queries, diagnostics = cached.saved, cached.lookup
+        else:
+            saved_queries, diagnostics = _lookup(cache, list(keys.values()))
+        if diagnostics is not None:
+            _record_lookup(diagnostics)
         completed, misses = _cached_completions(
-            cache,
+            saved_queries,
             requests,
             keys,
             model_revision=model_revision,

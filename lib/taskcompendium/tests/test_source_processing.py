@@ -15,6 +15,7 @@ from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
+from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
@@ -293,15 +294,28 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     report = read_json(result.manifest_path)
     telemetry = read_json(report["telemetry"])
     assert telemetry["source"] == recipe.name and telemetry["status"] == "completed"
-    phases = {phase["phase"]: phase for phase in telemetry["phases"]}
-    assert {"raw_sample", "sample_prepare", "quality_review", "audit_review", "filter"} <= phases.keys()
-    for phase_name in ("sample_prepare", "audit_review", "filter"):
-        assert any(execution["operation"] == "manifest_count" for execution in phases[phase_name]["executions"])
+    operations = {
+        phase["phase"]: [execution["operation"] for execution in phase["executions"]] for phase in telemetry["phases"]
+    }
+    operations.pop("verification", None)
+    # The panel is prepared on the driver, and each later phase is one execution.
+    expected_operations = {
+        "raw_sample": ["execute"],
+        "panel_normalize": ["execute"],
+        "sample_prepare": [],
+        "quality_review": ["review"],
+        "audit_review": ["review"],
+        "filter": ["filter"],
+        "export": ["export"],
+    }
+    if expected_conversions > 100:
+        expected_operations["full_prepare"] = ["prepare"]
+    assert operations == expected_operations
     executions = [execution for phase in telemetry["phases"] for execution in phase["executions"]]
     ids = [execution["execution_id"] for execution in executions if execution["execution_id"]]
     assert len(ids) == len(set(ids)) and all(execution["status"] == "completed" for execution in executions)
     assert any("source/decode/seconds" in execution["counters"] for execution in executions)
-    assert context.panel_source_shards == [7, 7]
+    assert context.panel_source_shards == [7]
     files = list(conversions.iterdir())
     assert len(files) == expected_conversions
     assert all(file.read_text() == "converted\n" for file in files)
@@ -377,6 +391,38 @@ def test_unsupported_raw_panel_never_becomes_a_small_population_census(tmp_path,
     review = parquet_rows(result.review_path)
     assert len(review) == population_count
     assert {row["filter_status"] for row in review} == {"defer"}
+
+
+@dataclass(frozen=True)
+class AlternatingParts:
+    """Read a JSONL file in parts that take every ``count``-th row."""
+
+    count: int
+
+    def __call__(self, file, _context: ConversionContext, part: int):
+        return ((index, row) for index, row in enumerate(load_jsonl(str(file))) if index % self.count == part)
+
+
+def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(125))
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    config = pipeline_config(SourceProcessingMode.SAMPLE, reviewer)
+    whole = run_pipeline(fixture_recipe(convert_svamp), source, tmp_path / "whole", config)
+    parted_recipe = fixture_recipe(convert_svamp, source=replace(SOURCE_FILES, parts=AlternatingParts(3)))
+    parted = run_pipeline(parted_recipe, source, tmp_path / "parted", config)
+    assert len(list((Path(parted.download_path) / "locators").glob("*.parquet"))) == 3
+    assert sorted(parquet_rows(Path(parted.download_path) / "locators"), key=lambda row: row["task_id"]) == sorted(
+        parquet_rows(Path(whole.download_path) / "locators"), key=lambda row: row["task_id"]
+    )
+    for view in ("normalize", "final"):
+        files = sorted(path.name for path in (tmp_path / "whole" / view).glob("*.parquet"))
+        assert files == sorted(path.name for path in (tmp_path / "parted" / view).glob("*.parquet"))
+        assert all(
+            (tmp_path / "whole" / view / name).read_bytes() == (tmp_path / "parted" / view / name).read_bytes()
+            for name in files
+        )
+    assert read_json(parted.manifest_path)["raw_population_count"] == 125
 
 
 def test_completed_source_rerun_reuses_inference_cache_without_scratch(tmp_path):
@@ -593,10 +639,9 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
         "sample_prepare",
         "quality_review",
     ]
-    prepared = report["phases"][2]
-    assert prepared["status"] == "completed"
-    assert [execution["operation"] for execution in prepared["executions"]] == ["prepare", "manifest_count"]
-    assert all(execution["execution_id"] and execution["status"] == "completed" for execution in prepared["executions"])
+    assert report["phases"][2]["status"] == "completed"
+    assert read_json(tmp_path / "output/work/sample/manifest.json")["input_rows"] == 1
+    assert list((tmp_path / "output/work/sample/review-inputs").glob("batch-*.jsonl.gz"))
     assert report["phases"][-1]["executions"] == []
     assert report["phases"][-1]["status"] == "failed"
     assert not list((tmp_path / "output/work/quality").glob("**/reviews.json"))

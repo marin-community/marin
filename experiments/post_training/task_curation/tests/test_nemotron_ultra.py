@@ -28,7 +28,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
-from taskcompendium.pipeline.sources import staged_raw_file_rows
+from taskcompendium.pipeline.sources import SourceShard, staged_raw_file_rows
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
@@ -398,7 +398,7 @@ def test_swe_components_split_by_swe_gym_membership(tmp_path, staged):
             record["locator"]
             for record in staged_raw_file_rows(
                 str(tmp_path),
-                "mopd.jsonl",
+                SourceShard("mopd.jsonl", 0, 1),
                 source_files(PIPELINES[f"nemotron_ultra_mopd_swe_pivot_len40k_{split}"].source),
                 ConversionContext(staged, None),
             )

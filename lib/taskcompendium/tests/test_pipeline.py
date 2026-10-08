@@ -15,6 +15,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
+from finestore.cache import PersistentKvCache
 from fray.types import ResourceConfig
 from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
@@ -54,7 +55,7 @@ from taskcompendium.pipeline.query_cache import cached_batch_output
 from taskcompendium.pipeline.review import BatchReviewer, review_records
 from taskcompendium.pipeline.review_requests import batch_output
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
-from taskcompendium.pipeline.sources import staged_file_rows, staged_files, staged_inputs
+from taskcompendium.pipeline.sources import SourceShard, source_shards, staged_file_rows, staged_inputs
 from taskcompendium.pipeline.stages import (
     AuditExecution,
     assess_source_quality,
@@ -841,7 +842,8 @@ def test_staged_source_reaches_end_across_files(tmp_path, apple_row):
     snapshot = tmp_path / "source.jsonl"
     snapshot.write_text("".join(json.dumps({**apple_row, "position": index}) + "\n" for index in range(1003)))
     spec = SourceFiles("fixture", "1", ("*.jsonl",), SourceFormat.JSONL)
-    records = list(staged_file_rows(str(tmp_path), "source.jsonl", spec, ConversionContext(staged_inputs({}), None)))
+    context = ConversionContext(staged_inputs({}), None)
+    records = list(staged_file_rows(str(tmp_path), SourceShard("source.jsonl", 0, 1), spec, context))
     assert [row["data"]["position"] for row in records] == list(range(1003))
 
 
@@ -880,8 +882,8 @@ def test_source_read_select_and_decode_receive_staged_inputs_and_keep_original_l
     context = ConversionContext(staged_inputs({"labels": str(aux)}), None)
     records = [
         record
-        for file in staged_files(str(source), spec)
-        for record in staged_file_rows(str(source), file, spec, context)
+        for shard in source_shards(str(source), spec)
+        for record in staged_file_rows(str(source), shard, spec, context)
     ]
     assert [(record["locator"], record["data"]) for record in records] == [
         ("problems.xml:1", {"ID": "1", "Body": "Two plus two", "label": "four"})
@@ -1187,9 +1189,43 @@ def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path,
     report = assess_source_quality(prepared, quality, svamp_recipe, config, SourceQualityPolicy(), execution)
     assert report.status == "reject" and report.population.eligible_count == 0
     assert report.population.input_count == 1 and report.defect_fraction == 1.0
-    manifest = audit_prepared_source(prepared, quality, audited, svamp_recipe, config, execution)
+    manifest = audit_prepared_source(prepared, quality, audited, svamp_recipe, config, execution).manifest
     assert not service.batches
     assert manifest["input_rows"] == 1 and manifest["dispositions"] == {"reject": 1}
+
+
+def test_quality_panel_reads_the_review_cache_once_for_all_batches(tmp_path, apple_row, svamp_recipe, monkeypatch):
+    staged, prepared = tmp_path / "staged", tmp_path / "prepared"
+    staged.mkdir()
+    rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(6)]
+    (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    reads = []
+    load_many = PersistentKvCache.load_many
+    monkeypatch.setattr(
+        PersistentKvCache, "load_many", lambda cache, keys: reads.append(len(keys)) or load_many(cache, keys)
+    )
+
+    def assess(service: BatchService, output: str):
+        reviewer = BatchReviewer(service, "fixture", "revision", query_cache_root=str(tmp_path / "cache"))
+        execution = AuditExecution(max_workers=2, review_batch_size=2, reviewer=reviewer)
+        prepare_source(str(staged), str(prepared), svamp_recipe, None, execution)
+        return assess_source_quality(
+            str(prepared),
+            str(tmp_path / output),
+            svamp_recipe,
+            review_config(reviewer),
+            SourceQualityPolicy(),
+            execution,
+        )
+
+    initial = BatchService()
+    first = assess(initial, "first")
+    assert sorted(len(batch) for batch in initial.batches.values()) == [2, 2, 2]
+    assert reads == [6]
+    cached = BatchService()
+    assert assess(cached, "second") == first
+    assert not cached.batches
+    assert reads == [6, 6]
 
 
 @pytest.mark.parametrize("fixture", ["x" * 600000, list(range(100000))])

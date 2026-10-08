@@ -56,7 +56,7 @@ An `RlDataPipeline` has these fields:
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
 
-`convert`, `select`, `decode` and `read` each receive a `ConversionContext` with
+`convert`, `select`, `decode`, `read` and `parts` each receive a `ConversionContext` with
 two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, the
 built grader image's environment or `None` when the declaration names no
 `grader_image`. `required_grader_environment(context)` returns the environment or

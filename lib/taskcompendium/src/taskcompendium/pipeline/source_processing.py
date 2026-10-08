@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
@@ -20,7 +20,9 @@ from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import Mode
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
+from zephyr.dataset import Dataset, ShardInfo, format_shard_path
+from zephyr.readers import load_parquet
+from zephyr.writers import write_parquet_file
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
@@ -29,6 +31,7 @@ from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME, SourceTelemetry, execute_phase
 from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe, SourceStatus
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
+from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
     SOURCE_QUALITY_REVISION,
     QualitySampleCoverage,
@@ -44,9 +47,11 @@ from taskcompendium.pipeline.source_verification import (
     verify_source,
 )
 from taskcompendium.pipeline.sources import (
+    SourceShard,
     conversion_context,
     decode_staged_row,
     source_files_identity,
+    source_shards,
     staged_files,
     staged_raw_file_rows,
 )
@@ -58,7 +63,9 @@ from taskcompendium.pipeline.stages import (
     _write_json,
     assess_source_quality,
     audit_prepared_source,
+    checked_row,
     filter_source,
+    prepare_panel,
     prepare_source,
     skip_source_review,
 )
@@ -67,6 +74,8 @@ from taskcompendium.pipeline.transforms import normalize_row, row_source, row_ta
 SOURCE_PIPELINE_REVISION = "9"
 PANEL_ROWS_PER_SHARD = 16
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
+SIDECAR_SHARD = "part-{shard:05d}.parquet"
+UNPROCESSED_REVIEW_TEMPLATE = "review/unprocessed-{shard:05d}.parquet"
 SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified")
 VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output; a later run of the source reuses its trials."""
@@ -143,7 +152,7 @@ def merge_raw_samples(samples: Iterator[RawSample], *, size: int, seed: int) -> 
 
 
 def _raw_dataset(source_input: str, recipe: SourceRecipe) -> Dataset:
-    return Dataset.from_list(list(staged_files(source_input, recipe.source))).flat_map(
+    return Dataset.from_list(list(source_shards(source_input, recipe.source))).flat_map(
         partial(staged_raw_file_rows, source_input, spec=recipe.source, context=conversion_context(recipe))
     )
 
@@ -198,18 +207,18 @@ def _source_identity(row: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
 
 
 def _staged_rows_with_ledger(
-    relative_file: str, *, source_input: str, recipe: SourceRecipe, output: StoragePath
+    shard: SourceShard, *, source_input: str, recipe: SourceRecipe, output: StoragePath
 ) -> Iterator[dict[str, Any]]:
-    """Read selected rows without decoding and retain their original content identities."""
+    """Read one shard's selected rows without decoding and retain their original content identities."""
     metrics = counters.current_stage()
     started = time.monotonic()
-    filename = hashlib.sha256(relative_file.encode()).hexdigest()
+    filename = hashlib.sha256(shard.name.encode()).hexdigest()
     path = output / "download" / "locators" / f"part-{filename}.parquet"
     try:
         with path.open("wb", auto_mkdir=True) as stream:
             with pq.ParquetWriter(stream, RAW_SCHEMA) as writer:
                 batch = []
-                for row in staged_raw_file_rows(source_input, relative_file, recipe.source, conversion_context(recipe)):
+                for row in staged_raw_file_rows(source_input, shard, recipe.source, conversion_context(recipe)):
                     batch.append(_source_identity(row, recipe))
                     metrics.update_counter("source/raw/selected_rows", 1)
                     metrics.update_counter("source/output/download/rows", 1)
@@ -257,15 +266,18 @@ REVIEW_COLUMNS = tuple(
 VERIFY_COLUMNS = ("task_id", "checks", "grader_readiness", "filter_status", "filter_reasons", "admission")
 
 
-def _project_sidecar(row: dict[str, Any], columns: tuple[str, ...], view: str) -> dict[str, Any]:
+def _sidecar_row(row: dict[str, Any], *, columns: tuple[str, ...], view: str) -> dict[str, Any]:
     counters.current_stage().update_counter(f"source/output/{view}/rows", 1)
-    raw = json.loads(row["raw_json"])
     return {
         **{column: row[column] for column in columns},
-        "source_locator": raw["source_locator"],
-        "raw_input_sha256": raw["raw_input_sha256"],
-        "raw_sha256": raw["raw_sha256"],
+        **{name: row[name] for name, _ in IDENTITY_FIELDS[1:]},
     }
+
+
+def _final_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    if row["admission"] != Admission.ADMITTED.value:
+        return None
+    return _sidecar_row(row, columns=NORMALIZED_COLUMNS, view="final")
 
 
 def _unprocessed_review(
@@ -313,10 +325,6 @@ def _admit(row: dict[str, Any], *, verification: SourceVerificationStatus) -> di
     return {**row, "admission": admission.value}
 
 
-def _count_admissions(rows: Iterator[dict[str, Any]]) -> Counter[str]:
-    return Counter(row["admission"] for row in rows)
-
-
 def _merge_admissions(parts: Iterator[Counter[str]]) -> Counter[str]:
     total: Counter[str] = Counter()
     for part in parts:
@@ -339,18 +347,14 @@ def _written_output(path: str, view: str) -> str:
 def _quality_gate(
     decision: SourceQualityReport, *, coverage: QualitySampleCoverage, panel_size: int
 ) -> SourceQualityReport:
-    metrics = counters.current_stage()
-    started = time.monotonic()
+    """Withhold source trust when a sampled raw panel lacks rows the sample should hold."""
     if coverage != QualitySampleCoverage.CENSUS and decision.population.input_count != panel_size:
-        decision = decision.model_copy(
+        return decision.model_copy(
             update={
                 "status": SourceQualityStatus.INCOMPLETE,
                 "reason": "The raw panel does not contain the required sampled rows; no source trust",
             }
         )
-    metrics.update_counter(f"source/gate/{decision.status.value}", 1)
-    metrics.update_counter("source/gate/eligible_panel_rows", len(decision.population.task_ids))
-    metrics.update_counter("source/gate/seconds", time.monotonic() - started)
     return decision
 
 
@@ -401,12 +405,12 @@ class _Panel:
 
 
 def _sample_panel(run: _SourceRun) -> _Panel:
-    """Draw the raw panel while writing the locator ledger, then normalize and prepare only the panel."""
+    """Draw the raw panel while writing the locator ledger, then normalize, check and prepare only the panel."""
     policy = run.config.quality_policy
     with run.telemetry.phase("raw_sample") as phase:
         sample = execute_phase(
             run.context,
-            Dataset.from_list(list(staged_files(run.source_input, run.recipe.source)))
+            Dataset.from_list(list(source_shards(run.source_input, run.recipe.source)))
             .flat_map(
                 partial(_staged_rows_with_ledger, source_input=run.source_input, recipe=run.recipe, output=run.output)
             )
@@ -419,27 +423,23 @@ def _sample_panel(run: _SourceRun) -> _Panel:
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
     with run.telemetry.phase("panel_normalize") as phase:
-        normalized = execute_phase(
+        checked = execute_phase(
             run.context,
             Dataset.from_list(list(batched(sample.rows, PANEL_ROWS_PER_SHARD)))
             .flat_map(iter)
-            .map(partial(_decode_and_normalize, recipe=run.recipe)),
+            .map(partial(_decode_and_normalize, recipe=run.recipe))
+            .map(checked_row),
             telemetry=phase,
         ).results
-    with run.telemetry.phase("sample_prepare") as phase:
-        prepare_source(
-            run.source_input,
-            str(run.scratch("sample")),
-            run.recipe,
-            None,
-            run.config.execution,
-            context=run.context,
-            raw_rows=Dataset.from_list(sample.rows),
-            normalized_rows=Dataset.from_list(list(batched(normalized, PANEL_ROWS_PER_SHARD))).flat_map(iter),
-            telemetry=phase,
-        )
+    # The panel is a few dozen rows: deduplicating it on the driver costs less than an execution.
+    with run.telemetry.phase("sample_prepare"):
+        prepare_panel(checked, str(run.scratch("sample")), run.recipe, run.config.execution)
     census = sample.population_count <= policy.sample_size
-    return _Panel(sample, normalized, QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE)
+    return _Panel(
+        sample,
+        [row.normalized for row in checked],
+        QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
+    )
 
 
 def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -> SourceQualityReport:
@@ -448,15 +448,7 @@ def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -
     config = run.config
     with run.telemetry.phase("quality_review") as phase:
         if review is None:
-            decision = skip_source_review(
-                str(prepared),
-                str(quality),
-                config.quality_policy,
-                config.execution,
-                coverage=panel.coverage,
-                context=run.context,
-                telemetry=phase,
-            )
+            decision = skip_source_review(str(prepared), str(quality), config.quality_policy, coverage=panel.coverage)
         else:
             decision = assess_source_quality(
                 str(prepared),
@@ -469,14 +461,7 @@ def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -
                 coverage=panel.coverage,
                 telemetry=phase,
             )
-    with run.telemetry.phase("quality_gate") as phase:
-        decision = execute_phase(
-            run.context,
-            Dataset.from_list([decision]).map(
-                partial(_quality_gate, coverage=panel.coverage, panel_size=config.quality_policy.sample_size)
-            ),
-            telemetry=phase,
-        ).results[0]
+    decision = _quality_gate(decision, coverage=panel.coverage, panel_size=config.quality_policy.sample_size)
     _write_json(quality / "report.json", decision.model_dump(mode="json"))
     return decision
 
@@ -513,7 +498,7 @@ def _audit(run: _SourceRun, prepared: StoragePath, review: ReviewConfig | None) 
     if previous_audit.exists():
         previous_audit.rmtree()
     with run.telemetry.phase("audit_review") as phase:
-        audit_prepared_source(
+        return audit_prepared_source(
             str(prepared),
             str(run.scratch("quality")),
             str(audited),
@@ -522,17 +507,7 @@ def _audit(run: _SourceRun, prepared: StoragePath, review: ReviewConfig | None) 
             run.config.execution,
             context=run.context,
             telemetry=phase,
-        )
-    # Invalid responses count as unavailable, as in the quality gate.
-    with run.telemetry.phase("audit_review_count") as phase:
-        return execute_phase(
-            run.context,
-            Dataset.from_files(str(audited / AUDIT_INPUT_PATTERN))
-            .load_parquet(columns=["review_status"])
-            .filter(lambda row: row["review_status"] in {"invalid", "unavailable"})
-            .count(),
-            telemetry=phase,
-        ).results[0]
+        ).unavailable_reviews
 
 
 def _filter(run: _SourceRun) -> None:
@@ -603,6 +578,65 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     )
 
 
+def _export_row(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+    """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
+    admitted = _admit(row, verification=verification)
+    raw = json.loads(admitted.pop("raw_json"))
+    return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
+
+
+@dataclass(frozen=True)
+class _CheckedAudit:
+    """One checked audit file, whose admitted rows feed every derived view."""
+
+    path: str
+    verification: SourceVerificationStatus
+
+    def export_rows(self) -> Iterator[dict[str, Any]]:
+        for row in load_parquet(self.path):
+            yield _export_row(row, verification=self.verification)
+
+
+@dataclass(frozen=True)
+class _UnprocessedLocators:
+    """One locator file, whose rows outside the processed panel form one ``review/unprocessed-*`` shard."""
+
+    path: str
+    output: str
+    shard: ShardInfo
+    unprocessed: Callable[[dict[str, Any]], Iterator[dict[str, Any]]]
+
+    def export_rows(self) -> Iterator[dict[str, Any]]:
+        template = str(StoragePath(self.output) / UNPROCESSED_REVIEW_TEMPLATE)
+        path = format_shard_path(template, self.shard.shard_idx, self.shard.total_shards)
+        rows = (review for identity in load_parquet(self.path) for review in self.unprocessed(identity))
+        write_parquet_file(rows, path, schema=_sidecar_schema(REVIEW_COLUMNS))
+        _written_output(path, "review")
+        return iter(())
+
+
+def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[Counter[str]]:
+    """Write one shard of the normalize, review, verify and final views; return its admission counts."""
+    admissions: Counter[str] = Counter()
+
+    def counted() -> Iterator[dict[str, Any]]:
+        for row in rows:
+            admissions[row["admission"]] += 1
+            yield row
+
+    root = StoragePath(output)
+    outputs = {
+        view: ShardOutput(
+            str(root / view / SIDECAR_SHARD), _sidecar_schema(columns), partial(_sidecar_row, columns=columns, view=view)
+        )
+        for view, columns in (("normalize", NORMALIZED_COLUMNS), ("review", REVIEW_COLUMNS), ("verify", VERIFY_COLUMNS))
+    }
+    outputs["final"] = ShardOutput(str(root / "final" / SIDECAR_SHARD), _sidecar_schema(NORMALIZED_COLUMNS), _final_row)
+    for view, path in zip(outputs, write_shard_outputs(counted(), shard, list(outputs.values())), strict=True):
+        _written_output(path, view)
+    yield admissions
+
+
 def _export_sidecars(
     run: _SourceRun,
     panel: _Panel,
@@ -612,88 +646,47 @@ def _export_sidecars(
     *,
     expanded: bool,
 ) -> dict[str, int]:
-    """Publish the normalize, review, verify and final views from the checked audit; return admission counts."""
-    output, context, telemetry = run.output, run.context, run.telemetry
-    raw = Dataset.from_files(str(output / "download/locators/*.parquet")).load_parquet()
-    audit = (
-        Dataset.from_files(str(checked / AUDIT_INPUT_PATTERN))
-        .load_parquet()
-        .map(partial(_admit, verification=verification))
-    )
+    """Publish the normalize, review, verify and final views in one execution; return admission counts.
+
+    Every view takes its rows from one shuffle by task ID into the canonical normalized shards.
+    Locator files of an unexpanded sample write their unprocessed review rows alongside.
+    """
+    output = run.output
     # A recovered panel can expand a formerly deferred source. Remove old
     # derived shards, including unprocessed locators, before publishing that view.
     for name in OUTPUT_VIEWS[1:]:
         previous_output = output / name
         if previous_output.exists():
             previous_output.rmtree()
-    for name, columns in (("normalize", NORMALIZED_COLUMNS), ("review", REVIEW_COLUMNS)):
-        projected = audit.map(partial(_project_sidecar, columns=columns, view=name))
-        if name == "normalize":
+    audits = sorted(str(path) for path in (checked / AUDIT_INPUT_PATTERN).glob())
+    inputs: list[_CheckedAudit | _UnprocessedLocators] = [_CheckedAudit(path, verification) for path in audits]
+    if not expanded and not panel.census:
+        locators = sorted(str(path) for path in (output / "download/locators/*.parquet").glob())
+        unprocessed = partial(
+            _unprocessed_review,
+            recipe=run.recipe,
+            processed=frozenset(_source_identity(row, run.recipe)["task_id"] for row in panel.sample.rows),
+            disposition="reject" if decision.status == SourceQualityStatus.REJECT else "defer",
+        )
+        inputs.extend(
+            _UnprocessedLocators(path, str(output), ShardInfo(index, len(locators)), unprocessed)
+            for index, path in enumerate(locators)
+        )
+    with run.telemetry.phase("export") as phase:
+        shard_admissions = execute_phase(
+            run.context,
+            Dataset.from_list(inputs).flat_map(lambda item: item.export_rows())
             # Scatter bounds serialized bytes; reshard only moves existing
             # pickle chunks and cannot subdivide a partition of wide tasks.
-            projected = projected.group_by(
+            .group_by(
                 lambda row: row["task_id"],
                 reducer=lambda _key, rows: rows,
                 num_output_shards=run.config.normalized_shards,
-            )
-        else:
-            projected = projected.reshard(run.config.normalized_shards)
-        with telemetry.phase(f"export_{name}") as phase:
-            execute_phase(
-                context,
-                projected.write_parquet(
-                    str(output / name / "part-{shard:05d}.parquet"),
-                    schema=_sidecar_schema(columns),
-                ).map(partial(_written_output, view=name)),
-                telemetry=phase,
-            )
-    if not expanded and not panel.census:
-        processed = frozenset(_source_identity(row, run.recipe)["task_id"] for row in panel.sample.rows)
-        with telemetry.phase("export_unprocessed_review") as phase:
-            execute_phase(
-                context,
-                raw.flat_map(
-                    partial(
-                        _unprocessed_review,
-                        recipe=run.recipe,
-                        processed=processed,
-                        disposition="reject" if decision.status == SourceQualityStatus.REJECT else "defer",
-                    )
-                )
-                .write_parquet(
-                    str(output / "review/unprocessed-{shard:05d}.parquet"), schema=_sidecar_schema(REVIEW_COLUMNS)
-                )
-                .map(partial(_written_output, view="review")),
-                telemetry=phase,
-            )
-    with telemetry.phase("export_verify") as phase:
-        execute_phase(
-            context,
-            audit.map(partial(_project_sidecar, columns=VERIFY_COLUMNS, view="verify"))
-            .write_parquet(str(output / "verify/part-{shard:05d}.parquet"), schema=_sidecar_schema(VERIFY_COLUMNS))
-            .map(partial(_written_output, view="verify")),
+            ).map_shard(partial(_write_export_shard, output=str(output))),
             telemetry=phase,
-        )
-    with telemetry.phase("export_final") as phase:
-        execute_phase(
-            context,
-            audit.filter(lambda row: row["admission"] == Admission.ADMITTED.value)
-            .map(partial(_project_sidecar, columns=NORMALIZED_COLUMNS, view="final"))
-            .write_parquet(str(output / "final/part-{shard:05d}.parquet"), schema=_sidecar_schema(NORMALIZED_COLUMNS))
-            .map(partial(_written_output, view="final")),
-            telemetry=phase,
-        )
-        return dict(
-            execute_phase(
-                context,
-                Dataset.from_files(str(checked / AUDIT_INPUT_PATTERN))
-                .load_parquet()
-                .map(partial(_admit, verification=verification))
-                .reduce(_count_admissions, _merge_admissions),
-                telemetry=phase,
-                operation="admission_count",
-            ).results[0]
-        )
+            operation="export",
+        ).results
+    return dict(_merge_admissions(iter(shard_admissions)))
 
 
 def _source_status(

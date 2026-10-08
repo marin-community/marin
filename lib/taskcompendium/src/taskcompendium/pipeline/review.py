@@ -15,7 +15,12 @@ from typing import Any, Protocol
 from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
-from taskcompendium.pipeline.query_cache import cached_batch_output, cached_request_output
+from taskcompendium.pipeline.query_cache import (
+    CachedRequests,
+    cached_batch_output,
+    cached_request_output,
+    read_cached_requests,
+)
 from taskcompendium.pipeline.review_requests import (
     DEFAULT_MAX_BATCH_BYTES,
     BatchClient,
@@ -386,7 +391,14 @@ class Reviewer(Protocol):
         output_path: Path,
         *,
         originals: Mapping[str, TaskSpec] | None = None,
-    ) -> list[ReviewRecord]: ...
+        cached: CachedRequests | None = None,
+    ) -> list[ReviewRecord]:
+        """Review ``tasks``; ``cached`` is this batch's share of a ``read_cache`` result."""
+        ...
+
+    def read_cache(self, batches: Sequence[Sequence[TaskSpec]], rubric: ReviewRubric) -> list[CachedRequests | None]:
+        """Read the cached first-attempt responses of several review batches together."""
+        ...
 
 
 def completion_body(
@@ -484,10 +496,16 @@ class BatchReviewer:
         output_path: Path,
         *,
         originals: Mapping[str, TaskSpec] | None = None,
+        cached: CachedRequests | None = None,
     ) -> list[ReviewRecord]:
-        return _review_with_retries(self, tasks, rubric, output_path, originals=originals)
+        return _review_with_retries(self, tasks, rubric, output_path, originals=originals, cached=cached)
 
-    def request_output(self, requests: Sequence[dict[str, Any]], output_path: Path) -> str:
+    def read_cache(self, batches: Sequence[Sequence[TaskSpec]], rubric: ReviewRubric) -> list[CachedRequests | None]:
+        return _read_review_cache(self, batches, rubric)
+
+    def request_output(
+        self, requests: Sequence[dict[str, Any]], output_path: Path, *, cached: CachedRequests | None = None
+    ) -> str:
         if self.query_cache_root is not None:
             return cached_batch_output(
                 self.client,
@@ -498,6 +516,7 @@ class BatchReviewer:
                 poll_seconds=self.poll_seconds,
                 valid_completion=valid_review_completion,
                 max_batch_bytes=self.max_batch_bytes,
+                cached=cached,
             )
         return batch_output(
             self.client,
@@ -536,10 +555,16 @@ class ChatReviewer:
         output_path: Path,
         *,
         originals: Mapping[str, TaskSpec] | None = None,
+        cached: CachedRequests | None = None,
     ) -> list[ReviewRecord]:
-        return _review_with_retries(self, tasks, rubric, output_path, originals=originals)
+        return _review_with_retries(self, tasks, rubric, output_path, originals=originals, cached=cached)
 
-    def request_output(self, requests: Sequence[dict[str, Any]], output_path: Path) -> str:
+    def read_cache(self, batches: Sequence[Sequence[TaskSpec]], rubric: ReviewRubric) -> list[CachedRequests | None]:
+        return _read_review_cache(self, batches, rubric)
+
+    def request_output(
+        self, requests: Sequence[dict[str, Any]], output_path: Path, *, cached: CachedRequests | None = None
+    ) -> str:
         submit = partial(
             chat_output,
             self.client,
@@ -554,6 +579,7 @@ class ChatReviewer:
                 model_revision=self.model_revision,
                 valid_completion=valid_review_completion,
                 submit=submit,
+                cached=cached,
             )
         return submit(requests, output_path)
 
@@ -574,6 +600,17 @@ def _reviewer_identity(reviewer: BatchReviewer | ChatReviewer, *, mode: str) -> 
     }
 
 
+def _read_review_cache(
+    reviewer: BatchReviewer | ChatReviewer, batches: Sequence[Sequence[TaskSpec]], rubric: ReviewRubric
+) -> list[CachedRequests | None]:
+    if reviewer.query_cache_root is None:
+        return [None] * len(batches)
+    requests = [[review_request(reviewer, task, rubric) for task in batch] for batch in batches]
+    return list(
+        read_cached_requests(requests, cache_root=reviewer.query_cache_root, model_revision=reviewer.model_revision)
+    )
+
+
 def _review_with_retries(
     reviewer: BatchReviewer | ChatReviewer,
     tasks: Sequence[TaskSpec],
@@ -581,6 +618,7 @@ def _review_with_retries(
     output_path: Path,
     *,
     originals: Mapping[str, TaskSpec] | None,
+    cached: CachedRequests | None,
 ) -> list[ReviewRecord]:
     if reviewer.max_attempts < 1:
         raise ValueError("At least one review attempt is required")
@@ -607,6 +645,8 @@ def _review_with_retries(
                 rubric,
                 group_directory,
                 originals=originals,
+                # A shared read covers the first attempt's requests; retries change their budgets.
+                cached=cached if attempt == 0 else None,
             )
             records.update((record.task_id, record) for record in results)
             for record in results:
@@ -646,6 +686,7 @@ def review_attempt(
     output_path: Path,
     *,
     originals: Mapping[str, TaskSpec] | None,
+    cached: CachedRequests | None = None,
 ) -> list[ReviewRecord]:
     """Persist one attempt, leaving retries and final filtering to their callers."""
     requests, pending = [], []
@@ -672,7 +713,7 @@ def review_attempt(
     if reviewer.query_cache_root is not None:
         output_path.mkdir(parents=True, exist_ok=True)
         (output_path / "query-task-ids.json").write_text(json.dumps(task_ids, indent=2))
-        raw_output = reviewer.request_output(requests, output_path)
+        raw_output = reviewer.request_output(requests, output_path, cached=cached)
         records = review_records(raw_output, list(task_ids))
         return [
             record.model_copy(

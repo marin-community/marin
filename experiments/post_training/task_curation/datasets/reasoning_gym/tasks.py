@@ -4,10 +4,11 @@
 """Reasoning Gym puzzles from two sources, each graded by the puzzle task's own scorer.
 
 ``reasoning_gym_generated`` generates entries with the pinned ``reasoning_gym`` wheel, the release
-the grader image installs. Its grader (``reasoning_gym_grade.py``) regenerates each entry before
-scoring, so the scorer sees the generator's Python values, and rows whose entry a fresh dataset does
-not reproduce are rejected. ``tasktrove-reasoning-gym`` keeps the TaskTrove archive's ``tests/test.sh``,
-which thresholds the scorer's reward at 0.5. Both run in the grader image (``images.recipes.GRADER``).
+the grader image installs, in ``GENERATOR_PARTS`` parts that workers generate in parallel. Its grader
+(``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
+Python values, and rows whose entry a fresh dataset does not reproduce are rejected.
+``tasktrove-reasoning-gym`` keeps the TaskTrove archive's ``tests/test.sh``, which thresholds the
+scorer's reward at 0.5. Both run in the grader image (``images.recipes.GRADER``).
 The Nemotron Ultra ``reasoning_gym`` component is declared with the other Ultra components.
 """
 
@@ -77,6 +78,8 @@ EXCLUDED_GENERATORS = (
     ),
 )
 PYTHON_HASH_SEED = 0
+GENERATOR_PARTS = 32
+"""Parts of the task registry generated on separate workers; the slowest task bounds each part."""
 GENERATED_GRADE = grade_script(HERE / "reasoning_gym_grade.py", *shipped_files(HERE, GENERATE.name))
 
 TASKTROVE_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
@@ -121,8 +124,13 @@ def generated_rows(
     generator_version: str,
     excluded_generators: tuple[tuple[str, str], ...],
     python_hash_seed: int,
-) -> Iterator[dict[str, Any]]:
-    """Run ``generate.py`` with the unpacked generator wheel first on ``PYTHONPATH`` and yield its JSONL rows."""
+    part: int,
+    parts: int,
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Run one part of ``generate.py`` with the unpacked generator wheel first on ``PYTHONPATH``.
+
+    Yields the part's rows with their indices in the whole generated source.
+    """
     with TemporaryDirectory() as directory:
         local_wheel = os.path.join(directory, GENERATOR_ARCHIVE)
         with wheel_path.open("rb") as source, open(local_wheel, "wb") as destination:
@@ -138,7 +146,14 @@ def generated_rows(
         }
         with TemporaryFile(mode="w+b") as errors:
             process = subprocess.Popen(
-                [sys.executable, str(GENERATE), generator_version, json.dumps(dict(excluded_generators))],
+                [
+                    sys.executable,
+                    str(GENERATE),
+                    generator_version,
+                    json.dumps(dict(excluded_generators)),
+                    str(part),
+                    str(parts),
+                ],
                 stdout=subprocess.PIPE,
                 stderr=errors,
                 text=True,
@@ -147,7 +162,8 @@ def generated_rows(
             try:
                 assert process.stdout is not None
                 for line in process.stdout:
-                    yield json.loads(line)
+                    record = json.loads(line)
+                    yield record["index"], record["row"]
                 if process.wait() != 0:
                     errors.seek(0, os.SEEK_END)
                     errors.seek(max(0, errors.tell() - GENERATOR_ERROR_BYTES))
@@ -161,14 +177,19 @@ def generated_rows(
 
 @dataclass(frozen=True)
 class GeneratedRows:
-    """Read the generator wheel by running the pinned generator."""
+    """Read the generator wheel by running the pinned generator in ``count`` parts."""
 
     generator_version: str
     excluded_generators: tuple[tuple[str, str], ...]
     python_hash_seed: int
+    count: int
 
-    def __call__(self, wheel_path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
-        return generated_rows(wheel_path, self.generator_version, self.excluded_generators, self.python_hash_seed)
+    def __call__(
+        self, wheel_path: StoragePath, _context: ConversionContext, part: int
+    ) -> Iterator[tuple[int, dict[str, Any]]]:
+        return generated_rows(
+            wheel_path, self.generator_version, self.excluded_generators, self.python_hash_seed, part, self.count
+        )
 
 
 class RecordedScoringError(BaseModel):
@@ -302,7 +323,7 @@ def pipelines() -> list[RlDataPipeline]:
                 GENERATOR_SHA256,
                 GENERATOR_ARCHIVE,
                 SourceFormat.GENERATED,
-                read=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED),
+                parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
             ),
             convert=convert_generated,
             version="1",

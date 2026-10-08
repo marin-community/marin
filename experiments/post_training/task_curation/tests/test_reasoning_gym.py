@@ -154,7 +154,8 @@ def noisy_generator_wheel(tmp_path) -> StoragePath:
     factory = (
         "import os\n"
         "DATASETS = {'composite': object(),\n"
-        "    os.environ.get('REASONING_TEST_EXAMPLE_FAMILY', 'puzzle'): object()}\n"
+        "    os.environ.get('REASONING_TEST_EXAMPLE_FAMILY', 'puzzle'): object(),\n"
+        "    **{name: object() for name in os.environ.get('REASONING_TEST_MORE_FAMILIES', '').split()}}\n"
     )
     package = """import dataclasses
 import os
@@ -215,11 +216,30 @@ def get_score_answer_fn(name):
 
 
 def first_rows(wheel: StoragePath, count: int = 1, excluded=EXCLUDED, python_hash_seed: int = 0) -> list[dict]:
-    rows = declarations.generated_rows(wheel, "pinned-version", excluded, python_hash_seed)
+    rows = declarations.generated_rows(wheel, "pinned-version", excluded, python_hash_seed, 0, 1)
     try:
-        return [next(rows) for _ in range(count)]
+        return [next(rows)[1] for _ in range(count)]
     finally:
         rows.close()
+
+
+def test_generated_parts_together_yield_the_rows_of_one_run(noisy_generator_wheel, monkeypatch):
+    monkeypatch.setenv("REASONING_TEST_MORE_FAMILIES", "riddle sudoku")
+
+    def rows(parts: int) -> dict[int, dict]:
+        return {
+            index: row
+            for part in range(parts)
+            for index, row in declarations.generated_rows(
+                noisy_generator_wheel, "pinned-version", EXCLUDED, 0, part, parts
+            )
+        }
+
+    whole = rows(1)
+    assert sorted(whole) == list(range(3 * generate.ROWS_PER_TASK))
+    # Locators cycle the sorted registry, one entry of each task per round.
+    assert [whole[index]["generation"]["task"] for index in range(4)] == ["puzzle", "riddle", "sudoku", "puzzle"]
+    assert rows(2) == whole
 
 
 def test_generated_rows_keep_generator_output_out_of_the_jsonl(noisy_generator_wheel):

@@ -3,11 +3,15 @@
 
 """Print deterministic Reasoning Gym rows as JSONL from the ``reasoning_gym`` on ``PYTHONPATH``.
 
-Usage: ``generate.py GENERATOR_VERSION EXCLUDED_GENERATORS_JSON``, with ``PYTHONHASHSEED`` set, since
-some generators iterate over sets; rows record the seed so the grader can regenerate with it.
+Usage: ``generate.py GENERATOR_VERSION EXCLUDED_GENERATORS_JSON PART PARTS``, with ``PYTHONHASHSEED``
+set, since some generators iterate over sets; rows record the seed so the grader can regenerate with it.
 Rows cycle the sorted task registry, ``ROWS_PER_TASK`` entries per task with a stable per-task seed,
 and record the scorer's reward for the task's known answer and for a fixed wrong answer. Each row also
 records whether a fresh dataset regenerates its entry, as the grader does before scoring.
+
+Part ``PART`` of ``PARTS`` generates every ``PARTS``-th task of the registry, each from its own dataset
+read in order, and prints each row as ``{"index": ..., "row": ...}`` with its index in the whole cycle,
+so the parts together print the rows of a single run.
 
 The grader imports this module from ``/tests`` for the seeds and the JSON encoding.
 """
@@ -89,23 +93,28 @@ def positive_candidate(name: str, entry: dict[str, Any]) -> str | None:
 
 
 def generated_rows(
-    generator_version: str, excluded_generators: dict[str, str], python_hash_seed: int
-) -> Iterator[dict[str, Any]]:
+    generator_version: str, excluded_generators: dict[str, str], python_hash_seed: int, part: int, parts: int
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Yield one part's rows with their indices in the cycle over every task."""
     names = [name for name in sorted(DATASETS) if name not in excluded_generators]
-    datasets = {name: reasoning_gym.create_dataset(name, size=ROWS_PER_TASK, seed=task_seed(name)) for name in names}
-    scorers = {name: cast(Scorer, reasoning_gym.get_score_answer_fn(name)) for name in names}
+    positions = range(part, len(names), parts)
+    datasets = {
+        position: reasoning_gym.create_dataset(names[position], size=ROWS_PER_TASK, seed=task_seed(names[position]))
+        for position in positions
+    }
+    scorers = {position: cast(Scorer, reasoning_gym.get_score_answer_fn(names[position])) for position in positions}
     for index in range(ROWS_PER_TASK):
-        for name in names:
-            dataset = datasets[name]
+        for position in positions:
+            name, dataset = names[position], datasets[position]
             entry = dataset[index]
             # The grader builds a fresh dataset and reads one index, so a generator whose entries
             # depend on earlier reads or on process state cannot be graded.
             fresh = reasoning_gym.create_dataset(name, size=ROWS_PER_TASK, seed=task_seed(name))[index]
-            scorer = scorers[name]
+            scorer = scorers[position]
             answer = positive_candidate(name, entry)
             # Scorers may compare tuple-valued metadata, so score the entry before its JSON round trip.
             positive = {"candidate": answer, "reward": float(scorer(answer, entry)) if answer is not None else None}
-            yield {
+            yield index * len(names) + position, {
                 "entry": encoded(entry),
                 "reproducible": encoded(fresh) == encoded(entry),
                 "generation": {
@@ -124,17 +133,19 @@ def generated_rows(
             }
 
 
-def main(generator_version: str, excluded_generators_json: str) -> None:
+def main(generator_version: str, excluded_generators_json: str, part: int, parts: int) -> None:
+    if not 0 <= part < parts:
+        raise ValueError(f"Part {part} is outside 0..{parts - 1}")
     python_hash_seed = int(os.environ["PYTHONHASHSEED"])
-    rows = iter(generated_rows(generator_version, json.loads(excluded_generators_json), python_hash_seed))
+    rows = iter(generated_rows(generator_version, json.loads(excluded_generators_json), python_hash_seed, part, parts))
     while True:
         with contextlib.redirect_stdout(sys.stderr):
             try:
-                row = next(rows)
+                index, row = next(rows)
             except StopIteration:
                 return
-        print(json.dumps(row, ensure_ascii=False, default=json_value), flush=True)
+        print(json.dumps({"index": index, "row": row}, ensure_ascii=False, default=json_value), flush=True)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))

@@ -35,7 +35,7 @@ from taskcompendium.convert.environment import IMAGE_BACKENDS, grading_environme
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, EnvironmentRequirements
 from taskcompendium.pipeline.controls import controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
     Controls,
@@ -81,8 +81,9 @@ class HfSource:
 
     ``select`` drops rows before raw sampling (for example, one component of a blend). ``decode``
     rewrites a selected row before conversion (for example, unpacking an archive). ``read`` replaces
-    the format reader for files that need a custom parser. Each receives the ``ConversionContext``:
-    the staged auxiliary inputs and the grader image environment.
+    the format reader for files that need a custom parser; ``parts`` replaces it for a file several
+    workers read in parts, such as a slow generator. Each receives the ``ConversionContext``: the
+    staged auxiliary inputs and the grader image environment.
     """
 
     repo: str
@@ -92,6 +93,7 @@ class HfSource:
     select: RowSelector | None = None
     decode: RowDecoder | None = None
     read: FileReader | None = None
+    parts: FileParts | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,7 @@ class UrlSource:
     select: RowSelector | None = None
     decode: RowDecoder | None = None
     read: FileReader | None = None
+    parts: FileParts | None = None
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
@@ -191,10 +194,24 @@ def review_rubric(pipeline: RlDataPipeline) -> ReviewRubric | None:
 def source_files(source: HfSource | UrlSource) -> SourceFiles:
     if isinstance(source, HfSource):
         return SourceFiles(
-            source.repo, source.revision, source.files, source.format, source.select, source.decode, source.read
+            source.repo,
+            source.revision,
+            source.files,
+            source.format,
+            source.select,
+            source.decode,
+            source.read,
+            source.parts,
         )
     return SourceFiles(
-        source.url, source.sha256, (source.filename,), source.format, source.select, source.decode, source.read
+        source.url,
+        source.sha256,
+        (source.filename,),
+        source.format,
+        source.select,
+        source.decode,
+        source.read,
+        source.parts,
     )
 
 

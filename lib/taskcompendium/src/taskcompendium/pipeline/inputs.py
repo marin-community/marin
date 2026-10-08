@@ -6,7 +6,7 @@
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from rigging.filesystem.storage_path import StoragePath
 
@@ -35,6 +35,21 @@ def required_grader_environment(context: ConversionContext) -> EnvironmentRequir
     return context.grader_environment
 
 
+class FileParts(Protocol):
+    """Read each staged file in ``count`` independent parts, so that several workers read one file.
+
+    Each call yields one part's rows with their indices in the whole file, which form the rows'
+    locators; together the parts yield every index once.
+    """
+
+    @property
+    def count(self) -> int: ...
+
+    def __call__(
+        self, file: StoragePath, context: ConversionContext, part: int
+    ) -> Iterator[tuple[int, dict[str, Any]]]: ...
+
+
 class SourceFormat(StrEnum):
     PARQUET = "parquet"
     JSONL = "jsonl"
@@ -49,7 +64,8 @@ class SourceFiles:
     """Rows of one staged source and the provenance recorded on each task.
 
     ``select`` and ``decode`` run on raw records before sampling, so a panel is drawn from the
-    intended rows. ``read`` replaces the format reader for files that are not one record per row.
+    intended rows. ``read`` replaces the format reader for files that are not one record per row;
+    ``parts`` replaces it for a file whose rows are expensive to produce, such as a generator.
     Each callable also receives the source's conversion context.
     """
 
@@ -60,3 +76,8 @@ class SourceFiles:
     select: Callable[[dict[str, Any], ConversionContext], bool] | None = None
     decode: Callable[[dict[str, Any], ConversionContext], dict[str, Any]] | None = None
     read: Callable[[StoragePath, ConversionContext], Iterator[dict[str, Any]]] | None = None
+    parts: FileParts | None = None
+
+    def __post_init__(self) -> None:
+        if self.read is not None and self.parts is not None:
+            raise ValueError("A source reads its files either whole or in parts")

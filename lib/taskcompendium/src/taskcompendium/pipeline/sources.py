@@ -6,6 +6,7 @@
 import csv
 import json
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from rigging.filesystem.factory import url_to_fs
@@ -28,6 +29,8 @@ def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
         "select": callable_identity(spec.select) if spec.select is not None else None,
         "decode": callable_identity(spec.decode) if spec.decode is not None else None,
         "read": callable_identity(spec.read) if spec.read is not None else None,
+        # Present only for parted sources, so whole-file sources keep their identities.
+        **({"parts": callable_identity(spec.parts)} if spec.parts is not None else {}),
     }
 
 
@@ -58,6 +61,28 @@ def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
     return tuple(sorted(files))
 
 
+@dataclass(frozen=True)
+class SourceShard:
+    """One staged file, or one part of a file that its source reads in parts."""
+
+    file: str
+    part: int
+    parts: int
+
+    @property
+    def name(self) -> str:
+        """A name unique among the source's shards: the file, with its part when it has several."""
+        return self.file if self.parts == 1 else f"{self.file}#part-{self.part}"
+
+
+def source_shards(path: str, spec: SourceFiles) -> tuple[SourceShard, ...]:
+    """The independently readable shards of the selected files, in file and part order."""
+    parts = spec.parts.count if spec.parts is not None else 1
+    if parts < 1:
+        raise ValueError("A parted source requires at least one part")
+    return tuple(SourceShard(file, part, parts) for file in staged_files(path, spec) for part in range(parts))
+
+
 def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[dict[str, Any]]:
     if source_format == SourceFormat.PARQUET:
         yield from load_parquet(str(path))
@@ -76,15 +101,22 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
         raise ValueError(f"Unsupported staged source format: {source_format}")
 
 
+def _indexed_rows(
+    file: StoragePath, shard: SourceShard, spec: SourceFiles, context: ConversionContext
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    if spec.parts is not None:
+        return spec.parts(file, context, shard.part)
+    return enumerate(spec.read(file, context) if spec.read is not None else _decoded_rows(file, spec.format))
+
+
 def staged_raw_file_rows(
-    path: str, relative_file: str, spec: SourceFiles, context: ConversionContext
+    path: str, shard: SourceShard, spec: SourceFiles, context: ConversionContext
 ) -> Iterator[dict[str, Any]]:
-    """Yield selected source rows before decoding with their original stable locators."""
+    """Yield one shard's selected source rows before decoding with their original stable locators."""
+    relative_file = shard.file
     if relative_file.startswith("/") or ".." in relative_file.split("/"):
         raise ValueError(f"Source file must be relative to its staged root: {relative_file}")
-    file = StoragePath(path) / relative_file
-    records = spec.read(file, context) if spec.read is not None else _decoded_rows(file, spec.format)
-    for index, row in enumerate(records):
+    for index, row in _indexed_rows(StoragePath(path) / relative_file, shard, spec, context):
         if not isinstance(row, dict):
             raise ValueError(f"Expected an object at {relative_file}:{index}")
         if spec.select is not None and not spec.select(row, context):
@@ -99,8 +131,8 @@ def decode_staged_row(record: dict[str, Any], spec: SourceFiles, context: Conver
 
 
 def staged_file_rows(
-    path: str, relative_file: str, spec: SourceFiles, context: ConversionContext
+    path: str, shard: SourceShard, spec: SourceFiles, context: ConversionContext
 ) -> Iterator[dict[str, Any]]:
-    """Yield selected, decoded records with their original file and row locators."""
-    for record in staged_raw_file_rows(path, relative_file, spec, context):
+    """Yield one shard's selected, decoded records with their original file and row locators."""
+    for record in staged_raw_file_rows(path, shard, spec, context):
         yield decode_staged_row(record, spec, context)

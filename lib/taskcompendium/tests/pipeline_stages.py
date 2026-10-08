@@ -130,7 +130,7 @@ def review_source(
     """Prepare and review every eligible row, without source-level quality extrapolation."""
     assert isinstance(execution.reviewer, BatchReviewer)
     prepare_source(staged, output, recipe, limit, execution)
-    return audit_prepared_source(output, None, output, recipe, review_config(execution.reviewer), execution)
+    return audit_prepared_source(output, None, output, recipe, review_config(execution.reviewer), execution).manifest
 
 
 def run_stages(

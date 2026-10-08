@@ -13,7 +13,7 @@ does not import experiments or construct ArtifactSteps.
 | Field | Meaning |
 | --- | --- |
 | `name`, `version` | Source name and converter revision, recorded on every row's `Source`. |
-| `source` | `SourceFiles`: the staged dataset, revision, file patterns, format, and optional `select`, `decode` and `read` callables. |
+| `source` | `SourceFiles`: the staged dataset, revision, file patterns, format, and optional `select`, `decode` and `read` callables, or `parts` to read each file in parallel parts. |
 | `convert` | `RawRow -> TaskSpec | NormalizedTask | ImportRejection`. The converter fixes the grader. |
 | `rubric` | A `ReviewRubric` for model review, or `None` to skip review. |
 | `controls` | `Controls(golden, memory_mb)` for grader verification, or `None` to skip it. |
@@ -29,14 +29,16 @@ cannot convert.
 
 ## Stages
 
-[source_processing.py](source_processing.py) runs these Zephyr stages:
+[source_processing.py](source_processing.py) runs these stages; the
+[telemetry](#telemetry) section lists the phase and Zephyr execution of each:
 
 1. **Raw sample.** Read the staged files, record every row locator under
    `download/locators/`, and draw at most 100 raw rows.
 2. **Normalize and prepare.** Convert the sample and run cheap structural checks
    (`verify_task`): resource layout, answer-format compatibility, and
    reference/wrong-answer checks for in-process numeric, MCQ, exact and action
-   graders.
+   graders. The driver deduplicates the checked panel and saves its review
+   batches.
 3. **Review.** With a rubric, the GLM reviewer judges the sample. More than 90%
    known-good judgments accept the source without reviewing the remainder; more
    than 50% known defects reject it; otherwise the full source is reviewed.
@@ -125,9 +127,10 @@ trial; definite failures survive successful retries.
 
 ## Review execution
 
-Audit stages assign each row to a normalization shard by locator hash, then
-deduplicate and pack model requests into batches before distributing review
-work. Prepared review batches are saved before inference. Batches respect both
+Full preparation assigns each row to a normalization shard by locator hash, then
+deduplicates and packs model requests into batches before distributing review
+work; the driver prepares the panel the same way without a shuffle. Prepared
+review batches are saved before inference. Batches respect both
 `review_batch_size` and `review_input_bytes` (64 MiB by default); an oversized
 audit is preserved alone. Review execution uses `review_task_resources`, so
 several model requests can wait on one worker. Completed review shards are
@@ -138,8 +141,9 @@ oversized single request is deferred with its size diagnostic. Transient HTTP
 failures use bounded retries with backoff, and failed requests leave unavailable
 review records that do not count as source defects. GLM completions use an
 exact-request cache keyed by the complete request and the declared model
-revision, read in batches through FineStore, so unrelated catalog changes do not
-repeat inference.
+revision, read through FineStore, so unrelated catalog changes do not repeat
+inference. The quality review reads the cache once for all of a source's sampled
+requests; reviewing the remainder of a source reads it once per batch.
 
 GLM sees resource paths, roles, SHA-256 hashes, byte counts and UTF-8 previews.
 Up to 256 files share 32,768 preview characters: each text file first receives up
@@ -157,6 +161,20 @@ wall time of each phase. Join its execution IDs to Zephyr stage rows by
 execution ID and emitting cluster/job; take the latest value per counter series
 rather than summing snapshots, and do not add phase wall time to nested
 execution times. Failed executions have no ID or final counters.
+
+A source runs these phases in order:
+
+| Phase | Work |
+| --- | --- |
+| `raw_sample` | One execution scans the staged files, writes the locators and draws the panel. |
+| `panel_normalize` | One execution decodes, converts and checks the panel rows. |
+| `sample_prepare` | The driver deduplicates the panel and saves its review batches. |
+| `quality_review` | With a rubric, the driver reads the review cache once and one execution reviews the sample; without one, the driver decides from conversion and check failures. |
+| `full_prepare` | Full mode only: one execution converts, deduplicates and checks every row. |
+| `audit_review` | One execution applies the source decision to every prepared row and reviews the remainder of a source that needs a full review. |
+| `filter` | One execution writes the filtered audit and its kept rows. |
+| `verification` | With controls, the executions of [source verification](#verification-trials). |
+| `export` | One execution shuffles the checked rows by task ID into the normalized shards and writes the `normalize`, `review`, `verify` and `final` views, with the unprocessed review rows of an unexpanded sample. |
 
 ## Grading environments
 
