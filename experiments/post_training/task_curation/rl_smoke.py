@@ -103,13 +103,11 @@ terminal_bench:
     enable_reward_shaping: false
     enable_error_classification: true
     mask_exceptions:
-      - DaytonaError
+      - TaskMachineError
       - EnvironmentStartTimeoutError
-      - NetworkError
       - ConnectionError
       - RewardFileNotFoundError
       - RewardFileEmptyError
-      - AgentEnvironmentTimeoutError
       - ContextLengthExceededError
     default_error_treatment: zero
     passthrough_exceptions:
