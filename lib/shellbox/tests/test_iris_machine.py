@@ -343,7 +343,7 @@ def test_close_raises_when_an_admitted_exec_outlives_the_sandbox(tmp_path: Path,
         exec_future = pool.submit(machine._exec_sync, ["true"])
         assert rpc.admitted.wait(timeout=10)
 
-        with pytest.raises(RuntimeError, match="still in flight"):
+        with pytest.raises(RuntimeError, match=r"1 Iris exec\(s\) still in flight .*: true$"):
             asyncio.run(machine.close())
 
         assert job.cancelled
