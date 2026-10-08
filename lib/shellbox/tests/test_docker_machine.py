@@ -155,7 +155,8 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
                 async with asyncio.timeout(10):
                     while True:
                         observed = await machine.run(Command(("cat", "child.pid")))
-                        if observed.exit_code == 0:
+                        # The shell creates child.pid before echo writes the pid into it.
+                        if observed.exit_code == 0 and observed.stdout.strip():
                             break
                 child = int(observed.stdout)
                 if interruption == "cancel":
