@@ -17,7 +17,7 @@ src/taskforge/
   llm/        GLM-5.3 transport, structured calls, call cache, agent loop, web tools, RolloutEngine model
   ledger/     timed spans to per-item JSONL and, on Iris, Finelog
   spec/       TaskSpec assembly and fixed controls
-  sandbox/    MachineFactory selection per EnvironmentKind, up-front task refusals, image builds
+  sandbox/    MachineFactory selection per host, up-front task refusals, image builds
 scripts/      Iris image builder, shellbox Iris probe, ledger summary
 ```
 
@@ -58,10 +58,13 @@ content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
   `ControlConcern`: `reference`, `acceptance`, `extraction` or `shortcut`. A `Workspace` holds
   files relative to the machine root and needs a task machine. `validate_controls(task, controls)`
   checks a set against its task; `controls_json` and `parse_controls` round-trip it.
-- `sandbox.factories.machine_factories(where, controller_url, image_cache)`: the
-  `EnvironmentKind -> MachineFactory` mapping for `ShellboxRolloutEngine`. On Iris it takes the
-  controller URL and no image cache; on a laptop it takes the directory where the Docker factory
-  keeps Skopeo-prepared images and no controller URL. The caller names that directory.
+- `sandbox.factories.machine_factories(where, controller_url, image_cache)`: the factories for
+  `ShellboxRolloutEngine`, keyed by shellbox `Backend` value as `MachineRuntimeSpec.backend` names
+  them: ShellSim plus Docker on a laptop, ShellSim plus gVisor on Iris (`container_backend(where)`).
+  On Iris it takes the controller URL and no image cache; on a laptop it takes the directory where
+  the Docker factory keeps Skopeo-prepared images and no controller URL. The caller names that
+  directory. `task_refusals(lowered, factory_capabilities(where))` lists every typed reason a
+  lowered task cannot run on them.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
