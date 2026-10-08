@@ -400,6 +400,12 @@ REJECTIONS = [
         "unsupported_test_cases",
     ),
     (
+        "verifiable_code",
+        {"metadata": {"problem_url": "https://practice.geeksforgeeks.org/problems/destructive-year/1"}},
+        ImportFailureKind.SOURCE_DEFECT,
+        "function_template_with_example_tests",
+    ),
+    (
         "eurus2_code",
         {"reward_model": {"ground_truth": json.dumps({"inputs": ["1 2"], "outputs": ["3"], "fn_name": "add"})}},
         ImportFailureKind.SOURCE_DEFECT,
@@ -442,6 +448,14 @@ def test_skyrl_converter_rejects_unusable_rows(name, changes, kind, reason):
     result = convert_row(PIPELINES[name], {**ROWS[name], **changes})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
+
+
+def test_apps_golden_skips_python2_solutions_for_the_first_python3_one():
+    python2 = "a, b = map(int, raw_input().split())\nprint a + b"
+    row = {**ROWS["apps"], "solutions": json.dumps([python2, SUM_SOLUTION])}
+    golden = code.reference_solution(converted_task(PIPELINES["apps"], row))
+    assert golden is not None
+    assert golden.event == TextMessage(role="assistant", content=f"```python\n{SUM_SOLUTION}\n```")
 
 
 def test_apps_accepts_alternative_expected_outputs():

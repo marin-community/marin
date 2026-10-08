@@ -3,6 +3,7 @@
 
 """Checks and grading settings for code tasks whose hidden tests use the LiveCodeBench test-case layout."""
 
+import ast
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -12,6 +13,8 @@ CODE_GRADER_MEMORY_MB = 5120
 THREAD_ENVIRONMENT = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 """Run each test's numeric libraries on one thread."""
 FAILING_PROGRAM = '```python\nraise RuntimeError("negative control")\n```'
+CODE_BLOCK = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
+"""A fenced code block as the source scorers match one; they run the last block in a reply."""
 
 
 def validate_code_cases(cases: Mapping[str, Any] | list[Any]) -> None:
@@ -56,11 +59,21 @@ def validate_code_cases(cases: Mapping[str, Any] | list[Any]) -> None:
 
 def has_code_block(response: str) -> bool:
     """Match a fenced code block the way the source scorers extract one."""
-    return re.search(r"```(?:\w+)?\n(.*?)```", response, re.DOTALL) is not None
+    return CODE_BLOCK.search(response) is not None
 
 
 def python_reply(solution: Any) -> str | None:
-    """A source solution as a reply the scorers extract code from, or ``None`` when there is none."""
+    """A source solution as a reply the scorers extract code from.
+
+    Returns ``None`` when there is no solution or when the program the scorers would run is not
+    Python 3. Some sources keep Python 2 solutions; the graders run Python 3, so such a solution
+    cannot serve as a known-correct submission.
+    """
     if not isinstance(solution, str) or not solution.strip():
         return None
-    return solution if has_code_block(solution) else f"```python\n{solution}\n```"
+    reply = solution if has_code_block(solution) else f"```python\n{solution}\n```"
+    try:
+        ast.parse(CODE_BLOCK.findall(reply)[-1].strip())
+    except SyntaxError:  # Includes TabError from Python 2 tab indentation.
+        return None
+    return reply

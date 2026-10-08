@@ -17,6 +17,7 @@ from taskcompendium.convert.answers import (
     mcq_task,
     numeric_answer_task,
 )
+from taskcompendium.convert.code import python_reply
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, GradingAttempt, Source, TaskSpec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
@@ -156,3 +157,20 @@ def test_evidence_stays_with_the_grader_and_out_of_the_solver_view():
     assert json.loads(resource_bytes(stored)) == evidence
     assert task.resources.worker == task.resources.oracle == ()
     assert reward(task, "7") == 1.0
+
+
+@pytest.mark.parametrize(
+    "solution,reply",
+    [
+        ("print(int(input()) * 2)", "```python\nprint(int(input()) * 2)\n```"),
+        (
+            "Double the input.\n```python\nprint(int(input()) * 2)\n```",
+            "Double the input.\n```python\nprint(int(input()) * 2)\n```",
+        ),
+        ("```python\nprint int(raw_input()) * 2\n```", None),
+        ("if True:\n\tn = int(input())\n        print(n * 2)", None),
+    ],
+    ids=["python3", "python3_block_after_prose", "python2_print", "python2_tab_indentation"],
+)
+def test_python_reply_offers_a_source_solution_only_when_it_is_python3(solution, reply):
+    assert python_reply(solution) == reply

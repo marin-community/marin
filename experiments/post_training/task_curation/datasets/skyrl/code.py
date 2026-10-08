@@ -44,6 +44,7 @@ SQL_INSTRUCTION = (
     "answers the question. Return only the query, inside <solution></solution>."
 )
 FAILING_SQL = "SELECT FROM"
+GEEKSFORGEEKS_HOST = "geeksforgeeks.org"
 
 APPS_RUBRIC = """
 Check the public problem and starter code against every hidden test. Multiple valid outputs and permissive source
@@ -203,6 +204,15 @@ def convert_verifiable_code(row: RawRow, context: ConversionContext) -> TaskSpec
         return source_defect(
             "missing_prompt_or_tests", "problem_statement and verification_info test_cases are required"
         )
+    # GeeksforGeeks prompts ask the solver to complete a function and not to read input, but the
+    # hidden stdin tests are the statement's display examples, such as ``N = 9, K = 4``. No reply
+    # that follows the prompt can pass them.
+    metadata = row.data.get("metadata") or {}
+    if GEEKSFORGEEKS_HOST in (metadata.get("problem_url") or ""):
+        return source_defect(
+            "function_template_with_example_tests",
+            "GeeksforGeeks rows ask for a function body; their stdin tests are the statement's display examples",
+        )
     solution = row.data.get("gold_standard_solution")
     evidence = {
         key: row.data[key]
@@ -291,7 +301,7 @@ def pipelines() -> list[RlDataPipeline]:
                 "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
             ),
             convert=convert_apps,
-            version="1",
+            version="2",
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=APPS_RUBRIC,
@@ -328,7 +338,7 @@ def pipelines() -> list[RlDataPipeline]:
                 SourceFormat.PARQUET,
             ),
             convert=convert_verifiable_code,
-            version="1",
+            version="2",
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=VERIFIABLE_CODE_RUBRIC,
