@@ -653,7 +653,8 @@ def main() -> None:
     )
     if args.summary_file is not None:
         updates = dependency_updates(previous_dependencies, dependencies)
-        args.summary_file.write_text(render_summary(dependencies, updates))
+        selected_dependencies = tuple(dependency for dependency in dependencies if dependency.project in selected)
+        args.summary_file.write_text(render_summary(selected_dependencies, updates))
     pins_match = regenerate_generated_pins(dependencies, check=args.check)
     if args.check and not pins_match:
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")

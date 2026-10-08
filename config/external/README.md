@@ -52,15 +52,16 @@ Verify that all generated state is current without contacting the repositories:
 uv run config/update-external.py --check
 ```
 
-`Ops - External Dependency Update` runs the all-project command every six hours
-and can also be started with `workflow_dispatch`. It opens or refreshes one
-`automation/external-dependencies` pull request containing every changed lock
-and generated pin. The dedicated updater app merges after the required checks
-pass. A failed check or one-hour timeout leaves the pull request open and fails
-the scheduled run. The workflow log and pull request body list each resolved
-package version and commit, followed by the upstream commit subjects in every
-changed range. Generate the same Markdown summary locally with `--summary-file
-<path>`; commit metadata is read through the authenticated GitHub CLI.
+`Ops - External Dependency Update` runs every six hours and can also be started
+with `workflow_dispatch`. Each admitted project runs in its own job, resolves
+its lockfile and opens or refreshes an `automation/external-dependencies-<project>`
+pull request with that lockfile and the shared generated pins. The dedicated
+updater app merges each pull request after the required checks pass. A failed
+check or one-hour timeout leaves that pull request open while the other projects
+continue. Each workflow job and pull request body list the selected project's
+resolved package version and commit, followed by the upstream commit subjects.
+Generate the same Markdown summary locally with `--summary-file <path>`; commit
+metadata is read through the authenticated GitHub CLI.
 
 The six-hour schedule is the update-discovery interval. Under normal GitHub
 Actions scheduling, a green update lands in the same run; a blocked update is
