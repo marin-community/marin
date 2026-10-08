@@ -1016,6 +1016,8 @@ class GrugModelConfig:
     mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
     mla_shared_kv: bool = False
     mla_shared_kv_tied: bool = False
+    mla_kv_direct: bool = False
+    """No KV latent: MLA keys / values project the normed attention input directly."""
     """With ``mla_shared_kv``: the one cached vector is both key and value."""
     """MLA keys and values are one head each (MQA), broadcast to every query head."""
     mla_dcmha_paper: bool = False
@@ -1101,10 +1103,8 @@ class GrugModelConfig:
     """SimBal (arXiv 2506.14038): adds ``weight * sum_l ||R_l^T R_l - I||_1`` over the real-expert router
     columns ``R_l`` [D, E] to the training loss (unnormalized, as in the paper; it uses 0.1). 0: off."""
     newton_muon: bool = False
-    """Newton-Muon (arXiv 2604.01472) right-preconditioning of the routed-expert gate/up gradients:
-    ``G <- G (K + gamma tr(K)/n I)^{-1}`` before momentum and Newton-Schulz, with ``K`` an EMA of the
-    second moment ``Z Z^T / N`` of the expert input. All routed experts of a layer read the same (latent)
-    input, so each layer keeps one ``[latent, latent]`` ``K``, which the forward emits and the trainer holds."""
+    """Newton-Muon (arXiv 2604.01472) right-preconditioning of the routed-expert gate/up gradients by an EMA of the
+    expert-input second moment ``K`` (one ``[latent, latent]`` per layer)."""
     newton_muon_beta: float = 0.95
     """EMA decay of ``K`` per refresh (the paper's short-track record: 0.95)."""
     newton_muon_eps: float = 0.2
@@ -1167,12 +1167,7 @@ class GrugModelConfig:
     kda_gate_per_head: bool = False
     """KDA output gate ``sigmoid(x W_g)`` with one value per head instead of one per channel."""
     kda_dd_rope: bool = False
-    """Data-dependent rotation of the KDA state: complex-eigenvalue transitions (Mamba-3, arXiv 2603.15569;
-    Selective RoPE, arXiv 2511.17388) via the RoPE trick. Channel pairs ``(j, j + h/2)`` of q and k are rotated
-    by ``theta_t = cumsum_{s<=t} gamma_j * omega_j * softplus(x_s W_rot_down W_rot_up)`` (reset at document
-    starts); ``omega_j`` is log-spaced in ``[1/128, 1]`` rad/token and the per-pair amplitude ``gamma`` is
-    zero-init (exact KDA at init). The decay is tied across each pair so the transition commutes with the
-    rotation."""
+    """Data-dependent rotation of the KDA state (Mamba-3 complex transitions via the RoPE trick); zero-init."""
     kda_dd_rope_rank: int = 16
     """Hidden width of the low-rank angle projection ``W_rot_down W_rot_up`` (``kda_dd_rope``)."""
     kda_out_correction: bool = False
@@ -1446,11 +1441,8 @@ class GrugModelConfig:
     """Physical layers whose routed experts are picked by a fixed token-id hash (Hash Layers, Roller et
     al. 2021): each vocab id maps to K distinct random experts; combine weights still come from the router."""
     moe_drop_renorm: bool = False
-    """Renormalize each token's combine weights over the slots that survived the capacity-limited EP dispatch,
-    so they keep their pre-drop total (``routing_renorm_sum`` under the renormalized combines). Without it a
-    dropped (token, expert) assignment just loses its weight: the token's routed output shrinks. Tokens with
-    no drop are unchanged. Costs one int8 all-to-all per expert wave (the receiver keep mask back to the
-    senders)."""
+    """Renormalize each token's combine weights over the slots that survived the capacity-limited EP dispatch
+    (one extra int8 all-to-all per expert wave). Without it a dropped assignment just loses its weight."""
     router_token_bias_rank: int = 0
     """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
     shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
@@ -1468,11 +1460,8 @@ class GrugModelConfig:
     """The router reads the expert input (the RMS-normed MoE latent, ``latent_dim`` wide) instead of the full
     MLP input ``x``: its weight is ``[latent_dim, E]`` and routing gradients reach the latent projection."""
     router_embed_tie: tuple[str, ...] = ()
-    """Router-embedding ties ``"L:E:V"`` (``L`` a layer index or ``*`` for every layer): layer ``L``'s router
-    column for expert ``E`` is ``alpha * token_embed[V]``, so its logit is ``alpha * token_embed[V] . x``
-    on the normed MLP input ``x``; ``alpha`` is learnable, initialized to the untied column's scale.
-    ``"L:E:V1|V2|..."`` ties to the centroid ``alpha * mean(token_embed[V1], ...)`` of the current rows.
-    Seeds expert specialization (expert-specialization study); parsed once by ``_router_ties``."""
+    """Router-embedding ties ``"L:E:V"`` (``*`` for every layer): router column ``E`` is ``alpha * token_embed[V]``
+    (``V1|V2|...``: their centroid); parsed by ``_router_ties``."""
     router_embed_tie_release_step: int | None = None
     """Release the ``router_embed_tie`` ties at this step: the router columns take their tied value (so the
     function is continuous) and then train freely; the tied program runs only before it. None: tied throughout."""
@@ -2402,7 +2391,7 @@ class CausalSelfAttention(eqx.Module):
             appended = cfg.mla_match_append != MatchAppend.OFF
             kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
             shared_kvl = cfg.kv_shared_latent_dim
-            kvl = cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)  # what w_uk / w_uv read
+            kvl = cfg.kv_in_dim if cfg.mla_kv_direct else cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
             diff = cfg.mla_diff_attn
             group = cfg.mla_grouped_diff
@@ -2437,18 +2426,29 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
-                w_dkv=reshard(
-                    _init_weight(
-                        k_dkv,
-                        (cfg.kv_in_dim, shared_kvl + cfg.mla_kv_latent_dim * (cfg.latent_mix_experts if kv_sum else 1)),
-                        std,
-                    ),
-                    P(_FSDP_AXES, None),
+                w_dkv=(
+                    None
+                    if cfg.mla_kv_direct
+                    else reshard(
+                        _init_weight(
+                            k_dkv,
+                            (
+                                cfg.kv_in_dim,
+                                shared_kvl + cfg.mla_kv_latent_dim * (cfg.latent_mix_experts if kv_sum else 1),
+                            ),
+                            std,
+                        ),
+                        P(_FSDP_AXES, None),
+                    )
                 ),
                 kv_latent_norm=(
-                    _grouped_rms_norm(cfg, cfg.latent_mix_experts, cfg.mla_kv_latent_dim // cfg.latent_mix_experts)
-                    if kv_mix and not kv_sum
-                    else _learned_rms_norm(cfg, cfg.mla_kv_latent_dim, cfg.layer_norm_eps, role="kv_latent")
+                    None
+                    if cfg.mla_kv_direct
+                    else (
+                        _grouped_rms_norm(cfg, cfg.latent_mix_experts, cfg.mla_kv_latent_dim // cfg.latent_mix_experts)
+                        if kv_mix and not kv_sum
+                        else _learned_rms_norm(cfg, cfg.mla_kv_latent_dim, cfg.layer_norm_eps, role="kv_latent")
+                    )
                 ),
                 kv_shared_norm=(
                     _learned_rms_norm(cfg, shared_kvl, cfg.layer_norm_eps) if shared_kvl and not kv_sum else None
@@ -2680,11 +2680,15 @@ class CausalSelfAttention(eqx.Module):
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent (of
         ``kv_input``, the KV side stream, when given). The last element is the second (q, k) pair of
         ``mla_diff_attn`` (same latent and SConvs), else None."""
-        assert self.w_dkv is not None and self.kv_latent_norm is not None
         head_dim = self.cfg.inferred_head_dim
         proj_inputs = proj_inputs or {}
         q_in = proj_inputs.get("q", x)
-        latent = _proj(self.cfg, x if kv_input is None else kv_input, self.w_dkv)
+        direct = self.w_dkv is None  # mla_kv_direct: k / v read the normed attention input itself
+        if not direct:
+            assert self.kv_latent_norm is not None
+        latent = x if kv_input is None else kv_input
+        if not direct:
+            latent = _proj(self.cfg, latent, self.w_dkv)
         if self.bias_dkv is not None:
             latent = latent + unshard(self.bias_dkv).astype(x.dtype)
 
@@ -2699,7 +2703,9 @@ class CausalSelfAttention(eqx.Module):
         assert self.w_q is not None
         q = project_q(self.w_q)
         share_latent = kv_share is not None and self.cfg.mla_share_kv_latent
-        if share_latent and "latent" in kv_share:
+        if direct:
+            kv_latent = latent
+        elif share_latent and "latent" in kv_share:
             kv_latent = kv_share["latent"]
         else:
             if self.kv_mix_gate is None:
@@ -2720,14 +2726,18 @@ class CausalSelfAttention(eqx.Module):
                     kv_latent = jnp.concatenate([self.kv_shared_norm(shared), kv_latent], axis=-1)
             if share_latent:
                 kv_share["latent"] = kv_latent
+
         # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its
         # own latent from that stream (same W_dkv and latent norm).
-        k_latent = (
-            kv_latent if "k" not in proj_inputs else self.kv_latent_norm(_proj(self.cfg, proj_inputs["k"], self.w_dkv))
-        )
-        v_latent = (
-            kv_latent if "v" not in proj_inputs else self.kv_latent_norm(_proj(self.cfg, proj_inputs["v"], self.w_dkv))
-        )
+        def stream_latent(name: str) -> jax.Array:
+            if name not in proj_inputs:
+                return kv_latent
+            if direct:
+                return proj_inputs[name]
+            assert self.kv_latent_norm is not None and self.w_dkv is not None
+            return self.kv_latent_norm(_proj(self.cfg, proj_inputs[name], self.w_dkv))
+
+        k_latent, v_latent = stream_latent("k"), stream_latent("v")
 
         def project_k(w_uk: jax.Array) -> jax.Array:
             k_flat = _proj(self.cfg, k_latent, w_uk)
