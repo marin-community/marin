@@ -56,8 +56,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import ANSWER_FILE_DELIVERY, tasktrove_source
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim, UrlSource
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -361,7 +360,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=GENERATED_RUBRIC,
             controls=GENERATED_CONTROLS,
             atlas_id="MarinSkyRL:reasoning_gym",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
         ),
         RlDataPipeline(
             name="tasktrove-reasoning-gym",
@@ -373,6 +372,6 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{TASKTROVE_CONFIG}",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
         ),
     ]

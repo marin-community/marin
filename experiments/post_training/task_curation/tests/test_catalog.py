@@ -36,5 +36,5 @@ def test_declarations_join_available_atlas_listings_once():
 
 def test_declared_grader_images_are_buildable_recipes():
     """The build CLI builds only registered recipes, so a declaration naming another could never resolve."""
-    declared = {pipeline.grader_image for pipeline in all_pipelines().values()} - {None}
+    declared = {pipeline.grader.image for pipeline in all_pipelines().values() if pipeline.grader is not None}
     assert declared <= set(RECIPES.values())

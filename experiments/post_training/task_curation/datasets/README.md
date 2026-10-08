@@ -21,8 +21,9 @@ artifact each declaration produces.
    `shipped_files` and `script_package` from
    `taskcompendium.convert.script_grader`, which ship the script, the scorer
    files and the row's `config.json` in the task's verifier resources. A
-   sandboxed grader runs in the grader image: set `grader_image=GRADER` from
-   [images/recipes.py](../images/recipes.py) and use
+   grade script needs the grader recipe's packages: set `grader=LOCAL_GRADER`
+   when it only parses model text, or `grader=SANDBOX_GRADER` when it executes
+   model programs (both from [pipeline.py](../pipeline.py)), and use
    `required_grader_environment(context)` as its environment.
 4. Add a representative raw row to the family test's `ROWS` and add the module's
    `pipelines()` to [sources.py](../sources.py).

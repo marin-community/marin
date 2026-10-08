@@ -38,8 +38,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
@@ -166,7 +165,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=rubric,
             controls=Controls(golden=calendar_golden),
             atlas_id=f"Task Trove:{config}",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
         )
         for name, config, rubric in sources
     ]

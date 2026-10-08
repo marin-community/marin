@@ -1,8 +1,10 @@
 # Task-curation images
 
-Every sandboxed grader in the catalog runs in one image, built from the `grader`
-recipe in [`recipes.py`](recipes.py). A declaration names it with
-`grader_image=GRADER`, and its converter reads the built image's environment from
+Every grade script in the catalog needs one recipe, `grader` in
+[`recipes.py`](recipes.py). A declaration names it with `grader=SANDBOX_GRADER`
+when its scripts run in a fresh machine of the built image, or
+`grader=LOCAL_GRADER` when they run in the Zephyr worker in a uv environment built
+from the recipe's lock file; its converter reads the resulting environment from
 `context.grader_environment`. Agent images are separate: a workspace declaration
 names the image its agent works in with an `AgentImage` literal.
 Iris workers and training pull images anonymously, so every agent image is a

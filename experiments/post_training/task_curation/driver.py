@@ -21,7 +21,8 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy
+from shellbox.machine import Backend, DockerImage, MachineFactory, MachineSpec, NetworkPolicy
+from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.models import FilterPolicy
@@ -42,6 +43,7 @@ from experiments.post_training.task_curation.campaign import (
     require_matching_sample,
     run_campaign,
 )
+from experiments.post_training.task_curation.grader_environment import LocalGraderMachines
 from experiments.post_training.task_curation.pipeline import RlDataArtifact, RlDataPipeline, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
 
@@ -76,7 +78,8 @@ class IrisMachines:
     def identity(self) -> dict[str, Any]:
         return machines_identity(VerificationBackend.IRIS, self.worker_image, controller=True)
 
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        image = _sandbox_image(environment)
         factory = IrisMachineFactory(
             controller_url=self.controller_url,
             scheduling_timeout=IRIS_SCHEDULING_TIMEOUT,
@@ -99,17 +102,40 @@ class GvisorMachines:
     def identity(self) -> dict[str, Any]:
         return machines_identity(VerificationBackend.GVISOR, self.worker_image, controller=False)
 
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        image = _sandbox_image(environment)
         return GvisorMachineFactory(), MachineSpec(DockerImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
 
 
+def _sandbox_image(environment: EnvironmentRequirements) -> str:
+    if environment.docker_image is None:
+        raise ValueError("A sandbox machine requires an environment with a digest-pinned image")
+    return environment.docker_image
+
+
+@dataclass(frozen=True)
+class CampaignMachines:
+    """Grading machines for a campaign: local environments grade in the worker, images on ``sandbox``."""
+
+    sandbox: IrisMachines | GvisorMachines
+    local: LocalGraderMachines
+
+    def identity(self) -> dict[str, Any]:
+        return {**self.sandbox.identity(), "local": self.local.identity()}
+
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        if Backend.LOCAL in environment.compatible_backends:
+            return self.local.machine(environment, memory_mb)
+        return self.sandbox.machine(environment, memory_mb)
+
+
 def campaign_machines(backend: VerificationBackend, worker_image: str, controller_url: str | None) -> GradingMachines:
-    """Fresh, network-denied grading machines on ``backend`` for every source in a campaign."""
+    """Grading machines for every source in a campaign: sandbox graders on ``backend``, local graders in the worker."""
     if backend == VerificationBackend.IRIS:
         if controller_url is None:
             raise ValueError("Iris verification requires a controller URL")
-        return IrisMachines(worker_image, controller_url)
-    return GvisorMachines(worker_image)
+        return CampaignMachines(IrisMachines(worker_image, controller_url), LocalGraderMachines())
+    return CampaignMachines(GvisorMachines(worker_image), LocalGraderMachines())
 
 
 def job_controller_url() -> str | None:

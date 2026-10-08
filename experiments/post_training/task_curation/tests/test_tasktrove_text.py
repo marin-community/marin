@@ -42,9 +42,9 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
 from experiments.post_training.task_curation.tests.conversion import (
-    FIXTURE_GRADER_ENVIRONMENT,
     convert_row,
     converted_task,
+    fixture_context,
     tasktrove_row,
 )
 
@@ -334,7 +334,7 @@ def test_math_ships_the_archived_scorer_and_its_oracle(name, files, golden):
     task = task_of(name, tasktrove_row(files))
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert grader.environment == FIXTURE_GRADER_ENVIRONMENT
+    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
     verifier = verifier_files(task)
     assert verifier["verifier.py"] == files["tests/verifier.py"]
     assert verifier["test.sh"] == files["tests/test.sh"]

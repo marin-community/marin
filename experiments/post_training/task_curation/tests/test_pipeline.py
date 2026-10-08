@@ -26,6 +26,8 @@ from experiments.post_training.task_curation.driver import VerificationBackend, 
 from experiments.post_training.task_curation.images.build import MissingImageArtifact, image_artifact
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
+    GraderEnvironment,
+    GraderIsolation,
     UrlSource,
     download_source,
     download_step,
@@ -153,7 +155,7 @@ def grader_recipe(tmp_path, monkeypatch):
 
 
 def test_a_rebuilt_grader_image_renames_the_artifact(grader_recipe, config):
-    pipeline = replace(math500(), grader_image=grader_recipe)
+    pipeline = replace(math500(), grader=GraderEnvironment(grader_recipe, GraderIsolation.SANDBOX))
     (first,) = run(image_artifact(grader_recipe, REPOSITORY))
     original = source_step(pipeline, config, CampaignRuntime())
     assert image_artifact(grader_recipe).name in [dep.name for dep in original.deps]
@@ -164,7 +166,7 @@ def test_a_rebuilt_grader_image_renames_the_artifact(grader_recipe, config):
 
 
 def test_a_grader_image_without_a_built_artifact_names_the_build_command(grader_recipe, config):
-    pipeline = replace(math500(), grader_image=grader_recipe)
+    pipeline = replace(math500(), grader=GraderEnvironment(grader_recipe, GraderIsolation.SANDBOX))
     with pytest.raises(
         MissingImageArtifact,
         match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --recipe fixture"),

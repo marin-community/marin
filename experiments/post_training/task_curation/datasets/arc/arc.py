@@ -44,8 +44,7 @@ from taskcompendium.pipeline.models import (
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, SANDBOX_GRADER, RlDataPipeline, ShellSim
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
 TRANSDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-transductive-v3"
@@ -243,7 +242,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_INDUCTIVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{INDUCTIVE_CONFIG}",
-            grader_image=GRADER,
+            grader=SANDBOX_GRADER,
             ships=ARC_SHIPS,
         ),
         RlDataPipeline(
@@ -256,7 +255,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{TRANSDUCTIVE_CONFIG}",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
             ships=ARC_SHIPS,
         ),
     ]

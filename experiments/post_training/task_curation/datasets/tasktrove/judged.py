@@ -26,8 +26,7 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
@@ -203,7 +202,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=source.rubric,
             atlas_id=f"Task Trove:{source.config}",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
         )
         for source in SOURCES
     ]

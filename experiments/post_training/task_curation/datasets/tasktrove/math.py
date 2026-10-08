@@ -43,8 +43,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import MathType
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, RlDataPipeline, ShellSim
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -243,7 +242,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=source.rubric,
             controls=MATH_CONTROLS,
             atlas_id=f"Task Trove:{source.config}",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
         )
         for source in SOURCES
     ]

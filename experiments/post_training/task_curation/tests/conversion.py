@@ -24,7 +24,7 @@ FIXTURE_GRADER_ENVIRONMENT = grading_environment(FIXTURE_GRADER_IMAGE)
 
 def fixture_context(pipeline: RlDataPipeline, inputs: StagedInputs | None = None) -> ConversionContext:
     """The context the source pipeline supplies, with the fixture grader image for a declared recipe."""
-    grader = FIXTURE_GRADER_ENVIRONMENT if pipeline.grader_image is not None else None
+    grader = pipeline.grader.requirements(FIXTURE_GRADER_IMAGE) if pipeline.grader is not None else None
     return ConversionContext(inputs or {}, grader)
 
 

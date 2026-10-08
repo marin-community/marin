@@ -13,8 +13,10 @@ from iris.cluster.types import JobName
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import StepContext
 from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import NetworkPolicy
+from shellbox.machine import HostImage, NetworkPolicy
+from taskcompendium.convert.environment import grading_environment, local_grading_environment
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -148,11 +150,24 @@ def test_full_run_reuses_only_admitted_sample_outputs(tmp_path, monkeypatch, cat
 
 
 def test_iris_schedules_each_grader_image_on_the_controller_without_network():
-    factory, spec = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL).machine(GRADER, 2048)
+    machines = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL)
+    factory, spec = machines.machine(grading_environment(GRADER), 2048)
     assert isinstance(factory, IrisMachineFactory)
     assert spec.source == RegistryImage(GRADER)
     assert spec.network == NetworkPolicy.DENY
     assert spec.memory_mb == 2048
+
+
+def test_local_environments_grade_in_the_worker_with_the_grader_runtime(tmp_path, monkeypatch):
+    machines = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL)
+    built = []
+    monkeypatch.setattr(type(machines.local.runtime), "ensure_built", lambda self: built.append(self.root))
+    factory, spec = machines.machine(local_grading_environment(GRADER), 2048)
+    assert isinstance(factory, LocalMachineFactory)
+    assert built == [machines.local.runtime.root]
+    assert factory.bin_dirs == (machines.local.runtime.bin_dir,)
+    assert spec.source == HostImage() and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
+    assert "runtime" in machines.identity()["local"]
 
 
 def test_iris_verification_requires_a_controller():

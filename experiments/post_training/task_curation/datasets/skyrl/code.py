@@ -29,8 +29,13 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, requ
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
 
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import (
+    LOCAL_GRADER,
+    SANDBOX_GRADER,
+    HfSource,
+    RlDataPipeline,
+    ShellSim,
+)
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -296,7 +301,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=APPS_RUBRIC,
             controls=CONTROLS,
-            grader_image=GRADER,
+            grader=SANDBOX_GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:apps",
         ),
@@ -315,7 +320,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=EURUS2_CODE_RUBRIC,
             controls=CONTROLS,
-            grader_image=GRADER,
+            grader=SANDBOX_GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:eurus2_code",
         ),
@@ -333,7 +338,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=VERIFIABLE_CODE_RUBRIC,
             controls=CONTROLS,
-            grader_image=GRADER,
+            grader=SANDBOX_GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:verifiable_code",
         ),
@@ -351,7 +356,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
             controls=CONTROLS,
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:gretel_text_to_sql",
         ),

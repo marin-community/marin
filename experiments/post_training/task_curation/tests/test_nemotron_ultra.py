@@ -49,9 +49,9 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
 )
 from experiments.post_training.task_curation.pipeline import source_files
 from experiments.post_training.task_curation.tests.conversion import (
-    FIXTURE_GRADER_ENVIRONMENT,
     convert_row,
     converted_task,
+    fixture_context,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
@@ -382,7 +382,7 @@ def test_every_component_row_converts_with_its_grader(name, staged):
         assert grader_config(task)["contract"]["agent_ref"] == ROWS[name]["agent_ref"]
         return
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment == FIXTURE_GRADER_ENVIRONMENT
+    assert task.grader.environment == fixture_context(PIPELINES[name]).grader_environment
     assert (task.answer_type == AnswerType.NATIVE_ACTION) == (path in ACTION_ANSWERS)
     contract = grader_config(task)["contract"]
     assert "responses_create_params" not in contract

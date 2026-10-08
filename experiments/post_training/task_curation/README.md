@@ -25,7 +25,7 @@ RlDataPipeline(
     rubric=MATH500_RUBRIC,               # optional model review; one criterion per paragraph
     controls=MATH_CONTROLS,              # optional grader verification
     atlas_id="MarinSkyRL:math500",       # join key into atlas_catalog.json
-    grader_image=None,                   # GRADER when a grader runs in a sandbox
+    grader=None,                         # LOCAL_GRADER or SANDBOX_GRADER when a grade script needs the grader recipe
     ships=(),                            # directories whose files the converter packages into tasks
     resource_budget_bytes=1_000_000,     # tasks carrying more resource bytes are deferred
 )
@@ -41,8 +41,8 @@ RlDataPipeline(
   auxiliary pinned sources. Each callable receives a `ConversionContext`, whose `inputs` holds
   the staged auxiliary sources by name.
 - **Converter.** A module-level function `convert(row, context)` that builds the
-  task and fixes its grader. `context.grader_environment` is the built grader
-  image when the declaration sets `grader_image`, else `None`;
+  task and fixes its grader. `context.grader_environment` is the grader
+  environment when the declaration sets `grader`, else `None`;
   `required_grader_environment(context)` returns it or raises. Shared
   techniques live in
   [`taskcompendium.convert`](../../../lib/taskcompendium/src/taskcompendium/convert/):
@@ -90,7 +90,7 @@ covers the source pins, auxiliary inputs, `version`, every `*.py` file in the
 converter module's directory, every file below `ships`, the digest of the built
 grader image, the agent image, the resource budget, the rubric, the controls
 code, and the review and verification settings. A declaration with a
-`grader_image` needs that image's artifact first; building its source without
+`grader` needs that image's artifact first; building its source without
 one raises `MissingImageArtifact` with the build command (see
 [images/](images/README.md)). Downloads are
 shared artifacts, `task-curation/download/<hash>`, keyed by the pinned files.
@@ -122,6 +122,12 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --mode sample --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
+A declaration's `grader` is `LOCAL_GRADER` or `SANDBOX_GRADER`: both name the
+grader recipe, and the isolation says where its scripts run. Local graders only
+parse model text; they run as locked-down subprocesses of the Zephyr worker, in
+a uv environment the worker builds once from the recipe's `requirements.lock`
+(`grader_environment.py`). Sandbox graders execute model programs; they run in
+a fresh machine of the built image.
 `--verification-backend` selects how sandbox graders run. `iris`, the default,
 schedules each grader machine as an Iris task; inside an Iris job the driver uses
 the job's controller, and elsewhere it requires `--controller-url`. `gvisor` runs

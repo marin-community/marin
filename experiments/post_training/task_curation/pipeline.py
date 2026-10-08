@@ -16,6 +16,7 @@ import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert.environment import IMAGE_BACKENDS, grading_environment
+from taskcompendium.convert.environment import IMAGE_BACKENDS, grading_environment, local_grading_environment
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, EnvironmentRequirements
 from taskcompendium.pipeline.controls import controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
@@ -63,7 +64,7 @@ from experiments.post_training.task_curation.images.build import (
     context_paths,
     image_artifact,
 )
-from experiments.post_training.task_curation.images.recipes import ImageRecipe
+from experiments.post_training.task_curation.images.recipes import GRADER, ImageRecipe
 
 PIPELINE_VERSION = "2026.10.07.1"
 URL_CHUNK_BYTES = 1024 * 1024
@@ -128,6 +129,39 @@ class AgentImage:
         return EnvironmentRequirements(docker_image=self.reference, compatible_backends=IMAGE_BACKENDS)
 
 
+class GraderIsolation(StrEnum):
+    """Where a source's grader scripts run.
+
+    ``LOCAL`` runs them as locked-down subprocesses of the Zephyr worker, in a uv environment built
+    from the recipe's locked requirements; the built image is not used. ``SANDBOX`` runs them in a
+    fresh gVisor or Docker machine of the built image. Graders that execute model programs declare
+    ``SANDBOX``; graders that only parse model text declare ``LOCAL``.
+    """
+
+    LOCAL = "local"
+    SANDBOX = "sandbox"
+
+
+@dataclass(frozen=True)
+class GraderEnvironment:
+    """The image recipe a source's grader scripts need and the isolation they run under."""
+
+    image: ImageRecipe
+    isolation: GraderIsolation
+
+    def requirements(self, built_image: str) -> EnvironmentRequirements:
+        """The grader environment conversion records, given the recipe's built digest."""
+        if self.isolation == GraderIsolation.LOCAL:
+            return local_grading_environment(built_image)
+        return grading_environment(built_image)
+
+
+LOCAL_GRADER = GraderEnvironment(GRADER, GraderIsolation.LOCAL)
+"""Grader scripts that parse model text: they run in the worker with the grader recipe's packages."""
+SANDBOX_GRADER = GraderEnvironment(GRADER, GraderIsolation.SANDBOX)
+"""Grader scripts that execute model programs: they run in a fresh machine of the grader image."""
+
+
 @dataclass(frozen=True)
 class ShellSim:
     """No agent image: conversation tasks, or shell tasks served by the simulated shell."""
@@ -145,8 +179,9 @@ class RlDataPipeline:
     review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary pinned files
     staged before conversion; the source callables and converter find them in ``context.inputs``.
 
-    ``grader_image`` is the recipe whose built image runs the source's sandboxed graders; the
-    converter reads its environment from ``context.grader_environment``. ``ships`` are directories,
+    ``grader`` names the image recipe whose packages the source's grader scripts need and whether
+    they run locally in the worker or in a sandbox of the built image; the converter reads the
+    resulting environment from ``context.grader_environment``. ``ships`` are directories,
     such as ``datasets/<family>/scorers``, whose files the converter packages into tasks. The
     artifact identity hashes the converter module's directory, every file below ``ships`` and the
     grader image digest. A task whose decoded resources exceed ``resource_budget_bytes`` is
@@ -163,7 +198,7 @@ class RlDataPipeline:
     controls: Controls | None = None
     inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
     atlas_id: str | None = None
-    grader_image: ImageRecipe | None = None
+    grader: GraderEnvironment | None = None
     ships: tuple[Path, ...] = ()
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
@@ -253,6 +288,7 @@ def converter_identity(pipeline: RlDataPipeline, grader_image: str | None) -> di
         "function": callable_identity(pipeline.convert),
         "files": {os.path.relpath(path, directory): _file_sha256(path) for path in sorted(files)},
         "grader_image": grader_image,
+        "grader_isolation": pipeline.grader.isolation.value if pipeline.grader is not None else None,
     }
 
 
@@ -392,7 +428,10 @@ def _source_run(
 def _run_source(
     pipeline: RlDataPipeline, config: SourcePipelineConfig, run: SourceRun, *, campaign: CampaignRuntime
 ) -> RlDataArtifact:
-    grader_environment = grading_environment(run.grader_image) if run.grader_image is not None else None
+    grader_environment = None
+    if run.grader_image is not None:
+        assert pipeline.grader is not None
+        grader_environment = pipeline.grader.requirements(run.grader_image)
     result = run_source_pipeline(
         source_recipe(pipeline, run.inputs, grader_environment),
         campaign.context,
@@ -417,16 +456,16 @@ def source_step(
     """The ``data/rl/<name>-<hash>`` artifact for one declaration.
 
     ``previous`` is an earlier output of the same source whose control trials are reused. A
-    declaration with a ``grader_image`` requires that image's artifact to be built already; see
+    declaration with a ``grader`` requires that image's artifact to be built already; see
     ``images.build``.
     """
     downloaded = download_step(pipeline.source, campaign)
     inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
     image_steps: tuple[ArtifactStep[ImageArtifact], ...] = ()
     grader_image = None
-    if pipeline.grader_image is not None:
-        grader_image = built_image(pipeline.grader_image).image
-        image_steps = (image_artifact(pipeline.grader_image),)
+    if pipeline.grader is not None:
+        grader_image = built_image(pipeline.grader.image).image
+        image_steps = (image_artifact(pipeline.grader.image),)
     identity = pipeline_identity(pipeline, config, grader_image)
     identity["previous"] = (
         {"name": previous.name, "version": previous.version, "fingerprint": previous.fingerprint()}

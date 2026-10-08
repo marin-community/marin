@@ -16,8 +16,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
-from experiments.post_training.task_curation.images.recipes import GRADER
-from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline
+from experiments.post_training.task_curation.pipeline import LOCAL_GRADER, AgentImage, RlDataPipeline
 
 AGENT_IMAGE = AgentImage(
     "ghcr.io/marin-community/iris-task@sha256:" "66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
@@ -63,6 +62,6 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=NL2BASH_RUBRIC,
             controls=Controls(golden=solve_script),
             atlas_id=f"Task Trove:{CONFIG}",
-            grader_image=GRADER,
+            grader=LOCAL_GRADER,
         )
     ]

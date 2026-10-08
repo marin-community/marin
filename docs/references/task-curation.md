@@ -49,7 +49,7 @@ An `RlDataPipeline` has these fields:
 | `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
-| `grader_image` | `GRADER` when graders run in a sandbox; the converter reads the built image as `ConversionContext.grader_environment`. |
+| `grader` | `LOCAL_GRADER` when grade scripts only parse model text and run in the worker, `SANDBOX_GRADER` when they execute model programs in a fresh machine of the built grader image; the converter reads the resulting environment as `ConversionContext.grader_environment`. |
 | `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
 | `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
 
@@ -59,7 +59,7 @@ declaration of the family in a loop.
 `convert`, `select`, `decode`, `read` and `parts` each receive a `ConversionContext` with
 two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, the
 built grader image's environment or `None` when the declaration names no
-`grader_image`. `required_grader_environment(context)` returns the environment or
+`grader`. `required_grader_environment(context)` returns the environment or
 raises.
 
 ## Graders and controls
@@ -187,9 +187,12 @@ its mode, the digest-pinned base image and the platform, so a rerun with an
 unchanged recipe does nothing. A source whose declaration names the recipe
 raises `MissingImageArtifact` until the artifact exists.
 
-`--verification-backend` is `iris` (the default) or `gvisor`. Iris schedules
-each grader machine on the controller of the enclosing Iris job, or on
-`--controller-url` outside one; gVisor runs it on the worker's Docker daemon.
+Local graders run as locked-down subprocesses of the Zephyr worker, in a uv
+environment the worker builds once from the grader recipe's `requirements.lock`.
+`--verification-backend` is where sandbox graders run: `iris` (the default) or
+`gvisor`. Iris schedules each grader machine on the controller of the enclosing
+Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
+Docker daemon.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
 `--base-url` overrides it. Full execution requires

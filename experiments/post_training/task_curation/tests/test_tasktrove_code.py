@@ -28,7 +28,6 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     structured_outputs,
 )
 from experiments.post_training.task_curation.tests.conversion import (
-    FIXTURE_GRADER_ENVIRONMENT,
     convert_row,
     converted_task,
     fixture_context,
@@ -193,7 +192,9 @@ def test_row_converts_to_declared_grader(name):
     assert task.output_paths == output_paths
     assert task.environment_requirements.docker_image == (agent_image.reference if agent_image is not None else None)
     grader_environment = task.grader.environment if isinstance(task.grader, VerifyitGrader) else None
-    assert grader_environment == (FIXTURE_GRADER_ENVIRONMENT if agent_image is not None else None)
+    assert grader_environment == (
+        fixture_context(PIPELINES[name]).grader_environment if agent_image is not None else None
+    )
     # Hidden tests and oracle files never reach the agent's machine.
     worker = {resource.path for resource in task.resources.worker}
     assert not any(path.startswith(("tests/", "solution/", "cases/")) for path in worker)

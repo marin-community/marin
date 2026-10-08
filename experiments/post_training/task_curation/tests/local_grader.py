@@ -18,7 +18,7 @@ import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
 from shellbox.machine import Backend, DockerImage, MachineSpec
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import ConversationTrace, GradingAttempt, TaskResource, TaskSpec
+from taskcompendium.models import ConversationTrace, EnvironmentRequirements, GradingAttempt, TaskResource, TaskSpec
 from taskcompendium.pipeline.controls import FILE_SUBMISSION_MESSAGE
 from taskcompendium.pipeline.models import Reply, WorkspaceFiles
 from taskcompendium.runtime.task_grading import sandbox_grade
@@ -34,8 +34,9 @@ class LocalGraderMachines:
     def identity(self) -> dict:
         return {"backend": self.backend.value, "image": LOCAL_GRADER_IMAGE}
 
-    def machine(self, image: str, memory_mb: int) -> tuple["LocalGraderMachines", MachineSpec]:
-        return self, MachineSpec(DockerImage(image), memory_mb=memory_mb)
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple["LocalGraderMachines", MachineSpec]:
+        assert environment.docker_image is not None
+        return self, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
 
     async def create(self, spec: MachineSpec) -> DockerMachine:
         return await DockerMachineFactory().create(replace(spec, source=DockerImage(LOCAL_GRADER_IMAGE)))
@@ -61,8 +62,8 @@ def grade(
         trace = ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE))
         attempt = GradingAttempt(trace, dict(submission.files))
     environment = task.grader.environment
-    assert environment is not None and environment.docker_image is not None
-    return asyncio.run(sandbox_grade(task, attempt, *machines.machine(environment.docker_image, memory_mb)))
+    assert environment is not None
+    return asyncio.run(sandbox_grade(task, attempt, *machines.machine(environment, memory_mb)))
 
 
 def with_verifier_file(task: TaskSpec, replacement: TaskResource) -> TaskSpec:

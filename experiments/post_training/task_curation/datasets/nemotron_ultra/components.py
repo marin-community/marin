@@ -58,8 +58,15 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     convert_ungraded,
     convert_ungraded_agent,
 )
-from experiments.post_training.task_curation.images.recipes import GRADER, ImageRecipe
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, RowDecoder, ShellSim
+from experiments.post_training.task_curation.pipeline import (
+    LOCAL_GRADER,
+    SANDBOX_GRADER,
+    GraderEnvironment,
+    HfSource,
+    RlDataPipeline,
+    RowDecoder,
+    ShellSim,
+)
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
@@ -288,7 +295,7 @@ def preference_rubric(scope: str) -> str:
 class Component:
     """How one component's rows become tasks; ``decode`` and ``inputs`` restore placeholder questions.
 
-    ``grader_image`` runs the component's grade script and ``ships`` holds the scorer directories it
+    ``grader`` is where the component's grade script runs and ``ships`` holds the scorer directories it
     packages; components graded in process or kept as ``NoGrader`` contracts name neither.
     """
 
@@ -297,21 +304,25 @@ class Component:
     controls: Controls | None = None
     decode: RowDecoder | None = None
     inputs: Mapping[str, HfSource] = field(default_factory=dict)
-    grader_image: ImageRecipe | None = None
+    grader: GraderEnvironment | None = None
     ships: tuple[Path, ...] = ()
 
 
 def scored(
-    convert: Converter, rubric: str, controls: Controls = REPLY_CONTROLS, ships: tuple[Path, ...] = SHIPS
+    convert: Converter,
+    rubric: str,
+    controls: Controls = REPLY_CONTROLS,
+    ships: tuple[Path, ...] = SHIPS,
+    grader: GraderEnvironment = LOCAL_GRADER,
 ) -> Component:
-    """A component whose grade script runs in the grader image."""
-    return Component(convert, rubric, controls, grader_image=GRADER, ships=ships)
+    """A component whose grade script needs the grader recipe's packages; ``grader`` says where it runs."""
+    return Component(convert, rubric, controls, grader=grader, ships=ships)
 
 
 ABSTENTION = Component(convert_ungraded, QA_ABSTENTION_RUBRIC)
 AGENTIC_SAFETY = Component(convert_ungraded_agent, AGENTIC_SAFETY_RUBRIC)
 CALENDAR = scored(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC)
-COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS, CODE_SHIPS)
+COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS, CODE_SHIPS, SANDBOX_GRADER)
 FORMAT = scored(convert_format, INSTRUCTION_FOLLOWING_RUBRIC)
 INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC)
 MATH = Component(
@@ -321,7 +332,8 @@ MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
 MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
 NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
-NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS, ARC_SHIPS)
+# Inductive NVARC runs the model's transform function, so both NVARC blends grade in a sandbox.
+NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS, ARC_SHIPS, SANDBOX_GRADER)
 RDKIT = scored(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS)
 REASONING_GYM = scored(convert_reasoning_gym, REASONING_GYM_RUBRIC, REASONING_GYM_CONTROLS)
 SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
@@ -497,7 +509,7 @@ def _pipeline(blend: str, path: str) -> RlDataPipeline:
         controls=component.controls,
         inputs=inputs,
         atlas_id=f"{ATLAS_PREFIX}{blend}/{path}",
-        grader_image=component.grader_image,
+        grader=component.grader,
         ships=component.ships,
     )
 
