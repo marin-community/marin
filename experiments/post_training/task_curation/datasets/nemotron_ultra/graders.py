@@ -3,12 +3,11 @@
 
 """Converters for Nemotron Ultra components, each fixing the component's grader.
 
-Graded components call the NeMo Gym scorer that the grader image installs under
-``skyrl_gym.envs.nemotron_ultra``, unchanged, through ``source_callable.py``: calendar, format,
-instruction-following, structured-output, competitive-code and single-step tool-action scorers run
-in ``NEMOTRON_ULTRA_IMAGE``, multiple-choice in ``ULTRA_MCQA_IMAGE``, and RDKit chemistry and
-tool-call-schema actions in ``EXECUTABLE_MATH_IMAGE``. Components whose NeMo Gym agent needs a
-model judge, a live environment or a Lean toolchain keep their row as a ``NoGrader`` contract.
+Graded components call the NeMo Gym scorer under ``skyrl_gym.envs.nemotron_ultra``, unchanged,
+through ``source_callable.py``: calendar, format, instruction-following, multiple-choice,
+structured-output, competitive-code, RDKit chemistry and single-step tool-action scorers all run in
+the grader image (``images.recipes.GRADER``). Components whose NeMo Gym agent needs a model judge,
+a live environment or a Lean toolchain keep their row as a ``NoGrader`` contract.
 """
 
 import copy
@@ -50,6 +49,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
     ImportRejection,
@@ -58,13 +58,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     Reply,
 )
-
-from experiments.post_training.task_curation.images import (
-    EXECUTABLE_MATH_IMAGE,
-    NEMOTRON_ULTRA_IMAGE,
-    ULTRA_MCQA_IMAGE,
-)
-from experiments.post_training.task_curation.pipeline import Image
 
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 """The NeMo Gym revision whose agents grade the pinned Ultra blends."""
@@ -141,7 +134,7 @@ def _scored(
     row: RawRow,
     request: BlendRequest,
     scorer: Mapping[str, Any],
-    image: Image,
+    environment: EnvironmentRequirements,
     *,
     answer_type: AnswerType = AnswerType.TEXT,
     timeout: float = SCORER_TIMEOUT,
@@ -151,7 +144,7 @@ def _scored(
     package = source_scorer_package(
         invocation=scorer,
         config={"contract": request.contract},
-        environment=image.requirements(),
+        environment=environment,
         timeout=timeout,
         state_path=state_path,
         env=env,
@@ -160,33 +153,33 @@ def _scored(
 
 
 def _text_scored(
-    row: RawRow, agents: tuple[str, ...], scorer: Mapping[str, Any], image: Image
+    row: RawRow, agents: tuple[str, ...], scorer: Mapping[str, Any], environment: EnvironmentRequirements
 ) -> NormalizedTask | ImportRejection:
     request = text_request(row.data, agents)
     if isinstance(request, ImportRejection):
         return request
-    return _scored(row, request, scorer, image)
+    return _scored(row, request, scorer, environment)
 
 
-def convert_calendar(row: RawRow) -> NormalizedTask | ImportRejection:
-    return _text_scored(row, ("calendar_simple_agent",), CALENDAR_SCORER, NEMOTRON_ULTRA_IMAGE)
+def convert_calendar(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    return _text_scored(row, ("calendar_simple_agent",), CALENDAR_SCORER, required_grader_environment(context))
 
 
-def convert_format(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_format(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     agents = ("citation_format_simple_agent", "freeform_formatting_simple_agent")
-    return _text_scored(row, agents, FORMAT_SCORER, NEMOTRON_ULTRA_IMAGE)
+    return _text_scored(row, agents, FORMAT_SCORER, required_grader_environment(context))
 
 
-def convert_instruction_following(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_instruction_following(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     agents = ("instruction_following_simple_agent",)
-    return _text_scored(row, agents, INSTRUCTION_FOLLOWING_SCORER, NEMOTRON_ULTRA_IMAGE)
+    return _text_scored(row, agents, INSTRUCTION_FOLLOWING_SCORER, required_grader_environment(context))
 
 
-def convert_mcqa(row: RawRow) -> NormalizedTask | ImportRejection:
-    return _text_scored(row, ("mcqa_simple_agent",), MCQA_SCORER, ULTRA_MCQA_IMAGE)
+def convert_mcqa(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    return _text_scored(row, ("mcqa_simple_agent",), MCQA_SCORER, required_grader_environment(context))
 
 
-def convert_code(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_code(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Score the last fenced program against the row's hidden unit tests, one thread per test."""
     request = text_request(row.data, ("code_gen_simple_agent",))
     if isinstance(request, ImportRejection):
@@ -199,14 +192,14 @@ def convert_code(row: RawRow) -> NormalizedTask | ImportRejection:
         row,
         request,
         CODE_SCORER,
-        NEMOTRON_ULTRA_IMAGE,
+        required_grader_environment(context),
         timeout=CODE_SCORER_TIMEOUT,
         state_path=STATE_PATH,
         env=THREAD_ENVIRONMENT,
     )
 
 
-def convert_structured_output(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_structured_output(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Validate a text document, or the payload of one typed tool call, against the row's schema."""
     mode = row.data.get("response_mode", "text")
     if mode not in {"text", "tool_call"}:
@@ -230,10 +223,10 @@ def convert_structured_output(row: RawRow) -> NormalizedTask | ImportRejection:
         return source_defect("invalid_structured_schema", str(error))
     scorer = {**STRUCTURED_OUTPUT_SCORER, "input_format": "event" if mode == "tool_call" else "text"}
     answer_type = AnswerType.NATIVE_ACTION if mode == "tool_call" else AnswerType.TEXT
-    return _scored(row, request, scorer, NEMOTRON_ULTRA_IMAGE, answer_type=answer_type)
+    return _scored(row, request, scorer, required_grader_environment(context), answer_type=answer_type)
 
 
-def convert_rdkit(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_rdkit(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Compare the rounded wrapped answer with the stored molecular property target."""
     request = agent_request(row.data, ("rdkit_chemistry_agent",))
     if isinstance(request, ImportRejection):
@@ -242,27 +235,27 @@ def convert_rdkit(row: RawRow) -> NormalizedTask | ImportRejection:
         return unsupported("unsupported_chemistry_property", str(row.data["property_type"]))
     if not math.isfinite(float(row.data["expected_answer"])):
         return source_defect("nonfinite_chemistry_target", "The rounded comparator requires a finite target")
-    return _scored(row, request, RDKIT_SCORER, EXECUTABLE_MATH_IMAGE)
+    return _scored(row, request, RDKIT_SCORER, required_grader_environment(context))
 
 
-def _tool_action(row: RawRow, image: Image) -> NormalizedTask | ImportRejection:
+def _tool_action(row: RawRow, environment: EnvironmentRequirements) -> NormalizedTask | ImportRejection:
     request = agent_request(row.data, TOOL_ACTION_AGENTS)
     if isinstance(request, ImportRejection):
         return request
     kind = row.data["expected_action"]["type"]
     if kind not in {"message", "function_call"}:
         return unsupported("unsupported_action_type", str(kind))
-    return _scored(row, request, TOOL_ACTION_SCORER, image, answer_type=AnswerType.NATIVE_ACTION)
+    return _scored(row, request, TOOL_ACTION_SCORER, environment, answer_type=AnswerType.NATIVE_ACTION)
 
 
-def convert_toolcall_schema(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_toolcall_schema(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Compare one predicted action with the expected call, without executing the tool."""
-    return _tool_action(row, EXECUTABLE_MATH_IMAGE)
+    return _tool_action(row, required_grader_environment(context))
 
 
-def convert_next_action(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_next_action(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Compare a predicted SWE agent action with the expected call, without executing the tool."""
-    return _tool_action(row, NEMOTRON_ULTRA_IMAGE)
+    return _tool_action(row, required_grader_environment(context))
 
 
 def _agent_provider(request: BlendRequest) -> dict[str, ProviderRequirement]:
@@ -301,7 +294,7 @@ def _ungraded(
     return NormalizedTask(task, (*changes, *request.changes))
 
 
-def convert_ungraded(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_ungraded(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     """A conversation component whose agent cannot run here."""
     request = blend_request(row.data)
     if isinstance(request, ImportRejection):
@@ -309,7 +302,7 @@ def convert_ungraded(row: RawRow) -> NormalizedTask | ImportRejection:
     return _ungraded(row, request, _agent_provider(request) if request.tools else {})
 
 
-def convert_ungraded_agent(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_ungraded_agent(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     """An agent-environment component, whose initial state the NeMo Gym agent also serves."""
     request = blend_request(row.data)
     if isinstance(request, ImportRejection):
@@ -382,7 +375,7 @@ def restore_placeholder(data: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[
     return restored, changes
 
 
-def convert_math(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_math(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     """A math component, with questions held by DAPO or Skywork placeholders restored first."""
     data: Mapping[str, Any] = row.data
     changes: tuple[NormalizationChange, ...] = ()

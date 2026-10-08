@@ -21,8 +21,12 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, N
 
 from experiments.post_training.task_curation.datasets import reasoning_gym as declarations
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
-from experiments.post_training.task_curation.images import REASONING_GYM_IMAGE
-from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
+from experiments.post_training.task_curation.tests.conversion import (
+    FIXTURE_GRADER_IMAGE,
+    convert_row,
+    converted_task,
+    tasktrove_row,
+)
 
 PIPELINES = {pipeline.name: pipeline for pipeline in declarations.pipelines()}
 GRADE = Path(declarations.__file__).with_name(declarations.GRADE)
@@ -86,7 +90,7 @@ def test_reasoning_gym_task_runs_its_scorer_in_the_grading_image(name):
     assert isinstance(grader, ScriptGrader)
     argv, package = GRADERS[name]
     assert (grader.argv, grader.env["PYTHONPATH"], grader.answer_path) == (argv, package, "/app/answer.txt")
-    assert grader.environment.docker_image == REASONING_GYM_IMAGE.reference
+    assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
     assert task.answer_type == AnswerType.TEXT
     controls = PIPELINES[name].controls
     assert controls is not None and controls.golden is not None

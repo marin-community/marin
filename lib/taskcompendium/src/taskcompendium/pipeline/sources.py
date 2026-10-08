@@ -13,7 +13,8 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import load_jsonl, load_parquet
 
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat, StagedInputs
+from taskcompendium.pipeline.models import SourceRecipe
 
 
 def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
@@ -33,6 +34,11 @@ def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
 def staged_inputs(paths: Mapping[str, str]) -> StagedInputs:
     """Resolve staged auxiliary input paths for the source callables."""
     return {name: StoragePath(path) for name, path in paths.items()}
+
+
+def conversion_context(recipe: SourceRecipe) -> ConversionContext:
+    """The staged inputs and grader image environment the recipe's source callables receive."""
+    return ConversionContext(staged_inputs(recipe.inputs), recipe.grader_environment)
 
 
 def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
@@ -71,28 +77,30 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
 
 
 def staged_raw_file_rows(
-    path: str, relative_file: str, spec: SourceFiles, inputs: StagedInputs
+    path: str, relative_file: str, spec: SourceFiles, context: ConversionContext
 ) -> Iterator[dict[str, Any]]:
     """Yield selected source rows before decoding with their original stable locators."""
     if relative_file.startswith("/") or ".." in relative_file.split("/"):
         raise ValueError(f"Source file must be relative to its staged root: {relative_file}")
     file = StoragePath(path) / relative_file
-    records = spec.read(file, inputs) if spec.read is not None else _decoded_rows(file, spec.format)
+    records = spec.read(file, context) if spec.read is not None else _decoded_rows(file, spec.format)
     for index, row in enumerate(records):
         if not isinstance(row, dict):
             raise ValueError(f"Expected an object at {relative_file}:{index}")
-        if spec.select is not None and not spec.select(row, inputs):
+        if spec.select is not None and not spec.select(row, context):
             continue
         yield {"index": index, "locator": f"{relative_file}:{index}", "data": row}
 
 
-def decode_staged_row(record: dict[str, Any], spec: SourceFiles, inputs: StagedInputs) -> dict[str, Any]:
+def decode_staged_row(record: dict[str, Any], spec: SourceFiles, context: ConversionContext) -> dict[str, Any]:
     """Apply a source decoder to an already selected row without changing its locator."""
-    data = spec.decode(record["data"], inputs) if spec.decode is not None else record["data"]
+    data = spec.decode(record["data"], context) if spec.decode is not None else record["data"]
     return {**record, "data": data}
 
 
-def staged_file_rows(path: str, relative_file: str, spec: SourceFiles, inputs: StagedInputs) -> Iterator[dict[str, Any]]:
+def staged_file_rows(
+    path: str, relative_file: str, spec: SourceFiles, context: ConversionContext
+) -> Iterator[dict[str, Any]]:
     """Yield selected, decoded records with their original file and row locators."""
-    for record in staged_raw_file_rows(path, relative_file, spec, inputs):
-        yield decode_staged_row(record, spec, inputs)
+    for record in staged_raw_file_rows(path, relative_file, spec, context):
+        yield decode_staged_row(record, spec, context)

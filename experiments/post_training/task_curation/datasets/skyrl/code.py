@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL code and text-to-SQL sources, graded by their source scorers in the code/SQL image.
+"""SkyRL code and text-to-SQL sources, graded by their source scorers in the grader image.
 
 Each reply is scored by a ``*_grade.py`` script next to this module that calls the scorer the
 image installs: the APPS evaluator for APPS, the SkyRL LiveCodeBench evaluator for Eurus-2 and
@@ -28,13 +28,13 @@ from taskcompendium.convert.code import (
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.source_scorer import grade_script_package
 from taskcompendium.grader import grader_config
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
-from taskcompendium.pipeline.inputs import SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
 
-from experiments.post_training.task_curation.images import APPS_IMAGE, SKYRL_CODE_SQL_IMAGE
-from experiments.post_training.task_curation.pipeline import HfSource, Image, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.images.recipes import GRADER
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
 APPS_GRADE = "apps_grade.py"
 LCB_GRADE = "lcb_grade.py"
@@ -99,24 +99,24 @@ def scored_task(
     instruction: str,
     script: str,
     scorer: str,
-    image: Image,
+    environment: EnvironmentRequirements,
     config: Mapping[str, Any],
     evidence: Mapping[str, Any],
 ) -> TaskSpec:
-    """A conversation task whose reply ``script`` grades by calling the image-installed ``scorer``."""
+    """A conversation task whose reply ``script`` grades by calling the ``scorer`` installed in ``environment``."""
     package = grade_script_package(
         script,
         GRADE_SCRIPTS[script],
         leading_args=(scorer,),
         config=config,
-        environment=image.requirements(),
+        environment=environment,
         timeout=GRADER_TIMEOUT,
         env=THREAD_ENVIRONMENT,
     )
     return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
 
 
-def convert_apps(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     question, encoded = row.data.get("question"), row.data.get("input_output")
     if not isinstance(question, str) or not isinstance(encoded, str):
         return source_defect("missing_prompt_or_tests", "question and input_output JSON are required")
@@ -142,7 +142,7 @@ def convert_apps(row: RawRow) -> TaskSpec | ImportRejection:
         instruction=CODE_INSTRUCTION,
         script=APPS_GRADE,
         scorer=APPS_TESTING_UTIL_PATH,
-        image=APPS_IMAGE,
+        environment=required_grader_environment(context),
         config={
             "apps_source_sha256": APPS_TESTING_UTIL_SHA256,
             "input_output": encoded,
@@ -160,6 +160,7 @@ def _lcb_task(
     test_cases: Mapping[str, Any] | list[Any],
     reference: str | None,
     evidence: Mapping[str, Any],
+    environment: EnvironmentRequirements,
 ) -> TaskSpec | ImportRejection:
     try:
         validate_code_cases(test_cases)
@@ -171,17 +172,17 @@ def _lcb_task(
         instruction=CODE_INSTRUCTION,
         script=LCB_GRADE,
         scorer=SKYRL_GYM_ROOT,
-        image=SKYRL_CODE_SQL_IMAGE,
+        environment=environment,
         config={"test_cases": test_cases, "reference_reply": reference},
         evidence=evidence,
     )
 
 
-def is_code_row(row: dict[str, Any], _inputs: StagedInputs) -> bool:
+def is_code_row(row: dict[str, Any], _context: ConversionContext) -> bool:
     return row["ability"] == "code"
 
 
-def convert_eurus2_code(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_eurus2_code(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     messages, reward = row.data.get("prompt"), row.data.get("reward_model")
     ground_truth = reward.get("ground_truth") if isinstance(reward, dict) else None
     if not isinstance(messages, list) or not messages or not isinstance(ground_truth, str) or not ground_truth:
@@ -193,10 +194,10 @@ def convert_eurus2_code(row: RawRow) -> TaskSpec | ImportRejection:
     events = tuple(TextMessage(role=message["role"], content=message["content"]) for message in messages)
     evidence = {key: row.data[key] for key in ("extra_info", "data_source", "ability") if key in row.data}
     # Eurus-2 publishes no solutions, so these tasks have no golden control.
-    return _lcb_task(row, events, test_cases, None, evidence)
+    return _lcb_task(row, events, test_cases, None, evidence, required_grader_environment(context))
 
 
-def convert_verifiable_code(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_verifiable_code(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     problem, verification = row.data.get("problem_statement"), row.data.get("verification_info")
     if not isinstance(problem, str) or not isinstance(verification, dict) or not verification.get("test_cases"):
         return source_defect(
@@ -208,7 +209,14 @@ def convert_verifiable_code(row: RawRow) -> TaskSpec | ImportRejection:
         for key in ("gold_standard_solution", "metadata", "source", "task_type", "problem_id", "in_source_id")
         if key in row.data
     }
-    return _lcb_task(row, (TextMessage(role="user", content=problem),), verification, python_reply(solution), evidence)
+    return _lcb_task(
+        row,
+        (TextMessage(role="user", content=problem),),
+        verification,
+        python_reply(solution),
+        evidence,
+        required_grader_environment(context),
+    )
 
 
 def validate_seeded_reference(context: str, reference: str) -> None:
@@ -229,25 +237,25 @@ def validate_seeded_reference(context: str, reference: str) -> None:
             raise ValueError("Seeded reference cannot execute") from error
 
 
-def convert_gretel_text_to_sql(row: RawRow) -> TaskSpec | ImportRejection:
-    question, context, reference = (row.data.get(key) for key in ("sql_prompt", "sql_context", "sql"))
-    if not all(isinstance(value, str) and value.strip() for value in (question, context, reference)):
+def convert_gretel_text_to_sql(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
+    question, sql_context, reference = (row.data.get(key) for key in ("sql_prompt", "sql_context", "sql"))
+    if not all(isinstance(value, str) and value.strip() for value in (question, sql_context, reference)):
         return source_defect("missing_prompt_or_reference", "SQL prompt, context and reference are required")
-    assert isinstance(context, str) and isinstance(reference, str)
+    assert isinstance(sql_context, str) and isinstance(reference, str)
     try:
-        validate_seeded_reference(context, reference)
+        validate_seeded_reference(sql_context, reference)
     except ValueError as error:
         return unsupported("unsupported_sql_context", str(error))
     return scored_task(
         row,
-        events=(TextMessage(role="user", content=f"{question}\n\nDatabase context:\n{context}"),),
+        events=(TextMessage(role="user", content=f"{question}\n\nDatabase context:\n{sql_context}"),),
         instruction=SQL_INSTRUCTION,
         script=SQL_GRADE,
         scorer=SKYRL_GYM_ROOT,
-        image=SKYRL_CODE_SQL_IMAGE,
+        environment=required_grader_environment(context),
         config={
             "reference_sql": reference,
-            "context_sql": context,
+            "context_sql": sql_context,
             "reference_reply": f"<solution>{reference}</solution>",
         },
         evidence={
@@ -287,6 +295,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=APPS_RUBRIC,
             controls=CODE_CONTROLS,
+            grader_image=GRADER,
             atlas_id="MarinSkyRL:apps",
         ),
         RlDataPipeline(
@@ -304,6 +313,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=EURUS2_CODE_RUBRIC,
             controls=CODE_CONTROLS,
+            grader_image=GRADER,
             atlas_id="MarinSkyRL:eurus2_code",
         ),
         RlDataPipeline(
@@ -320,6 +330,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=VERIFIABLE_CODE_RUBRIC,
             controls=CODE_CONTROLS,
+            grader_image=GRADER,
             atlas_id="MarinSkyRL:verifiable_code",
         ),
         RlDataPipeline(
@@ -336,6 +347,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
             controls=SQL_CONTROLS,
+            grader_image=GRADER,
             atlas_id="MarinSkyRL:gretel_text_to_sql",
         ),
     ]

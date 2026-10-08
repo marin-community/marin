@@ -34,6 +34,7 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     CheckStatus,
     Controls,
@@ -85,8 +86,14 @@ def archive_row(files: dict[str, bytes]) -> dict:
     }
 
 
-def convert_archive(row: RawRow) -> NormalizedTask | ImportRejection:
-    return tasktrove_archive_task(row, convert=convert_sum, environment=ENVIRONMENT, output_paths=SOLUTION_PATHS)
+def archive_task(row: RawRow) -> NormalizedTask | ImportRejection:
+    return tasktrove_archive_task(
+        row, convert=convert_sum, environment=ENVIRONMENT, grader_environment=ENVIRONMENT, output_paths=SOLUTION_PATHS
+    )
+
+
+def convert_archive(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
+    return archive_task(row)
 
 
 @pytest.fixture
@@ -100,7 +107,7 @@ def executable_row():
 
 @pytest.fixture
 def executable_task(executable_row):
-    result = convert_archive(executable_row)
+    result = archive_task(executable_row)
     assert isinstance(result, NormalizedTask)
     return TaskSpec.model_validate_json(result.task.model_dump_json())
 

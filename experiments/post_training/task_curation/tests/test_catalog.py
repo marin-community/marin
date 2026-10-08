@@ -4,8 +4,7 @@
 import json
 from pathlib import Path
 
-from experiments.post_training.task_curation.images import IMAGES
-from experiments.post_training.task_curation.pipeline import Image
+from experiments.post_training.task_curation.images.recipes import RECIPES
 from experiments.post_training.task_curation.sources import all_pipelines
 from experiments.post_training.task_curation.tests import (
     test_arc,
@@ -35,6 +34,7 @@ def test_declarations_join_available_atlas_listings_once():
     assert set(declared) <= available
 
 
-def test_declared_images_are_committed():
-    declared = {pipeline.environment for pipeline in all_pipelines().values() if isinstance(pipeline.environment, Image)}
-    assert declared <= set(IMAGES)
+def test_declared_grader_images_are_buildable_recipes():
+    """The build CLI builds only registered recipes, so a declaration naming another could never resolve."""
+    declared = {pipeline.grader_image for pipeline in all_pipelines().values()} - {None}
+    assert declared <= set(RECIPES.values())

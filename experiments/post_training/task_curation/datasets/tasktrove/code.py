@@ -4,8 +4,8 @@
 """TaskTrove competitive-programming sources: stdin/stdout programs graded by verifyit ``stdio``.
 
 The agent writes a program in the executable image; the grader runs it on the hidden cases in a
-fresh machine of the same image. Controls run the source's ``solution/solve.sh`` oracle when the
-archive ships one, and a crashing program as the negative.
+fresh machine of the grader image (``images.recipes.GRADER``). Controls run the source's
+``solution/solve.sh`` oracle when the archive ships one, and a crashing program as the negative.
 """
 
 from taskcompendium.convert.executable import (
@@ -22,12 +22,19 @@ from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, Conve
 from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
 from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files
 from taskcompendium.convert.tasktrove_taco import convert_taco
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
-from experiments.post_training.task_curation.images import TASKTROVE_EXECUTABLE_IMAGE
-from experiments.post_training.task_curation.pipeline import RlDataPipeline
+from experiments.post_training.task_curation.images.recipes import GRADER
+from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline
+
+AGENT_IMAGE = AgentImage(
+    "ghcr.io/marin-community/task-curation-executable@sha256:"
+    "d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
+)
+"""The executable image the agent writes and runs its program in."""
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script, negative=broken_submission)
 
@@ -86,22 +93,26 @@ Check numerical tolerances, multi-case parsing, and that a meaningful set of hid
 """
 
 
-def stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | ImportRejection:
+def stdio_task(row: RawRow, context: ConversionContext, convert: ConvertFn) -> NormalizedTask | ImportRejection:
     return tasktrove_archive_task(
-        row, convert=convert, environment=TASKTROVE_EXECUTABLE_IMAGE.requirements(), output_paths=SOLUTION_PATHS
+        row,
+        convert=convert,
+        environment=AGENT_IMAGE.requirements(),
+        grader_environment=required_grader_environment(context),
+        output_paths=SOLUTION_PATHS,
     )
 
 
-def convert_code_contests_task(row: RawRow) -> NormalizedTask | ImportRejection:
-    return stdio_task(row, convert_code_contests)
+def convert_code_contests_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    return stdio_task(row, context, convert_code_contests)
 
 
-def convert_codeforces_task(row: RawRow) -> NormalizedTask | ImportRejection:
-    return stdio_task(row, convert_codeforces)
+def convert_codeforces_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    return stdio_task(row, context, convert_codeforces)
 
 
-def convert_taco_task(row: RawRow) -> NormalizedTask | ImportRejection:
-    return stdio_task(row, convert_taco)
+def convert_taco_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    return stdio_task(row, context, convert_taco)
 
 
 def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -122,9 +133,12 @@ def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
     )
 
 
-def convert_competitive_coding_task(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     return tasktrove_python_task(
-        row, convert=convert_competitive_coding, environment=TASKTROVE_EXECUTABLE_IMAGE.requirements()
+        row,
+        convert=convert_competitive_coding,
+        environment=AGENT_IMAGE.requirements(),
+        grader_environment=required_grader_environment(context),
     )
 
 
@@ -134,11 +148,12 @@ def stdio_pipeline(name: str, config: str, convert: Converter, rubric: str) -> R
         source=tasktrove_source(config),
         convert=convert,
         version="1",
-        environment=TASKTROVE_EXECUTABLE_IMAGE,
+        environment=AGENT_IMAGE,
         intended_use=IntendedUse.TRAIN,
         rubric=rubric,
         controls=EXECUTABLE_CONTROLS,
         atlas_id=f"Task Trove:{config}",
+        grader_image=GRADER,
     )
 
 

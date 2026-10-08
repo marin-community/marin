@@ -8,7 +8,7 @@ import re
 
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
@@ -40,7 +40,7 @@ def _letter(index: int) -> str:
     return chr(ord("A") + index)
 
 
-def convert_gpqa(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_gpqa(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     question = row.data.get("Question")
     choices = [row.data.get(key) for key in GPQA_CHOICES]
     if (
@@ -60,7 +60,7 @@ def convert_gpqa(row: RawRow) -> TaskSpec | ImportRejection:
     return mcq_task(row, prompt=prompt, answer=expected, options=len(texts))
 
 
-def convert_openscience(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_openscience(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     prompt, response = row.data.get("input"), row.data.get("output")
     if not isinstance(prompt, str) or not isinstance(response, str):
         return source_defect("missing_prompt_or_reference", "input and generated output strings are required")

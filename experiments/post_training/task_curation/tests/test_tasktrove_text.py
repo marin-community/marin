@@ -45,8 +45,12 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     qa,
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
-from experiments.post_training.task_curation.images import EXECUTABLE_MATH_IMAGE, REWARDKIT_IMAGE
-from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
+from experiments.post_training.task_curation.tests.conversion import (
+    FIXTURE_GRADER_ENVIRONMENT,
+    convert_row,
+    converted_task,
+    tasktrove_row,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PIPELINES = {
@@ -334,7 +338,7 @@ def test_math_runs_the_source_scorer_and_its_oracle(name, files, golden):
     task = task_of(name, tasktrove_row(files))
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert grader.environment == EXECUTABLE_MATH_IMAGE.requirements()
+    assert grader.environment == FIXTURE_GRADER_ENVIRONMENT
     verifier = verifier_files(task)
     assert verifier["verifier.py"] == files["tests/verifier.py"]
     assert verifier["test.sh"] == files["tests/test.sh"]
@@ -594,7 +598,7 @@ def test_multichallenge_runs_the_source_suite_with_its_files_beside_the_grade_sc
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, ScriptSpec)
     assert (spec.path, spec.verdict_file) == (multichallenge.GRADE_PATH, multichallenge_grade.VERDICT_FILENAME)
-    assert task.grader.environment == REWARDKIT_IMAGE.requirements()
+    assert task.grader.environment == FIXTURE_GRADER_ENVIRONMENT
     verifier = verifier_files(task)
     for path, content in MULTICHALLENGE.items():
         target = path.removeprefix("tests/") if path.startswith("tests/") else f"__source/{path}"

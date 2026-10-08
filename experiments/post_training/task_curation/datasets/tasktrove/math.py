@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove math sources, graded by each archive's own SymPy scorer in the executable math image.
+"""TaskTrove math sources, graded by each archive's own SymPy scorer in the grader image.
 
 An archive ships the scorer (``tests/verifier.py``), its runner (``tests/test.sh``) and the typed
 reference (``tests/verifier_data.json``). Only scorer and runner revisions seen before are
 accepted, and ``math_grade.py`` checks the interpreter and packages the scorer was pinned to before
-running it. The solver gets a conversation task: the prompt's answer-file delivery is rewritten to
-ask for the answer in the reply, which the grader writes to ``/app/answer.txt`` for the scorer.
+running it in the grader image (``images.recipes.GRADER``). The solver gets a conversation task:
+the prompt's answer-file delivery is rewritten to ask for the answer in the reply, which the grader
+writes to ``/app/answer.txt`` for the scorer.
 """
 
 import hashlib
@@ -30,6 +31,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply, wrong_reply
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
     ControlSubmission,
@@ -43,7 +45,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import MathType
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
-from experiments.post_training.task_curation.images import EXECUTABLE_MATH_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 GRADE_SCRIPT = "math_grade.py"
@@ -144,7 +146,7 @@ class MathConverter:
     sections: tuple[str, ...]
     phrases: tuple[tuple[str, str], ...]
 
-    def __call__(self, row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+    def __call__(self, row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
         files = archive_files(row.data).files
         scorer, runner = files.get("tests/verifier.py", b""), files.get("tests/test.sh", b"")
         expected_runner = SCORER_RUNNERS.get(hashlib.sha256(scorer).hexdigest())
@@ -171,7 +173,7 @@ class MathConverter:
         grader = ScriptGrader(
             argv=("python3", f"/tests/{GRADE_SCRIPT}", *scorer_pins(scorer)),
             cwd="/app",
-            environment=EXECUTABLE_MATH_IMAGE.requirements(),
+            environment=required_grader_environment(context),
             answer_path=ANSWER_PATH,
             reward=TEST_SH_REWARD,
             timeout=GRADER_TIMEOUT,
@@ -255,6 +257,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=source.rubric,
             controls=MATH_CONTROLS,
             atlas_id=f"Task Trove:{source.config}",
+            grader_image=GRADER,
         )
         for source in SOURCES
     ]

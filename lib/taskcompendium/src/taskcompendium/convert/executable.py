@@ -3,9 +3,9 @@
 
 """Shell tasks graded on the files an agent leaves in a pinned image.
 
-The agent works in a shell in the task image, with public setup files mounted at their archive
+The agent works in a shell in its own image, with public setup files mounted at their archive
 paths. A verifyit workspace mode (``stdio``, ``pytest``, ``script``) grades the captured output
-files in a fresh machine of the same image, with the hidden tests under ``/tests``. Oracle files
+files in a fresh machine of the grader image, with the hidden tests under ``/tests``. Oracle files
 stay with the oracle role, which only grader controls mount.
 """
 
@@ -79,6 +79,7 @@ def workspace_task(
     instruction: str,
     spec: Spec,
     environment: EnvironmentRequirements,
+    grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
     verifier: tuple[TaskResource, ...] = (),
     worker: tuple[TaskResource, ...] = (),
@@ -87,10 +88,11 @@ def workspace_task(
 ) -> TaskSpec:
     """A shell task in the ``environment`` image whose ``spec`` grades the agent's ``output_paths``.
 
-    ``verifier`` files are installed under ``/tests`` for the grader only; ``worker`` files are
-    mounted for the agent and ``oracle`` files for the grader controls.
+    The grader runs in a fresh machine of ``grader_environment``. ``verifier`` files are installed
+    under ``/tests`` for the grader only; ``worker`` files are mounted for the agent and ``oracle``
+    files for the grader controls.
     """
-    package = verifyit_package(spec, verifier, environment=environment)
+    package = verifyit_package(spec, verifier, environment=grader_environment)
     return TaskSpec(
         id=row.id,
         source=row.source,
@@ -112,6 +114,7 @@ def converted_workspace_task(
     *,
     instruction: str,
     environment: EnvironmentRequirements,
+    grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
 ) -> TaskSpec:
     """A workspace task from a TaskTrove converter's result.
@@ -138,6 +141,7 @@ def converted_workspace_task(
         instruction=instruction,
         spec=spec,
         environment=environment,
+        grader_environment=grader_environment,
         output_paths=output_paths,
         verifier=tuple(verifier),
         worker=tuple(worker),
@@ -161,14 +165,24 @@ def _converter_changes(row: RawRow, converted: ConvertedTask) -> tuple[Normaliza
 
 
 def tasktrove_archive_task(
-    row: RawRow, *, convert: ConvertFn, environment: EnvironmentRequirements, output_paths: tuple[str, ...]
+    row: RawRow,
+    *,
+    convert: ConvertFn,
+    environment: EnvironmentRequirements,
+    grader_environment: EnvironmentRequirements,
+    output_paths: tuple[str, ...],
 ) -> NormalizedTask | ImportRejection:
     """Convert an unpacked TaskTrove archive with ``convert`` into a workspace task."""
     converted = archive_conversion(row.data, convert)
     if isinstance(converted, ImportRejection):
         return converted
     task = converted_workspace_task(
-        row, converted, instruction=converted.instruction, environment=environment, output_paths=output_paths
+        row,
+        converted,
+        instruction=converted.instruction,
+        environment=environment,
+        grader_environment=grader_environment,
+        output_paths=output_paths,
     )
     return NormalizedTask(task, _converter_changes(row, converted))
 
@@ -250,7 +264,7 @@ def python_delivery(instruction: str, data_files: Mapping[str, bytes]) -> Delive
 
 
 def tasktrove_python_task(
-    row: RawRow, *, convert: ConvertFn, environment: EnvironmentRequirements
+    row: RawRow, *, convert: ConvertFn, environment: EnvironmentRequirements, grader_environment: EnvironmentRequirements
 ) -> NormalizedTask | ImportRejection:
     """Convert a TaskTrove archive into a workspace task capturing the Python files its instruction names."""
     converted = archive_conversion(row.data, convert)
@@ -264,6 +278,7 @@ def tasktrove_python_task(
         converted,
         instruction=delivery.instruction,
         environment=environment,
+        grader_environment=grader_environment,
         output_paths=delivery.output_paths,
     )
     return NormalizedTask(task, (*_converter_changes(row, converted), *delivery.changes))

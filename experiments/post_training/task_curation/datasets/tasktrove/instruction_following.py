@@ -18,6 +18,7 @@ from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.controls import answer_reply
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow, Reply
 from taskcompendium.pipeline.verification import MALFORMED_JSON
 from verifyit.grade import InvalidTask
@@ -145,7 +146,7 @@ def language_conflicts(prompt: str, constraints: tuple[Constraint, ...]) -> list
     return [word for word in words if isinstance(word, str) and LATIN_WORD.fullmatch(word)]
 
 
-def convert_ifeval(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_ifeval(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, data = row.data["instruction"], row.data.get("verifier_data")
     if not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and verifier_data are required")
@@ -178,7 +179,7 @@ def convert_ifeval(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
     return rewritten_task(task, original=instruction, reason=IFEVAL_REWRITE_REASON)
 
 
-def convert_structured(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, data = row.data["instruction"], row.data.get("verifier_data")
     if not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and verifier_data are required")

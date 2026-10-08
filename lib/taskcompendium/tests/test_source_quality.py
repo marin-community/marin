@@ -40,7 +40,7 @@ from taskcompendium.pipeline.source_quality import (
 )
 from taskcompendium.runtime.resources import inline_resource
 
-from .pipeline_stages import convert_svamp
+from .pipeline_stages import svamp_row_task
 
 
 def reviewed(task_id, quality=Quality.GOOD, confidence=Confidence.HIGH):
@@ -213,7 +213,7 @@ def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
     audits = []
     for index in range(80):
         source = Source(dataset="fixture", revision="1", row=str(index), importer_revision="1")
-        task = convert_svamp(
+        task = svamp_row_task(
             RawRow(
                 str(index),
                 source,
@@ -288,7 +288,7 @@ def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
 
 def test_contract_signature_separates_grader_code_but_not_reference_values():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(
+    task = svamp_row_task(
         RawRow(
             "task",
             source,

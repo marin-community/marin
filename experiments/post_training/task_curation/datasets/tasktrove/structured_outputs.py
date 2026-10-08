@@ -19,6 +19,7 @@ from taskcompendium.convert.tasktrove_converted_task import archive_conversion
 from taskcompendium.convert.tasktrove_nemotron_structured_outputs import convert_nemotron_structured_outputs
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.controls import answer_reply
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Controls,
     ImportFailureKind,
@@ -85,7 +86,7 @@ def invalid_contract(detail: str) -> ImportRejection:
     return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_structured_contract", detail=detail)
 
 
-def convert_structured_outputs(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_structured_outputs(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     converted = archive_conversion(row.data, convert_nemotron_structured_outputs)
     if isinstance(converted, ImportRejection):
         return converted

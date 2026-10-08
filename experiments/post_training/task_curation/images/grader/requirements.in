@@ -1,0 +1,37 @@
+# Grader image dependencies. Exact pins carry the versions earlier grader images were validated
+# with; regenerate requirements.lock after any change (see ../README.md).
+
+# Scientific stack shared by the vendored scorers (Nemotron Ultra, SkyRL code and SQL, ARC).
+numpy==2.3.5
+pandas==2.2.2
+scipy==1.17.0
+# TaskTrove math scorers parse LaTeX with sympy, which needs the 4.11 ANTLR runtime.
+sympy==1.13.3
+antlr4-python3-runtime==4.11.0
+rdkit==2025.9.3
+reasoning-gym==0.1.25
+
+# Structured-output, tool-call and instruction-following scorers.
+jsonschema==4.25.1
+pyyaml==6.0.3
+xmltodict==0.14.2
+openapi-schema-validator==0.6.3
+langdetect==1.0.9
+nltk==3.9.2
+absl-py==2.3.1
+immutabledict==4.3.0
+verifiable-instructions @ https://github.com/abukharin-nv/verifiable-instructions/archive/f46a5ac87b1400a4f8973039844b6be9b56e3faf.tar.gz
+
+# The NeMo Skills local sandbox server the Nemotron Ultra code scorers call.
+requests==2.33.1
+flask==3.1.2
+psutil==7.2.2
+ipython==9.10.0
+traitlets==5.14.3
+
+# Python test graders, and verifyit's own dependencies (verifyit is copied into the image).
+pytest
+pytest-json-report
+hypothesis
+tomlkit
+harbor-config @ https://github.com/marin-community/harbor/archive/6b2e76e1dae5c084eed05edefefffcec8c0c1ad9.tar.gz#subdirectory=packages/harbor-config

@@ -20,6 +20,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.pipeline.sources import staged_raw_file_rows
 
@@ -39,15 +40,12 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     TOOL_ACTION_CONTROLS,
     WRONG_TOOL,
 )
-from experiments.post_training.task_curation.images import (
-    ARC_IMAGE,
-    EXECUTABLE_MATH_IMAGE,
-    NEMOTRON_ULTRA_IMAGE,
-    REASONING_GYM_IMAGE,
-    ULTRA_MCQA_IMAGE,
+from experiments.post_training.task_curation.pipeline import source_files
+from experiments.post_training.task_curation.tests.conversion import (
+    FIXTURE_GRADER_ENVIRONMENT,
+    convert_row,
+    converted_task,
 )
-from experiments.post_training.task_curation.pipeline import Image, source_files
-from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 
 FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
 PIPELINES = {pipeline.name: pipeline for pipeline in pipelines()}
@@ -275,27 +273,27 @@ ROWS: dict[str, dict] = {
     pipeline_name(blend, path): COMPONENT_ROWS[path] for blend, paths in BLENDS.items() for path in paths
 } | {"nemotron_ultra_rlvr2_ultra_sft_step3200_rdkit": fixture_row("rdkit_rlvr2.json")}
 
-# Components graded in a grader image, by the image; the rest keep a NoGrader contract.
-GRADER_IMAGES: dict[str, Image] = {
-    f"{NEXT_ACTION}/SWE-Gym/SWE-Gym": NEMOTRON_ULTRA_IMAGE,
-    f"{NEXT_ACTION}/nebius/SWE-rebench-V2": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_calendar_v2": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_comp_coding": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_ds2_freeform": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_ds3_citation": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_instruction_following": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_nvarc_inductive": ARC_IMAGE,
-    "ultra_sft_step3200_nvarc_transductive": ARC_IMAGE,
-    "ultra_sft_step3200_rdkit": EXECUTABLE_MATH_IMAGE,
-    "ultra_sft_step3200_reasoning_gym": REASONING_GYM_IMAGE,
-    "ultra_sft_step3200_stem_mcqa": ULTRA_MCQA_IMAGE,
-    "ultra_sft_step3200_stem_mcqa_cot_rima_new": ULTRA_MCQA_IMAGE,
-    "ultra_sft_step3200_structured_outputs_v2": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_structured_outputs_v3": NEMOTRON_ULTRA_IMAGE,
-    "ultra_sft_step3200_toolcall_schema": EXECUTABLE_MATH_IMAGE,
-    "ultra_v3_agentic_rl_step73_citation_format_v2": NEMOTRON_ULTRA_IMAGE,
-    "ultra_v3_agentic_rl_step73_freeform_text_v2": NEMOTRON_ULTRA_IMAGE,
-    "ultra_v3_agentic_rl_step73_structured_outputs_v2": NEMOTRON_ULTRA_IMAGE,
+# Components graded in the grader image; the rest keep a NoGrader contract.
+GRADED: set[str] = {
+    f"{NEXT_ACTION}/SWE-Gym/SWE-Gym",
+    f"{NEXT_ACTION}/nebius/SWE-rebench-V2",
+    "ultra_sft_step3200_calendar_v2",
+    "ultra_sft_step3200_comp_coding",
+    "ultra_sft_step3200_ds2_freeform",
+    "ultra_sft_step3200_ds3_citation",
+    "ultra_sft_step3200_instruction_following",
+    "ultra_sft_step3200_nvarc_inductive",
+    "ultra_sft_step3200_nvarc_transductive",
+    "ultra_sft_step3200_rdkit",
+    "ultra_sft_step3200_reasoning_gym",
+    "ultra_sft_step3200_stem_mcqa",
+    "ultra_sft_step3200_stem_mcqa_cot_rima_new",
+    "ultra_sft_step3200_structured_outputs_v2",
+    "ultra_sft_step3200_structured_outputs_v3",
+    "ultra_sft_step3200_toolcall_schema",
+    "ultra_v3_agentic_rl_step73_citation_format_v2",
+    "ultra_v3_agentic_rl_step73_freeform_text_v2",
+    "ultra_v3_agentic_rl_step73_structured_outputs_v2",
 }
 ACTION_ANSWERS = {
     f"{NEXT_ACTION}/SWE-Gym/SWE-Gym",
@@ -331,13 +329,12 @@ def component_path(name: str) -> str:
 def test_every_component_row_converts_with_its_grader(name, staged):
     task = converted_task(PIPELINES[name], ROWS[name], inputs=staged)
     path = component_path(name)
-    image = GRADER_IMAGES.get(path)
-    if image is None:
+    if path not in GRADED:
         assert isinstance(task.grader, NoGrader)
         assert grader_config(task)["contract"]["agent_ref"] == ROWS[name]["agent_ref"]
         return
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment.docker_image == image.reference
+    assert task.grader.environment == FIXTURE_GRADER_ENVIRONMENT
     assert (task.answer_type == AnswerType.NATIVE_ACTION) == (path in ACTION_ANSWERS)
     contract = grader_config(task)["contract"]
     assert "responses_create_params" not in contract
@@ -355,7 +352,7 @@ def test_swe_components_split_by_swe_gym_membership(tmp_path, staged):
                 str(tmp_path),
                 "mopd.jsonl",
                 source_files(PIPELINES[f"nemotron_ultra_mopd_swe_pivot_len40k_{split}"].source),
-                staged,
+                ConversionContext(staged, None),
             )
         ]
         for split in ("swe_gym_swe_gym", "nebius_swe_rebench_v2")

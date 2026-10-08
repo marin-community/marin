@@ -10,9 +10,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.models import AssistantToolCalls, Source, TaskSpec, TextMessage
-from taskcompendium.pipeline.inputs import SourceFiles
+from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
 from taskcompendium.runtime.models import RolloutRecord
+
+RESOURCE_BUDGET_BYTES = 1_000_000
+"""Default limit on one task's decoded resource bytes; larger rows are deferred at normalization."""
+RESOURCES_OVER_BUDGET = "resources_over_budget"
 
 
 @dataclass(frozen=True)
@@ -75,7 +79,7 @@ class NormalizedTask:
     changes: tuple[NormalizationChange, ...]
 
 
-type Converter = Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
+type Converter = Callable[[RawRow, ConversionContext], TaskSpec | NormalizedTask | ImportRejection]
 """Convert one raw row into a task with its grader fixed, or reject it."""
 
 
@@ -127,7 +131,10 @@ class SourceRecipe:
     """One staged source and how its rows become reviewed, verified tasks.
 
     ``rubric=None`` skips model review. ``controls=None`` skips grader verification, so sandbox
-    graders remain unverified. ``inputs`` holds staged auxiliary input paths by name.
+    graders remain unverified. ``inputs`` holds staged auxiliary input paths by name, and
+    ``grader_environment`` the source's grader image; both reach the source callables through
+    their ``ConversionContext``. A task whose decoded resources exceed ``resource_budget_bytes``
+    is deferred as ``resources_over_budget``.
     """
 
     name: str
@@ -138,6 +145,8 @@ class SourceRecipe:
     controls: Controls | None
     intended_use: IntendedUse
     inputs: Mapping[str, str] = field(default_factory=dict)
+    grader_environment: EnvironmentRequirements | None = None
+    resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
 
 class CheckStatus(StrEnum):

@@ -4,18 +4,26 @@
 """TaskTrove natural-language-to-bash tasks, graded on the agent's captured command output.
 
 The agent runs a command in the nl2bash image and writes its combined output to the capture file. A
-checker compares the capture with the oracle command's recorded output as an order-insensitive multiset of
-normalized lines. The oracle control runs the source's ``solution/solve.sh``.
+checker in the grader image (``images.recipes.GRADER``) compares the capture with the oracle command's
+recorded output as an order-insensitive multiset of normalized lines. The oracle control runs the
+source's ``solution/solve.sh``.
 """
 
 from taskcompendium.convert.executable import broken_submission, solve_script, tasktrove_archive_task
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bash
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
-from experiments.post_training.task_curation.images import TASKTROVE_NL2BASH_IMAGE
-from experiments.post_training.task_curation.pipeline import RlDataPipeline
+from experiments.post_training.task_curation.images.recipes import GRADER
+from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline
+
+AGENT_IMAGE = AgentImage(
+    "ghcr.io/marin-community/task-curation-executable@sha256:"
+    "66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
+)
+"""The nl2bash image the agent's shell runs in."""
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 
@@ -34,9 +42,13 @@ minimal answer to the public request; unstated oracle output prefixes are a grad
 """
 
 
-def convert_nl2bash_task(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     return tasktrove_archive_task(
-        row, convert=convert_nl2bash, environment=TASKTROVE_NL2BASH_IMAGE.requirements(), output_paths=(OUTPUT_PATH,)
+        row,
+        convert=convert_nl2bash,
+        environment=AGENT_IMAGE.requirements(),
+        grader_environment=required_grader_environment(context),
+        output_paths=(OUTPUT_PATH,),
     )
 
 
@@ -47,10 +59,11 @@ def pipelines() -> list[RlDataPipeline]:
             source=tasktrove_source(CONFIG),
             convert=convert_nl2bash_task,
             version="1",
-            environment=TASKTROVE_NL2BASH_IMAGE,
+            environment=AGENT_IMAGE,
             intended_use=IntendedUse.TRAIN,
             rubric=NL2BASH_RUBRIC,
             controls=Controls(golden=solve_script, negative=broken_submission),
             atlas_id=f"Task Trove:{CONFIG}",
+            grader_image=GRADER,
         )
     ]

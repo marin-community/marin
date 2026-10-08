@@ -4,8 +4,8 @@
 """TaskTrove calendar sources: schedule a conversation's events and return the final calendar as JSON.
 
 The archive's verifier (``tests/verifier.py``, run by ``tests/test.sh``) accepts any schedule that
-meets the final event constraints. It needs only the Python 3.11 standard library, matching the
-source's ``python:3.11-slim`` environment, so it runs in the executable math image. A source
+meets the final event constraints. It needs only the Python standard library (the source ran it in
+``python:3.11-slim``), so it runs in the grader image (``images.recipes.GRADER``). A source
 witness (``solution/answer.json``) is the golden control, and the witness without its first event
 is the negative; an archive whose witness is not a nonempty JSON list of events is a source defect.
 """
@@ -26,6 +26,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply, wrong_reply
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
     ImportRejection,
@@ -37,7 +38,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
-from experiments.post_training.task_curation.images import EXECUTABLE_MATH_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 WITNESS_PATH = "solution/answer.json"
@@ -110,7 +111,7 @@ def witness_defect(witness: bytes | None) -> str | None:
     return None
 
 
-def convert_calendar(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_calendar(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, data = row.data["instruction"], row.data.get("verifier_data")
     if not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and calendar verifier data are required")
@@ -121,7 +122,7 @@ def convert_calendar(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection
     if defect is not None:
         return source_defect("invalid_witness", defect)
     grader = archive_script_grader(
-        row.data, required=GRADER_FILES, environment=EXECUTABLE_MATH_IMAGE.requirements(), answer_path=ANSWER_PATH
+        row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=ANSWER_PATH
     )
     if isinstance(grader, ImportRejection):
         return grader
@@ -173,6 +174,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=rubric,
             controls=Controls(golden=calendar_golden, negative=calendar_negative),
             atlas_id=f"Task Trove:{config}",
+            grader_image=GRADER,
         )
         for name, config, rubric in sources
     ]

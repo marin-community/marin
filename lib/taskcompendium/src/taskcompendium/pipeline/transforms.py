@@ -11,10 +11,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source
+from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
+    RESOURCES_OVER_BUDGET,
     CheckResult,
     Confidence,
     Decision,
@@ -29,6 +30,8 @@ from taskcompendium.pipeline.models import (
     SourceRecipe,
     TaskAudit,
 )
+from taskcompendium.pipeline.sources import conversion_context
+from taskcompendium.runtime.resources import resource_bytes
 
 GROUP_MEMORY_BYTES = 1024 * 1024
 
@@ -46,6 +49,26 @@ def row_task_id(recipe: SourceRecipe, source: Source) -> str:
     return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
 
 
+def task_resource_bytes(task: TaskSpec) -> int:
+    """Decoded bytes of every resource the task carries, across all roles."""
+    resources = task.resources
+    return sum(
+        len(resource_bytes(resource))
+        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier)
+    )
+
+
+def _within_budget(task: TaskSpec, budget: int) -> TaskSpec | ImportRejection:
+    size = task_resource_bytes(task)
+    if size <= budget:
+        return task
+    return ImportRejection(
+        kind=ImportFailureKind.UNSUPPORTED,
+        reason=RESOURCES_OVER_BUDGET,
+        detail=f"The task's resources hold {size} bytes; the source allows {budget}",
+    )
+
+
 def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
     source = row_source(recipe, record["locator"])
     task_id = row_task_id(recipe, source)
@@ -56,7 +79,7 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
         "data": record["data"],
     }
     try:
-        result = recipe.convert(RawRow(task_id, source, record["data"]))
+        result = recipe.convert(RawRow(task_id, source, record["data"]), conversion_context(recipe))
     except ValidationError as error:
         result = ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
     audit = TaskAudit(
@@ -74,6 +97,8 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
     if isinstance(result, NormalizedTask):
         audit = audit.model_copy(update={"normalization_changes": result.changes})
         result = result.task
+    if isinstance(result, TaskSpec):
+        result = _within_budget(result, recipe.resource_budget_bytes)
     if isinstance(result, ImportRejection):
         audit = audit.model_copy(
             update={

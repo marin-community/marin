@@ -211,6 +211,18 @@ DETAIL = {"cases": [{"passed": True}]}
         pytest.param(StdoutReward(), "echo 0.25", (Outcome.GRADED, 0.25, None, None, None), id="stdout"),
         pytest.param(
             StdoutReward(),
+            "echo 'loading scorer'; echo; echo 0.25; echo",
+            (Outcome.GRADED, 0.25, None, None, None),
+            id="stdout-chatter-before-reward",
+        ),
+        pytest.param(
+            StdoutReward(),
+            "echo 0.25; echo done",
+            (Outcome.INFRA_ERROR, None, None, None, GradingFailure.INVALID_REWARD),
+            id="stdout-chatter-after-reward",
+        ),
+        pytest.param(
+            StdoutReward(),
             "echo high",
             (Outcome.INFRA_ERROR, None, None, None, GradingFailure.INVALID_REWARD),
             id="stdout-text",

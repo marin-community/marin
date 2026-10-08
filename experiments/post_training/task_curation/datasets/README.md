@@ -15,9 +15,12 @@ artifact each declaration produces.
 2. Set the source pin and files, write the converter, and choose the
    environment. Use a helper from `taskcompendium.convert` when one fits; keep
    field mapping, prompt rewrites, rubrics and constants in the declaring module.
-3. If the grader needs a script, put it next to the module as `<name>_grade.py`,
-   read its bytes in the converter, and ship it in the task's verifier
-   resources. Reference the grader `Image` from [images/](../images/README.md).
+3. If the grader needs a script, put it next to the module as `<name>_grade.py`;
+   vendor an upstream scorer under `<family>/scorers/` and list that directory
+   in the declaration's `ships`. Read the bytes in the converter and ship them in
+   the task's verifier resources. A sandboxed grader runs in the grader image:
+   set `grader_image=GRADER` from [images/recipes.py](../images/recipes.py) and
+   use `required_grader_environment(context)` as its environment.
 4. Add a representative raw row to the family test's `ROWS` and add the module's
    `pipelines()` to [sources.py](../sources.py).
 
@@ -29,7 +32,7 @@ unreviewed, and without controls sandbox-graded rows stay out of `final/`.
 | Module | Sources |
 | --- | --- |
 | [skyrl/math.py](skyrl/math.py) | MarinSkyRL math and numeric-answer sets, graded in process. |
-| [skyrl/code.py](skyrl/code.py) | APPS, Eurus-2 code, verifiable coding problems and Gretel text-to-SQL, graded by `apps_grade.py`, `lcb_grade.py` and `sql_grade.py` in the code/SQL images. |
+| [skyrl/code.py](skyrl/code.py) | APPS, Eurus-2 code, verifiable coding problems and Gretel text-to-SQL, graded by `apps_grade.py`, `lcb_grade.py` and `sql_grade.py` in the grader image. |
 | [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by the pinned SkyRL IFEval scorer. |
 | [skyrl/mcq.py](skyrl/mcq.py) | GPQA and OpenScience multiple choice. |
 | [skyrl/preference.py](skyrl/preference.py) | HH-RLHF and KTO preference components; no runnable grader. |
@@ -38,7 +41,7 @@ unreviewed, and without controls sandbox-graded rows stay out of `final/`.
 | [tasktrove/code.py](tasktrove/code.py) | TaskTrove competitive programming (Code Contests, Codeforces, Nemotron competitive coding, TACO), graded by stdio cases. |
 | [tasktrove/python_tests.py](tasktrove/python_tests.py) | TaskTrove Python unit-test sources as one table, graded by pytest. |
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |
-| [tasktrove/repositories.py](tasktrove/repositories.py) | TaskTrove SWE repositories; no committed image covers their per-task repositories. |
+| [tasktrove/repositories.py](tasktrove/repositories.py) | TaskTrove SWE repositories; no agent image covers their per-task repositories. |
 | [tasktrove/structured_outputs.py](tasktrove/structured_outputs.py), [tasktrove/instruction_following.py](tasktrove/instruction_following.py) | Structured-output and instruction-following tasks, graded in process. |
 | [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by the source scorers through `math_grade.py`. |
 | [tasktrove/judged.py](tasktrove/judged.py), [tasktrove/qa.py](tasktrove/qa.py) | Judged responses and open QA (verifyit judge; not admitted until a judge runs), and knowledge MCQA. |

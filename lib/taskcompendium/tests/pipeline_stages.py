@@ -22,7 +22,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
 )
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
     Converter,
@@ -57,7 +57,7 @@ GRADER_IMAGE = "fixture@sha256:" + "b" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, compatible_backends=(Backend.DOCKER,))
 
 
-def convert_svamp(row: RawRow) -> TaskSpec | ImportRejection:
+def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:
     """An arithmetic word problem graded by its exact numeric answer; the equation stays private."""
     body, question = row.data.get("Body"), row.data.get("Question")
     if not isinstance(body, str) or not isinstance(question, str):
@@ -67,8 +67,12 @@ def convert_svamp(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
+def convert_svamp(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    return svamp_row_task(row)
+
+
 def svamp_task(task_id: str, data: Mapping[str, Any]) -> TaskSpec:
-    task = convert_svamp(RawRow(task_id, Source(dataset="fixture", revision="1", row="0", importer_revision="1"), data))
+    task = svamp_row_task(RawRow(task_id, Source(dataset="fixture", revision="1", row="0", importer_revision="1"), data))
     assert isinstance(task, TaskSpec)
     return task
 

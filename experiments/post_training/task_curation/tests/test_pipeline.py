@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-import importlib
+import importlib.util
+import re
+import sys
 import threading
 from dataclasses import replace
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from marin.execution.lazy import run
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
@@ -20,6 +23,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewT
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import VerificationBackend, campaign_machines
+from experiments.post_training.task_curation.images.build import MissingImageArtifact, image_artifact
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
     UrlSource,
@@ -28,12 +32,13 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
     source_step,
 )
+from experiments.post_training.task_curation.tests.image_builds import REGISTRY, install_fake_docker, tracked_recipe
 
 CONVERTER_MODULE = """
 from taskcompendium.convert.answers import exact_answer_task
 
 
-def convert(row):
+def convert(row, _context):
     return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
 """
 
@@ -96,28 +101,87 @@ def test_verification_backend_enters_identity_only_with_controls(config):
     assert step_name(unchecked, iris) == step_name(unchecked, config)
 
 
-def test_packaged_grader_script_changes_rename_the_artifact(tmp_path, monkeypatch, config):
-    (tmp_path / "fixture_source.py").write_text(CONVERTER_MODULE)
-    script = tmp_path / "fixture_grade.py"
+@pytest.fixture
+def fixture_converter(tmp_path, monkeypatch):
+    """A converter module in its own directory, so tests can change the files beside it."""
+    directory = tmp_path / "fixture_family"
+    directory.mkdir()
+    (directory / "fixture_source.py").write_text(CONVERTER_MODULE)
+    spec = importlib.util.spec_from_file_location("fixture_source", directory / "fixture_source.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Identity finds the converter's files through sys.modules; each test registers its own module.
+    monkeypatch.setitem(sys.modules, "fixture_source", module)
+    spec.loader.exec_module(module)
+    return directory, module.convert
+
+
+def test_python_files_beside_the_converter_rename_the_artifact(fixture_converter, config):
+    directory, convert = fixture_converter
+    script = directory / "fixture_grade.py"
     script.write_text("print(1)\n")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    module = importlib.import_module("fixture_source")
-    pipeline = replace(math500(), name="fixture", convert=module.convert)
+    pipeline = replace(math500(), name="fixture", convert=convert)
     original = step_name(pipeline, config)
     script.write_text("print(0)\n")
     assert step_name(pipeline, config) != original
 
 
+def test_shipped_scorer_bytes_rename_the_artifact(fixture_converter, config):
+    directory, convert = fixture_converter
+    scorer = directory / "scorers" / "upstream" / "score.py"
+    scorer.parent.mkdir(parents=True)
+    scorer.write_text("REWARD = 1\n")
+    pipeline = replace(math500(), name="fixture", convert=convert, ships=(directory / "scorers",))
+    original = step_name(pipeline, config)
+    scorer.write_text("REWARD = 0\n")
+    assert step_name(pipeline, config) != original
+    unshipped = replace(pipeline, ships=())
+    scorer.write_text("REWARD = 1\n")
+    assert step_name(unshipped, config) != original
+
+
+def test_declarations_ship_only_existing_directories(tmp_path):
+    with pytest.raises(ValueError, match="do not exist"):
+        replace(math500(), ships=(tmp_path / "missing",))
+
+
+@pytest.fixture
+def grader_recipe(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
+    install_fake_docker(tmp_path, monkeypatch)
+    return tracked_recipe(tmp_path)
+
+
+def test_a_rebuilt_grader_image_renames_the_artifact(grader_recipe, config):
+    pipeline = replace(math500(), grader_image=grader_recipe)
+    (first,) = run(image_artifact(grader_recipe, REGISTRY))
+    original = source_step(pipeline, config, CampaignRuntime())
+    assert image_artifact(grader_recipe).name in [dep.name for dep in original.deps]
+    (grader_recipe.context / "requirements.lock").write_text("numpy==2.3.4\n")
+    (second,) = run(image_artifact(grader_recipe, REGISTRY))
+    assert second.image != first.image
+    assert step_name(pipeline, config) != original.name
+
+
+def test_a_grader_image_without_a_built_artifact_names_the_build_command(grader_recipe, config):
+    pipeline = replace(math500(), grader_image=grader_recipe)
+    with pytest.raises(
+        MissingImageArtifact,
+        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images.build --recipe fixture"),
+    ):
+        source_step(pipeline, config, CampaignRuntime())
+
+
 def test_rubric_paragraphs_become_review_criteria():
     pipeline = replace(math500(), rubric="\nFirst criterion\nspans two lines.\n\nSecond criterion.\n")
-    assert source_recipe(pipeline, {}).rubric == ReviewRubric(
+    assert source_recipe(pipeline, {}, None).rubric == ReviewRubric(
         id="math500", version="1", criteria=("First criterion spans two lines.", "Second criterion.")
     )
 
 
 def test_declarations_with_the_same_pinned_files_share_one_download():
     pipeline = math500()
-    selected = replace(pipeline.source, select=lambda row, inputs: True)
+    selected = replace(pipeline.source, select=lambda row, context: True)
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
 
 

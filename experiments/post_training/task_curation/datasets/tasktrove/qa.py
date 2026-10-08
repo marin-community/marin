@@ -18,12 +18,13 @@ from taskcompendium.convert.tasktrove import archive_resources
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply, wrong_reply
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
-from experiments.post_training.task_curation.images import REWARDKIT_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
@@ -105,7 +106,7 @@ def openqa_references(data: dict) -> tuple[str, ...]:
     return tuple(stripped for answer in answers if (stripped := answer.strip().strip("*").strip()))
 
 
-def convert_openqa(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, data = row.data["instruction"], row.data.get("verifier_data")
     if not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and verifier_data are required")
@@ -119,7 +120,7 @@ def convert_openqa(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
     package = verifyit_package(
         JudgeSpec(references=references, question=question),
         archive_resources(row.data).verifier,
-        environment=REWARDKIT_IMAGE.requirements(),
+        environment=required_grader_environment(context),
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
     task = conversation_task(row, events=(prompt,), package=package)
@@ -155,7 +156,7 @@ def mcqa_question(instruction: str, options: int) -> str:
     return f"{problem.strip()}\n\nReturn one option letter from A through {chr(64 + options)}."
 
 
-def convert_knowledge_mcqa(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, data = row.data["instruction"], row.data.get("verifier_data")
     if not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and verifier_data are required")
@@ -191,6 +192,7 @@ def pipelines() -> list[RlDataPipeline]:
                 intended_use=IntendedUse.TRAIN,
                 rubric=OPENQA_RUBRIC,
                 atlas_id=f"Task Trove:{config}",
+                grader_image=GRADER,
             )
             for name, config in openqa
         ),

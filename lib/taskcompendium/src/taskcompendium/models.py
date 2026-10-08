@@ -401,7 +401,11 @@ class VerifierArtifact(BaseModel):
 
 
 class StdoutReward(BaseModel):
-    """The command exits zero and prints one finite number."""
+    """The command exits zero and its last nonempty stdout line is one finite number.
+
+    Earlier lines, such as library output, are ignored. The runtime retains only the first 16 KiB of
+    stdout, so a grader keeps its output below that for its reward line to be read.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

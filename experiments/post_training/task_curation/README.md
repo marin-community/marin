@@ -18,13 +18,16 @@ A declaration is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
 RlDataPipeline(
     name="math500",                      # catalog key and artifact name
     source=HfSource("HuggingFaceH4/MATH-500", "6e4ed1a2...", ("test.jsonl",), SourceFormat.JSONL),
-    convert=convert_math500,             # RawRow -> TaskSpec | NormalizedTask | ImportRejection
-    version="1",                         # bump when conversion changes outside the converter module
-    environment=ShellSim(),              # or an Image from images/ for agentic tasks
+    convert=convert_math500,             # (RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection
+    version="1",                         # bump when conversion changes outside the hashed files
+    environment=ShellSim(),              # or AgentImage("repo@sha256:...") for agentic tasks
     intended_use=IntendedUse.EVAL,
     rubric=MATH500_RUBRIC,               # optional model review; one criterion per paragraph
     controls=MATH_CONTROLS,              # optional grader verification
     atlas_id="MarinSkyRL:math500",       # join key into atlas_catalog.json
+    grader_image=None,                   # GRADER when a grader runs in a sandbox
+    ships=(),                            # directories whose files the converter packages into tasks
+    resource_budget_bytes=1_000_000,     # tasks carrying more resource bytes are deferred
 )
 ```
 
@@ -32,23 +35,35 @@ RlDataPipeline(
   `UrlSource(url, sha256, filename, format)`. `select` drops rows, `decode`
   rewrites a row before conversion (for example, unpacking a TaskTrove archive),
   and `read` replaces the format reader. `inputs` names auxiliary pinned
-  sources passed to those callables.
-- **Converter.** A module-level function that builds the task and fixes its
-  grader. Shared techniques live in
+  sources. Each callable receives a `ConversionContext`, whose `inputs` holds
+  the staged auxiliary sources by name.
+- **Converter.** A module-level function `convert(row, context)` that builds the
+  task and fixes its grader. `context.grader_environment` is the built grader
+  image when the declaration sets `grader_image`, else `None`;
+  `required_grader_environment(context)` returns it or raises. Shared
+  techniques live in
   [`taskcompendium.convert`](../../../lib/taskcompendium/src/taskcompendium/convert/):
   `math_answer_task`, `numeric_answer_task`, `mcq_task`, `exact_answer_task`,
   `ifeval_task` and `json_schema_task` build conversation tasks graded in
-  process by verifyit; `source_scorer_package` calls a scorer installed in a
-  grader image; the TaskTrove helpers unpack archives.
+  process by verifyit; `source_scorer_package` calls a scorer in the grader
+  machine; the TaskTrove helpers unpack archives.
 - **Graders.** A task's grader is one of:
   - a `VerifyitGrader` with no environment, graded in process;
-  - a `ScriptGrader` or `VerifyitGrader` with `environment=IMAGE.requirements()`,
-    graded in a fresh machine of that image. A dataset-specific script is a
-    `<name>_grade.py` file next to the declaration, read as bytes by the
-    converter and shipped in the task's verifier resources (mounted at `/tests`);
+  - a `ScriptGrader` or `VerifyitGrader` with
+    `environment=required_grader_environment(context)`, graded in a fresh
+    machine of the grader image. A dataset-specific script is a `<name>_grade.py`
+    file next to the declaration, and vendored upstream scorers live under
+    `datasets/<family>/scorers/` and are listed in `ships`. The converter reads
+    their bytes and ships them in the task's verifier resources (mounted at
+    `/tests`). A `StdoutReward` grader prints its reward as the last nonempty
+    stdout line;
   - `NoGrader`, when no runnable grader exists. Such rows never reach `final/`.
-- **Environment.** `ShellSim()` for conversation tasks; an `Image` from
-  [images/](images/README.md) when the agent works in a container.
+- **Environment.** `ShellSim()` for conversation tasks; an `AgentImage` pinned
+  by digest when the agent works in a container. Agent images are separate from
+  the grader image, which [images/](images/README.md) builds from a recipe.
+- **Resource budget.** A task whose decoded resources exceed
+  `resource_budget_bytes` is deferred with reason `resources_over_budget`, and
+  the manifest counts it.
 - **Rubric.** Optional. Without one, rows skip model review and are kept as
   `unreviewed`.
 - **Controls.** `Controls(golden, negative)` grades a known-correct and a
@@ -62,9 +77,13 @@ the module's `pipelines()` to [sources.py](sources.py).
 ## Outputs
 
 Each declaration becomes one cached artifact, `data/rl/<name>-<hash>`. The hash
-covers the source pins, auxiliary inputs, `version`, the converter module's
-bytes, the `*_grade.py` scripts beside it, the images it references, the rubric,
-the controls code, and the review and verification settings. Downloads are
+covers the source pins, auxiliary inputs, `version`, every `*.py` file in the
+converter module's directory, every file below `ships`, the digest of the built
+grader image, the agent image, the resource budget, the rubric, the controls
+code, and the review and verification settings. A declaration with a
+`grader_image` needs that image's artifact first; building its source without
+one raises `MissingImageArtifact` with the build command (see
+[images/](images/README.md)). Downloads are
 shared artifacts, `task-curation/download/<hash>`, keyed by the pinned files.
 
 ```
@@ -92,16 +111,14 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --review-cache CACHE_PREFIX --max-workers 64 --coordinator-memory 16g \
   --concurrent-sources 10 --normalized-shards 32 \
   --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
-  --verification-backend qemu \
   --mode sample --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-`--verification-backend` selects how sandbox graders run: `qemu` boots the guest
-bundle that the worker image carries for each grader image, `gvisor` runs the
-image on the worker's Docker daemon, and `iris` schedules it on
-`--controller-url`. With `qemu`, a `--controller-url` schedules images that have
-no QEMU bundle on Iris, and the artifact identity records both backends. An
-image the backend cannot run leaves its source inconclusive. Add `--run` to
+`--verification-backend` selects how sandbox graders run. `iris`, the default,
+schedules each grader machine as an Iris task; inside an Iris job the driver uses
+the job's controller, and elsewhere it requires `--controller-url`. `gvisor` runs
+the image on the worker's Docker daemon. The artifact identity records the
+backend and whether a controller is present, not the controller's address. Add `--run` to
 execute, with `GLM_BULK_TOKEN` set; the driver resolves the review endpoint
 from the Iris GLM relay job (`--relay-job`, default
 `DEFAULT_GLM_RELAY_JOB` in `experiments/post_training/glm.py`) unless `--base-url` is given.

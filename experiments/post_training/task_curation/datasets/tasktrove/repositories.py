@@ -10,6 +10,7 @@ record the source grader's files and terms under a ``NoGrader`` and never reach 
 
 from taskcompendium.convert.executable import swe_task
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
@@ -40,7 +41,7 @@ Compare the stated repository bug and behavioral requirements with FAIL_TO_PASS 
 {REPOSITORY_CRITERIA}"""
 
 
-def convert_repository_task(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_repository_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     return swe_task(row, workspace=WORKSPACE)
 
 

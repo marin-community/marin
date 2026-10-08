@@ -14,6 +14,7 @@ from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasktrove import archive_file
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.controls import reference_reply, wrong_reply
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
@@ -47,7 +48,7 @@ def puzzle_spec(expected: str, answer_type: str) -> Spec:
     return ExactSpec(expected=(expected,))
 
 
-def convert_puzzle(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_puzzle(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, gold = row.data["instruction"], archive_file(row.data, "tests/gold.json")
     if not instruction.strip() or gold is None:
         return source_defect("missing_input", "Instruction and tests/gold.json are required")

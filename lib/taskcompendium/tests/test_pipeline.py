@@ -37,7 +37,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.filtering import task_decision
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     CheckStatus,
     Confidence,
@@ -63,6 +63,7 @@ from taskcompendium.pipeline.stages import (
     prepare_source,
 )
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.runtime.resources import inline_resource
 
 from .pipeline_stages import (
     SOURCE_FILES,
@@ -73,6 +74,7 @@ from .pipeline_stages import (
     review_source,
     run_stages,
     stage_table,
+    svamp_row_task,
     svamp_task,
 )
 
@@ -177,12 +179,12 @@ def apple_row():
     }
 
 
-def convert_mixed_import(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_mixed_import(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     if "conversion_rejection" in row.data:
         return ImportRejection.model_validate(row.data["conversion_rejection"])
     if row.data.get("invalid_converted_task"):
         return TaskSpec.model_validate({"id": row.id})
-    return convert_svamp(row)
+    return svamp_row_task(row)
 
 
 def test_conversion_failures_retain_raw_records_without_review_or_accepted_output(tmp_path, apple_row, svamp_recipe):
@@ -226,6 +228,30 @@ def test_conversion_failures_retain_raw_records_without_review_or_accepted_outpu
     assert all(row["task_json"] is None and row["review_status"] is None for row in persisted[1:])
     assert [row["task_id"] for row in stage_table(tmp_path, "accepted").to_pylist()] == [persisted[0]["task_id"]]
     assert [request["custom_id"] for batch in service.batches.values() for request in batch] == [persisted[0]["task_id"]]
+
+
+def convert_with_attachment(row: RawRow, _context: ConversionContext) -> TaskSpec:
+    attachment = inline_resource("data/attachment.bin", b"x" * row.data["attachment_bytes"])
+    return svamp_row_task(row).model_copy(update={"resources": ResourceGroups(verifier=(attachment,))})
+
+
+def test_tasks_over_the_resource_budget_are_deferred_and_counted(tmp_path, apple_row, svamp_recipe):
+    rows = [
+        {**apple_row, "attachment_bytes": 64},
+        {**apple_row, "Body": "Aya has three apples.", "attachment_bytes": 65},
+    ]
+    recipe = replace(svamp_recipe, convert=convert_with_attachment, resource_budget_bytes=64)
+    manifest = run_stages(
+        recipe,
+        rows,
+        output_path=tmp_path,
+        limit=len(rows),
+        reviewer=BatchReviewer(BatchService(), "fixture-model", "fixture-deployment"),
+    )
+    persisted = stage_table(tmp_path).to_pylist()
+    assert manifest["dispositions"] == {"keep": 1, "defer": 1}
+    assert manifest["reasons"] == {"normalize:resources_over_budget": 1}
+    assert [row["normalization_reason"] for row in persisted] == [None, "resources_over_budget"]
 
 
 def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path, apple_row, svamp_recipe):
@@ -536,7 +562,7 @@ def test_exact_controls_accept_the_complete_reference_without_changing_list_scor
     assert task.model_dump(mode="json") == original
 
 
-def convert_instruction(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_instruction(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     data = row.data["verifier_data"]
     constraints = tuple(
         Constraint(name, kwargs) for name, kwargs in zip(data["instruction_id_list"], data["kwargs"], strict=True)
@@ -577,7 +603,7 @@ def test_unsupported_verification_is_annotated_separately_from_quality(tmp_path,
 def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_path, apple_row):
     service = BatchService()
     source = Source(dataset="catalog-1", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("first", source, apple_row))
+    task = svamp_row_task(RawRow("first", source, apple_row))
     assert isinstance(task, TaskSpec)
     cache_root = str(tmp_path / "cache")
     reviewer = BatchReviewer(service, "fixture-model", "deployment-1", query_cache_root=cache_root)
@@ -615,7 +641,7 @@ def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_
 def test_query_cache_miss_retries_after_polling_disconnect(tmp_path, apple_row):
     service = BatchService(interrupted=True)
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("first", source, apple_row))
+    task = svamp_row_task(RawRow("first", source, apple_row))
     assert isinstance(task, TaskSpec)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     interrupted = reviewer.review([task], SVAMP_RUBRIC, tmp_path / "interrupted")
@@ -711,7 +737,7 @@ def test_review_retry_submits_only_failed_parts_with_bounded_attempts(
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     tasks = []
     for index in range(65):
-        task = convert_svamp(RawRow(str(index), source, {**apple_row, "Body": f"Person {index} has 2 apples."}))
+        task = svamp_row_task(RawRow(str(index), source, {**apple_row, "Body": f"Person {index} has 2 apples."}))
         assert isinstance(task, TaskSpec)
         tasks.append(task)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=3, query_cache_root=str(tmp_path / "cache"))
@@ -743,7 +769,7 @@ def test_batch_provider_failures_have_finite_neutral_retries(tmp_path, apple_row
 
     monkeypatch.setattr(service, operation, failing_operation)
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("task", source, apple_row))
+    task = svamp_row_task(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
     reviewer = BatchReviewer(service, "model", "deployment", query_cache_root=str(tmp_path / "cache"))
     record = reviewer.review([task], SVAMP_RUBRIC, tmp_path / "review")[0]
@@ -815,28 +841,28 @@ def test_staged_source_reaches_end_across_files(tmp_path, apple_row):
     snapshot = tmp_path / "source.jsonl"
     snapshot.write_text("".join(json.dumps({**apple_row, "position": index}) + "\n" for index in range(1003)))
     spec = SourceFiles("fixture", "1", ("*.jsonl",), SourceFormat.JSONL)
-    records = list(staged_file_rows(str(tmp_path), "source.jsonl", spec, {}))
+    records = list(staged_file_rows(str(tmp_path), "source.jsonl", spec, ConversionContext(staged_inputs({}), None)))
     assert [row["data"]["position"] for row in records] == list(range(1003))
 
 
-def labels(inputs: StagedInputs) -> dict[str, str]:
-    with (inputs["labels"] / "labels.json").open("rt") as stream:
+def labels(context: ConversionContext) -> dict[str, str]:
+    with (context.inputs["labels"] / "labels.json").open("rt") as stream:
         return json.load(stream)
 
 
-def xml_problems(path: StoragePath, _inputs: StagedInputs) -> Iterator[dict[str, Any]]:
+def xml_problems(path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
     with path.open("rt") as stream:
         root = ET.fromstring(stream.read())
     for problem in root:
         yield {"ID": problem.get("ID"), "Body": problem.findtext("Body")}
 
 
-def labeled(row: dict[str, Any], inputs: StagedInputs) -> bool:
-    return row["ID"] in labels(inputs)
+def labeled(row: dict[str, Any], context: ConversionContext) -> bool:
+    return row["ID"] in labels(context)
 
 
-def with_label(row: dict[str, Any], inputs: StagedInputs) -> dict[str, Any]:
-    return {**row, "label": labels(inputs)[row["ID"]]}
+def with_label(row: dict[str, Any], context: ConversionContext) -> dict[str, Any]:
+    return {**row, "label": labels(context)[row["ID"]]}
 
 
 def test_source_read_select_and_decode_receive_staged_inputs_and_keep_original_locators(tmp_path):
@@ -851,11 +877,11 @@ def test_source_read_select_and_decode_receive_staged_inputs_and_keep_original_l
     spec = SourceFiles(
         "fixture", "1", ("*.xml",), SourceFormat.XML, select=labeled, decode=with_label, read=xml_problems
     )
-    inputs = staged_inputs({"labels": str(aux)})
+    context = ConversionContext(staged_inputs({"labels": str(aux)}), None)
     records = [
         record
         for file in staged_files(str(source), spec)
-        for record in staged_file_rows(str(source), file, spec, inputs)
+        for record in staged_file_rows(str(source), file, spec, context)
     ]
     assert [(record["locator"], record["data"]) for record in records] == [
         ("problems.xml:1", {"ID": "1", "Body": "Two plus two", "label": "four"})
@@ -889,7 +915,7 @@ def conversation_task(row: RawRow, prompt: str, grader: NoGrader) -> TaskSpec:
     )
 
 
-def convert_preference(row: RawRow) -> TaskSpec:
+def convert_preference(row: RawRow, _context: ConversionContext) -> TaskSpec:
     """A labeled candidate reply, kept as source evidence because no single reply is graded."""
     contract: dict[str, JsonValue] = {"completion": row.data["completion"], "preferred": row.data["label"]}
     grader = NoGrader(reason="A preference label grades no single reply", contract=contract)
@@ -920,7 +946,7 @@ def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
 def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row):
     service = BatchService(invalid_first_batch=True)
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("task", source, apple_row))
+    task = svamp_row_task(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     assert reviewer.review([task], SVAMP_RUBRIC, tmp_path / "first")[0].status == ReviewStatus.INVALID
@@ -940,8 +966,8 @@ def test_query_cache_fetches_only_missing_completions_in_same_evidence_directory
     service = PartialBatchService()
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     normalized = [
-        convert_svamp(RawRow("first", source, apple_row)),
-        convert_svamp(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
+        svamp_row_task(RawRow("first", source, apple_row)),
+        svamp_row_task(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
     ]
     tasks = []
     for task in normalized:
@@ -1192,7 +1218,7 @@ def test_large_encoded_code_tests_receive_bounded_review_without_changing_audit(
 
 def test_unicode_public_prompt_uses_character_budget_and_oversized_prompt_is_not_truncated(tmp_path, apple_row):
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("unicode", source, apple_row))
+    task = svamp_row_task(RawRow("unicode", source, apple_row))
     assert isinstance(task, TaskSpec)
     prompt = "漢字" * 5000
     task = task.model_copy(update={"context": ConversationInput(events=(TextMessage(role="user", content=prompt),))})

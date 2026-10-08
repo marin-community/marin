@@ -29,7 +29,7 @@ from taskcompendium.models import (
     ScriptGrader,
     TaskResource,
 )
-from taskcompendium.pipeline.inputs import StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
@@ -75,7 +75,7 @@ class TaskFiles:
             target.write_bytes(data)
 
 
-def unpack_task_binary(row: dict[str, Any], _inputs: StagedInputs) -> dict[str, Any]:
+def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict[str, Any]:
     """Expose an archived Harbor task's files, base64-encoded, with its instruction and verifier data."""
     blob = row["task_binary"]
     if not isinstance(blob, bytes):

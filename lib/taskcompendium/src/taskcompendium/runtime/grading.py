@@ -297,15 +297,16 @@ async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float)
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if isinstance(grader.reward, FileReward):
         return await _file_reward(machine, grader.reward, timeout, diagnostics)
-    if result.exit_code != 0 or result.stdout_truncated:
+    if result.exit_code != 0:
         return _infra_error(
             f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
         )
+    lines = [line.strip() for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
     try:
-        reward = float(result.stdout.decode().strip())
-    except (UnicodeError, ValueError):
+        reward = float(lines[-1])
+    except (IndexError, ValueError):
         return _infra_error(
-            "Grader stdout must contain one finite numeric reward", GradingFailure.INVALID_REWARD, diagnostics
+            "The last line of grader stdout must be a finite numeric reward", GradingFailure.INVALID_REWARD, diagnostics
         )
     if not math.isfinite(reward):
         return _infra_error("Grader returned a nonfinite reward", GradingFailure.INVALID_REWARD, diagnostics)

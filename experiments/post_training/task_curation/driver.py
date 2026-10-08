@@ -5,14 +5,13 @@
 
 import json
 import os
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 import click
 from fray.types import ResourceConfig
+from iris.cluster.client.job_info import get_job_info
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import ArtifactStep
@@ -21,9 +20,8 @@ from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.backends.qemu.machine import QemuMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy, QemuBundle, UnsupportedMachineSpec
+from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.direct_transport import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.models import FilterPolicy
@@ -42,8 +40,7 @@ from experiments.post_training.task_curation.campaign import (
     require_matching_sample,
     run_campaign,
 )
-from experiments.post_training.task_curation.images import IMAGES
-from experiments.post_training.task_curation.pipeline import PINNED_IMAGE, source_step
+from experiments.post_training.task_curation.pipeline import source_step
 from experiments.post_training.task_curation.sources import all_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
@@ -52,40 +49,18 @@ IRIS_JOB_TTL = 1800
 
 
 class VerificationBackend(StrEnum):
-    GVISOR = "gvisor"
     IRIS = "iris"
-    QEMU = "qemu"
+    GVISOR = "gvisor"
 
 
-def machines_identity(backend: VerificationBackend, worker_image: str) -> dict[str, Any]:
+def machines_identity(backend: VerificationBackend, worker_image: str, controller: bool) -> dict[str, Any]:
     """The settings every backend's grading machines share; the worker image carries the grading code."""
-    return {"backend": backend.value, "worker_image": worker_image, "network": NetworkPolicy.DENY.value}
-
-
-@dataclass(frozen=True)
-class QemuMachines:
-    """Boot the QEMU guest bundle that the worker image carries for each grader image."""
-
-    worker_image: str
-    bundles: Mapping[str, str]
-
-    def __post_init__(self) -> None:
-        if PINNED_IMAGE.fullmatch(self.worker_image) is None:
-            raise ValueError("QEMU verification requires a digest-pinned worker image carrying the bundles")
-
-    def identity(self) -> dict[str, Any]:
-        return {
-            **machines_identity(VerificationBackend.QEMU, self.worker_image),
-            "qemu_bundles": dict(sorted(self.bundles.items())),
-        }
-
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        bundle = self.bundles.get(image)
-        if bundle is None:
-            raise UnsupportedMachineSpec(f"The worker image carries no QEMU bundle for {image}")
-        return QemuMachineFactory(), MachineSpec(
-            QemuBundle(Path(bundle)), network=NetworkPolicy.DENY, memory_mb=memory_mb
-        )
+    return {
+        "backend": backend.value,
+        "worker_image": worker_image,
+        "network": NetworkPolicy.DENY.value,
+        "controller": controller,
+    }
 
 
 @dataclass(frozen=True)
@@ -96,7 +71,7 @@ class IrisMachines:
     controller_url: str
 
     def identity(self) -> dict[str, Any]:
-        return machines_identity(VerificationBackend.IRIS, self.worker_image)
+        return machines_identity(VerificationBackend.IRIS, self.worker_image, controller=True)
 
     def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         factory = IrisMachineFactory(
@@ -115,48 +90,25 @@ class GvisorMachines:
     worker_image: str
 
     def identity(self) -> dict[str, Any]:
-        return machines_identity(VerificationBackend.GVISOR, self.worker_image)
+        return machines_identity(VerificationBackend.GVISOR, self.worker_image, controller=False)
 
     def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         return GvisorMachineFactory(), MachineSpec(DockerImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
 
 
-@dataclass(frozen=True)
-class QemuOrIrisMachines:
-    """Boot images that have a QEMU bundle under QEMU and schedule every other image on Iris."""
-
-    qemu: QemuMachines
-    iris: IrisMachines
-
-    def identity(self) -> dict[str, Any]:
-        return {**self.qemu.identity(), "iris": self.iris.identity()}
-
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        if image in self.qemu.bundles:
-            return self.qemu.machine(image, memory_mb)
-        return self.iris.machine(image, memory_mb)
-
-
-def qemu_bundles() -> dict[str, str]:
-    return {image.reference: image.qemu_bundle for image in IMAGES if image.qemu_bundle is not None}
-
-
 def campaign_machines(backend: VerificationBackend, worker_image: str, controller_url: str | None) -> GradingMachines:
-    """Fresh, network-denied grading machines on ``backend`` for every source in a campaign.
-
-    QEMU with a controller URL runs images without a QEMU bundle on Iris instead of leaving their
-    sources inconclusive.
-    """
-    if backend == VerificationBackend.QEMU:
-        qemu = QemuMachines(worker_image, qemu_bundles())
-        if controller_url is None:
-            return qemu
-        return QemuOrIrisMachines(qemu, IrisMachines(worker_image, controller_url))
+    """Fresh, network-denied grading machines on ``backend`` for every source in a campaign."""
     if backend == VerificationBackend.IRIS:
         if controller_url is None:
             raise ValueError("Iris verification requires a controller URL")
         return IrisMachines(worker_image, controller_url)
     return GvisorMachines(worker_image)
+
+
+def job_controller_url() -> str | None:
+    """The controller of the Iris job this process runs in, or ``None`` outside an Iris job."""
+    info = get_job_info()
+    return info.controller_address if info is not None else None
 
 
 @click.command(help=__doc__)
@@ -177,13 +129,16 @@ def campaign_machines(backend: VerificationBackend, worker_image: str, controlle
 @click.option("--coordinator-memory", required=True, help="Explicit RAM budget for the shared coordinator, e.g. 16g.")
 @click.option("--normalized-shards", type=click.IntRange(min=1), required=True)
 @click.option("--concurrent-sources", type=click.IntRange(min=10), default=10, show_default=True)
-@click.option("--worker-image", required=True, help="Zephyr worker image; it also carries the QEMU guest bundles.")
+@click.option("--worker-image", required=True, help="Zephyr worker image; it carries the grading code.")
 @click.option(
-    "--verification-backend", type=click.Choice([backend.value for backend in VerificationBackend]), required=True
+    "--verification-backend",
+    type=click.Choice([backend.value for backend in VerificationBackend]),
+    default=VerificationBackend.IRIS.value,
+    show_default=True,
 )
 @click.option(
     "--controller-url",
-    help="Iris controller for --verification-backend iris, or for images without a QEMU bundle under qemu.",
+    help="Iris controller for --verification-backend iris; inside an Iris job, defaults to the job's controller.",
 )
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=100)
@@ -214,6 +169,11 @@ def main(
     sources: tuple[str, ...],
     do_run: bool,
 ) -> None:
+    backend = VerificationBackend(verification_backend)
+    if backend == VerificationBackend.IRIS and controller_url is None:
+        controller_url = job_controller_url()
+        if controller_url is None:
+            raise click.UsageError("--verification-backend iris outside an Iris job requires --controller-url")
     catalog = all_pipelines()
     unknown = set(sources) - catalog.keys()
     if unknown:
@@ -261,7 +221,7 @@ def main(
         ),
         filter_policy=FilterPolicy(),
         normalized_shards=normalized_shards,
-        machines=campaign_machines(VerificationBackend(verification_backend), worker_image, controller_url),
+        machines=campaign_machines(backend, worker_image, controller_url),
     )
     runtime = CampaignRuntime()
     steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]

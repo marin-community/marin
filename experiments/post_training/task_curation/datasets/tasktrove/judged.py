@@ -20,12 +20,13 @@ from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasktrove import archive_file
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
-from experiments.post_training.task_curation.images import REWARDKIT_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
@@ -145,7 +146,7 @@ def source_criteria(data: dict) -> tuple[str, ...]:
     return tuple(NUMBERED.sub("", line).strip() for line in principle.splitlines() if line.strip())
 
 
-def convert_judged(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     data = row.data.get("verifier_data")
     if not isinstance(data, dict):
         return unsupported("missing_judge_data", "Source verifier_data.json is required")
@@ -163,7 +164,7 @@ def convert_judged(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
     package = verifyit_package(
         JudgeSpec(criteria=criteria, question=question, rubric=RUBRIC_CHECKLIST),
         (inline_resource("source/judge.toml", judge_toml), inline_resource("source/verifier_data.json", verifier_data)),
-        environment=REWARDKIT_IMAGE.requirements(),
+        environment=required_grader_environment(context),
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
@@ -202,6 +203,7 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=source.rubric,
             atlas_id=f"Task Trove:{source.config}",
+            grader_image=GRADER,
         )
         for source in SOURCES
     ]

@@ -7,7 +7,10 @@ from shellbox.machine import Backend
 
 from taskcompendium.models import EnvironmentRequirements
 
+IMAGE_BACKENDS = (Backend.GVISOR, Backend.DOCKER)
+"""Backends that start a fresh machine from a digest-pinned image."""
 
-def grading_environment(image: str, backends: tuple[Backend, ...]) -> EnvironmentRequirements:
-    """A grader environment that runs the digest-pinned ``image`` on any of ``backends``."""
-    return EnvironmentRequirements(docker_image=image, compatible_backends=backends)
+
+def grading_environment(image: str) -> EnvironmentRequirements:
+    """A grader environment that runs the digest-pinned ``image`` under gVisor or Docker."""
+    return EnvironmentRequirements(docker_image=image, compatible_backends=IMAGE_BACKENDS)

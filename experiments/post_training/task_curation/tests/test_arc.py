@@ -8,14 +8,22 @@ import json
 import pytest
 from taskcompendium.grader import grader_config
 from taskcompendium.models import AnswerType, ScriptGrader, Source, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow, Reply, WorkspaceFiles
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets import arc
-from experiments.post_training.task_curation.images import ARC_IMAGE
-from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
+from experiments.post_training.task_curation.tests.conversion import (
+    FIXTURE_GRADER_ENVIRONMENT,
+    FIXTURE_GRADER_IMAGE,
+    convert_row,
+    converted_task,
+    tasktrove_row,
+)
 
 PIPELINES = {pipeline.name: pipeline for pipeline in arc.pipelines()}
+# The Nemotron Ultra declarations that use convert_ultra_arc name the grader image.
+ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]
 TASK_TOML = b"[verifier]\ntimeout_sec = 600.0\n"
 GRADER_FILES = {
@@ -64,7 +72,7 @@ def test_tasktrove_arc_runs_the_archive_grader_on_the_agents_files(name):
         None,
         600.0,
     )
-    assert grader.environment.docker_image == ARC_IMAGE.reference
+    assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
     assert (task.answer_type, task.output_paths) == (AnswerType.FILE, OUTPUT_PATHS[name])
     assert {"test.sh", "verifier.py", "verifier_data.json"} <= {resource.path for resource in task.resources.verifier}
     controls = PIPELINES[name].controls
@@ -125,7 +133,7 @@ def ultra_row(agent: str, **fields) -> RawRow:
 
 
 def test_ultra_transductive_controls_submit_the_expected_grid_and_a_changed_grid():
-    result = arc.convert_ultra_arc(ultra_row(arc.TRANSDUCTIVE_AGENT, expected_output=GRID))
+    result = arc.convert_ultra_arc(ultra_row(arc.TRANSDUCTIVE_AGENT, expected_output=GRID), ULTRA_CONTEXT)
     assert not isinstance(result, ImportRejection)
     task = result.task
     assert grader_config(task)["contract"]["expected_output"] == GRID
@@ -134,7 +142,8 @@ def test_ultra_transductive_controls_submit_the_expected_grid_and_a_changed_grid
 
 
 def test_ultra_inductive_ships_the_grade_script_and_has_no_known_program():
-    result = arc.convert_ultra_arc(ultra_row(arc.INDUCTIVE_AGENT, test_cases=[{"input": GRID, "output": GRID}]))
+    row = ultra_row(arc.INDUCTIVE_AGENT, test_cases=[{"input": GRID, "output": GRID}])
+    result = arc.convert_ultra_arc(row, ULTRA_CONTEXT)
     assert not isinstance(result, ImportRejection)
     task = result.task
     assert isinstance(task.grader, ScriptGrader) and task.grader.argv == (

@@ -27,9 +27,13 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
-from experiments.post_training.task_curation.images import IFEVAL_IMAGE, SKYRL_CODE_SQL_IMAGE
 from experiments.post_training.task_curation.pipeline import source_files
-from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
+from experiments.post_training.task_curation.tests.conversion import (
+    FIXTURE_GRADER_IMAGE,
+    convert_row,
+    converted_task,
+    fixture_context,
+)
 
 PIPELINES = {
     pipeline.name: pipeline for module in (math, code, ifeval, mcq, preference) for pipeline in module.pipelines()
@@ -256,7 +260,7 @@ def test_code_task_ships_its_scorer_cases_and_known_solution(name):
     task = converted_task(PIPELINES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert grader.environment.docker_image == SKYRL_CODE_SQL_IMAGE.reference
+    assert grader.environment.docker_image == FIXTURE_GRADER_IMAGE
     script = grader.argv[1].removeprefix("/tests/")
     assert verifier_file(task, script) == code.GRADE_SCRIPTS[script]
     final_prompt = task.context.events[-1]
@@ -277,7 +281,7 @@ def test_code_task_ships_its_scorer_cases_and_known_solution(name):
 def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     pipeline = PIPELINES["eurus2_code"]
     assert pipeline.source.select is not None
-    assert not pipeline.source.select({**ROWS["eurus2_code"], "ability": "math"}, {})
+    assert not pipeline.source.select({**ROWS["eurus2_code"], "ability": "math"}, fixture_context(pipeline))
     task = converted_task(pipeline, ROWS["eurus2_code"])
     assert [event.role for event in task.context.events] == ["system", "user"]
     assert grader_config(task)["test_cases"] == SUM_TESTS
@@ -293,7 +297,7 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
 def test_ifeval_task_calls_the_source_scorer_with_skyrl_constraints(name, constraints):
     task = converted_task(PIPELINES[name], ROWS[name])
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment.docker_image == IFEVAL_IMAGE.reference
+    assert task.grader.environment.docker_image == FIXTURE_GRADER_IMAGE
     assert json.loads(verifier_file(task, "config.json"))["contract"]["constraints"] == constraints
 
 
@@ -398,7 +402,7 @@ def test_asdiv_reader_yields_problem_fields(tmp_path):
         "<Body>Seven apples.</Body><Question>How many?</Question><Answer>7 (apples)</Answer>"
         "</Problem></ProblemSet></Machine-Reading-Corpus-File>"
     )
-    (row,) = math.asdiv_rows(StoragePath(str(path)), {})
+    (row,) = math.asdiv_rows(StoragePath(str(path)), fixture_context(PIPELINES["asdiv"]))
     assert row == {
         "ID": "nluds-0001",
         "Grade": "1",
@@ -439,7 +443,7 @@ def staged_component_rows(tmp_path, parent: list[dict], kto: list[dict], name: s
         str(tmp_path / "kto"),
         preference.TRAIN_FILE,
         source_files(PIPELINES[name].source),
-        {preference.PARENT_INPUT: StoragePath(str(tmp_path / "parent"))},
+        fixture_context(PIPELINES[name], {preference.PARENT_INPUT: StoragePath(str(tmp_path / "parent"))}),
     )
 
 

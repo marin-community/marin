@@ -17,7 +17,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import math_answer_task, numeric_answer_task, source_defect, unsupported
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply, wrong_reply
-from taskcompendium.pipeline.inputs import SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
@@ -148,14 +148,14 @@ def _message_math_task(
     return task.model_copy(update={"context": ConversationInput(events=events)})
 
 
-def convert_aime24(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_aime24(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     answer = row.data.get("answer")
     if not isinstance(answer, str) or not answer.strip().isdigit() or not 0 <= int(answer) <= 999:
         return source_defect("invalid_reference", "AIME answers must be integers from 0 through 999")
     return numeric_answer_task(row, prompt=row.data.get("problem"), answer=answer, tolerance_abs=0.0, tolerance_rel=0.0)
 
 
-def convert_aime_1983_2024(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_aime_1983_2024(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     return math_answer_task(
         row,
         prompt=row.data.get("Question"),
@@ -164,7 +164,7 @@ def convert_aime_1983_2024(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def asdiv_rows(path: StoragePath, _inputs: StagedInputs) -> Iterator[dict[str, Any]]:
+def asdiv_rows(path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
     """Read ASDiv ``Problem`` elements into their attributes and child fields."""
     with path.open("rb") as stream:
         root = ET.parse(stream).getroot()
@@ -172,7 +172,7 @@ def asdiv_rows(path: StoragePath, _inputs: StagedInputs) -> Iterator[dict[str, A
         yield {**item.attrib, **{child.tag: child.text or "" for child in item}}
 
 
-def convert_asdiv(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_asdiv(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     body, question, answer = (row.data.get(key) for key in ("Body", "Question", "Answer"))
     if not all(isinstance(value, str) and value.strip() for value in (body, question, answer)):
         return source_defect("missing_prompt_or_reference", "Body, Question and Answer are required")
@@ -184,7 +184,7 @@ def convert_asdiv(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def convert_dapo_math(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_dapo_math(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     messages, reward = row.data.get("prompt"), row.data.get("reward_model")
     if not isinstance(messages, list) or not messages or not isinstance(reward, dict) or "ground_truth" not in reward:
         return source_defect("missing_prompt_or_reference", "prompt messages and reward_model ground_truth are required")
@@ -192,20 +192,20 @@ def convert_dapo_math(row: RawRow) -> TaskSpec | ImportRejection:
     return _message_math_task(row, messages, str(reward["ground_truth"]), evidence)
 
 
-def convert_deepscaler(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_deepscaler(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     return math_answer_task(
         row, prompt=row.data.get("problem"), answer=row.data.get("answer"), evidence=_fields(row, SOLUTION_FIELDS)
     )
 
 
-def convert_gsm8k(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_gsm8k(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     question, answer = row.data.get("question"), row.data.get("answer")
     if not isinstance(question, str) or not isinstance(answer, str) or "####" not in answer:
         return source_defect("missing_prompt_or_reference", "question and answer with #### final separator are required")
     return math_answer_task(row, prompt=question, answer=answer.rsplit("####", 1)[-1], evidence={"answer": answer})
 
 
-def convert_hardmath(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_hardmath(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     return math_answer_task(
         row,
         prompt=row.data.get("question"),
@@ -214,14 +214,14 @@ def convert_hardmath(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def convert_hendrycks_math(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_hendrycks_math(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     solution = row.data.get("solution")
     if isinstance(solution, str) and r"\boxed" not in solution:
         return unsupported("missing_final_answer", "A boxed final answer is required in solution")
     return math_answer_task(row, prompt=row.data.get("problem"), answer=solution, evidence=_fields(row, SOLUTION_FIELDS))
 
 
-def convert_math500(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_math500(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     return math_answer_task(
         row,
         prompt=row.data.get("problem"),
@@ -230,7 +230,7 @@ def convert_math500(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def convert_numina_math(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_numina_math(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     problem, solution = row.data.get("problem"), row.data.get("solution")
     if not isinstance(problem, str) or not isinstance(solution, str):
         return source_defect("missing_prompt_or_reference", "problem and solution strings are required")
@@ -247,14 +247,14 @@ def convert_numina_math(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def convert_rlvr_math(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_rlvr_math(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     messages, expected = row.data.get("messages"), row.data.get("ground_truth")
     if not isinstance(messages, list) or not messages or not isinstance(expected, str):
         return source_defect("missing_prompt_or_reference", "messages and ground_truth strings are required")
     return _message_math_task(row, messages, expected, _fields(row, ("dataset", "constraint_type", "constraint")))
 
 
-def convert_svamp(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_svamp(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     body, question = row.data.get("Body"), row.data.get("Question")
     if not isinstance(body, str) or not body.strip() or not isinstance(question, str) or not question.strip():
         return source_defect("missing_prompt", "Body and Question must be nonempty strings")

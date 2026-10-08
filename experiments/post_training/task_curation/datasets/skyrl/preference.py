@@ -24,7 +24,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.preference import binary_preference_task, pairwise_preference_task
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.inputs import SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
@@ -120,7 +120,7 @@ def hh_conversation(text: str) -> tuple[TextMessage, ...]:
     )
 
 
-def convert_hh(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_hh(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
         chosen = hh_conversation(row.data["chosen"])
         rejected = hh_conversation(row.data["rejected"])
@@ -178,13 +178,13 @@ def _kto_key(row: dict[str, Any]) -> str:
     return _join_key(_messages(row.get("prompt")), _messages(row.get("completion")), row["label"])
 
 
-def kto_component_rows(path: StoragePath, inputs: StagedInputs) -> Iterator[dict[str, Any]]:
+def kto_component_rows(path: StoragePath, context: ConversionContext) -> Iterator[dict[str, Any]]:
     """KTO rows with ``kto_component_provenance`` recovered from the staged parent mixture.
 
     Every parent chosen/rejected candidate must appear in the KTO split exactly as often as in the
     parent, with no unmatched or ambiguous KTO row; otherwise the reader raises before yielding.
     """
-    parent = inputs[PARENT_INPUT] / TRAIN_FILE
+    parent = context.inputs[PARENT_INPUT] / TRAIN_FILE
     components = set(KTO_COMPONENTS.values())
     with TemporaryDirectory() as directory, sqlite3.connect(directory + "/join.sqlite") as connection:
         connection.execute("PRAGMA cache_size = -4096")
@@ -249,11 +249,11 @@ class KtoComponent:
 
     component: str
 
-    def __call__(self, row: dict[str, Any], _inputs: StagedInputs) -> bool:
+    def __call__(self, row: dict[str, Any], _context: ConversionContext) -> bool:
         return row["kto_component_provenance"]["component"] == self.component
 
 
-def convert_kto_component(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_kto_component(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     return binary_preference_task(
         row,
         prompt=row.data.get("prompt"),

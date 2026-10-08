@@ -63,7 +63,7 @@ from taskcompendium.pipeline.source_quality import (
     source_quality_report,
     unreviewed_quality_report,
 )
-from taskcompendium.pipeline.sources import staged_file_rows, staged_files, staged_inputs
+from taskcompendium.pipeline.sources import conversion_context, staged_file_rows, staged_files
 from taskcompendium.pipeline.transforms import (
     deduplicate_group,
     filter_row,
@@ -310,7 +310,7 @@ def prepare_source(
         relative_files = staged_files(str(source), recipe.source)
         selected = (
             Dataset.from_list(list(relative_files))
-            .flat_map(partial(staged_file_rows, str(source), spec=recipe.source, inputs=staged_inputs(recipe.inputs)))
+            .flat_map(partial(staged_file_rows, str(source), spec=recipe.source, context=conversion_context(recipe)))
             .reshard(1)
         )
     else:

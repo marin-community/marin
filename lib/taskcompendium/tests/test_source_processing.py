@@ -20,7 +20,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, reference_reply, wrong_reply
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
     FilterPolicy,
@@ -53,6 +53,7 @@ from .pipeline_stages import (
     fixture_recipe,
     review_config,
     script_graded,
+    svamp_row_task,
 )
 from .test_pipeline import BatchService, Output
 
@@ -64,29 +65,29 @@ class RecordingConverter:
     directory: str
     unsupported: bool = False
 
-    def __call__(self, row: RawRow) -> TaskSpec | ImportRejection:
+    def __call__(self, row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
         path = Path(self.directory) / row.id
         with path.open("a") as stream:
             stream.write("converted\n")
         if self.unsupported and row.data["Answer"] != "1":
             return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="unsupported_variant", detail="fixture")
-        return convert_svamp(row)
+        return svamp_row_task(row)
 
 
 @dataclass(frozen=True)
 class RecordingDecoder:
     directory: str
 
-    def __call__(self, row, _inputs):
+    def __call__(self, row, _context):
         with (Path(self.directory) / row["Answer"]).open("a") as stream:
             stream.write("decoded\n")
         decoded = {key: value for key, value in row.items() if key != "task_binary"}
         return {**decoded, "decode_receipt": "decoded source representation"}
 
 
-def convert_script_graded(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_script_graded(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     """The arithmetic task graded in its image, with the reference answer kept as an oracle file."""
-    task = convert_svamp(row)
+    task = svamp_row_task(row)
     if isinstance(task, ImportRejection):
         return task
     answer = str(row.data["Answer"])
@@ -103,12 +104,12 @@ def oracle_answer(_task: TaskSpec) -> OracleCommand:
 ORACLE_CONTROLS = Controls(golden=oracle_answer, negative=wrong_reply)
 
 
-def convert_mixed_graders(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_mixed_graders(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     """The arithmetic task with the grader named by the row's ``grader`` field."""
     kind = row.data["grader"]
     if kind == "script":
-        return convert_script_graded(row)
-    task = convert_svamp(row)
+        return convert_script_graded(row, context)
+    task = svamp_row_task(row)
     if isinstance(task, ImportRejection) or kind == "in_process":
         return task
     if kind == "none":
@@ -233,7 +234,7 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
     for index, (record, original) in enumerate(zip(records, rows, strict=True)):
         assert record["raw"]["data"] == original
         task = TaskSpec.model_validate(record["normalized"])
-        assert task == convert_svamp(RawRow(task.id, task.source, original))
+        assert task == svamp_row_task(RawRow(task.id, task.source, original))
         if index:
             assert record["decision"]["reasons"] == ["exact_semantic_duplicate"]
             assert record["decision"]["duplicate_of"] == records[0]["task_id"]
@@ -325,7 +326,7 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
         )
         expected_id = f"{recipe.name}-{canonical_sha256(expected_source.model_dump())}"
         original_row = rows[int(source_record["source_locator"].rsplit(":", 1)[1])]
-        expected = convert_svamp(RawRow(expected_id, expected_source, original_row))
+        expected = svamp_row_task(RawRow(expected_id, expected_source, original_row))
         assert task == expected
         expected_tasks[expected_id] = expected
     assert recipe.rubric is not None
@@ -528,8 +529,8 @@ class MixedPanelConverter:
     directory: str
     defect_limit: int
 
-    def __call__(self, row: RawRow) -> TaskSpec | ImportRejection:
-        task = RecordingConverter(self.directory)(row)
+    def __call__(self, row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
+        task = RecordingConverter(self.directory)(row, context)
         if int(row.data["Answer"]) <= self.defect_limit:
             return ImportRejection(
                 kind=ImportFailureKind.SOURCE_DEFECT, reason="invalid_test_contract", detail="Malformed source tests"

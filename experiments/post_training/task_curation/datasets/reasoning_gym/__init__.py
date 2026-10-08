@@ -7,8 +7,8 @@
 regenerates each entry again before scoring, so the scorer sees the generator's Python values.
 ``tasktrove-reasoning-gym`` keeps the TaskTrove archive's ``tests/test.sh``, which thresholds the
 scorer's reward at 0.5. The Nemotron Ultra ``reasoning_gym`` components are scored on the reply's
-last ``<answer>`` block or boxed answer. Every grader runs in ``REASONING_GYM_IMAGE``, which carries
-one reasoning-gym package per source.
+last ``<answer>`` block or boxed answer. Every grader runs in the grader image
+(``images.recipes.GRADER``).
 """
 
 import json
@@ -41,7 +41,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply
-from taskcompendium.pipeline.inputs import SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
     ImportFailureKind,
@@ -54,7 +54,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.tasktrove import ANSWER_FILE_DELIVERY, tasktrove_source
-from experiments.post_training.task_curation.images import REASONING_GYM_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
 
 GENERATOR_REVISION = "49b07130b3fcd12f2d064bba7c43869543a0e7e7"
@@ -173,7 +173,7 @@ class GeneratedRows:
     excluded_generators: tuple[tuple[str, str], ...]
     python_hash_seed: int
 
-    def __call__(self, archive_path: StoragePath, _inputs: StagedInputs) -> Iterator[dict[str, Any]]:
+    def __call__(self, archive_path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
         return generated_rows(archive_path, self.generator_revision, self.excluded_generators, self.python_hash_seed)
 
 
@@ -197,18 +197,20 @@ class RecordedControls(BaseModel):
     execution: str
 
 
-def _scorer_package(mode: str, contract: dict[str, Any], package_path: str) -> GraderPackage:
+def _scorer_package(
+    mode: str, contract: dict[str, Any], package_path: str, environment: EnvironmentRequirements
+) -> GraderPackage:
     return grade_script_package(
         GRADE,
         GRADE_BYTES,
         config={"mode": mode, "contract": contract},
-        environment=REASONING_GYM_IMAGE.requirements(),
+        environment=environment,
         timeout=SCORER_TIMEOUT,
         env={"PYTHONPATH": f"{package_path}:{SKYRL_GYM_PACKAGE}"},
     )
 
 
-def convert_generated(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
         entry = row.data["entry"]
         generation = row.data["generation"]
@@ -229,7 +231,7 @@ def convert_generated(row: RawRow) -> TaskSpec | ImportRejection:
         "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
         "recorded_pinned_generator_controls": recorded.model_dump(mode="json"),
     }
-    package = _scorer_package("generated", contract, GENERATED_PACKAGE)
+    package = _scorer_package("generated", contract, GENERATED_PACKAGE, required_grader_environment(context))
     return TaskSpec(
         id=row.id,
         source=row.source,
@@ -257,7 +259,7 @@ def reply_instruction(instruction: str) -> str:
     return public
 
 
-def convert_tasktrove(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     """A reply task graded by the archive's ``tests/test.sh`` with the TaskTrove reasoning-gym release."""
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
@@ -271,7 +273,7 @@ def convert_tasktrove(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejectio
     grader = archive_script_grader(
         row.data,
         required=("tests/verifier.py",),
-        environment=REASONING_GYM_IMAGE.requirements(),
+        environment=required_grader_environment(context),
         answer_path=ANSWER_PATH,
         env={"PYTHONPATH": TASKTROVE_PACKAGE},
     )
@@ -297,11 +299,12 @@ def tasktrove_golden(task: TaskSpec) -> Reply:
     return answer_reply(task, entry["answer"])
 
 
-def convert_ultra_reasoning_gym(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_ultra_reasoning_gym(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     request = text_request(row.data, (ULTRA_AGENT,))
     if isinstance(request, ImportRejection):
         return request
-    return blend_task(row, request, _scorer_package("ultra", request.contract, ULTRA_PACKAGE))
+    package = _scorer_package("ultra", request.contract, ULTRA_PACKAGE, required_grader_environment(context))
+    return blend_task(row, request, package)
 
 
 def ultra_golden(task: TaskSpec) -> Reply | None:
@@ -334,6 +337,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=GENERATED_RUBRIC,
             controls=GENERATED_CONTROLS,
             atlas_id="MarinSkyRL:reasoning_gym",
+            grader_image=GRADER,
         ),
         RlDataPipeline(
             name="tasktrove-reasoning-gym",
@@ -345,5 +349,6 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_RUBRIC,
             controls=TASKTROVE_CONTROLS,
             atlas_id=f"Task Trove:{TASKTROVE_CONFIG}",
+            grader_image=GRADER,
         ),
     ]

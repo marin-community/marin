@@ -6,8 +6,8 @@
 Each blend (``mopd``, ``rlvr1``, ``rlvr2``) is one JSONL file mixing components; a row's component
 is its ``dataset`` field, or ``agent:<name>`` for rows keyed by their NeMo Gym agent. SWE components
 are further split by whether the row's instance belongs to SWE-Gym. ``COMPONENTS`` maps each
-component path to its converter, rubric and controls; ``BLENDS`` lists the paths each blend carries.
-Converters live in ``graders.py``, except ARC (``datasets/arc``) and Reasoning Gym
+component path to its converter, rubric, controls and grader image; ``BLENDS`` lists the paths each
+blend carries. Converters live in ``graders.py``, except ARC (``datasets/arc``) and Reasoning Gym
 (``datasets/reasoning_gym``), which share their grader with the standalone sources.
 
 Selection and decoding are identified by name and parameters, not by this module's bytes; bump the
@@ -25,7 +25,7 @@ from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.nemotron_ultra import PLACEHOLDER_FIELD, blend_component
-from taskcompendium.pipeline.inputs import SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, IntendedUse
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
@@ -52,6 +52,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     convert_ungraded,
     convert_ungraded_agent,
 )
+from experiments.post_training.task_curation.images.recipes import GRADER, ImageRecipe
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, RowDecoder, ShellSim
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
@@ -96,7 +97,7 @@ class ComponentRows:
 
     component: str
 
-    def __call__(self, row: dict[str, Any], _inputs: StagedInputs) -> bool:
+    def __call__(self, row: dict[str, Any], _context: ConversionContext) -> bool:
         return blend_component(row) == self.component
 
 
@@ -112,14 +113,14 @@ class SweRows:
     component: str
     split: SweSplit
 
-    def __call__(self, row: dict[str, Any], inputs: StagedInputs) -> bool:
+    def __call__(self, row: dict[str, Any], context: ConversionContext) -> bool:
         if blend_component(row) != self.component:
             return False
-        members = swe_gym_ids(inputs[SWE_GYM.repo] / SWE_GYM.files[0])
+        members = swe_gym_ids(context.inputs[SWE_GYM.repo] / SWE_GYM.files[0])
         return (row["metadata"]["instance_id"] in members) == (self.split == SweSplit.SWE_GYM)
 
 
-def attach_placeholder_source(row: dict[str, Any], inputs: StagedInputs) -> dict[str, Any]:
+def attach_placeholder_source(row: dict[str, Any], context: ConversionContext) -> dict[str, Any]:
     """Attach the pinned upstream record that a question placeholder points at."""
     placeholder = row.get(PLACEHOLDER_FIELD)
     if placeholder is None:
@@ -130,7 +131,7 @@ def attach_placeholder_source(row: dict[str, Any], inputs: StagedInputs) -> dict
     if split != PLACEHOLDER_SPLITS[dataset]:
         raise ValueError(f"Unsupported placeholder split {dataset}/{split}")
     source = PLACEHOLDER_INPUTS[dataset]
-    record = placeholder_record(inputs[dataset] / source.files[0], index)
+    record = placeholder_record(context.inputs[dataset] / source.files[0], index)
     digest = hashlib.sha256(json.dumps(record, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return {
         **row,
@@ -277,34 +278,40 @@ def preference_rubric(scope: str) -> str:
 
 @dataclass(frozen=True)
 class Component:
-    """How one component's rows become tasks; ``decode`` and ``inputs`` restore placeholder questions."""
+    """How one component's rows become tasks; ``decode`` and ``inputs`` restore placeholder questions.
+
+    ``grader_image`` runs the component's sandboxed grader; components kept as ``NoGrader`` contracts name none.
+    """
 
     convert: Converter
     rubric: str
     controls: Controls | None = None
     decode: RowDecoder | None = None
     inputs: Mapping[str, HfSource] = field(default_factory=dict)
+    grader_image: ImageRecipe | None = None
 
 
 ABSTENTION = Component(convert_ungraded, QA_ABSTENTION_RUBRIC)
 AGENTIC_SAFETY = Component(convert_ungraded_agent, AGENTIC_SAFETY_RUBRIC)
-CALENDAR = Component(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC)
-COMPETITIVE_CODE = Component(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS)
-FORMAT = Component(convert_format, INSTRUCTION_FOLLOWING_RUBRIC)
-INSTRUCTION_FOLLOWING = Component(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC)
+CALENDAR = Component(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC, grader_image=GRADER)
+COMPETITIVE_CODE = Component(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS, grader_image=GRADER)
+FORMAT = Component(convert_format, INSTRUCTION_FOLLOWING_RUBRIC, grader_image=GRADER)
+INSTRUCTION_FOLLOWING = Component(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC, grader_image=GRADER)
 MATH = Component(convert_math, MATH_ANSWER_RUBRIC, decode=attach_placeholder_source, inputs=PLACEHOLDER_INPUTS)
 MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
-MCQA = Component(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
+MCQA = Component(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS, grader_image=GRADER)
 MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
-NEXT_ACTION = Component(convert_next_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
-NVARC = Component(arc.convert_ultra_arc, ARC_RUBRIC, arc.ULTRA_ARC_CONTROLS)
-RDKIT = Component(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS)
-REASONING_GYM = Component(reasoning_gym.convert_ultra_reasoning_gym, REASONING_GYM_RUBRIC, reasoning_gym.ULTRA_CONTROLS)
+NEXT_ACTION = Component(convert_next_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS, grader_image=GRADER)
+NVARC = Component(arc.convert_ultra_arc, ARC_RUBRIC, arc.ULTRA_ARC_CONTROLS, grader_image=GRADER)
+RDKIT = Component(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS, grader_image=GRADER)
+REASONING_GYM = Component(
+    reasoning_gym.convert_ultra_reasoning_gym, REASONING_GYM_RUBRIC, reasoning_gym.ULTRA_CONTROLS, grader_image=GRADER
+)
 SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
-STRUCTURED_OUTPUT = Component(convert_structured_output, INSTRUCTION_FOLLOWING_RUBRIC)
+STRUCTURED_OUTPUT = Component(convert_structured_output, INSTRUCTION_FOLLOWING_RUBRIC, grader_image=GRADER)
 SWE_REPO = Component(convert_ungraded_agent, SWE_REPO_RUBRIC)
 TAU_PIVOT = Component(convert_ungraded_agent, TOOL_USE_RUBRIC)
-TOOLCALL_SCHEMA = Component(convert_toolcall_schema, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
+TOOLCALL_SCHEMA = Component(convert_toolcall_schema, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS, grader_image=GRADER)
 
 HS3_EN = Component(
     convert_ungraded,
@@ -473,6 +480,7 @@ def _pipeline(blend: str, path: str) -> RlDataPipeline:
         controls=component.controls,
         inputs=inputs,
         atlas_id=f"{ATLAS_PREFIX}{blend}/{path}",
+        grader_image=component.grader_image,
     )
 
 

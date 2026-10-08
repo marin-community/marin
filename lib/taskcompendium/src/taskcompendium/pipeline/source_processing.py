@@ -45,10 +45,10 @@ from taskcompendium.pipeline.source_verification import (
     verify_source,
 )
 from taskcompendium.pipeline.sources import (
+    conversion_context,
     decode_staged_row,
     source_files_identity,
     staged_files,
-    staged_inputs,
     staged_raw_file_rows,
 )
 from taskcompendium.pipeline.stages import (
@@ -139,7 +139,7 @@ def merge_raw_samples(samples: Iterator[RawSample], *, size: int, seed: int) -> 
 
 def _raw_dataset(source_input: str, recipe: SourceRecipe) -> Dataset:
     return Dataset.from_list(list(staged_files(source_input, recipe.source))).flat_map(
-        partial(staged_raw_file_rows, source_input, spec=recipe.source, inputs=staged_inputs(recipe.inputs))
+        partial(staged_raw_file_rows, source_input, spec=recipe.source, context=conversion_context(recipe))
     )
 
 
@@ -161,7 +161,7 @@ def _decode_and_normalize(row: dict[str, Any], *, recipe: SourceRecipe) -> dict[
     raw_input_sha256 = _raw_input_sha256(row["data"])
     started = time.monotonic()
     try:
-        decoded = decode_staged_row(row, recipe.source, staged_inputs(recipe.inputs))
+        decoded = decode_staged_row(row, recipe.source, conversion_context(recipe))
     finally:
         metrics.update_counter("source/decode/seconds", time.monotonic() - started)
         metrics.update_counter("source/decode/attempts", 1)
@@ -204,9 +204,7 @@ def _staged_rows_with_ledger(
         with path.open("wb", auto_mkdir=True) as stream:
             with pq.ParquetWriter(stream, RAW_SCHEMA) as writer:
                 batch = []
-                for row in staged_raw_file_rows(
-                    source_input, relative_file, recipe.source, staged_inputs(recipe.inputs)
-                ):
+                for row in staged_raw_file_rows(source_input, relative_file, recipe.source, conversion_context(recipe)):
                     batch.append(_source_identity(row, recipe))
                     metrics.update_counter("source/raw/selected_rows", 1)
                     metrics.update_counter("source/output/download/rows", 1)

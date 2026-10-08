@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, DockerImage, MachineSpec
+from shellbox.machine import DockerImage, MachineSpec
 
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.environment import grading_environment
@@ -47,7 +47,7 @@ def scorer_task(scorer: Path) -> TaskSpec:
             "reward_key": "score",
         },
         config={"contract": {"words": ["red", "blue"]}},
-        environment=grading_environment(IMAGE, (Backend.DOCKER,)),
+        environment=grading_environment(IMAGE),
         timeout=30,
     )
     return conversation_task(

@@ -19,15 +19,15 @@ Building the catalog performs no downloads, inference or job submission.
 
 | Package | Responsibility |
 |---|---|
-| `experiments/post_training/task_curation/datasets/` | Dataset declarations, converters, rubrics, controls and `*_grade.py` grader scripts |
-| `experiments/post_training/task_curation/images/` | Grader image recipes and their digest-pinned `Image` constants |
+| `experiments/post_training/task_curation/datasets/` | Dataset declarations, converters, rubrics, controls, `*_grade.py` grader scripts and vendored `scorers/` |
+| `experiments/post_training/task_curation/images/` | The grader image recipe and `build.py`, which builds it and records it as an artifact |
 | `experiments/post_training/task_curation/sources.py` | The catalog, `all_pipelines()` |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
 | `taskcompendium.runtime` | Grading in fresh Shellbox machines |
-| `verifyit` | Stock graders and the bridge to image-installed source scorers |
+| `verifyit` | Stock graders and the bridge to source scorers shipped with a task |
 | `shellbox` | Isolated machines and their backends |
 
 TaskCompendium does not import experiments, name datasets, or construct
@@ -41,31 +41,42 @@ An `RlDataPipeline` has these fields:
 |---|---|
 | `name` | Catalog key and artifact name. |
 | `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
-| `convert` | `RawRow -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
-| `version` | Converter revision; bump it when conversion changes outside the converter module. |
-| `environment` | `ShellSim()` for conversation tasks, or an `Image` for agentic tasks. |
+| `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
+| `version` | Converter revision; bump it when conversion changes outside the hashed files. |
+| `environment` | `ShellSim()` for conversation tasks, or an `AgentImage` pinned by digest for agentic tasks. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
 | `controls` | Optional `Controls(golden, negative, memory_mb)` for grader verification. |
-| `inputs` | Auxiliary pinned sources, passed by name to `select`, `decode` and `read`. |
+| `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
+| `grader_image` | `GRADER` when graders run in a sandbox; the converter reads the built image as `ConversionContext.grader_environment`. |
+| `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
+| `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
+
+`convert`, `select`, `decode` and `read` each receive a `ConversionContext` with
+two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, the
+built grader image's environment or `None` when the declaration names no
+`grader_image`. `required_grader_environment(context)` returns the environment or
+raises.
 
 ## Graders and controls
 
 A task's grader is one of four kinds:
 
 - `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
-  in process; with `environment=IMAGE.requirements()` it grades in a fresh
-  machine of that image.
-- `ScriptGrader` runs a command in a fresh machine of a pinned image and reads
-  its reward from stdout, its exit code, or a reward file. A dataset-specific
-  script is a `<name>_grade.py` file next to its declaration, shipped in the
-  task's verifier resources under `/tests`. Scorers installed in a grader image
-  are called through `verifyit/execution/source_callable.py` with an
-  `invocation.json`, built by `taskcompendium.convert.source_scorer`.
+  in process; with `environment=required_grader_environment(context)` it grades
+  in a fresh machine of the grader image.
+- `ScriptGrader` runs a command in a fresh machine of the grader image and reads
+  its reward from the last nonempty stdout line, its exit code, or a reward file.
+  A dataset-specific script is a `<name>_grade.py` file next to its declaration,
+  and vendored upstream scorers live under `datasets/<family>/scorers/`, listed
+  in the declaration's `ships`. Both are shipped in the task's verifier resources
+  under `/tests`. Source scorers are called through
+  `verifyit/execution/source_callable.py` with an `invocation.json`, built by
+  `taskcompendium.convert.source_scorer`.
 - `SessionGrader` marks a task graded by its registered interactive session.
 - `NoGrader` records a source evaluator this repository cannot run, with the
   source contract. Its rows never reach `final/`.
@@ -117,16 +128,26 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
   --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
-  --verification-backend qemu \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-`--verification-backend` is `qemu`, `gvisor` or `iris` (with
-`--controller-url`). QEMU boots the guest bundle that the worker image carries
-for each grader image, as recorded in `images/__init__.py`; given
-`--controller-url`, it schedules images without a bundle on Iris instead of
-leaving their sources inconclusive. Grading machines never have network
-access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
+Build the grader image first, with the same `MARIN_PREFIX`:
+
+```bash
+uv run python -m experiments.post_training.task_curation.images.build --recipe grader
+```
+
+The build pushes `ghcr.io/marin-community/task-curation-grader:<identity>` and
+records the pushed digest in the artifact `images/grader-<identity>`. The
+identity hashes every file in the recipe's context and package directories with
+its mode, the digest-pinned base image and the platform, so a rerun with an
+unchanged recipe does nothing. A source whose declaration names the recipe
+raises `MissingImageArtifact` until the artifact exists.
+
+`--verification-backend` is `iris` (the default) or `gvisor`. Iris schedules
+each grader machine on the controller of the enclosing Iris job, or on
+`--controller-url` outside one; gVisor runs it on the worker's Docker daemon.
+Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
 `--base-url` overrides it. Full execution requires
 `--mode full --sample-report CAMPAIGN_PREFIX/sample.json`; the sample must match
@@ -154,8 +175,11 @@ Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader`,
 `deferred:judge` or `unverified`; `final/` holds the admitted rows. Sidecars
 join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
 `raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
-converter module bytes, grader scripts, referenced images, rubric, controls and
-pipeline settings, so changing any of them produces a new artifact.
+every `*.py` file in the converter module's directory, every file below `ships`,
+the built grader image digest, the agent image, the resource budget, rubric,
+controls and pipeline settings, so changing any of them produces a new artifact.
+The manifest counts rows deferred for `resources_over_budget` with the other
+normalization reasons.
 
 The
 [pipeline contract](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/README.md)

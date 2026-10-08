@@ -27,13 +27,13 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     repositories,
     structured_outputs,
 )
-from experiments.post_training.task_curation.images import (
-    TASKTROVE_EXECUTABLE_IMAGE,
-    TASKTROVE_NL2BASH_IMAGE,
-    TASKTROVE_PYTHON_TESTS_IMAGE,
-    TASKTROVE_STACK_PYTEST_IMAGE,
+from experiments.post_training.task_curation.tests.conversion import (
+    FIXTURE_GRADER_ENVIRONMENT,
+    convert_row,
+    converted_task,
+    fixture_context,
+    tasktrove_row,
 )
-from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 PIPELINES = {
     pipeline.name: pipeline
@@ -140,26 +140,30 @@ ROWS: dict[str, dict] = {
 
 PYTHON_FILE = ("/app/solution.py",)
 EXPECTED = {
-    "tasktrove-code_contests": ("stdio", SOLUTION_PATHS, TASKTROVE_EXECUTABLE_IMAGE),
-    "tasktrove-codeforces": ("stdio", SOLUTION_PATHS, TASKTROVE_EXECUTABLE_IMAGE),
-    "tasktrove-competitive_coding": ("stdio", PYTHON_FILE, TASKTROVE_EXECUTABLE_IMAGE),
-    "tasktrove-taco": ("stdio", SOLUTION_PATHS, TASKTROVE_EXECUTABLE_IMAGE),
-    "tasktrove-nl2bash": ("script", (OUTPUT_PATH,), TASKTROVE_NL2BASH_IMAGE),
-    "tasktrove-curriculum_easy": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-curriculum_medium": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-e2egit": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-e2egit_large": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-multifile": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-pymethods": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-pymethods_large": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-unitsyn": ("pytest", SOLUTION_PATHS, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-unitsyn_large": ("pytest", PYTHON_FILE, TASKTROVE_PYTHON_TESTS_IMAGE),
-    "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, TASKTROVE_STACK_PYTEST_IMAGE),
+    "tasktrove-code_contests": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
+    "tasktrove-codeforces": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
+    "tasktrove-competitive_coding": ("stdio", PYTHON_FILE, code.AGENT_IMAGE),
+    "tasktrove-taco": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
+    "tasktrove-nl2bash": ("script", (OUTPUT_PATH,), nl2bash.AGENT_IMAGE),
+    "tasktrove-curriculum_easy": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-curriculum_medium": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-e2egit": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-e2egit_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-multifile": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-pymethods": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-pymethods_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-unitsyn": ("pytest", SOLUTION_PATHS, python_tests.AGENT_IMAGE),
+    "tasktrove-unitsyn_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
+    "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, python_tests.STACK_PYTEST_AGENT_IMAGE),
     "tasktrove-structured_outputs": ("json-schema", (), None),
     "tasktrove-swe_rebench": ("none", (), None),
     "tasktrove-swesmith": ("none", (), None),
 }
-"""Each declaration's grader mode (``none`` for an ungraded task), captured files and grader image."""
+"""Each declaration's grader mode (``none`` for an ungraded task), captured files and agent image.
+
+A task with an agent image is graded in a fresh machine of the grader image; the others are graded
+in process or not at all.
+"""
 
 
 def grader_name(task: TaskSpec) -> str:
@@ -184,12 +188,12 @@ def test_rows_cover_every_declaration():
 @pytest.mark.parametrize("name", sorted(ROWS))
 def test_row_converts_to_declared_grader(name):
     task = converted_task(PIPELINES[name], ROWS[name])
-    mode, output_paths, image = EXPECTED[name]
+    mode, output_paths, agent_image = EXPECTED[name]
     assert grader_name(task) == mode
     assert task.output_paths == output_paths
+    assert task.environment_requirements.docker_image == (agent_image.reference if agent_image is not None else None)
     grader_environment = task.grader.environment if isinstance(task.grader, VerifyitGrader) else None
-    expected_image = image.requirements().docker_image if image is not None else None
-    assert (grader_environment.docker_image if grader_environment is not None else None) == expected_image
+    assert grader_environment == (FIXTURE_GRADER_ENVIRONMENT if agent_image is not None else None)
     # Hidden tests and oracle files never reach the agent's machine.
     worker = {resource.path for resource in task.resources.worker}
     assert not any(path.startswith(("tests/", "solution/", "cases/")) for path in worker)
@@ -286,8 +290,9 @@ def test_codeforces_oracle_passes_and_negative_fails_on_hidden_cases(tmp_path):
 @pytest.mark.parametrize("exit_code, expected_reward", [(0, 1.0), (7, 0.0)])
 def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_path, exit_code, expected_reward):
     # The submission prints every expected output, so only its exit status decides the reward.
-    source = archive_files(unpack_task_binary(ROWS["tasktrove-codeforces"], {}))
-    task = converted_task(PIPELINES["tasktrove-codeforces"], ROWS["tasktrove-codeforces"])
+    pipeline = PIPELINES["tasktrove-codeforces"]
+    source = archive_files(unpack_task_binary(ROWS["tasktrove-codeforces"], fixture_context(pipeline)))
+    task = converted_task(pipeline, ROWS["tasktrove-codeforces"])
     tests = tmp_path / "tests"
     write_verifier(task, tests)
     for path, data in source.under("tests/").items():

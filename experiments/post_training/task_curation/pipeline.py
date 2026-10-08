@@ -4,12 +4,14 @@
 """Dataset declarations and the artifact steps that ingest them.
 
 An ``RlDataPipeline`` names one pinned source, the converter that turns each row into a
-``TaskSpec`` with its grader fixed, the agent environment, an optional review rubric and optional
-grader controls. ``source_step`` turns a declaration into one cached ``data/rl/<name>-<hash>``
-artifact produced by ``taskcompendium.pipeline.source_processing.run_source_pipeline``.
+``TaskSpec`` with its grader fixed, the agent environment, the image its sandboxed graders run in,
+an optional review rubric and optional grader controls. ``source_step`` turns a declaration into
+one cached ``data/rl/<name>-<hash>`` artifact produced by
+``taskcompendium.pipeline.source_processing.run_source_pipeline``.
 """
 
 import hashlib
+import os
 import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
@@ -29,13 +31,19 @@ from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import Backend
-from taskcompendium.convert.environment import grading_environment
+from taskcompendium.convert.environment import IMAGE_BACKENDS, grading_environment
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, EnvironmentRequirements
 from taskcompendium.pipeline.controls import controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, StagedInputs
-from taskcompendium.pipeline.models import Controls, Converter, IntendedUse, ReviewRubric, SourceRecipe
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
+from taskcompendium.pipeline.models import (
+    RESOURCE_BUDGET_BYTES,
+    Controls,
+    Converter,
+    IntendedUse,
+    ReviewRubric,
+    SourceRecipe,
+)
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
     SourcePipelineConfig,
@@ -47,16 +55,22 @@ from taskcompendium.pipeline.sources import source_files_identity
 from zephyr.dataset import Dataset
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
+from experiments.post_training.task_curation.images.build import (
+    ImageArtifact,
+    built_image,
+    context_paths,
+    image_artifact,
+)
+from experiments.post_training.task_curation.images.recipes import ImageRecipe
 
 PIPELINE_VERSION = "2026.10.07.1"
-GRADER_SCRIPT_SUFFIX = "_grade.py"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 PINNED_IMAGE = re.compile(DOCKER_IMAGE_PATTERN)
 
-type RowSelector = Callable[[dict[str, Any], StagedInputs], bool]
-type RowDecoder = Callable[[dict[str, Any], StagedInputs], dict[str, Any]]
-type FileReader = Callable[[StoragePath, StagedInputs], Iterator[dict[str, Any]]]
+type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
+type RowDecoder = Callable[[dict[str, Any], ConversionContext], dict[str, Any]]
+type FileReader = Callable[[StoragePath, ConversionContext], Iterator[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -65,7 +79,8 @@ class HfSource:
 
     ``select`` drops rows before raw sampling (for example, one component of a blend). ``decode``
     rewrites a selected row before conversion (for example, unpacking an archive). ``read`` replaces
-    the format reader for files that need a custom parser. Each receives the staged auxiliary inputs.
+    the format reader for files that need a custom parser. Each receives the ``ConversionContext``:
+    the staged auxiliary inputs and the grader image environment.
     """
 
     repo: str
@@ -95,25 +110,17 @@ class UrlSource:
 
 
 @dataclass(frozen=True)
-class Image:
-    """A digest-pinned container image and the machine backends that can run it.
-
-    ``qemu_bundle`` is the guest bundle path on the campaign worker image; an image runs on QEMU
-    only when it has one.
-    """
+class AgentImage:
+    """A digest-pinned image the agent's machine starts from, run under gVisor or Docker."""
 
     reference: str
-    backends: tuple[Backend, ...] = (Backend.GVISOR, Backend.DOCKER, Backend.QEMU)
-    qemu_bundle: str | None = None
 
     def __post_init__(self) -> None:
         if PINNED_IMAGE.fullmatch(self.reference) is None or "@sha256:" not in self.reference:
-            raise ValueError(f"Image must be pinned by digest: {self.reference}")
-        if (Backend.QEMU in self.backends) != (self.qemu_bundle is not None):
-            raise ValueError(f"Image runs on QEMU exactly when it has a QEMU bundle: {self.reference}")
+            raise ValueError(f"Agent image must be pinned by digest: {self.reference}")
 
     def requirements(self) -> EnvironmentRequirements:
-        return grading_environment(self.reference, self.backends)
+        return EnvironmentRequirements(docker_image=self.reference, compatible_backends=IMAGE_BACKENDS)
 
 
 @dataclass(frozen=True)
@@ -129,21 +136,36 @@ class RlDataPipeline:
     """One RL data source and how its rows become tasks.
 
     ``name`` is the catalog key and artifact name. ``version`` is the converter revision; bump it
-    when conversion changes in a way the converter module's bytes do not capture. ``rubric=None``
-    skips model review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary
-    pinned files staged before conversion, passed to the source callables by name.
+    when conversion changes in a way the hashed files do not capture. ``rubric=None`` skips model
+    review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary pinned files
+    staged before conversion; the source callables and converter find them in ``context.inputs``.
+
+    ``grader_image`` is the recipe whose built image runs the source's sandboxed graders; the
+    converter reads its environment from ``context.grader_environment``. ``ships`` are directories,
+    such as ``datasets/<family>/scorers``, whose files the converter packages into tasks. The
+    artifact identity hashes the converter module's directory, every file below ``ships`` and the
+    grader image digest. A task whose decoded resources exceed ``resource_budget_bytes`` is
+    deferred as ``resources_over_budget``.
     """
 
     name: str
     source: HfSource | UrlSource
     convert: Converter
     version: str
-    environment: Image | ShellSim
+    environment: AgentImage | ShellSim
     intended_use: IntendedUse
     rubric: str | None = None
     controls: Controls | None = None
     inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
     atlas_id: str | None = None
+    grader_image: ImageRecipe | None = None
+    ships: tuple[Path, ...] = ()
+    resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+
+    def __post_init__(self) -> None:
+        missing = [str(path) for path in self.ships if not path.is_dir()]
+        if missing:
+            raise ValueError(f"{self.name} ships directories that do not exist: {missing}")
 
 
 class RlDataArtifact(CampaignArtifact):
@@ -174,7 +196,9 @@ def source_files(source: HfSource | UrlSource) -> SourceFiles:
     )
 
 
-def source_recipe(pipeline: RlDataPipeline, inputs: Mapping[str, str]) -> SourceRecipe:
+def source_recipe(
+    pipeline: RlDataPipeline, inputs: Mapping[str, str], grader_environment: EnvironmentRequirements | None
+) -> SourceRecipe:
     return SourceRecipe(
         name=pipeline.name,
         version=pipeline.version,
@@ -184,6 +208,8 @@ def source_recipe(pipeline: RlDataPipeline, inputs: Mapping[str, str]) -> Source
         controls=pipeline.controls,
         intended_use=pipeline.intended_use,
         inputs=dict(inputs),
+        grader_environment=grader_environment,
+        resource_budget_bytes=pipeline.resource_budget_bytes,
     )
 
 
@@ -191,18 +217,20 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def converter_identity(convert: Converter) -> dict[str, Any]:
-    """Converter code, packaged grader scripts and image digests the converter module references."""
-    module = sys.modules[callable_module(convert)]
+def converter_identity(pipeline: RlDataPipeline, grader_image: str | None) -> dict[str, Any]:
+    """The converter, every file it can package into a task, and the image its graders run in.
+
+    Files are the converter module's directory's ``*.py`` and everything below ``ships``, keyed
+    by path relative to the module's directory.
+    """
+    module = sys.modules[callable_module(pipeline.convert)]
     assert module.__file__ is not None
-    module_path = Path(module.__file__)
+    directory = Path(module.__file__).parent
+    files = {*directory.glob("*.py"), *(path for root in pipeline.ships for path in context_paths(root))}
     return {
-        "function": callable_identity(convert),
-        "module_sha256": _file_sha256(module_path),
-        "grader_scripts": {
-            path.name: _file_sha256(path) for path in sorted(module_path.parent.glob(f"*{GRADER_SCRIPT_SUFFIX}"))
-        },
-        "images": sorted({value.reference for value in vars(module).values() if isinstance(value, Image)}),
+        "function": callable_identity(pipeline.convert),
+        "files": {os.path.relpath(path, directory): _file_sha256(path) for path in sorted(files)},
+        "grader_image": grader_image,
     }
 
 
@@ -213,9 +241,11 @@ def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
 
-def pipeline_identity(pipeline: RlDataPipeline, config: SourcePipelineConfig) -> dict[str, Any]:
-    """Everything that can change a source artifact's contents."""
-    recipe = source_recipe(pipeline, {})
+def pipeline_identity(
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, grader_image: str | None
+) -> dict[str, Any]:
+    """Everything that can change a source artifact's contents; ``grader_image`` is the built digest."""
+    recipe = source_recipe(pipeline, {}, None)
     execution = config.execution
     return {
         "name": pipeline.name,
@@ -224,12 +254,13 @@ def pipeline_identity(pipeline: RlDataPipeline, config: SourcePipelineConfig) ->
         "source": {**download_identity(pipeline.source), "files": source_files_identity(recipe.source)},
         "inputs": {name: download_identity(source) for name, source in sorted(pipeline.inputs.items())},
         "code": recipe_code_identity(recipe),
-        "converter": converter_identity(pipeline.convert),
+        "converter": converter_identity(pipeline, grader_image),
         "environment": (
-            {"image": pipeline.environment.reference, "backends": pipeline.environment.backends}
-            if isinstance(pipeline.environment, Image)
+            {"image": pipeline.environment.reference}
+            if isinstance(pipeline.environment, AgentImage)
             else {"shellsim": True}
         ),
+        "resource_budget_bytes": pipeline.resource_budget_bytes,
         "rubric": pipeline.rubric,
         "review": asdict(config.review) if pipeline.rubric is not None else None,
         "controls": controls_identity(pipeline.controls) if pipeline.controls is not None else None,
@@ -313,6 +344,7 @@ class SourceRun:
     inputs: dict[str, str]
     output_path: str
     previous_verification_report: str | None
+    grader_image: str | None
 
 
 def _source_run(
@@ -320,6 +352,7 @@ def _source_run(
     downloaded: ArtifactStep[Artifact],
     inputs: Mapping[str, ArtifactStep[Artifact]],
     previous: ArtifactStep[Artifact] | None,
+    grader_image: str | None,
     ctx: StepContext,
 ) -> SourceRun:
     return SourceRun(
@@ -327,6 +360,7 @@ def _source_run(
         source_input=ctx.artifact_path(downloaded),
         inputs={name: ctx.artifact_path(step) for name, step in inputs.items()},
         output_path=ctx.output_path,
+        grader_image=grader_image,
         previous_verification_report=(
             str(StoragePath(ctx.artifact_path(previous)) / "verify/report.json") if previous is not None else None
         ),
@@ -336,8 +370,9 @@ def _source_run(
 def _run_source(
     pipeline: RlDataPipeline, config: SourcePipelineConfig, run: SourceRun, *, campaign: CampaignRuntime
 ) -> RlDataArtifact:
+    grader_environment = grading_environment(run.grader_image) if run.grader_image is not None else None
     result = run_source_pipeline(
-        source_recipe(pipeline, run.inputs),
+        source_recipe(pipeline, run.inputs, grader_environment),
         campaign.context,
         run.source_input,
         run.output_path,
@@ -359,11 +394,18 @@ def source_step(
 ) -> ArtifactStep[RlDataArtifact]:
     """The ``data/rl/<name>-<hash>`` artifact for one declaration.
 
-    ``previous`` is an earlier output of the same source whose control trials are reused.
+    ``previous`` is an earlier output of the same source whose control trials are reused. A
+    declaration with a ``grader_image`` requires that image's artifact to be built already; see
+    ``images.build``.
     """
     downloaded = download_step(pipeline.source, campaign)
     inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
-    identity = pipeline_identity(pipeline, config)
+    image_steps: tuple[ArtifactStep[ImageArtifact], ...] = ()
+    grader_image = None
+    if pipeline.grader_image is not None:
+        grader_image = built_image(pipeline.grader_image).image
+        image_steps = (image_artifact(pipeline.grader_image),)
+    identity = pipeline_identity(pipeline, config, grader_image)
     identity["previous"] = (
         {"name": previous.name, "version": previous.version, "fingerprint": previous.fingerprint()}
         if previous is not None
@@ -375,6 +417,6 @@ def source_step(
         version=PIPELINE_VERSION,
         artifact_type=RlDataArtifact,
         run=partial(_run_source, pipeline, config, campaign=campaign),
-        build_config=partial(_source_run, identity, downloaded, inputs, previous),
-        deps=(downloaded, *inputs.values(), *((previous,) if previous is not None else ())),
+        build_config=partial(_source_run, identity, downloaded, inputs, previous, grader_image),
+        deps=(downloaded, *inputs.values(), *image_steps, *((previous,) if previous is not None else ())),
     )

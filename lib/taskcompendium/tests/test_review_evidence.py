@@ -11,12 +11,14 @@ from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review import completion_body
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-from .pipeline_stages import SVAMP_RUBRIC, convert_svamp
+from .pipeline_stages import SVAMP_RUBRIC, svamp_row_task
 
 
 def test_review_can_inspect_verifier_text_without_changing_task_bytes():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = svamp_row_task(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resource = inline_resource("tests/cases.json", b'{"input":"two","output":"2"}')
     task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
@@ -28,7 +30,9 @@ def test_review_can_inspect_verifier_text_without_changing_task_bytes():
 
 def test_review_marks_omitted_fixture_content_and_retains_full_task():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = svamp_row_task(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resource = inline_resource("tests/large.txt", b"a" * 100_000)
     task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
@@ -41,7 +45,9 @@ def test_review_marks_omitted_fixture_content_and_retains_full_task():
 
 def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = svamp_row_task(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resources = ResourceGroups(
         verifier=tuple(inline_resource(f"tests/case-{index}.txt", b"case") for index in range(300)),
@@ -69,7 +75,9 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
 
 def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = svamp_row_task(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resources = ResourceGroups(
         verifier=tuple(
@@ -90,7 +98,9 @@ def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
 
 def test_large_public_files_do_not_hide_later_oracle_and_test_prefixes():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = convert_svamp(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = svamp_row_task(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     oracle = "é" * 1_000
     resources = ResourceGroups(

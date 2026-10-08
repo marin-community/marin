@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL instruction-following sources, graded by the pinned SkyRL IFEval scorer in the IFEval image.
+"""SkyRL instruction-following sources, graded by the pinned SkyRL IFEval scorer in the grader image.
 
 The scorer rewards the fraction of constraints a reply satisfies. RLVR-IFeval rows already carry
 SkyRL constraint descriptors; Nemotron instruction IDs are mapped to the same descriptors. The
@@ -17,11 +17,11 @@ from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.source_scorer import source_scorer_package
-from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.models import ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
-from experiments.post_training.task_curation.images import IFEVAL_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
 IFEVAL_SCORER_PATH = "/opt/skyrl_gym/skyrl_gym/envs/ifeval/utils.py"
@@ -122,18 +122,22 @@ def _messages(value: Any) -> tuple[TextMessage, ...]:
 
 
 def ifeval_scorer_task(
-    row: RawRow, events: Sequence[TextMessage], constraints: Any, evidence: Mapping[str, Any]
+    row: RawRow,
+    events: Sequence[TextMessage],
+    constraints: Any,
+    evidence: Mapping[str, Any],
+    environment: EnvironmentRequirements,
 ) -> TaskSpec:
     package = source_scorer_package(
         invocation=IFEVAL_INVOCATION,
         config={"contract": {"constraints": constraints}},
-        environment=IFEVAL_IMAGE.requirements(),
+        environment=environment,
         timeout=GRADER_TIMEOUT,
     )
     return conversation_task(row, events=events, package=package, evidence=evidence)
 
 
-def convert_nemotron_if(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_nemotron_if(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
         events = _messages(row.data["input"])
         names, arguments = row.data["args"]["instruction_id_list"], row.data["args"]["instruction_kwargs"]
@@ -149,10 +153,10 @@ def convert_nemotron_if(row: RawRow) -> TaskSpec | ImportRejection:
     except ValueError as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
     evidence = {key: value for key, value in row.data.items() if key not in {"input", "args", "path"}}
-    return ifeval_scorer_task(row, events, constraints, evidence)
+    return ifeval_scorer_task(row, events, constraints, evidence, required_grader_environment(context))
 
 
-def convert_rlvr_ifeval(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
         events = _messages(row.data["messages"])
         constraints = json.loads(row.data["ground_truth"])
@@ -161,7 +165,7 @@ def convert_rlvr_ifeval(row: RawRow) -> TaskSpec | ImportRejection:
     except (ValidationError, ValueError, KeyError, TypeError) as error:
         return unsupported("invalid_instruction_contract", str(error))
     evidence = {key: value for key, value in row.data.items() if key not in {"messages", "ground_truth", "path"}}
-    return ifeval_scorer_task(row, events, constraints, evidence)
+    return ifeval_scorer_task(row, events, constraints, evidence, required_grader_environment(context))
 
 
 def pipelines() -> list[RlDataPipeline]:
@@ -179,6 +183,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
+            grader_image=GRADER,
             atlas_id="MarinSkyRL:nemotron_if",
         ),
         RlDataPipeline(
@@ -194,6 +199,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
+            grader_image=GRADER,
             atlas_id="MarinSkyRL:rlvr_ifeval",
         ),
     ]

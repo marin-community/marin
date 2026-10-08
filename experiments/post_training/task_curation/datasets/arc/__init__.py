@@ -7,7 +7,7 @@ TaskTrove tasks ask for a file (``/app/solution.py`` holding ``transform(grid)``
 in ``/app/answer.txt``) and keep the archive's ``tests/test.sh`` as their grader. Ultra NVARC rows
 ask for a reply: the transductive reply is scored by the image's NVARC scorer directly, and the
 inductive reply by ``arc_grade.py``, which runs the transform through the image's sandbox server.
-Both run in ``ARC_IMAGE``.
+Every grader runs in the grader image (``images.recipes.GRADER``).
 """
 
 from collections.abc import Callable
@@ -28,6 +28,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
     ImportRejection,
@@ -39,7 +40,7 @@ from taskcompendium.pipeline.models import (
 )
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
-from experiments.post_training.task_curation.images import ARC_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
@@ -110,7 +111,10 @@ def _check_expected_grid(data: dict[str, Any]) -> None:
 
 
 def _tasktrove_task(
-    row: RawRow, output_paths: tuple[str, ...], check_reference: Callable[[dict[str, Any]], None]
+    row: RawRow,
+    environment: EnvironmentRequirements,
+    output_paths: tuple[str, ...],
+    check_reference: Callable[[dict[str, Any]], None],
 ) -> TaskSpec | ImportRejection:
     """A file task graded by the archive's own ``tests/test.sh``."""
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
@@ -120,9 +124,7 @@ def _tasktrove_task(
         check_reference(data)
     except (KeyError, TypeError, ValueError) as error:
         return source_defect("invalid_verifier_data", str(error))
-    grader = archive_script_grader(
-        row.data, required=("tests/verifier.py",), environment=ARC_IMAGE.requirements(), answer_path=None
-    )
+    grader = archive_script_grader(row.data, required=("tests/verifier.py",), environment=environment, answer_path=None)
     if isinstance(grader, ImportRejection):
         return grader
     return TaskSpec(
@@ -138,13 +140,14 @@ def _tasktrove_task(
     )
 
 
-def convert_tasktrove_inductive(row: RawRow) -> TaskSpec | ImportRejection:
+def convert_tasktrove_inductive(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     """The grader reads ``solution.py`` first and ``answer.txt`` as a fallback."""
-    return _tasktrove_task(row, (SOLUTION_PATH, ANSWER_PATH), _check_transform_cases)
+    environment = required_grader_environment(context)
+    return _tasktrove_task(row, environment, (SOLUTION_PATH, ANSWER_PATH), _check_transform_cases)
 
 
-def convert_tasktrove_transductive(row: RawRow) -> TaskSpec | ImportRejection:
-    return _tasktrove_task(row, (ANSWER_PATH,), _check_expected_grid)
+def convert_tasktrove_transductive(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
+    return _tasktrove_task(row, required_grader_environment(context), (ANSWER_PATH,), _check_expected_grid)
 
 
 def tasktrove_inductive_negative(_task: TaskSpec) -> WorkspaceFiles:
@@ -155,19 +158,20 @@ def tasktrove_transductive_negative(_task: TaskSpec) -> WorkspaceFiles:
     return WorkspaceFiles({ANSWER_PATH: b"__incorrect_grid__\n"})
 
 
-def convert_ultra_arc(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_ultra_arc(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """An Ultra NVARC reply: a fenced transform program (inductive) or an output grid (transductive)."""
     request = text_request(row.data, (INDUCTIVE_AGENT, TRANSDUCTIVE_AGENT))
     if isinstance(request, ImportRejection):
         return request
     config = {"contract": request.contract}
+    environment = required_grader_environment(context)
     if request.agent == TRANSDUCTIVE_AGENT:
         package = source_scorer_package(
-            invocation=TRANSDUCTIVE_SCORER, config=config, environment=ARC_IMAGE.requirements(), timeout=REPLY_TIMEOUT
+            invocation=TRANSDUCTIVE_SCORER, config=config, environment=environment, timeout=REPLY_TIMEOUT
         )
     else:
         package = grade_script_package(
-            ARC_GRADE, ARC_GRADE_BYTES, config=config, environment=ARC_IMAGE.requirements(), timeout=REPLY_TIMEOUT
+            ARC_GRADE, ARC_GRADE_BYTES, config=config, environment=environment, timeout=REPLY_TIMEOUT
         )
     return blend_task(row, request, package)
 
@@ -210,6 +214,7 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_INDUCTIVE_RUBRIC,
             controls=Controls(negative=tasktrove_inductive_negative, memory_mb=GRADER_MEMORY_MB),
             atlas_id=f"Task Trove:{INDUCTIVE_CONFIG}",
+            grader_image=GRADER,
         ),
         RlDataPipeline(
             name="tasktrove-arc_transductive",
@@ -221,5 +226,6 @@ def pipelines() -> list[RlDataPipeline]:
             rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
             controls=Controls(negative=tasktrove_transductive_negative, memory_mb=GRADER_MEMORY_MB),
             atlas_id=f"Task Trove:{TRANSDUCTIVE_CONFIG}",
+            grader_image=GRADER,
         ),
     ]

@@ -5,10 +5,10 @@
 
 Each archive's ``tests/judge.toml`` lists yes/no criteria that RewardKit asks a Together-hosted
 judge about and aggregates all-pass. ``multichallenge_grade.py`` runs the source's own
-``tests/test.sh`` in the RewardKit image and reports its reward. Only the observed runtime files,
-test layout, provider settings and judge scope are accepted, so the source files cannot point the
-judge at another provider or at other files. The judge needs network access and a provider key,
-so the source has no offline controls.
+``tests/test.sh`` in the grader image (``images.recipes.GRADER``) and reports its reward. Only the
+observed runtime files, test layout, provider settings and judge scope are accepted, so the source
+files cannot point the judge at another provider or at other files. The judge needs network access
+and a provider key, so the source has no offline controls.
 """
 
 import hashlib
@@ -21,6 +21,7 @@ from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasktrove import archive_files
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import ScriptSpec
@@ -32,7 +33,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.multichallenge_g
     SOURCE_TIMEOUT,
     VERDICT_FILENAME,
 )
-from experiments.post_training.task_curation.images import REWARDKIT_IMAGE
+from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 GRADE_SCRIPT = "multichallenge_grade.py"
@@ -71,7 +72,7 @@ Judge availability is a verification limitation; no canonical response should be
 """
 
 
-def convert_multichallenge(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
     files = archive_files(row.data).files
     for path, digest in RUNTIME_FILES.items():
         if hashlib.sha256(files.get(path, b"")).hexdigest() != digest:
@@ -108,7 +109,7 @@ def convert_multichallenge(row: RawRow) -> TaskSpec | NormalizedTask | ImportRej
     package = verifyit_package(
         ScriptSpec(path=GRADE_PATH, timeout=GRADER_TIMEOUT, verdict_file=VERDICT_FILENAME),
         resources,
-        environment=REWARDKIT_IMAGE.requirements(),
+        environment=required_grader_environment(context),
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
@@ -126,5 +127,6 @@ def pipelines() -> list[RlDataPipeline]:
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
             atlas_id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
+            grader_image=GRADER,
         )
     ]
