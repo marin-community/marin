@@ -17,15 +17,17 @@ import pwd
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import AsyncGenerator, Iterable
 from pathlib import Path, PurePosixPath
 
 from bubblewrap_bin import bwrap_path
 
 from shellbox.backends.local import launch
+from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES, write_download
 from shellbox.machine import (
     Backend,
     Command,
@@ -95,6 +97,18 @@ def _copy(source: Path, target: Path) -> None:
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
+
+
+async def _download_chunks(source: Path) -> AsyncGenerator[bytes, None]:
+    # Nonblocking open permits a type check if a regular file becomes a FIFO.
+    descriptor = os.open(source, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise UnsupportedMachineSpec("A download byte limit requires a regular file")
+        while data := await asyncio.to_thread(os.read, descriptor, DOWNLOAD_CHUNK_BYTES):
+            yield data
+    finally:
+        os.close(descriptor)
 
 
 def _interpreter_roots(bin_dirs: Iterable[Path]) -> tuple[str, ...]:
@@ -343,9 +357,13 @@ class LocalMachine:
             raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host directory")
         await asyncio.to_thread(_copy, source, self._host_path(path))
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
         self._check_open()
         path = self._host_path(_absolute_path(source))
+        if max_bytes is not None:
+            async with contextlib.aclosing(_download_chunks(path)) as chunks:
+                await write_download(chunks, target, max_bytes)
+            return
         if not path.exists():
             raise RuntimeError(f"No such file or directory: {source}")
         await asyncio.to_thread(_copy, path, target)
