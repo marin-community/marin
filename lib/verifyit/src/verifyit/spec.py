@@ -80,6 +80,13 @@ class TestIdMatching(StrEnum):
     UNIQUE_PREFIX = "unique_prefix"
 
 
+class SampleResolution(StrEnum):
+    """How a checklist criterion's repeated judgments resolve to one verdict."""
+
+    MAJORITY = "majority"
+    TWO_THEN_THIRD = "two_then_third"
+
+
 class EmptyOutputPolicy(StrEnum):
     """Whether a present empty answer is scored zero or passed to its grader."""
 
@@ -279,6 +286,12 @@ class JudgeSpec:
     question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside the
     answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
+
+    The checklist rubric judges each criterion up to ``samples`` times. ``majority`` asks all
+    ``samples`` times and takes the majority verdict, so ``samples`` must be odd.
+    ``two_then_third`` needs ``samples = 3``: it asks twice and a third time only when the first
+    two verdicts disagree. Single judgments go out at temperature 0; repeated judgments use
+    ``sample_temperature``, which must be positive for the samples to differ.
     """
 
     references: tuple[str, ...] = ()
@@ -304,6 +317,9 @@ class JudgeSpec:
     label_scan: str = "literal"
     label_case: str = "sensitive"
     api: str = "chat_completions"
+    samples: int = 1
+    sample_resolution: SampleResolution = SampleResolution.MAJORITY
+    sample_temperature: float = 0.0
 
 
 class JudgeRuntimeSource(StrEnum):

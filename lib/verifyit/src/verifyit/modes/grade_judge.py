@@ -7,7 +7,8 @@ Three rubrics. ``reference`` ports the Nemotron open-QA harness: most correct re
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
-default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
+default mean aggregation scored them. Each criterion can be judged several times and resolved by
+majority or by ``two_then_third``. ``labels`` maps a configured final verdict label to its
 explicit task score. All rubrics can sit behind ``constraints``, deterministic
 IFEval checks that must all pass first.
 
@@ -57,6 +58,7 @@ from verifyit.spec import (
     ExactSpec,
     JudgeRuntimeSource,
     JudgeSpec,
+    SampleResolution,
     Spec,
 )
 
@@ -188,6 +190,27 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         or not math.isfinite(spec.request_timeout)
     ):
         raise InvalidTask("judge request timeout must be finite and positive")
+    if type(spec.samples) is not int or spec.samples < 1:
+        raise InvalidTask("judge samples must be a positive integer")
+    if spec.samples > 1 and spec.rubric != RUBRIC_CHECKLIST:
+        raise InvalidTask("repeated judgments apply only to the checklist rubric")
+    if spec.sample_resolution == SampleResolution.MAJORITY:
+        if spec.samples % 2 == 0:
+            raise InvalidTask("majority resolution needs an odd number of samples")
+    elif spec.sample_resolution == SampleResolution.TWO_THEN_THIRD:
+        if spec.samples != 3:
+            raise InvalidTask("two_then_third resolution needs samples = 3")
+    else:
+        raise InvalidTask("judge sample resolution must be majority or two_then_third")
+    if (
+        isinstance(spec.sample_temperature, bool)
+        or not isinstance(spec.sample_temperature, (int, float))
+        or spec.sample_temperature < 0
+        or not math.isfinite(spec.sample_temperature)
+    ):
+        raise InvalidTask("judge sample temperature must be finite and nonnegative")
+    if spec.sample_temperature and spec.samples == 1:
+        raise InvalidTask("judge sample temperature applies only to repeated judgments")
     if (
         not isinstance(spec.exact_gate_answers, tuple)
         or any(not isinstance(answer, str) or not answer for answer in spec.exact_gate_answers)
@@ -484,34 +507,67 @@ def _judge_checklist(
         prompt = CHECKLIST_PROMPT.format(
             context=context_block, question=_question(spec), candidate=candidate.strip(), criterion=criterion.strip()
         )
-        try:
-            result = _ask(spec, client, model, prompt, allowed_scores=(0.0, 1.0))
-        except GradingInfraError as error:
-            raise GradingInfraError(
-                str(error), model=model, criteria=[*results, {"criterion": criterion, **error.detail}]
-            ) from error
+        samples: list[_ScoreResult] = []
+        while _needs_sample(spec, [_passed(sample) for sample in samples]):
+            try:
+                samples.append(_ask(spec, client, model, prompt, allowed_scores=(0.0, 1.0)))
+            except GradingInfraError as error:
+                completed = [asdict(attempt) for sample in samples for attempt in sample.attempts]
+                failing = error.detail.get("attempts", [])
+                assert isinstance(failing, list)
+                partial = {
+                    "criterion": criterion,
+                    "samples": [_sample_detail(sample) for sample in samples],
+                    "attempt_count": len(completed) + len(failing),
+                    "attempts": [*completed, *failing],
+                }
+                raise GradingInfraError(str(error), model=model, criteria=[*results, partial]) from error
+        passed = sum(1 for sample in samples if _passed(sample)) * 2 > len(samples)
+        deciding = next(sample for sample in samples if _passed(sample) == passed)
         results.append(
             {
                 "criterion": criterion,
-                "passed": result.score >= 1.0,
-                "reasoning": _reasoning(result.reply),
-                **_attempt_detail(result.attempts),
+                "passed": passed,
+                "reasoning": _reasoning(deciding.reply),
+                **_attempt_detail([attempt for sample in samples for attempt in sample.attempts]),
+                "samples": [_sample_detail(sample) for sample in samples],
             }
         )
     passed = sum(1 for result in results if result["passed"])
     return scored(passed / len(results), model=model, passed=passed, total=len(results), criteria=results)
 
 
+def _passed(sample: _ScoreResult) -> bool:
+    return sample.score >= 1.0
+
+
+def _sample_detail(sample: _ScoreResult) -> dict[str, object]:
+    return {"passed": _passed(sample), "reasoning": _reasoning(sample.reply), **_attempt_detail(sample.attempts)}
+
+
+def _needs_sample(spec: JudgeSpec, verdicts: list[bool]) -> bool:
+    """Whether a criterion needs another judgment under the spec's sample resolution."""
+    if spec.sample_resolution == SampleResolution.TWO_THEN_THIRD and len(verdicts) == 2:
+        return verdicts[0] != verdicts[1]
+    return len(verdicts) < spec.samples
+
+
 def _ask(
     spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
 ) -> _ScoreResult:
-    """Parse a final SCORE, retrying truncated replies with the larger budget."""
+    """Parse a final SCORE, retrying truncated replies with the larger budget.
+
+    Every failure, transport errors included, raises ``GradingInfraError`` with the attempts so far.
+    """
     attempts: list[_CompletionAttempt] = []
     budgets = _completion_budgets(spec)
     for attempt in range(1, ATTEMPTS + 1):
         for index, budget in enumerate(budgets):
-            response = _complete(spec, client, model, prompt, budget)
-            choice = _completion_choice(response)
+            try:
+                response = _complete(spec, client, model, prompt, budget)
+                choice = _completion_choice(response)
+            except (openai.APIError, RuntimeError, ValueError) as error:
+                raise GradingInfraError(f"{type(error).__name__}: {error}", **_attempt_detail(attempts)) from error
             attempts.append(
                 _CompletionAttempt(
                     finish_reason=choice.finish_reason,
@@ -552,7 +608,7 @@ def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, b
         client,
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
+        temperature=spec.sample_temperature,
         timeout=spec.request_timeout,
         max_completion_tokens=budget,
         **options,
