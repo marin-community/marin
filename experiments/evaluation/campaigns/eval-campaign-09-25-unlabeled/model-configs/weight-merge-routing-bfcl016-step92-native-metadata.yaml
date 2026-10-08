@@ -1,0 +1,29 @@
+# GrugMoE with 262,144 native context; use the reviewed Grug serving topology
+# and the campaign's 73,728-token suite cap.
+name: weight-merge-routing-bfcl016-step92-native-metadata
+location: s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/routing-bfcl016-step92-native-metadata
+# Object-store checkpoint revision identifies the committed producer recipe.
+revision: 9af3ffd229b45ee6a431ebd1345dea3350bc39a4
+identity: weight-merge-routing-bfcl016-step92-native-metadata-9af3ffd229b45ee6a431ebd1345dea3350bc39a4
+tokenizer: open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
+tokenizer_revision: fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
