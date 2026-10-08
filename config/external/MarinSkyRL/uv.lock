@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -14,6 +14,9 @@ required-markers = [
 
 [options]
 prerelease-mode = "allow"
+
+[manifest]
+overrides = [{ name = "marin-rigging", extras = ["secrets"], specifier = ">=0.2.123.dev35633925924" }]
 
 [[package]]
 name = "absl-py"
@@ -879,8 +882,8 @@ name = "httpcore2"
 version = "2.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "sys_platform != 'emscripten'" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/f3/1db7aa2bc2524062192bb0e0323969492d1883152a232fe36eea65f4e35c/httpcore2-2.13.1.tar.gz", hash = "sha256:e0aa977abe17e69a3b820a24542a6fa88702676d83880b8d194dcd18408e5103", size = 68071, upload-time = "2026-09-23T07:47:22.372Z" }
 wheels = [
@@ -1213,7 +1216,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
-    { name = "marin-rigging" },
+    { name = "marin-rigging", extra = ["secrets"] },
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pyyaml" },
@@ -1256,7 +1259,7 @@ name = "marin-finestore"
 version = "0.2.137.dev36938275180"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marin-rigging" },
+    { name = "marin-rigging", extra = ["secrets"] },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
@@ -1285,7 +1288,7 @@ dependencies = [
     { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging" },
+    { name = "marin-rigging", extra = ["secrets"] },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyqwest" },

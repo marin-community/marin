@@ -8,6 +8,8 @@ dependencies = ["marinskyrl"]
 package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
+# MarinSkyRL's Marin Git dependency exposes workspace rigging 0.2.0 instead of a published release.
+override-dependencies = ["marin-rigging[secrets]>=0.2.123.dev35633925924"]
 
 [tool.uv.sources]
 # The isolated lock keeps the selected branch revision immutable.
