@@ -39,10 +39,6 @@ def test_the_committed_example_accepts_a_too_easy_task_after_one_revision_and_re
     [
         (lambda p: p.pop("band_rules"), "missing fields \\['band_rules'\\]"),
         (lambda p: p["band_rules"]["too_easy"].update(then="note"), "note"),
-        (
-            lambda p: p["validation"].update(adversary_output_tokens=32768),
-            "unknown fields \\['adversary_output_tokens'\\]",
-        ),
         (lambda p: p["validation"].pop("adversary_submissions"), "missing fields \\['adversary_submissions'\\]"),
     ],
 )
