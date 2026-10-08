@@ -25,6 +25,7 @@ from functools import partial
 from pathlib import Path
 
 import httpx
+from iris.cluster.runtime.env import IRIS_OUTPUT_DIR_ENV
 from rigging.filesystem.storage_path import StoragePath
 
 from taskforge.build.sdk import BuildServices
@@ -54,7 +55,6 @@ PARALLEL_KEY = "PARALLEL_KEY"
 SUBMITTER_KEYS = ("HF_TOKEN", "WANDB_API_KEY")
 IRIS_JOB_ENV = "IRIS_JOB_ENV"
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
-IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
 # A sandbox environment name is a credential when one of its ``_``-separated words is in SECRET_WORDS
 # or it ends with one of SECRET_SUFFIXES (so GPG_KEY and TOKENIZERS_* are not).
 SECRET_WORDS = frozenset({"SECRET", "TOKEN", "PASSWORD"})
