@@ -20,12 +20,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from taskcompendium.models import AssistantToolCalls, TextMessage
-
 from taskforge.build.run import TaskDraft
 from taskforge.canonical import digest
 from taskforge.llm.policy import LLMPolicy
-from taskforge.spec.controls import Control, validate_controls
+from taskforge.spec.controls import Control
 from taskforge.validate.adversary import SUBMIT_DESCRIPTION, AdversaryRole, adversary_brief
 from taskforge.validate.attempts import load_adversary_attempt, trial_files
 from taskforge.validate.calibration import CalibrationBand, TaskFacts, task_facts
@@ -34,6 +32,8 @@ from taskforge.validate.controls import (
     ControlVerdict,
     ScriptedModel,
     Tokenize,
+    check_replayable,
+    context_assistant_turns,
     control_outcome,
     control_turns,
 )
@@ -153,19 +153,11 @@ async def replay_controls(
     re-enters with its attempt numbers after the files on disk.
 
     Raises:
-        ValueError: the draft is staged, or a control needs more turns than ``settings.max_turns``.
+        ValueError: ``check_replayable`` refuses the draft's controls.
     """
     task = draft.task
-    if task.stages:
-        raise ValueError("Control replay does not support staged tasks")
-    validate_controls(task, draft.controls)
-    too_long = [c.id for c in draft.controls if len(control_turns(c)) > settings.max_turns]
-    if too_long:
-        raise ValueError(f"Controls {too_long} need more than max_turns={settings.max_turns} turns")
-    context_turns = sum(
-        isinstance(event, AssistantToolCalls) or (isinstance(event, TextMessage) and event.role == "assistant")
-        for event in task.context.events
-    )
+    check_replayable(task, draft.controls, settings.max_turns)
+    context_turns = context_assistant_turns(task)
     settings = draft_settings(draft, settings)
     files = trial_files(site.evidence_dir, TrialKind.CONTROL)
     unsettled = [c.id for c in draft.controls if c.id in files and not files[c.id].settled]
