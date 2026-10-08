@@ -391,7 +391,7 @@ async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuil
     assert build_host_failures(loop.entries(item_id)) == Counter({InfrastructureCause.HOST_UNREACHABLE: 2})
 
 
-async def test_a_build_needing_a_machine_the_host_has_no_factory_for_is_rejected_without_retrying(
+async def test_a_build_the_host_has_no_factory_for_is_abandoned_at_once_and_built_on_a_host_with_it(
     loop, programs, fake_glm
 ):
     proposal = programs.proposal()
@@ -400,17 +400,22 @@ async def test_a_build_needing_a_machine_the_host_has_no_factory_for_is_rejected
 
     async with loop.services() as services:
         hostless = replace(services, build=replace(services.build, factories={}))
-        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, hostless) is Terminal.REJECTED
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, hostless) is Terminal.ABANDONED
     item_id = item_id_for(proposal)
-    assert events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE) == []
+    (failure,) = events_of(loop, item_id, EventKind.BUILD_INFRASTRUCTURE)
+    assert (failure.attrs["cause"], failure.attrs["retries_used"], failure.attrs["abandon"]) == (
+        InfrastructureCause.NO_FACTORY,
+        "0",
+        "true",
+    )
     assert events_of(loop, item_id, EventKind.BUILD_FAILED) == []
-    (rejected,) = events_of(loop, item_id, EventKind.TERMINAL)
-    assert rejected.attrs["kind"] == RejectKind.HOST and "no_factory" in rejected.attrs["reason"]
+    (abandoned,) = events_of(loop, item_id, EventKind.TERMINAL)
+    assert (abandoned.attrs["terminal"], abandoned.attrs["causes"]) == (Terminal.ABANDONED, "no_factory:1")
 
-    # A rejection is final: the relaunch on a host with the factory does not build again.
+    # The relaunch on a host with the factory builds the program already authored.
     async with loop.services() as services:
-        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.REJECTED
-    assert len(fake_glm.requests) == 1
+        assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, services) is Terminal.ACCEPTED
+    assert len(fake_glm.requests) == 1 and len(events_of(loop, item_id, EventKind.AUTHORED)) == 1
 
 
 async def test_a_log_opened_under_another_policy_is_refused(loop, programs):
