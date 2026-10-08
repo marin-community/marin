@@ -29,7 +29,7 @@ from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import TextMessage
 from taskcompendium.submission import PlainText
 
-from taskforge.build.run import TaskDraft, load_draft
+from taskforge.builder.run import TaskDraft, load_draft
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool

@@ -70,7 +70,7 @@ from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import AnswerCall, FinalAction, SubmissionConvention, conversation_messages
 
-from taskforge.build.run import TaskDraft
+from taskforge.builder.run import TaskDraft
 from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, ToolOutcome, assistant_message, run_agent, shell_tool
 from taskforge.llm.client import Completion, FinishReason, GlmClient
 from taskforge.llm.policy import LLMPolicy

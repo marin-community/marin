@@ -16,7 +16,7 @@ from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AnswerType, TaskSpec
 from taskcompendium.submission import PlainText
 
-from taskforge.build.step import StepRole
+from taskforge.builder.step import StepRole
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.sandbox.factories import SHELLSIM
 from taskforge.spec.controls import REJECTION_CEILING, ControlKind, Transcript, reply

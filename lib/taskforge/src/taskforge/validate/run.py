@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from taskforge.build.run import TaskDraft
+from taskforge.builder.run import TaskDraft
 from taskforge.content_hash import digest
 from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import Control

@@ -44,7 +44,7 @@ from taskcompendium.models import TaskSpec, TextMessage
 from verifyit.spec import Mode
 
 from taskforge.atomic_file import write_atomic
-from taskforge.build.step import StepRole
+from taskforge.builder.step import StepRole
 from taskforge.spec.controls import (
     REJECTION_CEILING,
     Control,
