@@ -827,6 +827,19 @@ wheels = [
 ]
 
 [[package]]
+name = "harbor-config"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "shortuuid" },
+    { name = "toml" },
+    { name = "typing-extensions" },
+    { name = "universal-pathlib" },
+]
+
+[[package]]
 name = "hf-transfer"
 version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1203,7 +1216,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=f375ab4a58e95ed731a2988381d508268c59a28d" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=9ca71b0b18d377728502e2aa286200d91d1f44a0" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1258,21 +1271,27 @@ wheels = [
 [[package]]
 name = "marin-finestore"
 version = "0.2.137.dev36938275180"
-source = { registry = "https://pypi.org/simple" }
+source = { url = "https://files.pythonhosted.org/packages/54/c4/3057a7f21a93b94c85de925a27280e643919cce238b3d889e99009349625/marin_finestore-0.2.137.dev36938275180-py3-none-any.whl" }
 dependencies = [
     { name = "marin-rigging" },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/57/3de6a3a42211babd419da9d79fe9d199d30d39211e7b73f2aee94d07cb1c/marin_finestore-0.2.137.dev36938275180.tar.gz", hash = "sha256:0266bed49c2dbddc785b075ab1ae65f6a0a5cca7c5d194ad27ce7dd5d731afcd", size = 55083, upload-time = "2026-10-01T23:03:12.297Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/c4/3057a7f21a93b94c85de925a27280e643919cce238b3d889e99009349625/marin_finestore-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:15ef8c236fb32dc6ee70101060e72d1da6f641cf011b97d24dcac2733a33fd37", size = 45000, upload-time = "2026-10-01T23:02:56.052Z" },
+    { url = "https://files.pythonhosted.org/packages/54/c4/3057a7f21a93b94c85de925a27280e643919cce238b3d889e99009349625/marin_finestore-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:15ef8c236fb32dc6ee70101060e72d1da6f641cf011b97d24dcac2733a33fd37" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-rigging", specifier = "==0.2.137.dev36938275180" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
 name = "marin-iris"
 version = "0.2.137.dev36938275180"
-source = { registry = "https://pypi.org/simple" }
+source = { url = "https://files.pythonhosted.org/packages/e9/c3/dadf8ab27c4771779072ee611edc2a94be7161209757c76db7da2ec2fada/marin_iris-0.2.137.dev36938275180-py3-none-any.whl" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
@@ -1302,10 +1321,43 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/fb/d7a1f9753eab4ce0115afa344f98b50fee2547bea3c0008a83b463dd9222/marin_iris-0.2.137.dev36938275180.tar.gz", hash = "sha256:81167dad7fb8180f9a762de7016a3c08a15013110a8c9e84f0385c1ce88a675e", size = 937390, upload-time = "2026-10-01T23:03:15.937Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/c3/dadf8ab27c4771779072ee611edc2a94be7161209757c76db7da2ec2fada/marin_iris-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:658ac9c095e6647d284915fc710ca638311ae12391eebd74b381d79f176ea3fa", size = 1132502, upload-time = "2026-10-01T23:03:01.216Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/c3/dadf8ab27c4771779072ee611edc2a94be7161209757c76db7da2ec2fada/marin_iris-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:658ac9c095e6647d284915fc710ca638311ae12391eebd74b381d79f176ea3fa" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "connect-python", specifier = ">=0.9.0" },
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "google-auth", specifier = ">=2.0" },
+    { name = "google-cloud-tpu", specifier = ">=1.18.0" },
+    { name = "grpcio", specifier = ">=1.76.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
+    { name = "marin-finelog", specifier = ">=0.2.10" },
+    { name = "marin-finelog-server", specifier = ">=0.2.46.dev33324331711" },
+    { name = "marin-finestore", specifier = "==0.2.137.dev36938275180" },
+    { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
+    { name = "marin-rigging", specifier = "==0.2.137.dev36938275180" },
+    { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'" },
+    { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", specifier = "==0.2.137.dev36938275180" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
+    { name = "pyqwest", specifier = ">=0.6.1,<0.7" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "starlette", specifier = ">=0.50.0" },
+    { name = "tabulate", specifier = ">=0.9.0" },
+    { name = "typing-extensions", specifier = ">=4.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+    { name = "zstandard", specifier = ">=0.22.0" },
+]
+provides-extras = ["controller", "iap", "worker"]
 
 [[package]]
 name = "marin-iris-native"
@@ -1322,7 +1374,7 @@ wheels = [
 [[package]]
 name = "marin-rigging"
 version = "0.2.137.dev36938275180"
-source = { registry = "https://pypi.org/simple" }
+source = { url = "https://files.pythonhosted.org/packages/87/ca/4dead2a2ba1cd778ab5a333e8a7690dfae9b095aaaacf96625a2ad8b707b/marin_rigging-0.2.137.dev36938275180-py3-none-any.whl" }
 dependencies = [
     { name = "aiobotocore" },
     { name = "aiohttp" },
@@ -1342,9 +1394,8 @@ dependencies = [
     { name = "starlette" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/5c/40d8713aa93a91e8b8e13f1995b2fb9ee926c54d94a84d5ded1c5f0026bd/marin_rigging-0.2.137.dev36938275180.tar.gz", hash = "sha256:74ce12f668dc4e3e5ebfda3c24e458e51f50543c409c60afe8eb5e25380ff9b7", size = 223928, upload-time = "2026-10-01T23:03:19.03Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/ca/4dead2a2ba1cd778ab5a333e8a7690dfae9b095aaaacf96625a2ad8b707b/marin_rigging-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:8f2a0508b9a6bbb9ce92590ea241c843669fc37e25c3b7df562d6abd103d7dba", size = 523416, upload-time = "2026-10-01T23:03:05.899Z" },
+    { url = "https://files.pythonhosted.org/packages/87/ca/4dead2a2ba1cd778ab5a333e8a7690dfae9b095aaaacf96625a2ad8b707b/marin_rigging-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:8f2a0508b9a6bbb9ce92590ea241c843669fc37e25c3b7df562d6abd103d7dba" },
 ]
 
 [package.optional-dependencies]
@@ -1352,10 +1403,43 @@ secrets = [
     { name = "google-cloud-secret-manager" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "aiobotocore", specifier = ">=2.12.2" },
+    { name = "aiohttp", specifier = ">=3.9" },
+    { name = "braceexpand", specifier = ">=0.1.7" },
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "connect-python", specifier = ">=0.9.0" },
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "google-auth", specifier = ">=2.0.0" },
+    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
+    { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
+    { name = "msgspec", specifier = ">=0.20.0" },
+    { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.24" },
+    { name = "psutil", specifier = ">=7.2.2" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "requests", specifier = ">=2.0.0" },
+    { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "starlette", specifier = ">=0.40" },
+    { name = "zstandard", specifier = ">=0.22" },
+]
+provides-extras = ["iap", "prometheus", "secrets"]
+
+[[package]]
+name = "marin-shellbox"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=232f192a56b013fdc3f6914eb158c7bc2d231f94#232f192a56b013fdc3f6914eb158c7bc2d231f94" }
+dependencies = [
+    { name = "httpx" },
+]
+
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=f375ab4a58e95ed731a2988381d508268c59a28d#f375ab4a58e95ed731a2988381d508268c59a28d" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=9ca71b0b18d377728502e2aa286200d91d1f44a0#9ca71b0b18d377728502e2aa286200d91d1f44a0" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1379,6 +1463,7 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-iris-native" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-shellbox" },
     { name = "math-verify" },
     { name = "ninja" },
     { name = "nvidia-ml-py" },
@@ -1749,6 +1834,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/9a/ffbd852d58bd74a617fe2f8ee6a58a96982271ce41cf981eab22190b4a4b/pandas-3.0.5-cp312-cp312-pyemscripten_2024_0_wasm32.whl", hash = "sha256:b2acb4650527eec6822c3dadb2b771277b65e7dae7a267d4bccf65fd1bb3fbce", size = 7197652, upload-time = "2026-07-22T22:18:22.502Z" },
     { url = "https://files.pythonhosted.org/packages/70/b5/d2d3e9ae73362ba4229651b0ee1455cf78073a1ce585f6ff693782ce263e/pandas-3.0.5-cp312-cp312-win_amd64.whl", hash = "sha256:80a611068e8a3ac23f7398c6c14eb46dc974e5cc9997f653e2dcfd1da74edd41", size = 9831691, upload-time = "2026-07-22T22:18:24.534Z" },
     { url = "https://files.pythonhosted.org/packages/52/51/dea1e89d6a6796b9c43f85a09b484ee03edb8a4c4842e73e200a8c11301c/pandas-3.0.5-cp312-cp312-win_arm64.whl", hash = "sha256:25ff585b972a18ef1fe9ffa3ac6544d9950508aa76832e5147640b6022821e49", size = 9105796, upload-time = "2026-07-22T22:18:27.064Z" },
+]
+
+[[package]]
+name = "pathlib-abc"
+version = "0.5.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/cb/448649d7f25d228bf0be3a04590ab7afa77f15e056f8fa976ed05ec9a78f/pathlib_abc-0.5.2.tar.gz", hash = "sha256:fcd56f147234645e2c59c7ae22808b34c364bb231f685ddd9f96885aed78a94c", size = 33342, upload-time = "2025-10-10T18:37:20.524Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/29/c028a0731e202035f0e2e0bfbf1a3e46ad6c628cbb17f6f1cc9eea5d9ff1/pathlib_abc-0.5.2-py3-none-any.whl", hash = "sha256:4c9d94cf1b23af417ce7c0417b43333b06a106c01000b286c99de230d95eefbb", size = 19070, upload-time = "2025-10-10T18:37:19.437Z" },
 ]
 
 [[package]]
@@ -2363,6 +2457,15 @@ wheels = [
 ]
 
 [[package]]
+name = "shortuuid"
+version = "1.0.13"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/e2/bcf761f3bff95856203f9559baf3741c416071dd200c0fc19fad7f078f86/shortuuid-1.0.13.tar.gz", hash = "sha256:3bb9cf07f606260584b1df46399c0b87dd84773e7b25912b7e391e30797c5e72", size = 9662, upload-time = "2024-03-11T20:11:06.879Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/44/21d6bf170bf40b41396480d8d49ad640bca3f2b02139cd52aa1e272830a5/shortuuid-1.0.13-py3-none-any.whl", hash = "sha256:a482a497300b49b4953e15108a7913244e1bb0d41f9d332f5e9925dba33a3c5a", size = 10529, upload-time = "2024-03-11T20:11:04.807Z" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2504,6 +2607,15 @@ wheels = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
+]
+
+[[package]]
 name = "tomlkit"
 version = "0.15.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2599,6 +2711,19 @@ wheels = [
 ]
 
 [[package]]
+name = "universal-pathlib"
+version = "0.3.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "pathlib-abc" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/6e/d997a70ee8f4c61f9a7e2f4f8af721cf072a3326848fc881b05187e52558/universal_pathlib-0.3.10.tar.gz", hash = "sha256:4487cbc90730a48cfb64f811d99e14b6faed6d738420cd5f93f59f48e6930bfb", size = 261110, upload-time = "2026-02-22T14:40:58.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/1a/5d9a402b39ec892d856bbdd9db502ff73ce28cdf4aff72eb1ce1d6843506/universal_pathlib-0.3.10-py3-none-any.whl", hash = "sha256:dfaf2fb35683d2eb1287a3ed7b215e4d6016aa6eaf339c607023d22f90821c66", size = 83528, upload-time = "2026-02-22T14:40:57.316Z" },
+]
+
+[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2658,8 +2783,9 @@ dependencies = [
 [[package]]
 name = "verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/verifyit?rev=a04f28fd8c00879f949031e58ce9fbe5f4d5da6e#a04f28fd8c00879f949031e58ce9fbe5f4d5da6e" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=232f192a56b013fdc3f6914eb158c7bc2d231f94#232f192a56b013fdc3f6914eb158c7bc2d231f94" }
 dependencies = [
+    { name = "harbor-config" },
     { name = "tomlkit" },
 ]
 
