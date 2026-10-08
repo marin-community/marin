@@ -10,6 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
 from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from taskcompendium.convert.tasktrove_nl2bash import CHECKER_NAME, DATA_NAME
@@ -25,6 +26,7 @@ from experiments.post_training.tasktrove.verify import verify_task
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 TOOL_REF = "0123abc"
 SOURCE = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+NAMED_COUNTS = "3 src/A.java\n2 src/B.java\n5 total\n"
 
 
 def _fixture() -> bytes:
@@ -130,6 +132,36 @@ def test_missing_expected_output_is_rejected_as_null_grader():
     task.files["tests/verifier_data.json"] = json.dumps({}).encode()
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
     assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
+
+
+@pytest.mark.parametrize(
+    ("expected", "extra", "score"),
+    [
+        (NAMED_COUNTS, "processed 9999 files\n42\n", 1),
+        (NAMED_COUNTS, "9999 total\0\n", 0),
+        (NAMED_COUNTS, "9" * 5000 + " total\n", 0),
+        (NAMED_COUNTS, "+0005 total\n", 1),
+        (NAMED_COUNTS, "-1 total\n", 0),
+        (NAMED_COUNTS, "4 /workspace/src/A.java\n", 0),
+        ("5\n", "9999\n", 0),
+        ("5\n", "+0005\n", 1),
+        ("5\n", "processed 9999 files\n", 1),
+        ("3\n2\n5\n", "9999\n", 1),
+    ],
+)
+def test_checker_rejects_conflicting_counts_without_rejecting_harmless_logs(tmp_path, expected, extra, score):
+    task = read_task_binary(_fixture())
+    task.files["tests/verifier_data.json"] = json.dumps({"expected_output": expected}).encode()
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    assert record.status == ConvertStatus.CONVERTED
+    converted = read_task_binary(record.task_binary)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / DATA_NAME).write_bytes(converted.files[f"tests/{DATA_NAME}"])
+    output = tmp_path / "command_capture.txt"
+    output.write_text(expected + extra)
+    reward = _run_checker(converted.text(f"tests/{CHECKER_NAME}"), tests_dir, output)
+    assert reward["reward"] == score
 
 
 def test_missing_oracle_preserves_task_and_grader_without_inventing_solution():

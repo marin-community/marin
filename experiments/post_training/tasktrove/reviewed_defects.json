@@ -16,6 +16,16 @@
  },
  {
   "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+  "path": "task_1492",
+  "reason": "oracle passes reverse-numeric inputs to comm, whose lexicographic comparison produces the wrong file difference"
+ },
+ {
+  "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+  "path": "task_3002",
+  "reason": "captured character dump fixes the oracle's chosen text although the instruction permits any small text file"
+ },
+ {
+  "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
   "path": "task_9748",
   "reason": "shipped solve script does not write command_capture.txt"
  },

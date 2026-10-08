@@ -8,10 +8,9 @@ The agent runs a shell command of its own choosing and writes its combined stdou
 pre-captured ``expected_output`` from ``tests/verifier_data.json`` as a normalized,
 order-insensitive multiset of "records" (one per output line): ANSI codes, a leading
 ``/workspace/`` or ``./`` path prefix, and a trailing size unit are stripped, and every expected
-record must appear in the actual output, with no extra record that looks like an error. That is
-not a plain normalized string match (records are compared as a multiset, extra non-error output
-is tolerated), so this maps onto :class:`ScriptSpec`: a new, self-contained checker under
-``tests/`` reimplements the same comparison without importing the old grader.
+record must appear in the actual output. A self-contained :class:`ScriptSpec` checker preserves
+that comparison and its tolerance for harmless extra records. It rejects extra error records and
+contradictory integer counts for the same normalized filename, total, or standalone count.
 
 Every task in this source also ships a root ``setup_files/`` directory instruction.md tells the
 agent to run (``bash /setup_files/setup_seeds.sh``) before starting, mirrored under
@@ -55,8 +54,9 @@ Reads the expected output from __DATA_NAME__ beside this script (under
 and reports the reward through ``$VERIFYIT_LOGS_DIR/reward.json``. The comparison is a
 normalized, order-insensitive multiset of "records" (one per output line; ANSI codes, a leading
 ``/workspace/`` or ``./`` prefix, a trailing size unit, and repeated whitespace are stripped):
-every expected record must appear in the actual output, and no extra record may look like an
-error. Self-contained: it does not import the original dataset's grader.
+every expected record must appear in the actual output, and extra records may neither look like
+errors nor contradict expected counts for the same target. Self-contained: it does not import the
+original dataset's grader.
 """
 
 import collections
@@ -70,6 +70,7 @@ OUTPUT = Path(sys.argv[1])
 ANSI = re.compile(r"\\x1b\\[[0-?]*[ -/]*[@-~]")
 ERROR = re.compile(r"(?i)\\b(?:error|failed|failure|no such file|not found|permission denied|traceback)\\b")
 UNIT = re.compile(r"(?i)\\s+(?:bytes?|kb|kib|mb|mib|gb|gib)\\s*$")
+COUNT = re.compile(r"^([+-]?\\d+)(?: (.+))?$")
 
 
 def _record(line):
@@ -81,7 +82,12 @@ def _record(line):
 
 
 def _records(text):
-    return [record for line in text.splitlines() if (record := _record(line))]
+    return [record for line in text.replace("\\0", "\\n").splitlines() if (record := _record(line))]
+
+
+def _normalized_count(value):
+    digits = value.lstrip("+-").lstrip("0") or "0"
+    return ("-" if value.startswith("-") and digits != "0" else "") + digits
 
 
 def _score(actual, expected):
@@ -93,9 +99,23 @@ def _score(actual, expected):
     if missing:
         return 0, [f"missing expected records: {dict(missing)}"]
     extras = actual_records - expected_records
+    standalone_count = expected_records.total() == 1
+    expected_counts = collections.defaultdict(set)
+    for record in expected_records:
+        match = COUNT.fullmatch(record)
+        if match:
+            count, target = match.groups()
+            if target is None and not standalone_count:
+                continue
+            expected_counts[target].add(_normalized_count(count))
     for record in extras:
         if ERROR.search(record):
             return 0, [f"unexpected error record: {record}"]
+        match = COUNT.fullmatch(record)
+        if match:
+            count, target = match.groups()
+            if target in expected_counts and _normalized_count(count) not in expected_counts[target]:
+                return 0, [f"contradictory count record: {record}"]
     return 1, []
 
 
