@@ -89,6 +89,7 @@ from taskforge.validate.submissions import Claim as Claim
 from taskforge.validate.submissions import ClaimKind as ClaimKind
 from taskforge.validate.submissions import parse_claim as parse_claim
 from taskforge.validate.trials import (
+    CLEANUP_ERROR_COUNT,
     ConventionUnavailable,
     EngineSettings,
     TrialPlan,
@@ -156,9 +157,7 @@ def adversary_brief(submissions: int, context: str) -> str:
     """The system turn of an adversary trial under a budget of ``submissions`` verifier calls.
 
     ``context`` is the consumer's section, "" for none; when present it is rendered as ``CONTEXT_HEADER`` and the
-    text as its own paragraph between the surfaces and the budget sentence. ``adversary_brief(
-    policy.adversary_submissions, "")`` is in ``ValidationPolicy.digest``; the brief each trial ran under is
-    persisted as ``adversary.system`` in its attempt file.
+    text as its own paragraph between the surfaces and the budget sentence.
     """
     section = f"{PREAMBLE_SEPARATOR}{CONTEXT_HEADER}\n{context}{PREAMBLE_SEPARATOR}" if context else " "
     return BRIEF_TEMPLATE.format(submissions=submissions, context=section)
@@ -409,7 +408,7 @@ def agent_rollout(
         stop_reason=stop_reason,
         steps=tuple(steps),
         metrics={
-            "cleanup_error_count": float(cleanup_errors),
+            CLEANUP_ERROR_COUNT: float(cleanup_errors),
             "submissions": float(len(submissions)),
             "passes": float(sum(s.passed for s in submissions)),
         },
