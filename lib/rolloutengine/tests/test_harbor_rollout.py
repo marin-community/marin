@@ -22,9 +22,15 @@ FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 
 
 @pytest.mark.parametrize("verifier_options", ["", 'environment_mode = "shared"'])
-def test_shared_harbor_grading_is_rejected_during_import(tmp_path, verifier_options):
+@pytest.mark.parametrize("verifier_environment", [False, True])
+def test_shared_harbor_grading_is_rejected_during_import(tmp_path, verifier_options, verifier_environment):
+    if verifier_environment:
+        verifier_options += f'\n[verifier.environment]\ndocker_image = "{FIXTURE_IMAGE}"\n'
     directory = harbor_package(tmp_path, verifier_options=verifier_options)
-    with pytest.raises(NotImplementedError):
+    exception = (
+        ValueError if verifier_environment and 'environment_mode = "shared"' in verifier_options else NotImplementedError
+    )
+    with pytest.raises(exception):
         harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
 
 
@@ -68,8 +74,21 @@ def harbor_package(tmp_path, *, task_options="", environment_options="", verifie
 
 
 @pytest.mark.parametrize("answer,reward", [("answer", 0.75), ("wrong", 0.0)])
-async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_file(tmp_path, answer, reward):
-    directory = harbor_package(tmp_path, verifier_options='environment_mode = "separate"')
+@pytest.mark.parametrize("verifier_environment", [False, True])
+async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_file(
+    tmp_path, answer, reward, verifier_environment
+):
+    options = 'environment_mode = "separate"'
+    if verifier_environment:
+        options += (
+            '\n[verifier.environment]\ndocker_image = "verifier@sha256:'
+            + "1" * 64
+            + '"\nworkdir = "/private-verifier"\n'
+        )
+    directory = harbor_package(tmp_path, verifier_options=options)
+    if verifier_environment:
+        grader = directory / "tests/test.sh"
+        grader.write_text('test "$(pwd)" = /private-verifier || exit 99\n' + grader.read_text())
     (directory / "setup_files/input").write_text(answer)
     task = harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
     task = TaskSpec.model_validate_json(task.model_dump_json())
