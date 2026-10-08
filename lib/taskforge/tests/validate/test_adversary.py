@@ -13,7 +13,7 @@ import pytest
 from rolloutengine.task_session import session_start
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import ConversationInput, TextMessage
-from taskcompendium.submission import PlainText
+from taskcompendium.submission import AnswerCall, PlainText
 
 from taskforge.ledger.jsonl import read_entries
 from taskforge.ledger.records import EntryKind
@@ -50,12 +50,14 @@ def settings(factory, capabilities=None, max_turns: int = 6) -> EngineSettings:
     )
 
 
-async def one_trial(tmp_path, task, rounds, fakes, client, policy=None, factory=None, context="", **engine):
+async def one_trial(
+    tmp_path, task, rounds, fakes, client, policy=None, factory=None, context="", convention=PLAIN, **engine
+):
     """Run one adversary trial of ``task``; return it and its evidence directory."""
     site = rounds.site(tmp_path)
     factory = factory or fakes.flaky_factory(0, RuntimeError)
     trials = await run_adversaries(
-        rounds.draft(task, (), PLAIN),
+        rounds.draft(task, (), convention),
         policy or rounds.policy(adversary_k=1),
         site,
         settings(factory, **engine),
@@ -334,6 +336,19 @@ async def test_a_refused_machine_is_one_unsupported_attempt(tmp_path, file_task,
     assert isinstance(trial.outcome, Ungraded) and trial.outcome.cause is Cause.MACHINE_UNSUPPORTED
     assert factory.creates == 0 and fake_glm.requests == []
     assert trial_files(directory.parents[2], TrialKind.ADVERSARY)["shortcut/0"].attempts == 1
+    assert load_adversary_attempt(directory / "attempt-0.json") == trial
+
+
+async def test_a_tool_call_convention_is_refused_before_the_model_is_called(
+    tmp_path, math_task, rounds, fakes, fake_glm, glm_client
+):
+    trial, directory = await one_trial(
+        tmp_path, math_task, rounds, fakes, glm_client, convention=AnswerCall(id="answer-call")
+    )
+
+    assert isinstance(trial.outcome, Ungraded) and trial.outcome.cause is Cause.SUBMISSION_UNSUPPORTED
+    assert "AnswerCall" in trial.outcome.detail and trial.submissions == ()
+    assert fake_glm.requests == []
     assert load_adversary_attempt(directory / "attempt-0.json") == trial
 
 

@@ -17,8 +17,10 @@ the spirit of the task or does not need the task's intended computation. Its fin
 one verdict line, ``NO_SHORTCUT`` or ``SHORTCUT: <why>`` (``submissions.parse_claim``). The brief is
 the system turn of every request; the task follows exactly as the solver sees it
 (``rolloutengine.task_session.session_start``), and a grading conversation is that task prefix plus
-the candidate's reply. ``calibration`` tiers a trial from its submissions, mainly the ordinal of the
-accepted submission the claim refers to, never from the adversary's account alone.
+the candidate's reply as assistant text, so a convention whose submission is a tool call (``AnswerCall``,
+``FinalAction``) is refused before any attempt (``adversary_convention``). ``calibration`` tiers a
+trial from its submissions, mainly the ordinal of the accepted submission the claim refers to, never
+from the adversary's account alone.
 
 Every attempt writes one attempt file holding ``trials.outcome_json``'s record, a ``RolloutData``
 synthesized from the agent run (``agent_rollout``), and an ``adversary`` record with the effective
@@ -66,7 +68,7 @@ from taskcompendium.execution import TaskExecution
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import TaskSpec
-from taskcompendium.submission import SubmissionConvention, conversation_messages
+from taskcompendium.submission import AnswerCall, FinalAction, SubmissionConvention, conversation_messages
 
 from taskforge.build.run import TaskDraft
 from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, ToolOutcome, assistant_message, run_agent, shell_tool
@@ -75,6 +77,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.proposal.model import TaskProposal
 from taskforge.sandbox.factories import task_refusals
+from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 from taskforge.validate.attempts import adversary_attempt_json, load_adversary_attempt, trial_files
 from taskforge.validate.classify import classify
 from taskforge.validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, TrialKind, Ungraded
@@ -142,6 +145,8 @@ SUBMIT_DESCRIPTION = (
 )
 
 VERIFIER_FAILED = "the verifier failed on this candidate"
+TOOL_CALL_CONVENTIONS = (AnswerCall, FinalAction)
+"""Conventions whose submission is a tool call, which a ``submit`` reply (assistant text) cannot express."""
 
 type AdversaryContext = Callable[[TaskProposal], str]
 """The consumer's section of the adversary brief for one item's proposal; "" for none."""
@@ -201,6 +206,23 @@ class AdversaryPolicy(TrialPolicy, Protocol):
 
 async def no_model(request: ModelRequest) -> ModelTurn:
     raise AssertionError("grade_state never calls the model")
+
+
+def adversary_convention(task: TaskSpec, convention: SubmissionConvention) -> SubmissionConvention:
+    """``trials.task_convention`` over the draft's ``convention``, refusing one a text reply cannot submit through.
+
+    A task whose answer is the machine state is graded from its files whatever the convention.
+
+    Raises:
+        ConventionUnavailable: ``convention`` is incompatible with ``task``, or carries its answer as a tool call
+            (``TOOL_CALL_CONVENTIONS``).
+    """
+    chosen = task_convention(task, (convention,))
+    if task.answer_type not in MACHINE_ANSWER_TYPES and isinstance(chosen, TOOL_CALL_CONVENTIONS):
+        raise ConventionUnavailable(
+            f"{chosen.id}: {type(chosen).__name__} submits through a tool call; adversary candidates are text replies"
+        )
+    return chosen
 
 
 def candidate_state(messages: tuple[dict[str, Any], ...], candidate: Candidate) -> SuppliedState:
@@ -524,15 +546,16 @@ async def run_adversary_trial(
     """One adversary trial: attempts until graded or the retries are spent, each attempt one agent loop.
 
     Mirrors ``trials.run_trial`` with the agent loop as the attempt body: a task no convention or factory can
-    carry is one refused attempt; attempts are numbered from ``plan.first_attempt``; ``RETRYABLE`` causes are
-    retried ``plan.max_retries`` times with ``plan.retry_backoff``. There is no token contract to retry. Each
-    attempt is one ``TRIAL`` ledger span (step ``adversary/<trial>/<attempt>``) and one attempt file, with a fresh
-    submission budget.
+    carry, or whose convention a text reply cannot submit through (``adversary_convention``), is one refused
+    attempt; attempts are numbered from ``plan.first_attempt``; ``RETRYABLE`` causes are retried
+    ``plan.max_retries`` times with ``plan.retry_backoff``. There is no token contract to retry. Each attempt is
+    one ``TRIAL`` ledger span (step ``adversary/<trial>/<attempt>``) and one attempt file, with a fresh submission
+    budget.
     """
     task = draft.task
     execution = plan.deadlines.apply(draft.execution)
     try:
-        convention = task_convention(task, (draft.convention,))
+        convention = adversary_convention(task, draft.convention)
     except ConventionUnavailable as error:
         outcome = Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None)
         return _refuse(draft, execution, None, plan, trial, brief, outcome)
