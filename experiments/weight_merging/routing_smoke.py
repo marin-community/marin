@@ -42,7 +42,15 @@ def main() -> None:
         api_model=model.name,
     )
     assert isinstance(config.engine, VllmEngineConfig)
-    engine = replace(config.engine, extra_args=(*config.engine.extra_args, "--enable-return-routed-experts"))
+    engine = replace(
+        config.engine,
+        extra_args=(
+            *config.engine.extra_args,
+            "--enable-return-routed-experts",
+            "--middleware",
+            "experiments.weight_merging.record_requests.RecordRequests",
+        ),
+    )
     os.environ.update(config.iris.worker_environment.env_vars)
     (args.output / "provenance.json").write_text(
         json.dumps(
@@ -76,7 +84,16 @@ def main() -> None:
             (args.output / f"response-{index}.json").write_text(json.dumps(payload) + "\n")
             summary = summarize_routing(payload, num_layers=26, num_experts=256, top_k=4)
             (args.output / f"summary-{index}.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (args.output / "complete.json").write_text(json.dumps({"validated_requests": 2}) + "\n")
+        streaming_request = {**request, "stream": True}
+        (args.output / "stream-request.json").write_text(json.dumps(streaming_request, indent=2) + "\n")
+        with requests.post(
+            f"{endpoint.base_url}/chat/completions", json=streaming_request, timeout=300, stream=True
+        ) as response:
+            response.raise_for_status()
+            with (args.output / "stream-response.bin").open("wb") as output:
+                for chunk in response.iter_content(chunk_size=8192):
+                    output.write(chunk)
+    (args.output / "complete.json").write_text(json.dumps({"validated_requests": 2, "streamed_requests": 1}) + "\n")
 
 
 if __name__ == "__main__":
