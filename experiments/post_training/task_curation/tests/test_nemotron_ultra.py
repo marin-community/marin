@@ -398,7 +398,7 @@ def test_swe_components_split_by_swe_gym_membership(tmp_path, staged):
             record["locator"]
             for record in staged_raw_file_rows(
                 str(tmp_path),
-                SourceShard("mopd.jsonl", 0, 1),
+                SourceShard("mopd.jsonl", 0, 1, None),
                 source_files(PIPELINES[f"nemotron_ultra_mopd_swe_pivot_len40k_{split}"].source),
                 ConversionContext(staged, None),
             )

@@ -461,7 +461,7 @@ def staged_component_rows(tmp_path, parent: list[dict], kto: list[dict], name: s
     pq.write_table(pa.Table.from_pylist(kto), tmp_path / "kto" / preference.TRAIN_FILE)
     return staged_raw_file_rows(
         str(tmp_path / "kto"),
-        SourceShard(preference.TRAIN_FILE, 0, 1),
+        SourceShard(preference.TRAIN_FILE, 0, 1, None),
         source_files(PIPELINES[name].source),
         fixture_context(PIPELINES[name], {preference.PARENT_INPUT: StoragePath(str(tmp_path / "parent"))}),
     )

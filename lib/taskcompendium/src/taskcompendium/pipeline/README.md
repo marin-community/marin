@@ -13,7 +13,7 @@ does not import experiments or construct ArtifactSteps.
 | Field | Meaning |
 | --- | --- |
 | `name`, `version` | Source name and converter revision, recorded on every row's `Source`. |
-| `source` | `SourceFiles`: the staged dataset, revision, file patterns, format, and optional `select`, `decode` and `read` callables, or `parts` to read each file in parallel parts. |
+| `source` | `SourceFiles`: the staged dataset, revision, file patterns, format, and optional `select`, `decode` and `read` callables, or `parts` to produce each file's rows, of a known count, in parallel parts. |
 | `convert` | `RawRow -> TaskSpec | NormalizedTask | ImportRejection`. The converter fixes the grader. |
 | `rubric` | A `ReviewRubric` for model review, or `None` to skip review. |
 | `controls` | `Controls(golden, memory_mb)` for grader verification, or `None` to skip it. |
@@ -33,7 +33,9 @@ cannot convert.
 [telemetry](#telemetry) section lists the phase and Zephyr execution of each:
 
 1. **Raw sample.** Read the staged files, record every row locator under
-   `download/locators/`, and draw at most 100 raw rows.
+   `download/locators/`, and draw at most 100 raw rows. In sample mode, a source
+   read in `parts` draws its row indices from the parts' row counts and produces
+   only the drawn rows; its ledger has no `raw_input_sha256` for the others.
 2. **Normalize and prepare.** Convert the sample and run cheap structural checks
    (`verify_task`): resource layout, answer-format compatibility, and
    reference/wrong-answer checks for in-process numeric, MCQ, exact and action
@@ -166,7 +168,7 @@ A source runs these phases in order:
 
 | Phase | Work |
 | --- | --- |
-| `raw_sample` | One execution scans the staged files, writes the locators and draws the panel. |
+| `raw_sample` | One execution scans the staged files, writes the locators and draws the panel. A parted source in sample mode draws the panel by index on the driver, and the execution produces only the panel's rows. |
 | `panel_normalize` | One execution decodes, converts and checks the panel rows. |
 | `sample_prepare` | The driver deduplicates the panel and saves its review batches. |
 | `quality_review` | With a rubric, the driver reads the review cache once and one execution reviews the sample; without one, the driver decides from conversion and check failures. |

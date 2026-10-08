@@ -8,7 +8,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from functools import partial
 from itertools import batched
@@ -28,7 +28,12 @@ from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.controls import GradingMachines, control_suite
-from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME, SourceTelemetry, execute_phase
+from taskcompendium.pipeline.execution_telemetry import (
+    TELEMETRY_FILENAME,
+    PhaseTelemetry,
+    SourceTelemetry,
+    execute_phase,
+)
 from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe, SourceStatus
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -50,6 +55,7 @@ from taskcompendium.pipeline.sources import (
     SourceShard,
     conversion_context,
     decode_staged_row,
+    row_locator,
     source_files_identity,
     source_shards,
     staged_files,
@@ -197,13 +203,22 @@ def _decode_and_normalize(row: dict[str, Any], *, recipe: SourceRecipe) -> dict[
     return result
 
 
-def _source_identity(row: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
+def _locator_identity(locator: str, raw_input_sha256: str | None, recipe: SourceRecipe) -> dict[str, Any]:
     return {
-        "task_id": row_task_id(recipe, row_source(recipe, row["locator"])),
-        "source_locator": row["locator"],
-        "raw_input_sha256": _raw_input_sha256(row["data"]),
+        "task_id": row_task_id(recipe, row_source(recipe, locator)),
+        "source_locator": locator,
+        "raw_input_sha256": raw_input_sha256,
         "raw_sha256": None,
     }
+
+
+def _source_identity(row: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
+    return _locator_identity(row["locator"], _raw_input_sha256(row["data"]), recipe)
+
+
+def _ledger_path(output: StoragePath, name: str) -> StoragePath:
+    """The locator ledger file of one source shard or staged file."""
+    return output / "download" / "locators" / f"part-{hashlib.sha256(name.encode()).hexdigest()}.parquet"
 
 
 def _staged_rows_with_ledger(
@@ -212,8 +227,7 @@ def _staged_rows_with_ledger(
     """Read one shard's selected rows without decoding and retain their original content identities."""
     metrics = counters.current_stage()
     started = time.monotonic()
-    filename = hashlib.sha256(shard.name.encode()).hexdigest()
-    path = output / "download" / "locators" / f"part-{filename}.parquet"
+    path = _ledger_path(output, shard.name)
     try:
         with path.open("wb", auto_mkdir=True) as stream:
             with pq.ParquetWriter(stream, RAW_SCHEMA) as writer:
@@ -404,22 +418,76 @@ class _Panel:
         return self.coverage == QualitySampleCoverage.CENSUS
 
 
+def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample:
+    """Draw a parted source's panel by row index, then produce only the panel's rows.
+
+    The parts report each file's row count, so the seeded sample of locators picks the rows a scan
+    of every row would pick. The ledger lists every locator; rows the sample did not produce have
+    no raw input hash.
+    """
+    spec, policy, recipe = run.recipe.source, run.config.quality_policy, run.recipe
+    assert spec.parts is not None
+    context = conversion_context(recipe)
+    sizes = {
+        file: spec.parts.size(StoragePath(run.source_input) / file, context)
+        for file in staged_files(run.source_input, spec)
+    }
+    population_count, chosen = seeded_sample(
+        ((file, index) for file, size in sizes.items() for index in range(size)),
+        size=policy.sample_size,
+        key=lambda row: seeded_order(row_locator(*row), policy.seed),
+    )
+    indices = {file: frozenset(index for chosen_file, index in chosen if chosen_file == file) for file in sizes}
+    shards = [
+        replace(shard, indices=indices[shard.file])
+        for shard in source_shards(run.source_input, spec)
+        if indices[shard.file]
+    ]
+    rows = execute_phase(
+        run.context,
+        Dataset.from_list(shards).flat_map(partial(staged_raw_file_rows, run.source_input, spec=spec, context=context)),
+        telemetry=telemetry,
+    ).results
+    if sorted(row["locator"] for row in rows) != sorted(row_locator(file, index) for file, index in chosen):
+        raise ValueError("The source parts did not produce exactly the sampled rows")
+    hashes = {row["locator"]: _raw_input_sha256(row["data"]) for row in rows}
+    for file, size in sizes.items():
+        write_parquet_file(
+            (
+                _locator_identity(locator, hashes.get(locator), recipe)
+                for locator in (row_locator(file, index) for index in range(size))
+            ),
+            str(_ledger_path(run.output, file)),
+            schema=RAW_SCHEMA,
+        )
+    return RawSample(population_count, sorted(rows, key=partial(_raw_order, seed=policy.seed)))
+
+
 def _sample_panel(run: _SourceRun) -> _Panel:
     """Draw the raw panel while writing the locator ledger, then normalize, check and prepare only the panel."""
     policy = run.config.quality_policy
+    # An earlier run may have written the ledger under other shard names.
+    ledger = run.output / "download" / "locators"
+    if ledger.exists():
+        ledger.rmtree()
     with run.telemetry.phase("raw_sample") as phase:
-        sample = execute_phase(
-            run.context,
-            Dataset.from_list(list(source_shards(run.source_input, run.recipe.source)))
-            .flat_map(
-                partial(_staged_rows_with_ledger, source_input=run.source_input, recipe=run.recipe, output=run.output)
-            )
-            .reduce(
-                partial(sample_raw_rows, size=policy.sample_size, seed=policy.seed),
-                partial(merge_raw_samples, size=policy.sample_size, seed=policy.seed),
-            ),
-            telemetry=phase,
-        ).results[0]
+        if run.config.mode == SourceProcessingMode.SAMPLE and run.recipe.source.parts is not None:
+            sample = _indexed_raw_sample(run, phase)
+        else:
+            sample = execute_phase(
+                run.context,
+                Dataset.from_list(list(source_shards(run.source_input, run.recipe.source)))
+                .flat_map(
+                    partial(
+                        _staged_rows_with_ledger, source_input=run.source_input, recipe=run.recipe, output=run.output
+                    )
+                )
+                .reduce(
+                    partial(sample_raw_rows, size=policy.sample_size, seed=policy.seed),
+                    partial(merge_raw_samples, size=policy.sample_size, seed=policy.seed),
+                ),
+                telemetry=phase,
+            ).results[0]
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
     with run.telemetry.phase("panel_normalize") as phase:
@@ -572,7 +640,10 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
             "population_count": population_count,
             "locator_sidecars": str(output / "download/locators/*.parquet"),
             "raw_payloads": "Retained at the immutable source input",
-            "raw_input_sha256": "Canonical source JSON with binary values represented by their SHA256 and byte size",
+            "raw_input_sha256": (
+                "Canonical source JSON with binary values represented by their SHA256 and byte size; "
+                "absent for rows of a parted source that a sample did not read"
+            ),
             "raw_sha256": "SHA256 of decoded canonical JSON; absent until the row is converted",
         },
     )

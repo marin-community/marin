@@ -36,7 +36,8 @@ RlDataPipeline(
   rewrites a row before conversion (for example, unpacking a TaskTrove archive),
   and `read` replaces the format reader. `parts` replaces it for a file that
   several workers read in parts, each yielding its rows with their indices in
-  the whole file; the Reasoning Gym generator runs this way. `inputs` names
+  the whole file. Parts report the file's row count, so a sample produces only
+  its sampled rows; the Reasoning Gym generator runs this way. `inputs` names
   auxiliary pinned sources. Each callable receives a `ConversionContext`, whose `inputs` holds
   the staged auxiliary sources by name.
 - **Converter.** A module-level function `convert(row, context)` that builds the

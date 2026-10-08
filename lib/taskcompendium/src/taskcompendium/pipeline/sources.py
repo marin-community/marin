@@ -61,13 +61,22 @@ def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
     return tuple(sorted(files))
 
 
+def row_locator(file: str, index: int) -> str:
+    """The stable locator of a staged file's row."""
+    return f"{file}:{index}"
+
+
 @dataclass(frozen=True)
 class SourceShard:
-    """One staged file, or one part of a file that its source reads in parts."""
+    """One staged file, or one part of a file that its source reads in parts.
+
+    ``indices`` restricts a part to those rows; ``None`` reads all of them.
+    """
 
     file: str
     part: int
     parts: int
+    indices: frozenset[int] | None
 
     @property
     def name(self) -> str:
@@ -80,7 +89,7 @@ def source_shards(path: str, spec: SourceFiles) -> tuple[SourceShard, ...]:
     parts = spec.parts.count if spec.parts is not None else 1
     if parts < 1:
         raise ValueError("A parted source requires at least one part")
-    return tuple(SourceShard(file, part, parts) for file in staged_files(path, spec) for part in range(parts))
+    return tuple(SourceShard(file, part, parts, None) for file in staged_files(path, spec) for part in range(parts))
 
 
 def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[dict[str, Any]]:
@@ -105,7 +114,8 @@ def _indexed_rows(
     file: StoragePath, shard: SourceShard, spec: SourceFiles, context: ConversionContext
 ) -> Iterator[tuple[int, dict[str, Any]]]:
     if spec.parts is not None:
-        return spec.parts(file, context, shard.part)
+        return spec.parts(file, context, shard.part, shard.indices)
+    assert shard.indices is None, "Only a parted source reads selected rows"
     return enumerate(spec.read(file, context) if spec.read is not None else _decoded_rows(file, spec.format))
 
 
@@ -121,7 +131,7 @@ def staged_raw_file_rows(
             raise ValueError(f"Expected an object at {relative_file}:{index}")
         if spec.select is not None and not spec.select(row, context):
             continue
-        yield {"index": index, "locator": f"{relative_file}:{index}", "data": row}
+        yield {"index": index, "locator": row_locator(relative_file, index), "data": row}
 
 
 def decode_staged_row(record: dict[str, Any], spec: SourceFiles, context: ConversionContext) -> dict[str, Any]:

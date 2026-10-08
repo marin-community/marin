@@ -12,6 +12,7 @@ import reasoning_gym
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
 from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
 
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
@@ -216,7 +217,7 @@ def get_score_answer_fn(name):
 
 
 def first_rows(wheel: StoragePath, count: int = 1, excluded=EXCLUDED, python_hash_seed: int = 0) -> list[dict]:
-    rows = declarations.generated_rows(wheel, "pinned-version", excluded, python_hash_seed, 0, 1)
+    rows = declarations.generated_rows(wheel, "pinned-version", excluded, python_hash_seed, 0, 1, None)
     try:
         return [next(rows)[1] for _ in range(count)]
     finally:
@@ -231,7 +232,7 @@ def test_generated_parts_together_yield_the_rows_of_one_run(noisy_generator_whee
             index: row
             for part in range(parts)
             for index, row in declarations.generated_rows(
-                noisy_generator_wheel, "pinned-version", EXCLUDED, 0, part, parts
+                noisy_generator_wheel, "pinned-version", EXCLUDED, 0, part, parts, None
             )
         }
 
@@ -240,6 +241,19 @@ def test_generated_parts_together_yield_the_rows_of_one_run(noisy_generator_whee
     # Locators cycle the sorted registry, one entry of each task per round.
     assert [whole[index]["generation"]["task"] for index in range(4)] == ["puzzle", "riddle", "sudoku", "puzzle"]
     assert rows(2) == whole
+
+
+def test_sampled_rows_are_the_rows_of_a_whole_generation(noisy_generator_wheel, monkeypatch):
+    monkeypatch.setenv("REASONING_TEST_MORE_FAMILIES", "riddle sudoku")
+    context = ConversionContext({}, None)
+    whole = dict(declarations.generated_rows(noisy_generator_wheel, "pinned-version", EXCLUDED, 0, 0, 1, None))
+    parts = declarations.GeneratedRows("pinned-version", EXCLUDED, 0, 2)
+    assert parts.size(noisy_generator_wheel, context) == len(whole)
+    sample = frozenset({1, 2, 1500, len(whole) - 1})
+    sampled = {
+        index: row for part in range(parts.count) for index, row in parts(noisy_generator_wheel, context, part, sample)
+    }
+    assert sampled == {index: whole[index] for index in sample}
 
 
 def test_generated_rows_keep_generator_output_out_of_the_jsonl(noisy_generator_wheel):

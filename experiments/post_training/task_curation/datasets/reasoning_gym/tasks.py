@@ -4,7 +4,8 @@
 """Reasoning Gym puzzles from two sources, each graded by the puzzle task's own scorer.
 
 ``reasoning_gym_generated`` generates entries with the pinned ``reasoning_gym`` wheel, the release
-the grader image installs, in ``GENERATOR_PARTS`` parts that workers generate in parallel. Its grader
+the grader image installs, in ``GENERATOR_PARTS`` parts that workers generate in parallel; a sample
+generates only its sampled rows. Its grader
 (``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
 Python values, and rows whose entry a fresh dataset does not reproduce are rejected.
 ``tasktrove-reasoning-gym`` keeps the TaskTrove archive's ``tests/test.sh``, which thresholds the
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
@@ -119,18 +121,9 @@ transformations, or a hidden question different from the public problem.
 """
 
 
-def generated_rows(
-    wheel_path: StoragePath,
-    generator_version: str,
-    excluded_generators: tuple[tuple[str, str], ...],
-    python_hash_seed: int,
-    part: int,
-    parts: int,
-) -> Iterator[tuple[int, dict[str, Any]]]:
-    """Run one part of ``generate.py`` with the unpacked generator wheel first on ``PYTHONPATH``.
-
-    Yields the part's rows with their indices in the whole generated source.
-    """
+@contextmanager
+def _generator_environment(wheel_path: StoragePath, python_hash_seed: int) -> Iterator[dict[str, str]]:
+    """Unpack the generator wheel and yield the environment that puts it first on ``PYTHONPATH``."""
     with TemporaryDirectory() as directory:
         local_wheel = os.path.join(directory, GENERATOR_ARCHIVE)
         with wheel_path.open("rb") as source, open(local_wheel, "wb") as destination:
@@ -138,41 +131,68 @@ def generated_rows(
         packages = os.path.join(directory, "packages")
         with zipfile.ZipFile(local_wheel) as wheel:
             wheel.extractall(packages)
-        environment = {
+        yield {
             **os.environ,
             "PYTHONPATH": packages + os.pathsep + os.environ.get("PYTHONPATH", ""),
             "MPLCONFIGDIR": directory,
             "PYTHONHASHSEED": str(python_hash_seed),
         }
-        with TemporaryFile(mode="w+b") as errors:
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    str(GENERATE),
-                    generator_version,
-                    json.dumps(dict(excluded_generators)),
-                    str(part),
-                    str(parts),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=errors,
-                text=True,
-                env=environment,
-            )
-            try:
-                assert process.stdout is not None
-                for line in process.stdout:
-                    record = json.loads(line)
-                    yield record["index"], record["row"]
-                if process.wait() != 0:
-                    errors.seek(0, os.SEEK_END)
-                    errors.seek(max(0, errors.tell() - GENERATOR_ERROR_BYTES))
-                    detail = errors.read().decode(errors="replace")
-                    raise RuntimeError(f"Pinned reasoning-gym generator failed: {detail}")
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait()
+
+
+def _generator_lines(arguments: list[str], environment: dict[str, str]) -> Iterator[str]:
+    """Yield the output lines of ``generate.py``, raising with the end of its stderr when it fails."""
+    with TemporaryFile(mode="w+b") as errors:
+        process = subprocess.Popen(
+            [sys.executable, str(GENERATE), *arguments],
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            text=True,
+            env=environment,
+        )
+        try:
+            assert process.stdout is not None
+            yield from process.stdout
+            if process.wait() != 0:
+                errors.seek(0, os.SEEK_END)
+                errors.seek(max(0, errors.tell() - GENERATOR_ERROR_BYTES))
+                detail = errors.read().decode(errors="replace")
+                raise RuntimeError(f"Pinned reasoning-gym generator failed: {detail}")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait()
+
+
+def generated_row_count(
+    wheel_path: StoragePath, excluded_generators: tuple[tuple[str, str], ...], python_hash_seed: int
+) -> int:
+    """The number of rows a whole run of the generator yields, from its pinned task registry."""
+    with _generator_environment(wheel_path, python_hash_seed) as environment:
+        (line,) = _generator_lines(["size", json.dumps(dict(excluded_generators))], environment)
+    return int(line)
+
+
+def generated_rows(
+    wheel_path: StoragePath,
+    generator_version: str,
+    excluded_generators: tuple[tuple[str, str], ...],
+    python_hash_seed: int,
+    part: int,
+    parts: int,
+    indices: frozenset[int] | None,
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Run one part of ``generate.py`` with the unpacked generator wheel first on ``PYTHONPATH``.
+
+    Yields the part's rows with their indices in the whole generated source, only those in
+    ``indices`` when given.
+    """
+    arguments = ["rows", generator_version, json.dumps(dict(excluded_generators)), str(part), str(parts)]
+    if indices is not None:
+        arguments += ["--indices", json.dumps(sorted(indices))]
+    with _generator_environment(wheel_path, python_hash_seed) as environment:
+        for line in _generator_lines(arguments, environment):
+            record = json.loads(line)
+            yield record["index"], record["row"]
 
 
 @dataclass(frozen=True)
@@ -184,11 +204,20 @@ class GeneratedRows:
     python_hash_seed: int
     count: int
 
+    def size(self, wheel_path: StoragePath, _context: ConversionContext) -> int:
+        return generated_row_count(wheel_path, self.excluded_generators, self.python_hash_seed)
+
     def __call__(
-        self, wheel_path: StoragePath, _context: ConversionContext, part: int
+        self, wheel_path: StoragePath, _context: ConversionContext, part: int, indices: frozenset[int] | None
     ) -> Iterator[tuple[int, dict[str, Any]]]:
         return generated_rows(
-            wheel_path, self.generator_version, self.excluded_generators, self.python_hash_seed, part, self.count
+            wheel_path,
+            self.generator_version,
+            self.excluded_generators,
+            self.python_hash_seed,
+            part,
+            self.count,
+            indices,
         )
 
 

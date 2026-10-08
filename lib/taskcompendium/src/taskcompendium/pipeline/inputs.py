@@ -36,17 +36,21 @@ def required_grader_environment(context: ConversionContext) -> EnvironmentRequir
 
 
 class FileParts(Protocol):
-    """Read each staged file in ``count`` independent parts, so that several workers read one file.
+    """Produce each staged file's rows in ``count`` independent parts, so that several workers share one file.
 
-    Each call yields one part's rows with their indices in the whole file, which form the rows'
-    locators; together the parts yield every index once.
+    A file holds ``size`` rows, indexed from 0 without producing them; the indices form the rows'
+    locators. Each call yields one part's rows with their indices, only those in ``indices`` when
+    given; together the parts yield every requested index once. A sample therefore draws its row
+    indices first and produces only those rows.
     """
 
     @property
     def count(self) -> int: ...
 
+    def size(self, file: StoragePath, context: ConversionContext) -> int: ...
+
     def __call__(
-        self, file: StoragePath, context: ConversionContext, part: int
+        self, file: StoragePath, context: ConversionContext, part: int, indices: frozenset[int] | None
     ) -> Iterator[tuple[int, dict[str, Any]]]: ...
 
 
@@ -65,7 +69,8 @@ class SourceFiles:
 
     ``select`` and ``decode`` run on raw records before sampling, so a panel is drawn from the
     intended rows. ``read`` replaces the format reader for files that are not one record per row;
-    ``parts`` replaces it for a file whose rows are expensive to produce, such as a generator.
+    ``parts`` replaces it for a file whose rows are expensive to produce but whose row count is known,
+    such as a generator.
     Each callable also receives the source's conversion context.
     """
 
@@ -81,3 +86,5 @@ class SourceFiles:
     def __post_init__(self) -> None:
         if self.read is not None and self.parts is not None:
             raise ValueError("A source reads its files either whole or in parts")
+        if self.select is not None and self.parts is not None:
+            raise ValueError("A parted source samples rows by index before reading them, so it cannot select rows")

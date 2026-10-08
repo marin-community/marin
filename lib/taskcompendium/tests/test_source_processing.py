@@ -395,26 +395,32 @@ def test_unsupported_raw_panel_never_becomes_a_small_population_census(tmp_path,
 
 @dataclass(frozen=True)
 class AlternatingParts:
-    """Read a JSONL file in parts that take every ``count``-th row."""
+    """Read a JSONL file in parts that take every ``count``-th row, recording each row they produce."""
 
     count: int
+    produced: str
 
-    def __call__(self, file, _context: ConversionContext, part: int):
-        return ((index, row) for index, row in enumerate(load_jsonl(str(file))) if index % self.count == part)
+    def size(self, file, _context: ConversionContext) -> int:
+        return sum(1 for _ in load_jsonl(str(file)))
+
+    def __call__(self, file, _context: ConversionContext, part: int, indices: frozenset[int] | None):
+        for index, row in enumerate(load_jsonl(str(file))):
+            if index % self.count == part and (indices is None or index in indices):
+                (Path(self.produced) / str(index)).touch()
+                yield index, row
 
 
-def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path):
-    source = tmp_path / "source"
+@pytest.mark.parametrize("mode", list(SourceProcessingMode))
+def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode):
+    source, produced = tmp_path / "source", tmp_path / "produced"
+    produced.mkdir()
     write_jsonl(source, apple_rows(125))
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")
-    config = pipeline_config(SourceProcessingMode.SAMPLE, reviewer)
+    config = pipeline_config(mode, reviewer)
     whole = run_pipeline(fixture_recipe(convert_svamp), source, tmp_path / "whole", config)
-    parted_recipe = fixture_recipe(convert_svamp, source=replace(SOURCE_FILES, parts=AlternatingParts(3)))
+    parts = AlternatingParts(3, str(produced))
+    parted_recipe = fixture_recipe(convert_svamp, source=replace(SOURCE_FILES, parts=parts))
     parted = run_pipeline(parted_recipe, source, tmp_path / "parted", config)
-    assert len(list((Path(parted.download_path) / "locators").glob("*.parquet"))) == 3
-    assert sorted(parquet_rows(Path(parted.download_path) / "locators"), key=lambda row: row["task_id"]) == sorted(
-        parquet_rows(Path(whole.download_path) / "locators"), key=lambda row: row["task_id"]
-    )
     for view in ("normalize", "final"):
         files = sorted(path.name for path in (tmp_path / "whole" / view).glob("*.parquet"))
         assert files == sorted(path.name for path in (tmp_path / "parted" / view).glob("*.parquet"))
@@ -422,6 +428,18 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path):
             (tmp_path / "whole" / view / name).read_bytes() == (tmp_path / "parted" / view / name).read_bytes()
             for name in files
         )
+    # A sample produces only the rows it processes; the ledger lists every row, hashing those produced.
+    normalized = parquet_rows(parted.normalize_path)
+    assert len(normalized) == (100 if mode == SourceProcessingMode.SAMPLE else 125)
+    assert {f"source.jsonl:{path.name}" for path in produced.iterdir()} == {row["source_row"] for row in normalized}
+    processed = {row["task_id"] for row in normalized}
+    expected_ledger = [
+        {**row, "raw_input_sha256": row["raw_input_sha256"] if row["task_id"] in processed else None}
+        for row in parquet_rows(Path(whole.download_path) / "locators")
+    ]
+    assert sorted(parquet_rows(Path(parted.download_path) / "locators"), key=lambda row: row["task_id"]) == sorted(
+        expected_ledger, key=lambda row: row["task_id"]
+    )
     assert read_json(parted.manifest_path)["raw_population_count"] == 125
 
 

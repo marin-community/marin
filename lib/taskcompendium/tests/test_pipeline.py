@@ -843,7 +843,7 @@ def test_staged_source_reaches_end_across_files(tmp_path, apple_row):
     snapshot.write_text("".join(json.dumps({**apple_row, "position": index}) + "\n" for index in range(1003)))
     spec = SourceFiles("fixture", "1", ("*.jsonl",), SourceFormat.JSONL)
     context = ConversionContext(staged_inputs({}), None)
-    records = list(staged_file_rows(str(tmp_path), SourceShard("source.jsonl", 0, 1), spec, context))
+    records = list(staged_file_rows(str(tmp_path), SourceShard("source.jsonl", 0, 1, None), spec, context))
     assert [row["data"]["position"] for row in records] == list(range(1003))
 
 
