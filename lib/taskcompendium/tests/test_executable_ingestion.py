@@ -14,11 +14,10 @@ import pytest
 from shellbox.machine import Backend, DockerImage, ExitReason, MachineSpec, Result
 from verifyit.spec import StdioSpec, spec_to_table
 
-from taskcompendium.datasets.executable_tasks import SubmissionControl, executable_checks, normalize
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.datasets.executable_tasks import SubmissionControl, executable_checks, grade_files, normalize
+from taskcompendium.models import Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import CheckStatus, RawRow, ReviewRubric, TaskPolicy
 from taskcompendium.pipeline.transforms import normalize_row
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.shell import ShellFactory
 
 from .pipeline_stages import fixture_recipe
@@ -53,6 +52,14 @@ def executable_task(executable_row):
     task = normalize(executable_row, "test@sha256:" + "a" * 64, output_paths=("/app/solution.py", "/app/solution.cpp"))
     assert isinstance(task, TaskSpec)
     return TaskSpec.model_validate_json(task.model_dump_json())
+
+
+def grading_spec(task: TaskSpec) -> MachineSpec:
+    """The machine specification for the task's grading image."""
+    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None
+    image = task.grader.environment.docker_image
+    assert image is not None
+    return MachineSpec(DockerImage(image))
 
 
 def test_linux_fixture_names_survive_normalization_and_traversal_cannot_produce_task(executable_row):
@@ -96,6 +103,10 @@ class GradingMachine(FileMachine):
     verdict_status: str = "scored"
 
     async def run(self, command):
+        if command.argv[:2] == ("rm", "-f"):
+            for path in command.argv[2:]:
+                self.files.pop(path, None)
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
         if command.argv[0] == "tar":
             with tarfile.open(fileobj=io.BytesIO(self.files[command.argv[2]])) as archive:
                 for member in archive.getmembers():
@@ -132,7 +143,7 @@ async def test_missing_executable_oracle_still_runs_negative_controls(executable
     report = await executable_checks(
         task,
         factory=machines,
-        machine_spec=MachineSpec(DockerImage(task.verifier.environment_requirements.docker_image)),
+        machine_spec=grading_spec(task),
     )
     assert {check.check: check.status for check in report.checks} == {
         "missing_submission": CheckStatus.PASS,
@@ -153,7 +164,7 @@ async def test_ungraded_zero_reward_cannot_pass_negative_controls(executable_tas
     report = await executable_checks(
         task,
         factory=machines,
-        machine_spec=MachineSpec(DockerImage(task.verifier.environment_requirements.docker_image)),
+        machine_spec=grading_spec(task),
         controls=(SubmissionControl("wrong_submission", {"/app/solution.py": b"wrong"}, 0.0),),
     )
     assert {check.check: check.status for check in report.checks} == {
@@ -169,7 +180,7 @@ async def test_executable_controls_enforce_each_declared_reward(executable_task)
     report = await executable_checks(
         task,
         factory=machines,
-        machine_spec=MachineSpec(DockerImage(task.verifier.environment_requirements.docker_image)),
+        machine_spec=grading_spec(task),
         controls=(
             SubmissionControl("advertised_partial", {"/app/solution.py": b"partial"}, 0.25),
             SubmissionControl("strict_zero", {"/app/solution.py": b"partial"}, 0.0),
@@ -188,25 +199,21 @@ async def test_executable_controls_enforce_each_declared_reward(executable_task)
 @pytest.mark.parametrize("program,reward", [(b"print(7)\n", 1.0), (b"print(0)\n", 0.0)])
 async def test_captured_submission_cannot_supply_its_own_reward(executable_task, program, reward):
     machines = GradingMachines()
-    grade = await grade_submission(
-        executable_task,
-        {
-            "/app/solution.py": program,
-            "/logs/verifier/verdict.json": b'{"status":"scored","reward":1,"detail":{}}',
-            "/tests/cases/output_1.txt": b"0\n",
-        },
-        machines,
-        machine_spec=MachineSpec(DockerImage(executable_task.verifier.environment_requirements.docker_image)),
-    )
+    files = {
+        "/app/solution.py": program,
+        "/logs/verifier/verdict.json": b'{"status":"scored","reward":1,"detail":{}}',
+        "/tests/cases/output_1.txt": b"0\n",
+    }
+    grade = await grade_files(executable_task, files, machines, machine_spec=grading_spec(executable_task), timeout=10)
     assert grade.reward == reward
     assert machines.machines[0].files["/tests/cases/output_1.txt"] == b"7\n"
     assert machines.machines[0].closed
 
 
-@pytest.mark.parametrize("role", ["worker", "verifier"])
+@pytest.mark.parametrize("role", ["worker", "grader"])
 async def test_serialized_backend_contract_rejects_incompatible_runtime_before_start(executable_task, role):
     data = executable_task.model_dump(mode="json")
-    requirements = data["environment_requirements"] if role == "worker" else data["verifier"]["environment_requirements"]
+    requirements = data["environment_requirements"] if role == "worker" else data["grader"]["environment"]
     requirements["compatible_backends"] = ["gvisor"]
     task = TaskSpec.model_validate_json(json.dumps(data))
     machines = GradingMachines()
@@ -214,10 +221,5 @@ async def test_serialized_backend_contract_rejects_incompatible_runtime_before_s
         if role == "worker":
             await ShellFactory(machines, MachineSpec(DockerImage("test")), {}, 1, 1024).create(task)
         else:
-            await grade_submission(
-                task,
-                {"/app/solution.py": b"print(7)\n"},
-                machines,
-                machine_spec=MachineSpec(DockerImage(task.verifier.environment_requirements.docker_image)),
-            )
+            await executable_checks(task, factory=machines, machine_spec=grading_spec(task))
     assert not machines.machines

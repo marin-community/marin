@@ -49,7 +49,7 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
-Numeric private `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
+Numeric `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
 are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
 `tolerance_rel = 0.0` accepts both `1/2` and `0.5` without losing integer or decimal precision.
 The effective tolerance is `max(tolerance_abs, tolerance_rel * abs(expected))`. Float tolerances
@@ -101,13 +101,18 @@ Harbor's error categories from the pinned config-only `harbor-config` dependency
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
 
-`candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ and predicted-action
-contracts for callers that already extracted a submission. `grade_text_candidate` scores extracted
-text; `grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
-filesystem or harness operations. Predicted-action matching preserves duplicate calls and requires
-all calls to match one to one. Argument objects stay decoded in JSON descriptors; `render_spec`
-encodes each argument object as a JSON string in TOML so nested JSON null values survive
-`parse_spec`.
+`candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
+from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
+already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
+accepts: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
+`structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
+decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
+names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
+tests directory. A specification the mode rejects yields an `invalid_task` reward; a candidate of
+the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script modes run only
+through the file grader. Predicted-action matching preserves duplicate calls and requires all calls
+to match one to one. Argument objects stay decoded in JSON tables; `render_spec` encodes each
+argument object as a JSON string in TOML so nested JSON null values survive `parse_spec`.
 
 ## Install and use
 
@@ -138,14 +143,14 @@ uv run --group test pytest lib/verifyit/tests
 
 ## Candidate scoring
 
-Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions remain in the pinned source package or task resources.
+Callers that already extracted an answer use `verifyit.candidate.grade_candidate` for the in-process modes, or the per-mode candidate functions in `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions remain in the pinned source package or the dataset's own grader scripts.
 
-A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
+A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
 
-For a pinned Python source scorer, [`execution/source_callable.py`](src/verifyit/execution/source_callable.py) is a transport script. It reads the task's private descriptor, passes declared inputs to the original image-installed function, and writes its returned reward and detail. It does not define a scoring rule. The dataset declaration chooses the source function, input projection, image, and source hash. See the [execution](src/verifyit/execution/README.md) and [mode](src/verifyit/modes/README.md) boundaries.
+For a pinned Python source scorer, [`execution/source_callable.py`](src/verifyit/execution/source_callable.py) is a transport script. It reads the task's descriptor, passes declared inputs to the original image-installed function, and writes its returned reward and detail. It does not define a scoring rule. The dataset declaration chooses the source function, input projection, image, and source hash. See the [execution](src/verifyit/execution/README.md) and [mode](src/verifyit/modes/README.md) boundaries.
 
 `StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
 Its TOML reference is encoded as a JSON string so null and nested JSON types survive
-`render_spec` and `parse_spec`; private JSON descriptors keep decoded values. Its `numeric_types`
+`render_spec` and `parse_spec`; JSON tables keep decoded values. Its `numeric_types`
 defaults to `"value"`; set `"strict"` to distinguish integers from floats. Structured and predicted-action
 candidate JSON rejects duplicate object keys.

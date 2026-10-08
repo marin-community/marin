@@ -15,13 +15,12 @@ from pathlib import Path
 from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets import reasoning_tasks
 from taskcompendium.datasets.source_definitions import archive_resources
-from taskcompendium.grader import grader_config, native_command_package
-from taskcompendium.models import TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.grader import GraderPackage, grader_config
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import (
-    ANSWER_PATH,
     bind_grader_recipe,
     bound_grader_task,
+    grading_environment,
     native_runtime_report,
 )
 from taskcompendium.pipeline.models import (
@@ -35,8 +34,9 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import control_result
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 RUNNER = Path(__file__).with_name("runner.py")
 GENERATED_REVISION = "49b07130b3fcd12f2d064bba7c43869543a0e7e7"
@@ -50,14 +50,14 @@ class ReasoningContract(StrEnum):
     ULTRA = "ultra"
 
 
-def tasktrove_command(package_path: str, timeout: float) -> NativeCommandSpec:
+def tasktrove_grader(package_path: str, timeout: float, image: str) -> ScriptGrader:
     """Run the archived grader with the source package selected for python3."""
-    return NativeCommandSpec(
+    return ScriptGrader(
         argv=("bash", "/tests/test.sh"),
         cwd="/",
         env={"PYTHONPATH": package_path},
-        result_format="reward_file",
-        result_path="/logs/verifier/reward.txt",
+        environment=grading_environment(image),
+        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
         timeout=timeout,
     )
 
@@ -115,22 +115,20 @@ def normalize_isolated(
         assert source_task is not None
         source_timeout = float(tomllib.loads(source_task.decode())["verifier"]["timeout_sec"])
         archive = archive_resources(row.data)
-        package = native_command_package(
-            tasktrove_command(package_path, source_timeout),
-            archive.verifier,
+        task = bound_grader_task(
+            task, GraderPackage(tasktrove_grader(package_path, source_timeout, image), archive.verifier)
         )
-        task = bound_grader_task(task, package=package, image=image)
         task = task.model_copy(
             update={"resources": task.resources.model_copy(update={"worker": archive.worker, "oracle": archive.oracle})}
         )
         return replace(result, task=task) if isinstance(result, NormalizedTask) else task
-    package = native_command_package(
-        NativeCommandSpec(
+    package = GraderPackage(
+        ScriptGrader(
             argv=("python3", "/tests/grade.py"),
             cwd="/",
             env={"PYTHONPATH": package_path + ":/opt/skyrl_gym"},
-            result_format="score_json",
-            result_path="/logs/verifier/score.json",
+            environment=grading_environment(image),
+            reward=FileReward(files=(RewardFile(path="/logs/verifier/score.json", format=RewardFileFormat.JSON),)),
             timeout=60,
         ),
         (
@@ -140,7 +138,7 @@ def normalize_isolated(
             ),
         ),
     )
-    task = bound_grader_task(task, package=package, image=image)
+    task = bound_grader_task(task, package)
     return replace(result, task=task) if isinstance(result, NormalizedTask) else task
 
 
@@ -154,18 +152,18 @@ async def isolated_checks(
     entry = record["entry"] if contract == ReasoningContract.GENERATED else record
     witness = recorded["positive"]["candidate"] if recorded else entry.get("answer")
     if not isinstance(witness, str):
-        diagnostic = await grade_submission(
-            task, {ANSWER_PATH: b"Runtime diagnostic response."}, factory, machine_spec=machine_spec, timeout=timeout
+        diagnostic = await grade_final_message(
+            task, TextMessage(role="assistant", content="Runtime diagnostic response."), factory, machine_spec, timeout
         )
         return native_runtime_report(diagnostic, "No native passing witness is present in this source entry")
-    positive = await grade_submission(
-        task, {ANSWER_PATH: witness.encode()}, factory, machine_spec=machine_spec, timeout=timeout
+    positive = await grade_final_message(
+        task, TextMessage(role="assistant", content=witness), factory, machine_spec, timeout
     )
     checks = [control_result(positive, "positive_witness", 1.0)]
     if recorded and recorded["negative"]["reward"] is not None:
         negative = recorded["negative"]
-        result = await grade_submission(
-            task, {ANSWER_PATH: negative["candidate"].encode()}, factory, machine_spec=machine_spec, timeout=timeout
+        result = await grade_final_message(
+            task, TextMessage(role="assistant", content=negative["candidate"]), factory, machine_spec, timeout
         )
         check = control_result(result, "recorded_negative", negative["reward"])
         if negative["reward"] >= 1.0:
@@ -220,7 +218,7 @@ def bind(
         suite_id=f"original-{contract.value}-reasoning-gym-controls",
         grader_bytes=RUNNER.read_bytes()
         + (
-            tasktrove_command(package_path, timeout).model_dump_json().encode()
+            tasktrove_grader(package_path, timeout, image).model_dump_json().encode()
             if contract == ReasoningContract.TASKTROVE
             else package_path.encode()
         ),

@@ -8,7 +8,14 @@ import hashlib
 
 from taskcompendium.datasets.direct_contracts import source_contract_package
 from taskcompendium.datasets.source_definitions import archive_resources
-from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -83,7 +90,8 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
         resources=archive_resources(row.data),
         output_paths=("/app/solution.py", "/app/answer.txt") if name == "arc_inductive" else ("/app/answer.txt",),
         answer_type=AnswerType.FILE,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
 
 

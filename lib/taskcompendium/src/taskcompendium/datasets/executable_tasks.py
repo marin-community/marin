@@ -7,6 +7,7 @@ import asyncio
 import base64
 import json
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 
@@ -14,18 +15,25 @@ from shellbox.machine import Backend, MachineFactory, MachineSpec
 from verifyit.spec import spec_from_table
 
 from taskcompendium.datasets.raw_conversion import RawConverter, with_raw_converter
-from taskcompendium.grader import grader_package
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     FunctionCall,
+    GradingAttempt,
     OutputDirectory,
+    PlainText,
     ProviderRequirement,
     ResourceGroups,
+    ScriptGrader,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    grader_workspace,
+    require_compatible_backend,
 )
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -38,11 +46,14 @@ from taskcompendium.pipeline.models import (
     TaskPolicy,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import GRADING_TIMEOUT, grade_submission
+from taskcompendium.runtime.grading import GRADING_TIMEOUT
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import BASH, INTERFACE, ShellFactory, machine_spec_identity
+from taskcompendium.runtime.task_grading import sandbox_grade
 
 DEFAULT_OUTPUT_PATHS = ("/app/solution.py", "/app/solution.cpp")
+# Controls submit files, not an answer; the grading attempt still needs a final assistant message.
+CONTROL_RESPONSE = TextMessage(role="assistant", content="The submission is in the workspace.")
 
 
 @dataclass(frozen=True)
@@ -187,14 +198,13 @@ def normalize(
         inline_resource(path, base64.b64decode(encoded, validate=True))
         for path, encoded in converted["control_files"].items()
     )
-    package = grader_package(spec_from_table(spec), tuple(trusted))
-    verifier = package.verifier.model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                docker_image=image,
-                compatible_backends=(Backend.DOCKER, Backend.GVISOR, Backend.QEMU),
-            )
-        }
+    package = verifyit_package(
+        spec_from_table(spec),
+        tuple(trusted),
+        environment=EnvironmentRequirements(
+            docker_image=image,
+            compatible_backends=(Backend.DOCKER, Backend.GVISOR, Backend.QEMU),
+        ),
     )
     return TaskSpec(
         id=row.id,
@@ -207,11 +217,12 @@ def normalize(
             tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
         ),
         interaction_tools=(BASH,),
-        resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=tuple(trusted)),
+        resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=package.resources),
         output_paths=output_paths,
         output_directories=output_directories,
         answer_type=AnswerType.FILE,
-        verifier=verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
 
 
@@ -278,6 +289,19 @@ def verification_report(
     )
 
 
+async def grade_files(
+    task: TaskSpec,
+    files: Mapping[str, bytes],
+    factory: MachineFactory,
+    *,
+    machine_spec: MachineSpec,
+    timeout: float,
+) -> GradeResult:
+    """Grade captured workspace files in a fresh machine."""
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, CONTROL_RESPONSE)), files)
+    return await sandbox_grade(task, attempt, factory, machine_spec, timeout=timeout)
+
+
 async def executable_checks(
     task: TaskSpec,
     *,
@@ -287,9 +311,10 @@ async def executable_checks(
     controls: tuple[SubmissionControl, ...] | None = None,
 ) -> VerificationReport:
     """Check declared submission rewards and the oracle in fresh machines."""
-    image = task.verifier.environment_requirements.docker_image
-    if image is None:
-        raise ValueError("Executable controls require a pinned image")
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
+        raise ValueError("Executable controls require a grader with a grading environment")
+    require_compatible_backend(grader.environment, factory.backend)
     checks = []
     if controls is None:
         path = task.output_paths[0]
@@ -300,7 +325,7 @@ async def executable_checks(
             SubmissionControl("wrong_submission", {path: wrong}, 0.0),
         )
     for control in controls:
-        result = await grade_submission(task, control.files, factory, machine_spec=machine_spec, timeout=timeout)
+        result = await grade_files(task, control.files, factory, machine_spec=machine_spec, timeout=timeout)
         status = (
             CheckStatus.INFRA_ERROR
             if result.status == Outcome.INFRA_ERROR
@@ -325,11 +350,10 @@ async def executable_checks(
             CheckResult(check="oracle", status=CheckStatus.SKIPPED, detail="Source ships no executable oracle solution")
         )
         return VerificationReport(checks)
-    spec = json.loads(task.verifier.parameters_json)
     shell_factory = ShellFactory(
         machine_factory=factory,
         machine_spec=replace(machine_spec, workdir="/"),
-        backend_identity={"image": image},
+        backend_identity={"image": grader.environment.docker_image},
         command_timeout=timeout,
         output_limit_bytes=1_048_576,
     )
@@ -339,7 +363,7 @@ async def executable_checks(
         checks.append(CheckResult(check="oracle", status=CheckStatus.INFRA_ERROR, detail=str(error)))
         return VerificationReport(checks)
     try:
-        workspace = shlex.quote(spec["workspace"])
+        workspace = shlex.quote(grader_workspace(grader))
         execution = json.loads(
             await environment.step(
                 FunctionCall(
@@ -360,7 +384,7 @@ async def executable_checks(
         evidence = await environment.evidence()
     finally:
         await environment.close()
-    result = await grade_submission(task, evidence.files, factory, machine_spec=machine_spec, timeout=timeout)
+    result = await grade_files(task, evidence.files, factory, machine_spec=machine_spec, timeout=timeout)
     status = (
         CheckStatus.INFRA_ERROR
         if result.status == Outcome.INFRA_ERROR

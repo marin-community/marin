@@ -14,6 +14,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -77,7 +78,8 @@ def normalize_native_harbor(row: RawRow, *, runtime_requirements: tuple[str, ...
             worker=resources.worker, verifier=package.resources + resources.verifier, oracle=resources.oracle
         ),
         answer_type=AnswerType.STATE,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
 
 

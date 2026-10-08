@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""VerifyIT reduces original code evaluator case results without replacing them."""
+"""The code and SQL grader scripts reduce original evaluator case results without replacing them."""
 
 import hashlib
 import json
 import sys
 
-from verifyit.modes import grade_apps, grade_lcb, grade_sql
+from experiments.post_training.task_curation.datasets.skyrl.code_sql import grade_apps, grade_lcb, grade_sql
 
 
 def test_lcb_mode_uses_original_case_results_for_binary_reward(tmp_path, monkeypatch):

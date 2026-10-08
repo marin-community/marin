@@ -4,7 +4,6 @@
 """Execute pinned original Ultra/LCB behavior fixtures, not source-row goldens."""
 
 import asyncio
-import json
 from dataclasses import asdict
 from functools import partial
 
@@ -14,14 +13,18 @@ from taskcompendium.datasets.nemotron_ultra import normalization
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
+    GradingAttempt,
+    PlainText,
     ResourceGroups,
     Source,
+    StateSubmission,
     TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow
-from taskcompendium.runtime.grading import grade_submission
+from taskcompendium.runtime.grading import grade_in_sandbox
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading import code_binding
 from lib.taskcompendium.tests.test_runtime import LocalGradingMachines
@@ -29,29 +32,24 @@ from lib.taskcompendium.tests.test_runtime import LocalGradingMachines
 
 def run_original(tmp_path, tests, answer, message=None):
     pytest.importorskip("skyrl_gym.envs.nemotron_ultra.code_gen", reason="Requires installed original scorer assets")
-    package = code_binding.original_package({"contract": {"verifier_metadata": {"unit_tests": tests}}})
     image = "fixture@sha256:" + "a" * 64
+    package = code_binding.original_package({"contract": {"verifier_metadata": {"unit_tests": tests}}}, image)
     task = TaskSpec(
         id="code-fixture",
         context=ConversationInput(events=(TextMessage(role="user", content="Code fixture"),)),
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier.model_copy(
-            update={
-                "environment_requirements": EnvironmentRequirements(
-                    docker_image=image, compatible_backends=(LocalGradingMachines.backend,)
-                )
-            }
-        ),
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
-        output_paths=("/app/answer.txt",),
     )
-    files = {"/app/answer.txt": answer.encode()}
-    if message is not None:
-        files["/app/state.json"] = json.dumps({"assistant_message": message}).encode()
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
+        state=None if message is None else StateSubmission({"assistant_message": message}),
+    )
     result = asyncio.run(
-        grade_submission(task, files, LocalGradingMachines(tmp_path), machine_spec=MachineSpec(DockerImage(image)))
+        grade_in_sandbox(task, attempt, LocalGradingMachines(tmp_path), MachineSpec(DockerImage(image)))
     )
     return asdict(result)
 
@@ -108,9 +106,9 @@ def test_captured_provider_reasoning_preserves_original_malformed_think_penalty(
     assert result["detail"]["reasoning_format_violation_rate"] == 1.0
 
 
-def test_malformed_source_tests_are_unscored_task_failure(tmp_path):
+def test_malformed_source_tests_write_no_reward(tmp_path):
     result = run_original(tmp_path, {"inputs": [], "outputs": []}, "```python\nprint(3)\n```")
-    assert result["status"] == "invalid_task"
+    assert (result["status"], result["failure"]) == ("infra_error", "missing_reward")
 
 
 def test_original_per_test_timeout_returns_failed_rollout(tmp_path):

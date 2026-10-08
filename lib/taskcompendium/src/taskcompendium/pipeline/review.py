@@ -12,8 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
-from taskcompendium.grader import SOURCE_UNAVAILABLE_KIND, grader_config
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.direct_transport import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, direct_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import cached_batch_output, cached_request_output
@@ -146,7 +145,8 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
         for field, value in state.items():
             if field in contract and contract[field] == value:
                 state[field] = private_evidence_summary(
-                    value, f"Shared evidence is represented in verifier.contract.{field}; full value retained in audit"
+                    value,
+                    f"Shared evidence is represented in grader_data.contract.{field}; full value retained in audit",
                 )
     for field in ("source_judge_data", "source_judge_toml"):
         if field in contract:
@@ -287,11 +287,11 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         "omitted_count": len(resources) - len(previews),
         "sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
     }
-    if task.verifier.kind == SOURCE_UNAVAILABLE_KIND:
-        parameters = grader_config(task)
-        project_source_contract(parameters, payload)
+    if isinstance(task.grader, NoGrader):
+        parameters = payload["grader"].pop("contract")
+        if "contract" in parameters:
+            project_source_contract(parameters, payload)
         payload["grader_data"] = parameters
-        payload["verifier"].pop("parameters_json")
     for resource in task.resources.verifier:
         if resource.path == "config.json":
             parameters = json.loads(resource_bytes(resource))

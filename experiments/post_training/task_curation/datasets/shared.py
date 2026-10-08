@@ -7,12 +7,28 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
+from shellbox.machine import MachineFactory, MachineSpec
+from taskcompendium.grading_result import GradeResult
+from taskcompendium.models import AssistantToolCalls, ConversationTrace, GradingAttempt, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import ExecutionAdapter, bind_executable
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, hub_inputs
 from taskcompendium.pipeline.models import DatasetRecipe, HFSource, IntendedUse, TaskPolicy
 from taskcompendium.pipeline.recipes import hf_recipe
+from taskcompendium.runtime.task_grading import sandbox_grade
 
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, SourceRuntimeConfig
+
+
+async def grade_final_message(
+    task: TaskSpec,
+    message: TextMessage | AssistantToolCalls,
+    factory: MachineFactory,
+    machine_spec: MachineSpec,
+    timeout: float,
+) -> GradeResult:
+    """Grade a control response in a fresh machine."""
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, message)))
+    return await sandbox_grade(task, attempt, factory, machine_spec, timeout=timeout)
 
 
 def _fixed_recipe(recipe: DatasetRecipe, _runtime: SourceRuntimeConfig) -> DatasetRecipe:

@@ -3,13 +3,15 @@
 
 """A source sample separates quality evidence, missingness, and population coverage."""
 
-import json
 from dataclasses import replace
 
 import pytest
+from shellbox.machine import Backend
+from verifyit.spec import ScriptSpec
 
 from taskcompendium.datasets.numeric_answers import normalize_svamp
-from taskcompendium.models import ResourceGroups, Source, VerifierSpec
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import EnvironmentRequirements, ResourceGroups, Source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -300,7 +302,14 @@ def test_contract_signature_separates_grader_code_but_not_private_reference_valu
     assert not isinstance(task, ImportRejection)
     task = task.model_copy(
         update={
-            "verifier": VerifierSpec(kind="script", parameters_json=json.dumps({"path": "grade.py"})),
+            "grader": (
+                verifyit_package(
+                    ScriptSpec(path="grade.py"),
+                    environment=EnvironmentRequirements(
+                        docker_image="fixture@sha256:" + "0" * 64, compatible_backends=(Backend.DOCKER,)
+                    ),
+                ).grader
+            ),
             "resources": ResourceGroups(
                 verifier=(
                     inline_resource("grade.py", b"read_and_grade_reference()"),

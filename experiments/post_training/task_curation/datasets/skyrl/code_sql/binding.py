@@ -11,13 +11,13 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
-from shellbox.machine import Backend, MachineFactory, MachineSpec
+from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.code_contracts import has_code_block, validate_code_cases
 from taskcompendium.datasets.gretel_text_to_sql import validate_seeded_reference
-from taskcompendium.grader import GraderPackage, grader_config, native_command_package
+from taskcompendium.grader import GraderPackage, grader_config
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.pipeline.execution_binding import grading_environment
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -29,10 +29,11 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import control_result
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import machine_spec_identity
-from verifyit.modes import grade_apps, grade_lcb, grade_sql
+
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
+from experiments.post_training.task_curation.datasets.skyrl.code_sql import grade_apps, grade_lcb, grade_sql
 
 UPSTREAM_REVISION = "544d5d6f14116a06bde0209352585903133bd618"
 APPS_UPSTREAM_REVISION = "b45c0ed78517a3a6492eb77b21cffbb79b1096f1"
@@ -60,7 +61,7 @@ SOURCE_PINS = {
 }
 
 
-def original_package(config: dict) -> GraderPackage:
+def original_package(config: dict, image: str) -> GraderPackage:
     """Bind the source scorer installed in the selected immutable image."""
     if config["evaluator"] == "apps":
         config = {
@@ -69,8 +70,8 @@ def original_package(config: dict) -> GraderPackage:
             "input_output": config["contract"]["input_output"],
         }
         adapter = Path(grade_apps.__file__).read_bytes()
-        return native_command_package(
-            NativeCommandSpec(
+        return GraderPackage(
+            ScriptGrader(
                 argv=(
                     "python3",
                     "/tests/grade_apps.py",
@@ -80,8 +81,9 @@ def original_package(config: dict) -> GraderPackage:
                     "/logs/verifier/reward.json",
                 ),
                 cwd="/",
-                result_format="reward_json",
-                result_path="/logs/verifier/reward.json",
+                environment=grading_environment(image),
+                answer_path=ANSWER_PATH,
+                reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),)),
                 timeout=330,
             ),
             (
@@ -106,8 +108,8 @@ def original_package(config: dict) -> GraderPackage:
         )
         config = {**config, "test_cases": ground_truth}
     script = Path(scorer.__file__)
-    return native_command_package(
-        NativeCommandSpec(
+    return GraderPackage(
+        ScriptGrader(
             argv=(
                 "python3",
                 "/tests/" + script.name,
@@ -116,8 +118,9 @@ def original_package(config: dict) -> GraderPackage:
                 "/logs/verifier/score.json",
             ),
             cwd="/",
-            result_format="score_json",
-            result_path="/logs/verifier/score.json",
+            environment=grading_environment(image),
+            answer_path=ANSWER_PATH,
+            reward=FileReward(files=(RewardFile(path="/logs/verifier/score.json", format=RewardFileFormat.JSON),)),
             timeout=330,
         ),
         (
@@ -165,7 +168,7 @@ def normalize_isolated(
                 reason="original_gretel_preparation_unsupported",
                 detail=str(error),
             )
-    package = original_package(config)
+    package = original_package(config, image)
     instruction = SQL_INSTRUCTION if evaluator == "gretel_text_to_sql" else CODE_INSTRUCTION
     events = list(task.context.events)
     last_user = max(
@@ -177,15 +180,7 @@ def normalize_isolated(
     return task.model_copy(
         update={
             "context": task.context.model_copy(update={"events": tuple(events)}),
-            "output_paths": (ANSWER_PATH,),
-            "verifier": package.verifier.model_copy(
-                update={
-                    "environment_requirements": EnvironmentRequirements(
-                        docker_image=image,
-                        compatible_backends=(Backend.DOCKER, Backend.GVISOR, Backend.QEMU),
-                    )
-                }
-            ),
+            "grader": package.grader,
             "resources": task.resources.model_copy(update={"verifier": package.resources}),
         }
     )
@@ -259,8 +254,8 @@ async def isolated_checks(
     controls = [("empty", "", 0.0), ("native_runtime", diagnostic, 0.0)]
     checks = []
     for name, answer, expected in controls:
-        result = await grade_submission(
-            task, {ANSWER_PATH: answer.encode()}, factory, machine_spec=machine_spec, timeout=timeout
+        result = await grade_final_message(
+            task, TextMessage(role="assistant", content=answer), factory, machine_spec, timeout
         )
         check = control_result(result, name, expected)
         if name == "native_runtime" and result.detail and result.detail.get("execution_error"):
@@ -281,8 +276,8 @@ async def isolated_checks(
     attempts = []
     result = None
     for witness in witnesses:
-        result = await grade_submission(
-            task, {ANSWER_PATH: witness.answer.encode()}, factory, machine_spec=machine_spec, timeout=timeout
+        result = await grade_final_message(
+            task, TextMessage(role="assistant", content=witness.answer), factory, machine_spec, timeout
         )
         attempts.append(
             {

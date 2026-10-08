@@ -23,7 +23,14 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 
-from taskcompendium.models import FunctionCall, FunctionDefinition, OutputDirectory, TaskSpec, require_compatible_backend
+from taskcompendium.models import (
+    FunctionCall,
+    FunctionDefinition,
+    OutputDirectory,
+    TaskSpec,
+    grader_workspace,
+    require_compatible_backend,
+)
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.output_capture import (
     CAPTURE_METADATA_BYTES,
@@ -185,8 +192,7 @@ class ShellFactory:
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
         require_compatible_backend(task.environment_requirements, self.machine_factory.backend)
-        workspace = json.loads(task.verifier.parameters_json).get("workspace", "/app")
-        validate_output_directories(task.output_directories, workspace)
+        validate_output_directories(task.output_directories, grader_workspace(task.grader))
         if task.output_directories and (
             "python3" not in task.environment_requirements.capabilities
             or self.machine_factory.backend == Backend.SHELLSIM

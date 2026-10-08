@@ -5,7 +5,6 @@
 
 import hashlib
 import heapq
-import json
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -13,9 +12,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-from taskcompendium.grader import SOURCE_UNAVAILABLE_KIND, grader_config
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.native_grader import NATIVE_COMMAND_KIND
+from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader
 from taskcompendium.pipeline.models import (
     CheckStatus,
     Confidence,
@@ -115,31 +113,37 @@ def contract_signature(audit: TaskAudit) -> str:
     """Return a runtime/answer contract signature, excluding task-specific references."""
     task = audit.normalized
     assert task is not None
+    grader = task.grader
     execution_contract = None
-    if task.verifier.kind in {"script", "stdio", "pytest", "junit", "gotest", NATIVE_COMMAND_KIND}:
-        execution_contract = json.loads(task.verifier.parameters_json)
-    elif task.verifier.kind == SOURCE_UNAVAILABLE_KIND:
-        source_contract = grader_config(task)
-        execution_contract = {
-            "evaluator": source_contract["evaluator"],
-            "source_revision": source_contract["source_revision"],
-            "runtime_requirements": source_contract["runtime_requirements"],
-        }
     entrypoint_digest = None
-    if task.verifier.kind == "script":
-        assert execution_contract is not None
-        entrypoint = execution_contract["path"]
-        for resource in task.resources.verifier:
-            if resource.path == entrypoint:
-                entrypoint_digest = hashlib.sha256(resource_bytes(resource)).hexdigest()
+    if isinstance(grader, ScriptGrader):
+        execution_contract = grader.model_dump(mode="json", exclude={"environment"})
+    elif isinstance(grader, VerifyitGrader) and grader.mode in {"script", "stdio", "pytest", "junit", "gotest"}:
+        execution_contract = dict(grader.parameters)
+        if grader.mode == "script":
+            for resource in task.resources.verifier:
+                if resource.path == grader.parameters["path"]:
+                    entrypoint_digest = hashlib.sha256(resource_bytes(resource)).hexdigest()
+    elif isinstance(grader, NoGrader):
+        execution_contract = {
+            "reason": grader.reason,
+            **{
+                key: grader.contract[key]
+                for key in ("evaluator", "source_revision", "runtime_requirements")
+                if key in grader.contract
+            },
+        }
+    environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
     return canonical_sha256(
         {
-            "verifier_kind": task.verifier.kind,
+            "grader_kind": grader.kind,
+            "verifyit_mode": grader.mode if isinstance(grader, VerifyitGrader) else None,
             "execution_contract": execution_contract,
             "entrypoint_digest": entrypoint_digest,
             "answer_type": task.answer_type,
+            "answer_format": task.answer_format.model_dump(mode="json"),
             "environment": task.environment_requirements.model_dump(mode="json"),
-            "verifier_environment": task.verifier.environment_requirements.model_dump(mode="json"),
+            "grader_environment": None if environment is None else environment.model_dump(mode="json"),
             "output_paths": task.output_paths,
             "output_directories": [directory.model_dump(mode="json") for directory in task.output_directories],
         }

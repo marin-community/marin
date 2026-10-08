@@ -15,14 +15,17 @@ from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import MathSpec, MathType
 
-from taskcompendium.grader import grader_package
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckSuite,
@@ -35,7 +38,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 NUMINA_PROOF_REQUEST = re.compile(r"\b(?:prove|show)\s+that\b", re.IGNORECASE)
 NUMINA_INEQUALITY = re.compile(r"[<>≤≥]|\\(?:leqslant|geqslant|leq|geq|le|ge|lt|gt)\b")
@@ -74,7 +76,7 @@ def normalize_math(row: RawRow, problem_field: str, reference_field: str) -> Tas
         {key: row.data[key] for key in ("solution", "answer_type", "extracted_answer", "source") if key in row.data},
         ensure_ascii=False,
     ).encode()
-    package = grader_package(spec, (inline_resource("reference/source-evidence.json", private),))
+    package = verifyit_package(spec, (inline_resource("reference/source-evidence.json", private),))
     return TaskSpec(
         id=row.id,
         source=row.source,
@@ -82,12 +84,14 @@ def normalize_math(row: RawRow, problem_field: str, reference_field: str) -> Tas
         environment_requirements=EnvironmentRequirements(),
         resources=ResourceGroups(verifier=package.resources),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
 
 
 def math_controls(task: TaskSpec) -> VerificationReport:
-    spec = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
     assert isinstance(spec, MathSpec)
     return VerificationReport(checks=verify_witness(task, rf"\boxed{{{spec.expected}}}", "__incorrect_math_answer__"))
 
@@ -101,12 +105,8 @@ def math_task(
     if isinstance(task, ImportRejection):
         return task
     resource = inline_resource("reference/source-evidence.json", json.dumps(evidence, ensure_ascii=False).encode())
-    package = grader_package(resolve_verifier(task.verifier), (resource,))
     return task.model_copy(
-        update={
-            "context": ConversationInput(events=events),
-            "resources": ResourceGroups(verifier=package.resources),
-        }
+        update={"context": ConversationInput(events=events), "resources": ResourceGroups(verifier=(resource,))}
     )
 
 

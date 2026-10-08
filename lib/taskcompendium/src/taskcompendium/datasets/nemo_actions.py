@@ -8,7 +8,7 @@ from jsonschema.validators import validator_for
 from verifyit.spec import PredictedActionSpec
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -21,13 +21,12 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     data = dict(row.data)
     try:
-        task, _ = import_row(data, expected_sha256=canonical_sha256(data))
+        task = import_row(data, expected_sha256=canonical_sha256(data))
     except ValueError as error:
         return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="unsupported_action", detail=str(error))
     return task.model_copy(update={"id": row.id, "source": row.source})
@@ -36,7 +35,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
 def verification_report(task: TaskSpec) -> VerificationReport:
     """Check reference arguments against public schemas before comparator controls."""
     functions = {function.name: function for function in task.final_tools}
-    verifier = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    verifier = verifyit_spec(task.grader)
     assert isinstance(verifier, PredictedActionSpec)
     checks = []
     for call in verifier.expected_calls:

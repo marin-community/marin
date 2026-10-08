@@ -12,13 +12,14 @@ from verifyit.json_objects import unique_object
 from verifyit.spec import FunctionCall as CandidateCall
 from verifyit.spec import PredictedActionSpec
 
-from taskcompendium.grading import verifier_descriptor
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
+    FinalAction,
     FunctionCall,
     FunctionDefinition,
     Source,
@@ -26,7 +27,6 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.submission import FinalAction
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
@@ -150,7 +150,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
     return tuple(events)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, FinalAction]:
+def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpec:
     """Verify row identity and retain the expected action only in private TaskSpec data."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")
@@ -181,22 +181,20 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Fin
     if any(call.name not in advertised for call in expected_calls):
         raise ValueError("expected function call is absent from source tools")
     source = Source(dataset=DATASET, revision=REVISION, row=expected_sha256, importer_revision=IMPORTER_REVISION)
-    specification = TaskSpec(
+    return TaskSpec(
         id=f"nemo-predicted-action-{expected_sha256}",
         context=ConversationInput(events=events),
         environment_requirements=EnvironmentRequirements(),
         final_tools=functions,
         answer_type=AnswerType.NATIVE_ACTION,
-        verifier=verifier_descriptor(
+        answer_format=FinalAction(
+            require_call=tool_choice == "required",
+            max_calls=1 if parallel_tool_calls is False else None,
+        ),
+        grader=verifyit_package(
             PredictedActionSpec(
                 expected_calls=tuple(CandidateCall(call.name, call.arguments) for call in expected_calls)
             )
-        ),
+        ).grader,
         source=source,
     )
-    convention = FinalAction(
-        id="native-final-action",
-        require_call=tool_choice == "required",
-        max_calls=1 if parallel_tool_calls is False else None,
-    )
-    return specification, convention

@@ -159,7 +159,7 @@ def test_component_provenance_survives_normalized_json_privately_without_changin
     restored = TaskSpec.model_validate_json(normalized.model_dump_json())
     assert restored.context == original.context
     assert restored.source == original.source and restored.id == original.id
-    assert restored.verifier == original.verifier
+    assert restored.grader == original.grader
     assert grader_config(restored) == grader_config(original)
     evidence_resource = next(
         resource

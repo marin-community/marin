@@ -9,10 +9,17 @@ import tomllib
 
 from verifyit.spec import McqSpec, parse_spec
 
-from taskcompendium.grading import verifier_descriptor
+from taskcompendium.grader import verifyit_package
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
-from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    TaskSpec,
+    TextMessage,
+)
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -67,6 +74,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=verifier_descriptor(McqSpec(expected=contract.expected.strip().upper(), options=contract.options)),
+        answer_format=PlainText(),
+        grader=verifyit_package(McqSpec(expected=contract.expected.strip().upper(), options=contract.options)).grader,
         source=archive.source,
     )

@@ -7,14 +7,14 @@ import pytest
 from shellbox.machine import DockerImage, MachineSpec
 from taskcompendium.datasets.nemotron_ultra import normalization
 from taskcompendium.grader import grader_config
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import AnswerType, Source
 from taskcompendium.pipeline.models import CheckStatus, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading import instruction_following_binding
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading.binding import normalize_terminal_grader
 
-from .test_calendar_binding import SourceScoreMachines, grade
+from .test_calendar_binding import SourceScoreMachines, grade, grader_image
 from .test_structured_output_binding import DiagnosticMachines
 
 
@@ -98,10 +98,10 @@ def test_original_bad_kwargs_stay_false_and_identify_broken_source_metadata(row,
     assert result.detail["invalid_instruction_kwargs"] == [0]
 
 
-def test_invalid_source_grading_mode_is_task_failure(row, native_dependencies):
+def test_invalid_source_grading_mode_writes_no_reward(row, native_dependencies):
     row.data["grading_mode"] = "unknown-mode"
     result = grade(task_for(row), "A tulip blooms.")
-    assert result.status == Outcome.INVALID_TASK
+    assert (result.status, result.failure) == (Outcome.INFRA_ERROR, GradingFailure.MISSING_REWARD)
     assert result.reward is None
 
 
@@ -141,16 +141,14 @@ def test_original_language_detection_including_undetectable_empty_answer(row, na
 
 @pytest.mark.parametrize(
     "verdict_status,expected",
-    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)],
+    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.INFRA_ERROR), ("infra_error", CheckStatus.INFRA_ERROR)],
 )
 @pytest.mark.asyncio
 async def test_runtime_diagnostic_does_not_claim_predicate_success(row, verdict_status, expected):
     task = task_for(row)
     machines = SourceScoreMachines(verdict_status=verdict_status)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await instruction_following_binding.isolated_checks(
-        task, factory=machines, machine_spec=MachineSpec(DockerImage(image)), timeout=10
+        task, factory=machines, machine_spec=MachineSpec(DockerImage(grader_image(task))), timeout=10
     )
     assert [(check.check, check.status) for check in report.checks] == [
         ("native_runtime", expected),
@@ -177,10 +175,8 @@ async def test_original_predicate_exceptions_distinguish_metadata_failure_from_u
 ):
     task = task_for(row)
     machines = DiagnosticMachines(diagnostic=diagnostic)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await instruction_following_binding.isolated_checks(
-        task, factory=machines, machine_spec=MachineSpec(DockerImage(image)), timeout=10
+        task, factory=machines, machine_spec=MachineSpec(DockerImage(grader_image(task))), timeout=10
     )
     assert report.checks[0].status == expected
     assert report.checks[1].status == CheckStatus.SKIPPED

@@ -10,18 +10,17 @@ from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.nemotron_ultra.normalization import VERIFIER_REVISION
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.models import AnswerType, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import bind_grader_recipe
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, DatasetRecipe, VerificationReport
-from taskcompendium.runtime.grading import grade_submission
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading.binding import (
     ANSWER_EXTRACTOR,
-    ANSWER_PATH,
     invocation_bytes,
     normalize_terminal_grader,
     score_package,
 )
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 CALL = {
     "function": "skyrl_gym.envs.nemotron_ultra.instruction_following:grade_instruction_following",
@@ -30,16 +29,16 @@ CALL = {
 }
 
 
-def grader_package(config: dict) -> GraderPackage:
-    return score_package(config, invocation=CALL, timeout=60)
+def grader_package(config: dict, image: str) -> GraderPackage:
+    return score_package(config, invocation=CALL, timeout=60, image=image)
 
 
 async def isolated_checks(
     task: TaskSpec, *, factory: MachineFactory, machine_spec: MachineSpec, timeout: float
 ) -> VerificationReport:
     """Probe fractional runtime output without asserting a passing response witness."""
-    result = await grade_submission(
-        task, {ANSWER_PATH: b"Runtime diagnostic response."}, factory, machine_spec=machine_spec, timeout=timeout
+    result = await grade_final_message(
+        task, TextMessage(role="assistant", content="Runtime diagnostic response."), factory, machine_spec, timeout
     )
     details = result.detail or {}
     errors = details.get("instruction_errors", [])

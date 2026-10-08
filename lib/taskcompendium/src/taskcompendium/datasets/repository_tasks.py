@@ -14,6 +14,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ProviderRequirement,
     ResourceGroups,
     TaskSpec,
@@ -115,7 +116,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         interaction_tools=(BASH,),
         resources=resources,
         answer_type=AnswerType.STATE,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
 
 

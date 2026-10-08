@@ -9,11 +9,20 @@ from collections.abc import Callable
 from dataclasses import asdict, replace
 from functools import partial
 
-from shellbox.machine import Backend, MachineFactory, MachineSpec, QemuBundle
+from shellbox.machine import MachineFactory, MachineSpec, QemuBundle
 from taskcompendium.datasets import executable_tasks
-from taskcompendium.grader import native_command_package
-from taskcompendium.models import EnvironmentRequirements, ProviderRequirement, ResourceGroups, TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    FileReward,
+    ProviderRequirement,
+    ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    TaskSpec,
+)
+from taskcompendium.pipeline.execution_binding import BACKENDS, grading_environment
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -34,7 +43,6 @@ SCORER_RUNNERS = {
         "cc69c5b5b676f27249084dd101edfa2ca4dbf96c8d370bebb4f43922bde8943d"
     ),
 }
-BACKENDS = (Backend.DOCKER, Backend.GVISOR, Backend.QEMU)
 ANSWER_PATH = "/app/answer.txt"
 RUNTIME_CHECK = """import sys
 from importlib.metadata import version
@@ -92,25 +100,19 @@ def normalize(
         inline_resource("test.sh", runner),
         inline_resource("runtime_check.py", runtime_check.encode()),
     )
-    package = native_command_package(
-        NativeCommandSpec(
-            argv=("bash", "-c", "python3 /tests/runtime_check.py && bash /tests/test.sh"),
-            cwd="/app",
-            result_format="reward_file",
-            result_path="/logs/verifier/reward.txt",
-            timeout=600,
-        ),
-        resources,
-    )
-    verifier = package.verifier.model_copy(
-        update={"environment_requirements": EnvironmentRequirements(docker_image=image, compatible_backends=BACKENDS)}
+    grader = ScriptGrader(
+        argv=("bash", "-c", "python3 /tests/runtime_check.py && bash /tests/test.sh"),
+        cwd="/app",
+        environment=grading_environment(image),
+        answer_path=ANSWER_PATH,
+        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
+        timeout=600,
     )
     task = task.model_copy(
         update={
-            "verifier": verifier,
-            "output_paths": (ANSWER_PATH,),
+            "grader": grader,
             "resources": ResourceGroups(
-                verifier=package.resources,
+                verifier=resources,
                 oracle=tuple(
                     inline_resource(path, content) for path, content in files.items() if path.startswith("solution/")
                 ),
@@ -123,15 +125,24 @@ def normalize(
 def verification_report(
     task: TaskSpec, *, factory: MachineFactory, machine_spec: MachineSpec, timeout: float
 ) -> VerificationReport:
-    """Give only the private oracle control a shell, keeping the solving task textual."""
+    """Give only the private oracle control a shell, keeping the solving task textual.
+
+    Controls and the oracle write the answer file the source runner reads, so the control task
+    grades that captured file instead of a final message.
+    """
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
     control_task = task.model_copy(
         update={
+            "answer_type": AnswerType.FILE,
+            "output_paths": (ANSWER_PATH,),
+            "grader": grader.model_copy(update={"answer_path": None}),
             "environment_requirements": EnvironmentRequirements(
-                docker_image=task.verifier.environment_requirements.docker_image,
+                docker_image=grader.environment.docker_image,
                 compatible_backends=BACKENDS,
                 capabilities=("shell", "filesystem"),
                 tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
-            )
+            ),
         }
     )
     return executable_tasks.verification_report(

@@ -18,6 +18,7 @@ import pytest
 from fray.types import ResourceConfig
 from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
 from verifyit.spec import ExactSpec, MathSpec, McqSpec
 
 from taskcompendium.datasets import code_contracts, gpqa, instruction_following, preference_tasks, rubric_tasks
@@ -25,20 +26,25 @@ from taskcompendium.datasets.direct_contracts import source_contract_package
 from taskcompendium.datasets.math_answers import asdiv_rows, math_controls, normalize_numina_math
 from taskcompendium.datasets.numeric_answers import normalize_aime24, normalize_svamp, svamp_policy
 from taskcompendium.datasets.source_definitions import tasktrove_files
-from taskcompendium.grader import grader_config, grader_package, native_command_package
+from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.grading import grade_answer
-from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
+    FileReward,
+    GradingAttempt,
+    PlainText,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
 )
-from taskcompendium.native_grader import NativeCommandSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
@@ -82,7 +88,6 @@ from taskcompendium.pipeline.stages import (
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
 
 from .pipeline_stages import fixture_recipe, run_stages, stage_table
 
@@ -596,15 +601,15 @@ def test_recipes_normalize_source_contract_and_keep_supervision_private(normaliz
     assert isinstance(message, TextMessage)
     prompt = message.content
     assert private_field not in prompt and "private" not in prompt
-    parameters = json.loads(task.verifier.parameters_json)
+    assert isinstance(task.grader, VerifyitGrader)
+    parameters = task.grader.parameters
     if expected is not None:
         assert parameters["expected"] == expected
-        convention = PlainText(id="plain")
         for answer, reward in ((expected, 1.0), (str(int(expected) - 1), 0.0)):
             conversation = ConversationTrace(
                 events=(*task.context.events, TextMessage(role="assistant", content=answer))
             )
-            assert grade_task(task, convention, conversation).reward == reward
+            assert grade_task(task, GradingAttempt(conversation)).reward == reward
     else:
         option = f"{parameters['expected']}. right"
         assert option in prompt
@@ -617,17 +622,17 @@ def test_recipes_normalize_source_contract_and_keep_supervision_private(normaliz
     [(("dry", "led", "would"), True), (("dry", "led", "would"), False), (("dry",), True)],
 )
 def test_exact_controls_accept_the_complete_reference_without_changing_list_scoring(references, ordered):
-    package = grader_package(ExactSpec(expected=references, ordered=ordered))
+    package = verifyit_package(ExactSpec(expected=references, ordered=ordered))
     task = TaskSpec(
         id="puzzle-list",
         environment_requirements=EnvironmentRequirements(),
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
         context=ConversationInput(events=(TextMessage(role="user", content="Return the requested list."),)),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
     )
-    convention = PlainText(id="plain")
 
     candidates = [("\n".join(references), 1.0)]
     if len(references) > 1:
@@ -635,7 +640,6 @@ def test_exact_controls_accept_the_complete_reference_without_changing_list_scor
     for answer, expected_reward in candidates:
         result = grade_answer(
             task,
-            convention,
             GradingAttempt(
                 ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
             ),
@@ -1203,7 +1207,7 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     task = task.model_copy(
         update={
             "context": ConversationInput(events=(TextMessage(role="user", content=question),)),
-            "verifier": package.verifier,
+            "grader": package.grader,
             "resources": ResourceGroups(verifier=package.resources),
         }
     )
@@ -1285,10 +1289,10 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
     for index, expected in enumerate(references):
         name = chr(97 + index)
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
-        verifier = (
-            grader_package(MathSpec(expected=expected)).verifier
+        grader = (
+            verifyit_package(MathSpec(expected=expected)).grader
             if kind == "math"
-            else grader_package(McqSpec(expected=expected, options=4)).verifier
+            else verifyit_package(McqSpec(expected=expected, options=4)).grader
         )
         resources = ResourceGroups(
             verifier=(inline_resource("reference/source-evidence.json", json.dumps({"solution": name}).encode()),),
@@ -1303,7 +1307,8 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
                 events=(TextMessage(role="user", content="conflict" if index in (2, 3) else "duplicate"),)
             ),
             resources=resources,
-            verifier=verifier,
+            answer_format=PlainText(),
+            grader=grader,
         )
         original_resources[name] = resources
         audit = TaskAudit(
@@ -1339,7 +1344,7 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
     } == original_resources
 
 
-@pytest.mark.parametrize("grader_kind", ["source_unavailable", "native_command"])
+@pytest.mark.parametrize("grader_kind", ["none", "script"])
 def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_exact_copies(tmp_path, grader_kind):
     rows = []
     contracts: dict[str, dict[str, JsonValue]] = {
@@ -1355,13 +1360,17 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
             contract=contract,
             runtime_requirements=("source evaluator",),
         )
-        if grader_kind == "native_command":
-            package = native_command_package(
-                NativeCommandSpec(
+        if grader_kind == "script":
+            package = GraderPackage(
+                ScriptGrader(
                     argv=("bash", "/tests/test.sh"),
                     cwd="/",
-                    result_format="reward_file",
-                    result_path="/logs/verifier/reward.txt",
+                    environment=EnvironmentRequirements(
+                        docker_image="fixture@sha256:" + "c" * 64, compatible_backends=(Backend.DOCKER,)
+                    ),
+                    reward=FileReward(
+                        files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)
+                    ),
                     timeout=60,
                 ),
                 (inline_resource("config.json", json.dumps({"contract": contract}).encode()),),
@@ -1372,7 +1381,8 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
             environment_requirements=EnvironmentRequirements(),
             answer_type=AnswerType.TEXT,
             context=ConversationInput(events=(TextMessage(role="user", content="Shared public question"),)),
-            verifier=package.verifier,
+            answer_format=PlainText(),
+            grader=package.grader,
             resources=ResourceGroups(verifier=package.resources),
         )
         audit = TaskAudit(

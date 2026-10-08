@@ -85,16 +85,17 @@ Conversion preserves source grading semantics, including inline pytest graders.
 A broken source test suite is a rollout failure and rejects the task. Conversion
 does not repair comparators or rewrite tests to accept the golden.
 
-VerifyIT descriptors and native commands are supported grading contracts. A
-source can run its supplied command directly. Image-installed evaluators are
-acquired from pinned upstream commits; the experiment's runtime manifest supplies
-their resolved image pins. Task resources carry private grading inputs and result
-bridges. A native command declares its output path and format:
-`reward_file`, `reward_json`, or `score_json` with reward and diagnostic details.
-A source-supplied script runs through a native command. Neither execution path
-imports the converter. Packaging must preserve the original scorer's decisions. A source with
-no available grader declares `source_unavailable`; verification records unsupported
-readiness without creating a synthetic grader script.
+A task's grader is one of four kinds. A `VerifyitGrader` names a stock verifyit
+mode. A `ScriptGrader` runs a source-supplied scorer in a fresh machine built from
+a pinned image and reads its reward from stdout, its exit code, or a reward file
+(a number, or JSON with a reward and optional detail object). Image-installed
+evaluators are acquired from pinned upstream commits; the experiment's runtime
+manifest supplies their resolved image pins. Verifier resources carry the
+scorer's inputs. Neither execution path imports the converter. Packaging must
+preserve the original scorer's decisions. A source whose evaluator cannot run
+here declares a `NoGrader` with the reason and the source contract; verification
+records unsupported readiness without creating a synthetic grader script. A
+`SessionGrader` marks a task that a registered interactive session grades itself.
 
 TaskSpec has no universal golden-script field. Each dataset's control suite finds
 its own source-provided witness, such as a private answer, reference program or
@@ -105,11 +106,11 @@ candidate fails. Missing controls and unsupported evaluators cannot certify a
 working grader.
 
 `EnvironmentRequirements.compatible_backends` declares acceptable Shellbox
-backends separately for the agent and private verifier. Verification and RL
+backends separately for the agent and the grader. Verification and RL
 rollouts must select a declared backend and satisfy the task's runtime and image
 requirements. A sampled pass certifies the backend exercised. QEMU runs inside a
 Zephyr worker; Iris gVisor verification creates an isolated Iris job through
-`IrisMachineFactory`. Secret bindings belong only to trusted private grading.
+`IrisMachineFactory`. Secrets are passed only to grading machines.
 
 Quality acceptance and executable readiness remain separate. A completed source
 procedure can retain inconclusive verification evidence. Read the source report's

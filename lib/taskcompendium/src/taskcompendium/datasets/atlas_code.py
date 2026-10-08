@@ -4,15 +4,15 @@
 """CodeContests and CodeNet policies using the shared executable task boundary."""
 
 import asyncio
-import json
 
 from shellbox.machine import MachineFactory, MachineSpec
+from verifyit.spec import StdioSpec
 
-from taskcompendium.datasets.executable_tasks import ExecutableConversion, normalize
+from taskcompendium.datasets.executable_tasks import ExecutableConversion, grade_files, normalize
 from taskcompendium.datasets.executable_tasks import verification_report as executable_verification_report
 from taskcompendium.datasets.raw_conversion import with_raw_converter
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ResourceGroups, TaskSpec
+from taskcompendium.models import ResourceGroups, TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -23,7 +23,7 @@ from taskcompendium.pipeline.models import (
     TaskPolicy,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import GRADING_TIMEOUT, grade_submission
+from taskcompendium.runtime.grading import GRADING_TIMEOUT
 from taskcompendium.runtime.resources import inline_resource
 
 
@@ -31,15 +31,16 @@ async def exit_status_result(
     task: TaskSpec, *, factory: MachineFactory, machine_spec: MachineSpec, timeout: float
 ) -> CheckResult:
     """Probe the installed stdio runner without changing the source's private cases."""
-    parameters = json.loads(task.verifier.parameters_json)
-    cases = parameters["cases"]
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
+    assert isinstance(spec, StdioSpec)
     resources = tuple(
-        inline_resource(f"{cases}/{kind}_{index}.txt", b"exit-status-control\n")
-        for index in range(max(2, parameters["min_cases"]))
+        inline_resource(f"{spec.cases}/{kind}_{index}.txt", b"exit-status-control\n")
+        for index in range(max(2, spec.min_cases))
         for kind in ("input", "output")
     )
     probe = task.model_copy(update={"resources": ResourceGroups(verifier=resources)})
-    result = await grade_submission(
+    result = await grade_files(
         probe,
         {task.output_paths[0]: b"print('exit-status-control', flush=True)\nraise SystemExit(7)\n"},
         factory,

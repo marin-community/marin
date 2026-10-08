@@ -7,8 +7,15 @@ import hashlib
 
 from verifyit.spec import McqSpec
 
-from taskcompendium.grader import grader_package
-from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.models import (
     ImportFailureKind,
     ImportRejection,
@@ -50,7 +57,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=grader_package(McqSpec(expected, options=len(texts))).verifier,
+        answer_format=PlainText(),
+        grader=verifyit_package(McqSpec(expected, options=len(texts))).grader,
         source=row.source,
     )
 

@@ -1,106 +1,55 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private grader execution and reward collection."""
+"""Grade a finished rollout with the task's grader, outside the model's machine."""
 
 import asyncio
-import json
-import math
-import tarfile
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
-from functools import partial
-from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
 from typing import Any
-from uuid import uuid4
 
-from harbor_config.env import resolve_env_vars
-from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine, MachineFactory
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
-from taskcompendium.grading import parse_grade_result
-from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure, TextSubmission, resolve_verifier
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import AnswerType, TaskResource
-from taskcompendium.runtime.models import RuntimeEvidence
-from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.shell_verifier import (
-    ArtifactKind,
-    ExitCodeReward,
-    FileReward,
-    MissingArtifactPolicy,
-    RewardFileFormat,
-    ShellVerifierSpec,
-    VerifierArtifact,
-)
-from taskcompendium.submission import SubmissionConvention
-from verifyit.spec import DEFAULT_OUTPUT, GotestSpec, JunitSpec, PytestSpec, ScriptSpec, StdioSpec, render_spec
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
+from taskcompendium.runtime.grading import grade_in_sandbox
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.machines import _install_resources, _prepare_machine
+from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
 from rolloutengine.spec import LoweredTaskSpec
 
 MISSING_FILE_EXIT = 44
-SPEC_PATH = "/tests/verifier.toml"
-VERDICT_PATH = "/logs/verifier/verdict.json"
 
 
 async def _grade_rollout(
     lowered: LoweredTaskSpec,
-    convention: SubmissionConvention,
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     resources: AsyncExitStack,
 ) -> GradeResult:
-    """Grade evidence without exposing private files to model inference."""
+    """Grade in process, or in a fresh verifier machine that the attempt owns."""
     task = lowered.task
+    grader = task.grader
+    if isinstance(grader, NoGrader):
+        return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
+    conversation = chat_conversation(list(messages))
+    if isinstance(grader, VerifyitGrader) and grader.environment is None:
+        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation))
     timeout = lowered.session.verifier_timeout
+    attempt = GradingAttempt(conversation, await _capture_outputs(machine, task.output_paths, timeout))
+    assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = lowered.runtime.verifier_machine
-    if task.verifier.kind == "skipped":
-        return GradeResult(Outcome.SKIPPED, None, json.loads(task.verifier.parameters_json)["reason"])
-    if task.verifier.kind != "shell":
-        evidence = RuntimeEvidence(await _capture_outputs(machine, task.output_paths, timeout), "{}")
-        if selection is None:
-            return await asyncio.to_thread(grade_task, task, convention, chat_conversation(list(messages)), evidence)
-        grading_machine = await _prepare_machine(
-            task.verifier.environment_requirements,
-            selection,
-            task.resources.all,
-            factories,
-            cleanup,
-            resources,
-        )
-        assert grading_machine is not None
-        return await _verifyit_grade(lowered, convention, messages, evidence, grading_machine)
-    verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
-    for command in verifier.collect:
-        assert machine is not None
-        result = await machine.run(
-            Command(command.argv, cwd=command.cwd, env=resolve_env_vars(command.env), timeout=timeout, user="0")
-        )
-        if result.exit_code != 0:
-            return GradeResult(
-                Outcome.INFRA_ERROR, None, "Cannot collect grading inputs", failure=GradingFailure.EXECUTION
-            )
-    grading_machine = await _prepare_machine(
-        task.verifier.environment_requirements, selection, task.resources.all, factories, cleanup, resources
-    )
-    assert grading_machine is not None
-    with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
-        for index, artifact in enumerate(verifier.artifacts):
-            assert machine is not None
-            path = Path(directory) / str(index)
-            if await _download_artifact(machine, artifact, path, timeout, cleanup, resources):
-                await grading_machine.upload(path, artifact.target)
-    return await _shell_grade(
-        verifier,
-        messages,
-        grading_machine,
-        task.resources.verifier,
-        timeout,
+    assert selection is not None
+    return await grade_in_sandbox(
+        task,
+        attempt,
+        _AttemptMachineFactory(selection, factories, cleanup, resources),
+        _machine_spec(grader.environment, selection),
+        task_machine=machine,
+        timeout=timeout,
     )
 
 
@@ -130,257 +79,3 @@ async def _capture_outputs(machine: Machine | None, paths: tuple[str, ...], time
             raise RuntimeError(f"Cannot capture task output within the size limit: {path}")
         files[path] = result.stdout
     return files
-
-
-async def _verifyit_grade(
-    lowered: LoweredTaskSpec,
-    convention: SubmissionConvention,
-    messages: tuple[dict[str, Any], ...],
-    evidence: RuntimeEvidence,
-    machine: Machine,
-) -> GradeResult:
-    task = lowered.task
-    spec = resolve_verifier(task.verifier)
-    files = dict(evidence.files)
-    if task.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}:
-        assert not isinstance(spec, StdioSpec | PytestSpec | JunitSpec | GotestSpec)
-        try:
-            submission = convention.extract(GradingAttempt(chat_conversation(list(messages))))
-        except SubmissionFailure as error:
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-        if not isinstance(submission, TextSubmission):
-            raise TypeError("Runtime text grading requires a text submission")
-        files[DEFAULT_OUTPUT if isinstance(spec, ScriptSpec) else spec.output] = submission.value.encode()
-    await _install_resources(machine, task.resources.verifier, root="/tests")
-    await _install_resources(
-        machine,
-        (
-            *(inline_resource(path.removeprefix("/"), data) for path, data in files.items()),
-            inline_resource(SPEC_PATH.removeprefix("/"), render_spec(spec).encode()),
-        ),
-    )
-    result = await machine.run(
-        Command(
-            ("python3", "-c", "from verifyit.grade import main; raise SystemExit(main())", SPEC_PATH),
-            timeout=lowered.session.verifier_timeout,
-        )
-    )
-    if result.reason == ExitReason.TIMED_OUT:
-        return GradeResult(Outcome.INFRA_ERROR, None, "Verifier command timed out", failure=GradingFailure.TIMEOUT)
-    if result.exit_code != 0:
-        return GradeResult(Outcome.INFRA_ERROR, None, "Verifier command failed", failure=GradingFailure.EXECUTION)
-    with TemporaryDirectory(prefix="rollout-verdict-") as directory:
-        path = Path(directory) / "verdict.json"
-        await machine.download(VERDICT_PATH, path)
-        return parse_grade_result(spec, path.read_bytes())
-
-
-async def _remove_archive(machine: Machine, path: str, timeout: float | None) -> None:
-    result = await machine.run(Command(("rm", "-f", path), timeout=timeout, user="0"))
-    if result.exit_code != 0:
-        raise RuntimeError("Cannot remove private artifact archive")
-
-
-async def _download_artifact(
-    machine: Machine,
-    artifact: VerifierArtifact,
-    target: Path,
-    timeout: float | None,
-    cleanup: _Cleanup,
-    resources: AsyncExitStack,
-) -> bool:
-    """Download an artifact. Return false only when its missing-file policy permits omission."""
-    kind = artifact.kind
-    if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
-        result = await machine.run(
-            Command(
-                argv=(
-                    "sh",
-                    "-c",
-                    'if [ -d "$1" ]; then printf directory; elif [ -f "$1" ]; then printf file; '
-                    f"else exit {MISSING_FILE_EXIT}; fi",
-                    "artifact-kind",
-                    artifact.source,
-                ),
-                timeout=timeout,
-                user="0",
-            )
-        )
-        if result.exit_code == MISSING_FILE_EXIT and artifact.missing == MissingArtifactPolicy.SKIP:
-            return False
-        if result.exit_code != 0:
-            raise RuntimeError(f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}")
-        kind = ArtifactKind(result.stdout.decode())
-    if kind == ArtifactKind.DIRECTORY:
-        target.mkdir()
-    if not artifact.exclude or kind != ArtifactKind.DIRECTORY:
-        await machine.download(artifact.source, target)
-        return True
-    remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
-    resources.push_async_callback(
-        cleanup.run, "artifact_archive_remove", partial(_remove_archive, machine, remote_archive, timeout)
-    )
-    result = await machine.run(
-        Command(
-            argv=(
-                "tar",
-                "-cf",
-                remote_archive,
-                *(f"--exclude={pattern}" for pattern in artifact.exclude),
-                "-C",
-                artifact.source,
-                ".",
-            ),
-            timeout=timeout,
-            user="0",
-        )
-    )
-    if result.exit_code != 0:
-        raise RuntimeError(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
-    archive_path = target.with_suffix(".tar")
-    await machine.download(remote_archive, archive_path)
-    with tarfile.open(archive_path) as archive:
-        archive.extractall(target, filter="data")
-    return True
-
-
-async def _shell_grade(
-    verifier: ShellVerifierSpec,
-    messages: tuple[dict[str, Any], ...],
-    machine: Machine,
-    resources: tuple[TaskResource, ...],
-    timeout: float | None,
-) -> GradeResult:
-    if isinstance(verifier.reward, FileReward):
-        paths = tuple(file.path for file in verifier.reward.files)
-        directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
-        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            prepared = await machine.run(Command(argv=argv, timeout=timeout))
-            if prepared.exit_code != 0:
-                return GradeResult(
-                    Outcome.INFRA_ERROR, None, "Cannot prepare private reward files", failure=GradingFailure.EXECUTION
-                )
-    await _install_resources(machine, resources, root="/tests")
-    result = await machine.run(
-        Command(
-            argv=verifier.argv,
-            stdin=json.dumps(messages).encode(),
-            timeout=timeout,
-        )
-    )
-    diagnostics = {
-        "stdout": result.stdout.decode(errors="replace"),
-        "stderr": result.stderr.decode(errors="replace"),
-        "exit_code": result.exit_code,
-        "stdout_truncated": result.stdout_truncated,
-        "stderr_truncated": result.stderr_truncated,
-    }
-    if result.reason == ExitReason.TIMED_OUT:
-        return GradeResult(
-            Outcome.INFRA_ERROR,
-            None,
-            "Grader command timed out",
-            diagnostics=diagnostics,
-            failure=GradingFailure.TIMEOUT,
-        )
-    if isinstance(verifier.reward, ExitCodeReward):
-        passed = result.exit_code == 0
-        return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
-    if isinstance(verifier.reward, FileReward):
-        return await _file_grade(machine, verifier.reward, timeout, diagnostics)
-    if result.exit_code != 0 or result.stdout_truncated:
-        return GradeResult(
-            Outcome.INFRA_ERROR,
-            None,
-            f"Grader command failed: {result.reason}, exit={result.exit_code}",
-            diagnostics=diagnostics,
-            failure=GradingFailure.EXECUTION,
-        )
-    try:
-        reward = float(result.stdout.decode().strip())
-    except (UnicodeError, ValueError):
-        return GradeResult(
-            Outcome.INFRA_ERROR,
-            None,
-            "Grader stdout must contain one finite numeric reward",
-            diagnostics=diagnostics,
-            failure=GradingFailure.INVALID_REWARD,
-        )
-    if not math.isfinite(reward):
-        return GradeResult(
-            Outcome.INFRA_ERROR,
-            None,
-            "Grader returned a nonfinite reward",
-            diagnostics=diagnostics,
-            failure=GradingFailure.INVALID_REWARD,
-        )
-    return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
-
-
-async def _file_grade(
-    machine: Machine, specification: FileReward, timeout: float | None, diagnostics: dict[str, Any]
-) -> GradeResult:
-    for file in specification.files:
-        result = await machine.run(
-            Command(
-                argv=(
-                    "sh",
-                    "-c",
-                    f'if [ -f "$1" ]; then cat "$1"; else exit {MISSING_FILE_EXIT}; fi',
-                    "reward-file",
-                    file.path,
-                ),
-                timeout=timeout,
-            )
-        )
-        if result.exit_code == MISSING_FILE_EXIT:
-            continue
-        if result.exit_code != 0 or result.stdout_truncated:
-            return GradeResult(
-                Outcome.INFRA_ERROR,
-                None,
-                f"Cannot read reward file: {file.path}",
-                diagnostics=diagnostics,
-                failure=GradingFailure.EXECUTION,
-            )
-        if not result.stdout.strip():
-            return GradeResult(
-                Outcome.INFRA_ERROR,
-                None,
-                f"Empty reward file: {file.path}",
-                diagnostics=diagnostics,
-                failure=GradingFailure.EMPTY_REWARD,
-            )
-        try:
-            values = json.loads(result.stdout) if file.format == RewardFileFormat.JSON else None
-            value = (
-                values[file.key]
-                if isinstance(values, dict)
-                else values if values is not None else result.stdout.decode()
-            )
-            if isinstance(value, bool):
-                raise ValueError("A boolean is not a numeric reward")
-            reward = float(value)
-            if not math.isfinite(reward):
-                raise ValueError("Nonfinite reward")
-        except (UnicodeError, ValueError, TypeError, KeyError) as error:
-            return GradeResult(
-                Outcome.INFRA_ERROR,
-                None,
-                f"Invalid reward file {file.path}: {error}",
-                diagnostics=diagnostics,
-                failure=GradingFailure.INVALID_REWARD,
-            )
-        return GradeResult(
-            Outcome.GRADED,
-            reward,
-            passed=None if specification.pass_above is None else reward > specification.pass_above,
-            diagnostics=diagnostics,
-        )
-    return GradeResult(
-        Outcome.INFRA_ERROR,
-        None,
-        "Grader did not write a reward file",
-        diagnostics=diagnostics,
-        failure=GradingFailure.MISSING_REWARD,
-    )

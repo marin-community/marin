@@ -10,11 +10,10 @@ import json
 from taskcompendium.datasets import atlas_arc_injection
 from taskcompendium.grader import grader_config
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
+from taskcompendium.models import ConversationTrace, GradingAttempt, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
 
 
 def source_row(name: str, verifier_data: dict, files: dict[str, bytes]) -> RawRow:
@@ -36,11 +35,8 @@ def source_row(name: str, verifier_data: dict, files: dict[str, bytes]) -> RawRo
 
 
 def grade(task: TaskSpec, answer: str):
-    return grade_task(
-        task,
-        PlainText(id="plain"),
-        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
-    )
+    events = (*task.context.events, TextMessage(role="assistant", content=answer))
+    return grade_task(task, GradingAttempt(ConversationTrace(events=events)))
 
 
 def test_arc_transductive_preserves_source_files_without_inventing_a_comparator():

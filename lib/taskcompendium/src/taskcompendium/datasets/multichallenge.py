@@ -89,7 +89,7 @@ def normalized_checklist(row: RawRow, conversation: str) -> NormalizedTask | Imp
         {
             "mode": "checklist",
             "question": conversation,
-            "criteria": criteria,
+            "criteria": list(criteria),
             "aggregation": configuration,
             "source_judge_data": row.data["verifier_data"],
             "source_judge_toml": judge_toml,

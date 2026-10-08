@@ -1,14 +1,14 @@
 # TaskCompendium tests
 
-Tests cover task serialization and submission semantics, source conversions,
-private grading and output capture, source quality gates, review evidence and
-pipeline sidecars. [fixtures/](fixtures/README.md) contains recorded inputs;
+Tests cover task serialization and answer formats, source conversions,
+in-process and machine grading, output capture, source quality gates, review
+evidence and pipeline sidecars. [fixtures/](fixtures/README.md) contains recorded inputs;
 `pipeline_stages.py` provides pipeline test support.
 
 From the repository root:
 
 ```bash
-uv run pytest lib/taskcompendium/tests
+uv run --package taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
 ```
 
 Keep the repository's default marker expression. Tests requiring live providers,

@@ -14,14 +14,17 @@ from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlEleme
 
 from taskcompendium.datasets.raw_conversion import RawConverter, with_raw_converter
 from taskcompendium.datasets.structured_output import verification_report as schema_verification_report
-from taskcompendium.grader import grader_package
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckSuite,
@@ -36,7 +39,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 RUBRIC = ReviewRubric(
     id="structured-outputs-answerability",
@@ -87,7 +89,7 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
             if not isinstance(schema_value, dict):
                 raise ValueError("The verifier requires a JSON Schema object")
             validator_for(schema_value).check_schema(schema_value)
-            package = grader_package(
+            package = verifyit_package(
                 JsonSchemaSpec(schema="schema.json", format=SchemaFormat(spec["format"])),
                 (inline_resource("schema.json", schema.encode()),),
             )
@@ -98,7 +100,7 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
             if any(not isinstance(name, str) or not name for name in (*required, *any_of)):
                 raise ValueError("Required and alternative names must be nonempty strings")
             selected = XmlElementsSpec if spec["mode"] == "xml-elements" else CsvColumnsSpec
-            package = grader_package(selected(required=required, any_of=any_of))
+            package = verifyit_package(selected(required=required, any_of=any_of))
         else:
             return ImportRejection(
                 kind=ImportFailureKind.UNSUPPORTED,
@@ -124,7 +126,8 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
     )
     changes = (
@@ -156,7 +159,8 @@ def policy(*, converter: RawConverter, converter_revision: str) -> TaskPolicy:
 
 def verification_report(task: TaskSpec) -> VerificationReport:
     """Check schema contradictions or the preserved named-fields runtime contract."""
-    spec = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
     if isinstance(spec, JsonSchemaSpec):
         return schema_verification_report(task)
     assert isinstance(spec, (XmlElementsSpec, CsvColumnsSpec))

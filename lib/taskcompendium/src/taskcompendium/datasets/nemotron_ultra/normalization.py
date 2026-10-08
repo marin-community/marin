@@ -17,7 +17,9 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
+    FinalAction,
     FunctionDefinition,
+    PlainText,
     ProviderRequirement,
     ResourceGroups,
     TaskSpec,
@@ -175,6 +177,7 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         if tools or (state and family in {"tool-use", "agentic-safety", "swe-repo"})
         else {}
     )
+    native_action = data.get("expected_action", {}).get("type") == "function_call" and bool(tools)
     task = TaskSpec(
         id=row.id,
         source=row.source,
@@ -182,12 +185,9 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         environment_requirements=EnvironmentRequirements(capabilities=requirements, tool_providers=providers),
         final_tools=tools,
         interaction_tools=tools,
-        answer_type=(
-            AnswerType.NATIVE_ACTION
-            if data.get("expected_action", {}).get("type") == "function_call" and tools
-            else AnswerType.TEXT
-        ),
-        verifier=package.verifier,
+        answer_type=AnswerType.NATIVE_ACTION if native_action else AnswerType.TEXT,
+        answer_format=FinalAction() if native_action else PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
     )
     return NormalizedTask(task, (*placeholder_changes, *changes))

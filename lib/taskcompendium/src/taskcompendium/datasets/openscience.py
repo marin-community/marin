@@ -9,14 +9,17 @@ import re
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import McqSpec
 
-from taskcompendium.grading import verifier_descriptor
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckSuite,
@@ -29,7 +32,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 RUBRIC = ReviewRubric(
     id="openscience-quality",
@@ -74,12 +76,14 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         resources=ResourceGroups(
             verifier=(inline_resource("reference/generated-response.json", json.dumps({"output": reference}).encode()),)
         ),
-        verifier=verifier_descriptor(McqSpec(expected=expected.strip().upper(), options=len(choices))),
+        answer_format=PlainText(),
+        grader=verifyit_package(McqSpec(expected=expected.strip().upper(), options=len(choices))).grader,
     )
 
 
 def controls(task: TaskSpec) -> VerificationReport:
-    verifier = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    verifier = verifyit_spec(task.grader)
     assert isinstance(verifier, McqSpec)
     wrong = next(chr(65 + index) for index in range(verifier.options) if chr(65 + index) != verifier.expected)
     return VerificationReport(checks=verify_witness(task, verifier.expected, wrong))

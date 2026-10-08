@@ -16,9 +16,9 @@ from pathlib import Path
 from rigging.secrets import SecretSpec
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import Backend, MachineSpec, NetworkPolicy
-from taskcompendium.grader import grader_config, grader_package
+from taskcompendium.grader import grader_config, verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import EnvironmentRequirements, ResourceGroups, TaskSpec
+from taskcompendium.models import EnvironmentRequirements, ResourceGroups, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import VerificationRuntime, verification_machine
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -31,7 +31,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import ScriptSpec
 
@@ -40,9 +39,9 @@ from experiments.post_training.task_curation.datasets.rewardkit.runtime import (
     SOURCE_TIMEOUT,
     VERDICT_FILENAME,
 )
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 SOURCES = frozenset({"multichallenge"})
-ANSWER_PATH = "/app/answer.txt"
 TIMEOUT = SOURCE_TIMEOUT + 30.0
 RUNTIME_FILES = {
     "tests/test.sh": "db2681b4a2e86cdfd2699e2b12fd14806cf98040473a9e8956c570c78c99b97b",
@@ -50,7 +49,7 @@ RUNTIME_FILES = {
     "environment/Dockerfile": "7f92fb2192bd4721685459bfc1b18954b68dcdb383f3be24f9bb53d649e00e65",
 }
 SOURCE_TEST_FILES = {"test.sh", "sitecustomize.py", "judge.toml", "conversation.txt", "verifier_data.json"}
-DIAGNOSTIC_RESPONSE = b"This is a diagnostic response used to exercise the original grading runtime."
+DIAGNOSTIC_RESPONSE = "This is a diagnostic response used to exercise the original grading runtime."
 
 
 def normalize(
@@ -119,21 +118,14 @@ def normalize(
         ),
         inline_resource("__runtime/bridge.py", (Path(__file__).parent / "runtime.py").read_bytes()),
     )
-    package = grader_package(
+    package = verifyit_package(
         ScriptSpec(path="__runtime/bridge.py", timeout=TIMEOUT, verdict_file=VERDICT_FILENAME),
         resources,
-    )
-    verifier = package.verifier.model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                docker_image=image, compatible_backends=(Backend.GVISOR,)
-            )
-        }
+        environment=EnvironmentRequirements(docker_image=image, compatible_backends=(Backend.GVISOR,)),
     )
     task = task.model_copy(
         update={
-            "verifier": verifier,
-            "output_paths": (ANSWER_PATH,),
+            "grader": package.grader,
             "resources": ResourceGroups(
                 verifier=package.resources,
                 oracle=tuple(
@@ -146,16 +138,16 @@ def normalize(
 
 
 async def checks(task: TaskSpec, *, factory: IrisMachineFactory, machine_spec: MachineSpec) -> VerificationReport:
-    """Exercise source guards and judge execution without inventing a semantic oracle."""
+    """Exercise the empty-response guard and judge execution without inventing a semantic oracle."""
     results = []
-    for name, files in (
-        ("missing_submission", {}),
-        ("empty_submission", {ANSWER_PATH: b""}),
-        ("runtime_contract", {ANSWER_PATH: DIAGNOSTIC_RESPONSE}),
-    ):
-        result = await grade_submission(task, files, factory, machine_spec=machine_spec, timeout=TIMEOUT + 30)
+    for name, response in (("empty_submission", ""), ("runtime_contract", DIAGNOSTIC_RESPONSE)):
+        result = await grade_final_message(
+            task, TextMessage(role="assistant", content=response), factory, machine_spec, TIMEOUT + 30
+        )
         if result.status == Outcome.INFRA_ERROR:
             status = CheckStatus.INFRA_ERROR
+        elif name == "empty_submission" and result.status == Outcome.SUBMISSION_FAILURE:
+            status = CheckStatus.PASS
         elif result.status != Outcome.GRADED:
             status = CheckStatus.FAIL
         elif name == "runtime_contract" or result.reward == 0:

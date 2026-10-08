@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adapt the pinned APPS evaluator's case results to a native reward file."""
+"""Adapt the pinned APPS evaluator's case results to a reward file."""
 
 import hashlib
 import importlib.util

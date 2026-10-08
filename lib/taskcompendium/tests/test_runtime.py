@@ -4,7 +4,6 @@
 """Executable task evidence, reset behavior and curation replay."""
 
 import asyncio
-import io
 import json
 import os
 import sys
@@ -19,35 +18,45 @@ from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.datasets import nemo_actions
 from taskcompendium.datasets.direct_contracts import source_contract_package
-from taskcompendium.grader import grader_package, native_command_package
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
+    FileReward,
+    GradingAttempt,
+    NoGrader,
+    PlainText,
     ProviderRequirement,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.native_grader import NativeCommandSpec
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
-from taskcompendium.runtime.grading import grade_submission
-from taskcompendium.runtime.models import RuntimeEvidence, Termination
+from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_in_sandbox
+from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import BASH, CONTROL_PATH, INTERFACE, OUTPUT_PATH, ShellFactory
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
+
+GRADER_IMAGE = "fixture@sha256:" + "a" * 64
+GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_MACHINE = MachineSpec(DockerImage(GRADER_IMAGE))
+EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 
 
 @pytest.fixture
 def shell_task():
     source = Source(dataset="mock/shell-files", revision="1", row="0", importer_revision="1")
-    package = source_contract_package("test fixture", "1", {}, ("Test overrides the verifier where needed",))
+    package = source_contract_package("test fixture", "1", {}, ("Test overrides the grader where needed",))
     return TaskSpec(
         id="shell-0",
         source=source,
@@ -66,8 +75,14 @@ def shell_task():
         ),
         output_paths=(OUTPUT_PATH,),
         answer_type=AnswerType.FILE,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
+
+
+def finished(task: TaskSpec) -> ConversationTrace:
+    """The conversation of an agent that worked in its machine and then stopped."""
+    return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
 
 
 @dataclass
@@ -79,12 +94,11 @@ class FileMachine:
 
     async def run(self, command: Command):
         if command.argv[0] == "mkdir":
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
-        if command.argv[0] == "rm":
-            if command.argv[1] not in self.files:
-                return Result(1, b"", b"missing file", False, False, ExitReason.EXITED)
-            del self.files[command.argv[1]]
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+            return EXITED
+        if command.argv[:2] == ("rm", "-f"):
+            for path in command.argv[2:]:
+                self.files.pop(path, None)
+            return EXITED
         path = command.argv[4]
         data = self.files.get(path)
         if data is None:
@@ -114,74 +128,68 @@ class FileMachines:
 
 
 @dataclass(kw_only=True)
-class LocalGradingMachine(FileMachine):
-    """Translate container paths while running the real trusted grader subprocess."""
+class LocalGradingMachine:
+    """Run grading commands as host subprocesses under ``root``, translating absolute container paths."""
 
     root: Path
     workdir: str
     remove_exit_code: int = 0
+    closed: bool = False
+
+    def local(self, path: str) -> Path:
+        return self.root / path.lstrip("/")
+
+    def local_arguments(self, arguments) -> list[str]:
+        return [str(self.local(value)) if value.startswith("/") else value for value in arguments]
 
     async def upload(self, source: Path, target: str):
-        await super().upload(source, target)
-        path = self.root / target.lstrip("/")
+        path = self.local(target)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(source.read_bytes())
 
     async def download(self, source: str, target: Path):
-        target.write_bytes((self.root / source.lstrip("/")).read_bytes())
+        target.write_bytes(self.local(source).read_bytes())
 
-    async def run(self, command):
-        if command.argv[0] == "rm":
-            target = command.argv[-1]
-            if self.remove_exit_code and target == "/tmp/taskcompendium-submission.tar":
+    async def close(self):
+        self.closed = True
+
+    async def run(self, command: Command):
+        program = command.argv[0]
+        if command.argv[:2] == ("rm", "-f"):
+            if self.remove_exit_code and STAGING_ARCHIVE in command.argv:
                 return Result(self.remove_exit_code, b"", b"cleanup failed", False, False, ExitReason.EXITED)
-            (self.root / target.lstrip("/")).unlink(missing_ok="-f" in command.argv)
-            self.files.pop(target, None)
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
-        if command.argv[0] == "mkdir":
-            (self.root / command.argv[-1].lstrip("/")).mkdir(parents=True, exist_ok=True)
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
-        if command.argv[0] == "tar":
-            with tarfile.open(fileobj=io.BytesIO(self.files[command.argv[2]])) as archive:
-                for member in archive.getmembers():
-                    stream = archive.extractfile(member)
-                    assert stream is not None
-                    path = self.root / member.name
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(stream.read())
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
-        if command.argv[0] in {"bash", "test"}:
-            argv = [str(self.root / value.lstrip("/")) if value.startswith("/") else value for value in command.argv]
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=self.root / (command.cwd or self.workdir).lstrip("/"),
-                env={**os.environ, **command.env},
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-            return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
-        if command.argv[0] != "python3":
-            return await super().run(command)
-        argv = [str(self.root / value.lstrip("/")) if value.startswith("/") else value for value in command.argv[1:]]
-        if "/tests/verifier.toml" in command.argv:
-            spec_path = self.root / "tests/verifier.toml"
-            spec = spec_from_table(tomllib.loads(spec_path.read_text()))
-            assert isinstance(spec, ScriptSpec)
-            spec_path.write_text(render_spec(replace(spec, workspace=str(self.root / "app"))))
-            argv.extend(("--logs-dir", str(self.root / "logs/verifier")))
+            for path in command.argv[2:]:
+                self.local(path).unlink(missing_ok=True)
+            return EXITED
+        if command.argv[:2] == ("mkdir", "-p"):
+            for path in command.argv[2:]:
+                self.local(path).mkdir(parents=True, exist_ok=True)
+            return EXITED
+        if command.argv[:2] == ("tar", "-xf"):
+            with tarfile.open(self.local(command.argv[2])) as archive:
+                archive.extractall(self.root, filter="data")
+            return EXITED
+        argv = self.local_arguments(command.argv)
+        env = {**os.environ, **command.env}
+        if program == "python3":
+            argv[0] = sys.executable
+            env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
+            if SPEC_PATH in command.argv:
+                spec_path = self.local(SPEC_PATH)
+                spec = spec_from_table(tomllib.loads(spec_path.read_text()))
+                assert isinstance(spec, ScriptSpec)
+                spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
+                argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
+        else:
+            assert program in {"bash", "sh"}, command.argv
         process = await asyncio.create_subprocess_exec(
-            sys.executable,
             *argv,
-            cwd=self.root / (command.cwd or self.workdir).lstrip("/"),
-            env={**os.environ, "PYTHONPATH": os.pathsep.join(path for path in sys.path if path), **command.env},
+            cwd=self.local(command.cwd or self.workdir),
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate()
-        verdict = self.root / "logs/verifier/verdict.json"
-        if verdict.exists():
-            self.files["/logs/verifier/verdict.json"] = verdict.read_bytes()
         return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
 
 
@@ -210,26 +218,19 @@ def trusted_bootstrap_task(shell_task):
         b"(Path(os.environ['VERIFYIT_LOGS_DIR']) / 'verdict.json').write_text(\n"
         b"    json.dumps({'status': 'scored', 'reward': reward, 'detail': {}}))\n"
     )
-    package = grader_package(
+    package = verifyit_package(
         ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=60),
         (inline_resource("grader.py", script), inline_resource("config.json", b'{"expected": "42"}')),
+        environment=GRADER_ENVIRONMENT,
     )
-    task = shell_task
-    image = "fixture@sha256:" + "a" * 64
-    task = task.model_copy(
+    task = shell_task.model_copy(
         update={
             "output_paths": ("/app/numbers.py",),
-            "verifier": package.verifier.model_copy(
-                update={
-                    "environment_requirements": task.verifier.environment_requirements.model_copy(
-                        update={"docker_image": image, "compatible_backends": (Backend.DOCKER,)}
-                    )
-                }
-            ),
-            "resources": task.resources.model_copy(update={"verifier": package.resources}),
+            "grader": package.grader,
+            "resources": shell_task.resources.model_copy(update={"verifier": package.resources}),
         }
     )
-    return task
+    return TaskSpec.model_validate_json(task.model_dump_json())
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])
@@ -237,14 +238,8 @@ async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
     tmp_path, trusted_bootstrap_task, candidate, expected
 ):
     task = trusted_bootstrap_task
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        task,
-        {"/app/numbers.py": candidate},
-        LocalGradingMachines(tmp_path),
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
+    attempt = GradingAttempt(finished(task), {"/app/numbers.py": candidate})
+    result = await grade_in_sandbox(task, attempt, LocalGradingMachines(tmp_path), GRADER_MACHINE)
     assert (result.status, result.reward) == (Outcome.GRADED, expected), result.error
 
 
@@ -252,41 +247,27 @@ async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
 async def test_private_fixture_archive_removed_before_grading_or_grader_never_runs(
     tmp_path, trusted_bootstrap_task, remove_exit_code
 ):
-    image = trusted_bootstrap_task.verifier.environment_requirements.docker_image
-    assert image is not None
     machines = LocalGradingMachines(tmp_path, remove_exit_code=remove_exit_code)
-    result = await grade_submission(
-        trusted_bootstrap_task,
-        {"/app/numbers.py": b"print(42)\n"},
-        machines,
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
-    machine = machines.machines[0]
-    archive = tmp_path / "tmp/taskcompendium-submission.tar"
+    attempt = GradingAttempt(finished(trusted_bootstrap_task), {"/app/numbers.py": b"print(42)\n"})
+    result = await grade_in_sandbox(trusted_bootstrap_task, attempt, machines, GRADER_MACHINE)
+    archive = tmp_path / STAGING_ARCHIVE.lstrip("/")
     assert (tmp_path / "tests/config.json").is_file()
-    assert machine.closed
+    assert machines.machines[0].closed
     if remove_exit_code:
-        assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+        assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)
         assert archive.is_file()
         assert not (tmp_path / "logs/verifier/verdict.json").exists()
     else:
         assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
         assert not archive.exists()
-        assert "/tmp/taskcompendium-submission.tar" not in machine.files
 
 
-class NativeUnavailableMachines:
-    backend = Backend.DOCKER
-
-    async def create(self, spec):
-        raise OSError("machine unavailable")
-
-
-NATIVE_SHELL_SCRIPT = (
+SCRIPT_GRADER = (
     b"#!/bin/bash\n"
     b"if [ -f numbers.py ]; then\n"
     b'  if [ "$(python3 numbers.py 2>/dev/null)" = 42 ]; then reward=1; else reward=0; fi\n'
-    b'elif [ -f state.json ] && [ "$(cat state.json)" = \'{"ready":true}\' ]; then reward=1\n'
+    b'elif [ -f state.json ] && python3 -c \'import json; assert json.load(open("state.json")) == {"ready": True}\'\n'
+    b"then reward=1\n"
     b"else reward=0\n"
     b"fi\n"
     b"printf '%s\\n' \"$reward\" > ../logs/verifier/reward.txt\n"
@@ -294,202 +275,72 @@ NATIVE_SHELL_SCRIPT = (
 
 
 @pytest.fixture
-def native_grading_task(trusted_bootstrap_task):
-    package = native_command_package(
-        NativeCommandSpec(
-            argv=("bash", "/tests/test.sh"),
-            cwd="/app",
-            result_format="reward_file",
-            result_path="/logs/verifier/reward.txt",
-            timeout=30,
-        ),
-        (inline_resource("test.sh", NATIVE_SHELL_SCRIPT),),
+def script_grading_task(trusted_bootstrap_task):
+    grader = ScriptGrader(
+        argv=("bash", "/tests/test.sh"),
+        environment=GRADER_ENVIRONMENT,
+        answer_path=None,
+        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
+        timeout=30,
     )
     task = trusted_bootstrap_task.model_copy(
         update={
-            "verifier": package.verifier.model_copy(
-                update={"environment_requirements": trusted_bootstrap_task.verifier.environment_requirements}
+            "grader": grader,
+            "resources": trusted_bootstrap_task.resources.model_copy(
+                update={"verifier": (inline_resource("test.sh", SCRIPT_GRADER),)}
             ),
-            "resources": trusted_bootstrap_task.resources.model_copy(update={"verifier": package.resources}),
         }
     )
     return TaskSpec.model_validate_json(task.model_dump_json())
 
 
-def native_task_with_script(task: TaskSpec, script: bytes, *, result_format: str, result_path: str) -> TaskSpec:
-    native = NativeCommandSpec.model_validate_json(task.verifier.parameters_json).model_copy(
-        update={"result_format": result_format, "result_path": result_path}
-    )
-    return task.model_copy(
-        update={
-            "verifier": task.verifier.model_copy(update={"parameters_json": native.model_dump_json()}),
-            "resources": task.resources.model_copy(update={"verifier": (inline_resource("test.sh", script),)}),
-        }
-    )
-
-
 @pytest.mark.parametrize("candidate,reward", [(b"print(42)\n", 1.0), (b"print(0)\n", 0.0)])
-def test_native_source_grader_is_shared_by_verification_and_runtime(tmp_path, native_grading_task, candidate, reward):
+def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
+    tmp_path, script_grading_task, candidate, reward
+):
     factory = LocalGradingMachines(tmp_path)
-    image = native_grading_task.verifier.environment_requirements.docker_image
-    assert image is not None
-    spec = MachineSpec(DockerImage(image))
-    files = {"/app/numbers.py": candidate}
-    verification = asyncio.run(grade_submission(native_grading_task, files, factory, machine_spec=spec))
-    conversation = ConversationTrace(
-        events=(*native_grading_task.context.events, TextMessage(role="assistant", content="done"))
-    )
-    runtime = grade_task(
-        native_grading_task,
-        PlainText(id="native-test"),
-        conversation,
-        RuntimeEvidence(files, "{}"),
-        machine_factory=factory,
-        machine_spec=spec,
-    )
-    assert (verification.status, verification.reward) == (Outcome.GRADED, reward)
+    attempt = grading_attempt(finished(script_grading_task), RuntimeEvidence({"/app/numbers.py": candidate}, "{}"))
+    sandbox = asyncio.run(grade_in_sandbox(script_grading_task, attempt, factory, GRADER_MACHINE))
+    runtime = grade_task(script_grading_task, attempt, machine_factory=factory, machine_spec=GRADER_MACHINE)
+    assert (sandbox.status, sandbox.reward) == (Outcome.GRADED, reward)
     assert (runtime.status, runtime.reward) == (Outcome.GRADED, reward)
-    assert (tmp_path / "tests/test.sh").read_bytes() == NATIVE_SHELL_SCRIPT
+    assert (tmp_path / "tests/test.sh").read_bytes() == SCRIPT_GRADER
     assert all(machine.closed for machine in factory.machines)
 
 
-def test_native_state_grader_reads_captured_state(tmp_path, native_grading_task):
-    task = native_grading_task.model_copy(update={"answer_type": AnswerType.STATE, "output_paths": ()})
-    factory = LocalGradingMachines(tmp_path)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
-    conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
+@pytest.mark.parametrize("state,reward", [('{"ready":true}', 1.0), ('{"ready":false}', 0.0)])
+def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state, reward):
+    task = script_grading_task.model_copy(update={"answer_type": AnswerType.STATE, "output_paths": ()})
     result = grade_task(
         task,
-        PlainText(id="native-state"),
-        conversation,
-        RuntimeEvidence({}, '{"ready":true}'),
-        machine_factory=factory,
-        machine_spec=MachineSpec(DockerImage(image)),
+        grading_attempt(finished(task), RuntimeEvidence({}, state)),
+        machine_factory=LocalGradingMachines(tmp_path),
+        machine_spec=GRADER_MACHINE,
     )
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-async def test_native_source_grader_preserves_non_unit_reward(tmp_path, native_grading_task):
-    task = native_task_with_script(
-        native_grading_task,
-        b"printf '2.5\\n' > ../logs/verifier/reward.txt\n",
-        result_format="reward_file",
-        result_path="/logs/verifier/reward.txt",
-    )
-    factory = LocalGradingMachines(tmp_path)
-    image = native_grading_task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        task,
-        {"/app/numbers.py": b"print(42)\n"},
-        factory,
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
-    assert (result.status, result.reward) == (Outcome.GRADED, 2.5)
+class UnavailableMachines:
+    backend = Backend.DOCKER
+
+    async def create(self, spec):
+        raise OSError("machine unavailable")
 
 
-async def test_native_source_grader_uses_written_reward_after_nonzero_exit(tmp_path, native_grading_task):
-    task = native_task_with_script(
-        native_grading_task,
-        b"printf '0\\n' > ../logs/verifier/reward.txt\n"
-        b"if [ ! -f numbers.py ]; then exit 1; fi\n"
-        b"printf '1\\n' > ../logs/verifier/reward.txt\n",
-        result_format="reward_file",
-        result_path="/logs/verifier/reward.txt",
-    )
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        task,
-        {},
-        LocalGradingMachines(tmp_path),
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
-    assert (result.status, result.reward) == (Outcome.GRADED, 0.0)
-
-
-@pytest.mark.parametrize(
-    "reward_bytes,expected",
-    [(b'{"reward":0.75}', 0.75), (b'{"reward":"bad"}', None), (b'{"reward":0.75,"detail":{}}', None)],
-)
-async def test_native_source_grader_reads_original_json_reward(tmp_path, native_grading_task, reward_bytes, expected):
-    task = native_task_with_script(
-        native_grading_task,
-        b"printf '%s\\n' '" + reward_bytes + b"' > ../logs/verifier/reward.json\n",
-        result_format="reward_json",
-        result_path="/logs/verifier/reward.json",
-    )
-    factory = LocalGradingMachines(tmp_path)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        task,
-        {"/app/numbers.py": b"print(42)\n"},
-        factory,
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
-    assert (result.status, result.reward) == (
-        (Outcome.GRADED, expected) if expected is not None else (Outcome.INVALID_TASK, None)
-    )
-
-
-async def test_native_source_grader_preserves_score_detail(tmp_path, native_grading_task):
-    task = native_task_with_script(
-        native_grading_task,
-        b"""printf '%s\\n' '{"reward":0.75,"detail":{"cases":[{"passed":true}]}}' > ../logs/verifier/score.json
-""",
-        result_format="score_json",
-        result_path="/logs/verifier/score.json",
-    )
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        task,
-        {"/app/numbers.py": b"print(42)\n"},
-        LocalGradingMachines(tmp_path),
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
-    assert (result.status, result.reward, result.detail) == (
-        Outcome.GRADED,
-        0.75,
-        {"cases": [{"passed": True}]},
-    )
-
-
-@pytest.mark.parametrize(
-    "script",
-    [b"printf broken > ../logs/verifier/reward.txt\n", b"exit 2\n"],
-)
-async def test_native_source_grader_broken_contract_is_invalid_task(tmp_path, native_grading_task, script):
-    task = native_task_with_script(
-        native_grading_task,
-        script,
-        result_format="reward_file",
-        result_path="/logs/verifier/reward.txt",
-    )
-    factory = LocalGradingMachines(tmp_path)
-    image = native_grading_task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        task,
-        {"/app/numbers.py": b"print(42)\n"},
-        factory,
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
-    assert (result.status, result.reward) == (Outcome.INVALID_TASK, None)
-
-
-async def test_native_source_grader_backend_failure_is_infrastructure_error(native_grading_task):
-    image = native_grading_task.verifier.environment_requirements.docker_image
-    assert image is not None
-    result = await grade_submission(
-        native_grading_task,
-        {"/app/numbers.py": b"print(42)\n"},
-        NativeUnavailableMachines(),
-        machine_spec=MachineSpec(DockerImage(image)),
-    )
+def test_grading_machine_failure_is_infrastructure_error(script_grading_task):
+    attempt = GradingAttempt(finished(script_grading_task), {"/app/numbers.py": b"print(42)\n"})
+    result = grade_task(script_grading_task, attempt, machine_factory=UnavailableMachines(), machine_spec=GRADER_MACHINE)
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+
+
+def test_no_grader_task_is_unavailable_without_a_grading_machine(shell_task):
+    grader = shell_task.grader
+    assert isinstance(grader, NoGrader)
+    machines = FileMachines()
+    attempt = GradingAttempt(finished(shell_task), {OUTPUT_PATH: b"person-0-0\n"})
+    result = grade_task(shell_task, attempt, machine_factory=machines, machine_spec=GRADER_MACHINE)
+    assert (result.status, result.reward, result.error) == (Outcome.UNAVAILABLE, None, grader.reason)
+    assert not machines.machines
 
 
 async def test_shell_uploads_public_files_without_oracle_and_captures_submission(shell_task):
@@ -519,9 +370,9 @@ class UnavailableFactory:
         raise RuntimeError("Machine service unavailable")
 
 
-async def test_environment_failure_is_recorded_without_reward(native_grading_task):
+async def test_environment_failure_is_recorded_without_reward(script_grading_task):
     rollout = await run_episode(
-        native_grading_task, ScriptedActor(()), UnavailableFactory(), max_steps=2, control="failure"
+        script_grading_task, ScriptedActor(()), UnavailableFactory(), max_steps=2, control="failure"
     )
     assert rollout.termination == Termination.INFRA_ERROR
     assert rollout.artifacts == ()

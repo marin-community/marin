@@ -19,17 +19,17 @@ including source pins, artifact identities, dependencies, outputs and resources.
 TaskCompendium does not import experiments or construct ArtifactSteps.
 
 The `pipeline` package owns acquisition, review, filtering and verification.
-Dataset converters live in `taskcompendium.datasets`; source-specific image and
-grader bindings live in the experiment's `datasets` package. These ingestion
-bindings select the grader declaration and runtime requirements recorded in each
-TaskSpec. TaskCompendium dispatches that declaration during grading. Common
-graders and source-call transport live in VerifyIT. A task declares its supplied command or
-an evaluator installed in a pinned image. Its resources retain private inputs
-and any invocation bridge needed by that command.
-Missing evaluators use the explicit `source_unavailable`
-contract; they do not create executable placeholder graders.
+Dataset converters live in `taskcompendium.datasets`; source-specific grader
+images and declarations live in the experiment's `datasets` package. Those
+declarations select the grader and runtime requirements recorded in each
+TaskSpec, and TaskCompendium grades by grader kind. Common graders and
+source-call transport live in VerifyIT. A `ScriptGrader` runs a supplied command
+or an evaluator installed in a pinned image; its verifier resources hold the
+command's inputs and any invocation bridge it needs. An evaluator that cannot
+run here, or a command without a selected image, becomes a `NoGrader` with the
+reason and source contract. No executable placeholder grader is created.
 
-Normalization preserves the boundary between the public problem and private
+Normalization preserves the boundary between the public problem and hidden
 answers or fixtures. Checks and GLM review supply separate evidence. Filtering
 keeps or rejects tasks with quality evidence and defers tasks whose review is
 unavailable or malformed. Deferred rows remain in the audit, count separately
@@ -112,7 +112,7 @@ request identity and response before reuse.
 bundle with `schema_version="recorded-review-v1"`, verified against the SHA256
 of its complete file. It carries root `provenance` and `records`, each containing
 `task_sha256`, `rubric_sha256`, a typed `review`, and record `provenance`.
-Each record must match the complete TaskSpec and rubric hashes, including private
+Each record must match the complete TaskSpec and rubric hashes, including
 resources and runtime metadata. Unmatched tasks and rewrite comparisons use the
 original reviewer. Matched judgments retain confidence, reference uncertainty,
 inspection limits, and reviewer/source provenance in `review_detail` and
@@ -159,18 +159,19 @@ Binary files retain signatures without text. An aggregate hash covers omitted
 files. This describes TaskSpec resources; installed container files require a
 separate environment inventory, and previews cannot establish unseen contents.
 
-For grading changes, follow [grader.py](../grader.py): a task carries a standard
-VerifyIT spec or an ordinary script with private resources. Put generic reusable
-verification components in [VerifyIT](../../../../../lib/verifyit); keep
+For grading changes, start with the grader kinds in [models.py](../models.py) and
+the packages in [grader.py](../grader.py): a task carries a `VerifyitGrader` with
+a standard verifyit mode, or a `ScriptGrader` with verifier resources. Put
+generic reusable verification components in [VerifyIT](../../../../../lib/verifyit); keep
 dataset-specific behavior in the emitted grader. Runtime requirements must remain
 explicit in the TaskSpec.
 
 Source normalizers declare `EnvironmentRequirements.compatible_backends` on
 each TaskSpec. Use the existing `shellbox.machine.Backend` values. The agent's
-environment and `verifier.environment_requirements` have separate declarations:
-a task may permit ShellSim for shell interaction while its private grader needs
-gVisor. An empty tuple declares no Shellbox backend; it does not mean every
-backend is allowed. Answer-only tasks need no machine declaration.
+environment and `grader.environment` have separate declarations: a task may
+permit ShellSim for shell interaction while its grader needs gVisor. An empty
+tuple declares no Shellbox backend; it does not mean every backend is allowed.
+Answer-only tasks need no machine declaration.
 
 Use this rubric when authoring a source:
 
@@ -179,7 +180,7 @@ Use this rubric when authoring a source:
 | Built-in shell commands and virtual files preserve the requested behavior | ShellSim may be declared after checking command semantics, paths, quoting, pipes, and required file metadata. |
 | Arbitrary Python packages, native binaries, or image-specific dependencies | Use an image-backed backend and pin the required image. ShellSim cannot satisfy a required Docker image. |
 | Kernel behavior, subprocesses, networking, or special filesystem behavior | Check the specific Shellbox backend's support. A generic shell capability is insufficient. |
-| Private grader has different dependencies from the task | Declare grader compatibility independently; preserve private fixtures across backend choices. |
+| Grader has different dependencies from the task | Declare compatibility in the grader's environment; preserve grader fixtures across backend choices. |
 | Records within a source differ in runtime needs | Emit the correct declaration for each record; do not broaden compatibility to fit the launch. |
 
 Compatibility is an author claim. Verification records evidence for the selected
@@ -189,9 +190,9 @@ image source, network policy and host prerequisites, and unsupported choices fai
 without fallback. An unavailable compatible runtime is an infrastructure problem,
 not proof that the source is defective.
 
-The shared shell environment and private grading entry point enforce the same
-declarations for oracle controls and actor episodes. The oracle receives private
-solution files, while the actor receives only public files. Both submit the same
+The shared shell environment and `grade_task` enforce the same declarations for
+oracle controls and actor episodes. The oracle receives private solution files,
+while the actor receives only public files. Both submit the same
 declared output paths to the grader. Production executable RL integration remains
 separate work: the current TaskSpec Harbor exporter supports direct chat only.
 
@@ -215,7 +216,7 @@ unverified. Unverified tasks can enter accepted/train/eval views, but cannot
 enter executable export. Reports record checked and skipped task counts; these
 counts overlap when a task has both executed and skipped checks.
 
-TaskTrove oracle controls use the `solution/solve.sh` convention. Converters
+TaskTrove oracle controls run `solution/solve.sh`. Converters
 preserve source scripts or create wrappers around supplied solutions; answer
 converters may create a script that writes the known reference to the declared
 output file. These files are stored in TaskSpec's private `resources.oracle`
@@ -232,7 +233,7 @@ results, source provenance and the final source decision.
 One trial executes the entire control suite at one ordinal; the two ordinals
 originally run independently in fresh environments. Reruns can reuse complete
 trials from retained verification reports without counting an execution twice.
-Identity covers the entire private task, suite configuration, grading code,
+Identity covers the entire task, suite configuration, grading code,
 installed dependencies, immutable runtime image and verification policy. Each
 trial keeps its original execution ID, checks, rollouts and report provenance.
 Infrastructure or unsupported controls cause that entire trial to rerun,
@@ -242,7 +243,7 @@ definite failures survive successful retries. A task is inconsistent when any
 current trial passes alongside a current or historical failure. Failures remain
 evidence for the source gate; skipped goldens remain skipped.
 Prior failures outside the current sample reject only rows with
-the same task ID and entire private TaskSpec digest; current sample counts remain
+the same task ID and entire TaskSpec digest; current sample counts remain
 independent. Converter-rejected rows without a TaskSpec retain their own rejection.
 QEMU reuse requires an immutable worker image pin identifying the packaged
 bundle. Online or network-enabled graders always execute fresh because their

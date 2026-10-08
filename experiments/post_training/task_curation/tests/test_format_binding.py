@@ -8,13 +8,13 @@ import pytest
 from shellbox.machine import DockerImage, MachineSpec
 from taskcompendium.datasets.nemotron_ultra import normalization
 from taskcompendium.grader import grader_config
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import Source
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading import format_binding
 
-from .test_calendar_binding import SourceScoreMachines, grade
+from .test_calendar_binding import SourceScoreMachines, grade, grader_image
 
 
 @pytest.fixture
@@ -91,16 +91,16 @@ def test_original_marker_matching_detects_missing_and_spurious_without_counting_
         {"type": "semantic_judge"},
     ],
 )
-def test_broken_source_format_contract_is_invalid_task_not_infrastructure(row, verifier):
+def test_broken_source_format_contract_writes_no_reward(row, verifier):
     row.data["verifier"] = verifier
     result = grade(task_for(row), "Candidate response.")
-    assert (result.status, result.reward) == (Outcome.INVALID_TASK, None)
+    assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.MISSING_REWARD)
 
 
-def test_missing_verifier_is_invalid_task(row):
+def test_missing_verifier_writes_no_reward(row):
     del row.data["verifier"]
     result = grade(task_for(row), "Candidate response.")
-    assert (result.status, result.reward) == (Outcome.INVALID_TASK, None)
+    assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.MISSING_REWARD)
 
 
 def test_format_binding_preserves_private_contract_and_does_not_bind_semantic_judges(row):
@@ -121,16 +121,14 @@ def test_format_binding_preserves_private_contract_and_does_not_bind_semantic_ju
 
 @pytest.mark.parametrize(
     "verdict_status,expected",
-    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)],
+    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.INFRA_ERROR), ("infra_error", CheckStatus.INFRA_ERROR)],
 )
 @pytest.mark.asyncio
 async def test_format_runtime_checks_do_not_invent_a_positive_witness(row, verdict_status, expected):
     task = task_for(row)
     machines = SourceScoreMachines(verdict_status=verdict_status)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await format_binding.isolated_checks(
-        task, factory=machines, machine_spec=MachineSpec(DockerImage(image)), timeout=10
+        task, factory=machines, machine_spec=MachineSpec(DockerImage(grader_image(task))), timeout=10
     )
     assert [(check.check, check.status) for check in report.checks] == [
         ("native_runtime", expected),

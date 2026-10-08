@@ -12,7 +12,7 @@ from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.code_contracts import has_code_block, validate_code_cases
 from taskcompendium.datasets.nemotron_ultra.normalization import VERIFIER_REVISION
 from taskcompendium.grader import GraderPackage, grader_config
-from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.models import AnswerType, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import bind_grader_recipe
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -25,15 +25,14 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import control_result
-from taskcompendium.runtime.grading import grade_submission
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading.binding import (
     ANSWER_EXTRACTOR,
-    ANSWER_PATH,
     invocation_bytes,
     normalize_terminal_grader,
     score_package,
 )
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 from experiments.post_training.task_curation.datasets.skyrl.code_sql.binding import THREAD_ENVIRONMENT
 
 CALL = {
@@ -45,8 +44,8 @@ CALL = {
 SCRIPT_TIMEOUT = 330.0
 
 
-def original_package(config: dict) -> GraderPackage:
-    return score_package(config, invocation=CALL, timeout=SCRIPT_TIMEOUT, state_path="/app/state.json")
+def original_package(config: dict, image: str) -> GraderPackage:
+    return score_package(config, invocation=CALL, timeout=SCRIPT_TIMEOUT, image=image, state_path="/app/state.json")
 
 
 def normalize_isolated(
@@ -94,8 +93,8 @@ async def isolated_checks(task: TaskSpec, *, factory: MachineFactory, machine_sp
         controls.append(("positive_witness", witness, 1.0))
     checks = []
     for name, answer, reward in controls:
-        result = await grade_submission(
-            task, {ANSWER_PATH: answer.encode()}, factory, machine_spec=machine_spec, timeout=timeout
+        result = await grade_final_message(
+            task, TextMessage(role="assistant", content=answer), factory, machine_spec, timeout
         )
         check = control_result(result, name, reward)
         if result.error:

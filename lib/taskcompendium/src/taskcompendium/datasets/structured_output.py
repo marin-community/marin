@@ -12,14 +12,17 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from verifyit.spec import JsonSchemaSpec, SchemaFormat
 
-from taskcompendium.grader import grader_package
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -34,7 +37,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 
 def required_object_conflicts(schema: dict[str, Any], path: str = "$") -> list[str]:
@@ -104,7 +106,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         validator_for(data["schema"]).check_schema(data["schema"])
     except SchemaError as error:
         return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="invalid_schema", detail=str(error))
-    package = grader_package(
+    package = verifyit_package(
         JsonSchemaSpec(schema="schema.json", format=SchemaFormat.JSON),
         (inline_resource("schema.json", json.dumps(data["schema"]).encode()),),
     )
@@ -120,7 +122,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         ),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
@@ -141,7 +144,8 @@ def policy() -> TaskPolicy:
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    spec = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
     assert isinstance(spec, JsonSchemaSpec)
     schema_resource = next(resource for resource in task.resources.verifier if resource.path == spec.schema)
     conflicts = required_object_conflicts(json.loads(base64.b64decode(schema_resource.source.content_base64)))

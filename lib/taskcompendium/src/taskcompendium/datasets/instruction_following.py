@@ -9,13 +9,16 @@ from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, IfevalSpec
 
-from taskcompendium.grader import grader_package
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -29,7 +32,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 NON_LATIN_LANGUAGES = frozenset({"ar", "bg", "bn", "he", "hi", "ja", "ko", "ne", "ru", "ta", "te", "th", "zh"})
 LATIN_WORD = re.compile(r"[A-Za-z]+")
@@ -118,7 +120,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     try:
         constraints = tuple(Constraint(name=name, params=params) for name, params in zip(names, parameters, strict=True))
         resolve_checks(constraints)
-        package = grader_package(IfevalSpec(constraints=constraints))
+        package = verifyit_package(IfevalSpec(constraints=constraints))
     except (InvalidTask, ValueError) as error:
         return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="invalid_constraints", detail=str(error))
     return TaskSpec(
@@ -126,7 +128,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction.strip()),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         source=row.source,
     )
 
@@ -154,7 +157,8 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     """
     event = task.context.events[0]
     assert isinstance(event, TextMessage)
-    verifier = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    verifier = verifyit_spec(task.grader)
     assert isinstance(verifier, IfevalSpec)
     languages = set()
     for constraint in verifier.constraints:

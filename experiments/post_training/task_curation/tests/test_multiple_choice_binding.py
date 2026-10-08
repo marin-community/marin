@@ -8,21 +8,16 @@ import pytest
 from shellbox.machine import DockerImage, MachineSpec
 from taskcompendium.datasets.nemotron_ultra import normalization
 from taskcompendium.grader import grader_config
-from taskcompendium.grading_result import Outcome
-from taskcompendium.models import (
-    Source,
-)
+from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.models import ConversationTrace, GradingAttempt, Source, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, NormalizedTask, RawRow
-from taskcompendium.runtime.grading import grade_submission
+from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.submission import PlainText
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading import multiple_choice_binding
 from lib.taskcompendium.tests.test_runtime import LocalGradingMachines
 
-from .test_calendar_binding import SourceScoreMachines, grade
-
-PLAIN = PlainText(id="plain")
+from .test_calendar_binding import SourceScoreMachines, grade, grader_image
 
 
 @pytest.fixture
@@ -85,12 +80,12 @@ def test_original_custom_regex_multilingual_labels(row, label):
     assert multiple_choice_binding.reference_answer(grader_config(task)["contract"]) is None
 
 
-def test_ambiguous_regex_is_invalid_task_not_wrong_answer(row):
+def test_ambiguous_regex_writes_no_reward_rather_than_scoring_a_wrong_answer(row):
     row.data["template_metadata"] = {"output_regex": r"(A)(B)"}
     result = grade(task_for(row), "AB")
-    assert result.status == Outcome.INVALID_TASK
+    assert (result.status, result.failure) == (Outcome.INFRA_ERROR, GradingFailure.MISSING_REWARD)
     assert result.reward is None
-    assert result.error is not None and "unambiguous answer capture" in result.error
+    assert "unambiguous answer capture" in result.diagnostics["stderr"]
 
 
 def test_private_contract_and_original_modules_stay_out_of_public_task(row):
@@ -142,12 +137,12 @@ async def test_submitted_package_cannot_shadow_installed_source_grader(row, tmp_
     task = task_for(row)
     path = "/app/skyrl_gym/__init__.py"
     task = task.model_copy(update={"output_paths": (*task.output_paths, path)})
-    image = task.verifier.environment_requirements.docker_image
-    result = await grade_submission(
-        task,
-        {"/app/answer.txt": rb"\boxed{A}", path: b'raise RuntimeError("Actor package loaded")\n'},
-        LocalGradingMachines(tmp_path),
-        machine_spec=MachineSpec(DockerImage(image)),
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=r"\boxed{A}"))),
+        {path: b'raise RuntimeError("Actor package loaded")\n'},
+    )
+    result = await grade_in_sandbox(
+        task, attempt, LocalGradingMachines(tmp_path), MachineSpec(DockerImage(grader_image(task)))
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
@@ -179,24 +174,16 @@ def test_original_regex_fallback_and_inactive_captures_remain_valid(row, pattern
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
-@pytest.mark.parametrize(
-    "verdict_status,expected", [("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)]
-)
+@pytest.mark.parametrize("verdict_status", ["invalid_task", "infra_error"])
 @pytest.mark.asyncio
-async def test_isolated_invalid_task_rejects_control_without_infrastructure_failure(row, verdict_status, expected):
-    row.data["template_metadata"] = {"output_regex": r"(A)(B)"}
+async def test_isolated_source_failure_is_not_a_scored_control(row, verdict_status):
     task = task_for(row)
     machines = SourceScoreMachines(verdict_status=verdict_status)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await multiple_choice_binding.isolated_checks(
         task,
         factory=machines,
-        machine_spec=MachineSpec(DockerImage(image)),
+        machine_spec=MachineSpec(DockerImage(grader_image(task))),
         timeout=10,
     )
-    assert [(check.check, check.status) for check in report.checks] == [
-        ("empty", expected),
-        ("positive_witness", CheckStatus.SKIPPED),
-    ]
+    assert {check.check: check.status for check in report.checks}["reference"] == CheckStatus.INFRA_ERROR
     assert len(machines.machines) == 1 and machines.machines[0].closed

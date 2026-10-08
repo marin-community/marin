@@ -9,14 +9,17 @@ import json
 from verifyit.spec import ExactSpec, MathSpec, MathType
 
 from taskcompendium.datasets.direct_contracts import source_contract_package
-from taskcompendium.grader import grader_package
+from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckSuite,
@@ -28,7 +31,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 REASONING_RUBRIC = ReviewRubric(
     id="reasoning-gym-answerability",
@@ -143,16 +145,17 @@ def normalize_puzzle(row: RawRow) -> TaskSpec | ImportRejection:
             )
         )
     )
-    return _task(row, direct_instruction(instruction), grader_package(spec))
+    return _task(row, direct_instruction(instruction), verifyit_package(spec))
 
 
-def _task(row: RawRow, instruction: str, package) -> TaskSpec:
+def _task(row: RawRow, instruction: str, package: GraderPackage) -> TaskSpec:
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
@@ -163,7 +166,8 @@ def reasoning_checks(task: TaskSpec) -> VerificationReport:
 
 
 def puzzle_checks(task: TaskSpec) -> VerificationReport:
-    spec = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
     assert isinstance(spec, (ExactSpec, MathSpec))
     expected = ", ".join(spec.expected) if isinstance(spec, ExactSpec) else spec.expected
     return VerificationReport(checks=verify_witness(task, expected, "__incorrect_puzzle_answer__"))

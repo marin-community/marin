@@ -10,12 +10,11 @@ import pytest
 
 from taskcompendium.datasets import atlas_math_qa
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
+from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, RawRow
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
 
 
 def row(name, instruction, data):
@@ -33,11 +32,8 @@ def row(name, instruction, data):
 
 
 def grade(task, answer):
-    return grade_task(
-        task,
-        PlainText(id="plain"),
-        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
-    )
+    events = (*task.context.events, TextMessage(role="assistant", content=answer))
+    return grade_task(task, GradingAttempt(ConversationTrace(events=events)))
 
 
 @pytest.mark.parametrize(
@@ -153,7 +149,7 @@ def test_abstention_source_judge_requires_original_runtime():
         "qa_abstention",
     )
     assert isinstance(task, TaskSpec)
-    assert task.verifier.kind == "source_unavailable"
+    assert isinstance(task.grader, NoGrader)
     assert grade(task, r"\boxed{PARIS}").status == Outcome.UNAVAILABLE
     assert all(check.status == CheckStatus.UNSUPPORTED for check in atlas_math_qa.verification_report(task).checks)
 

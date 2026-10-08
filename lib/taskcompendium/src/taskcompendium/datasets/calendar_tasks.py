@@ -8,16 +8,17 @@ import tomllib
 
 from taskcompendium.datasets.reasoning_tasks import snapshot_file
 from taskcompendium.datasets.source_definitions import archive_resources
-from taskcompendium.grader import native_command_package
+from taskcompendium.grader import GraderPackage
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    NoGrader,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.native_grader import NativeCommandSpec
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -96,14 +97,15 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     assert source_task is not None
     source_timeout = float(tomllib.loads(source_task.decode())["verifier"]["timeout_sec"])
     archive = archive_resources(row.data)
-    package = native_command_package(
-        NativeCommandSpec(
-            argv=("bash", "/tests/test.sh"),
-            cwd="/",
-            env={},
-            result_format="reward_file",
-            result_path="/logs/verifier/reward.txt",
-            timeout=source_timeout,
+    package = GraderPackage(
+        NoGrader(
+            reason="The TaskTrove calendar test script has no pinned grader image",
+            contract={
+                "argv": ["bash", "/tests/test.sh"],
+                "cwd": "/",
+                "reward_path": "/logs/verifier/reward.txt",
+                "timeout": source_timeout,
+            },
         ),
         archive.verifier,
     )
@@ -116,7 +118,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=ResourceGroups(
             oracle=archive.oracle,
             worker=archive.worker,

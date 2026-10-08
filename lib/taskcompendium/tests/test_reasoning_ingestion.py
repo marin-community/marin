@@ -19,11 +19,10 @@ from taskcompendium.datasets.reasoning_gym.generated import generated_rows
 from taskcompendium.datasets.source_definitions import unpack_task_binary
 from taskcompendium.grader import grader_config
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
+from taskcompendium.models import ConversationTrace, GradingAttempt, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, RawRow
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
 
 
 @pytest.fixture
@@ -36,11 +35,8 @@ def encoded_file(value):
 
 
 def answer_grade(task, answer):
-    return grade_task(
-        task,
-        PlainText(id="plain"),
-        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
-    )
+    events = (*task.context.events, TextMessage(role="assistant", content=answer))
+    return grade_task(task, GradingAttempt(ConversationTrace(events=events)))
 
 
 def test_generated_codeio_symbolic_integer_keeps_exact_json_and_native_reward():
@@ -107,7 +103,7 @@ def test_reasoning_ingestion_preserves_upstream_contract_without_local_execution
     assert all(check.status == CheckStatus.UNSUPPORTED for check in reasoning_tasks.reasoning_checks(task).checks)
 
 
-def test_calendar_ingestion_preserves_original_command_and_private_archive(row_source):
+def test_calendar_ingestion_records_unbound_original_command_and_private_archive(row_source):
     fixture = Path(__file__).parents[3] / "experiments/post_training/tasktrove/fixtures/agent_calendar.tar.gz"
     decoded = unpack_task_binary(
         {"task_binary": fixture.read_bytes(), "path": "agent_calendar/fixture"}, StoragePath("/tmp")
@@ -115,10 +111,19 @@ def test_calendar_ingestion_preserves_original_command_and_private_archive(row_s
     row = RawRow("calendar", row_source, decoded)
     task = calendar_tasks.normalize(row)
     assert isinstance(task, TaskSpec)
-    command = json.loads(task.verifier.parameters_json)
+    command = grader_config(task)
     assert command["argv"] == ["bash", "/tests/test.sh"]
-    assert command["result_format"] == "reward_file"
-    assert [(check.check, check.status) for check in verify_task(task)] == [("runtime", CheckStatus.UNSUPPORTED)]
+    assert command["reward_path"] == "/logs/verifier/reward.txt"
+    assert command["timeout"] == 600.0
+    assert [(check.check, check.status) for check in verify_task(task)] == [
+        ("source_evaluator", CheckStatus.UNSUPPORTED)
+    ]
+    # Without a grader image the source witness cannot be graded, so no control can pass or fail.
+    assert [(check.check, check.status) for check in calendar_tasks.verification_report(task).checks] == [
+        ("empty", CheckStatus.UNSUPPORTED),
+        ("witness", CheckStatus.UNSUPPORTED),
+        ("negative", CheckStatus.UNSUPPORTED),
+    ]
     assert {resource.path for resource in task.resources.verifier} >= {"test.sh", "verifier.py", "verifier_data.json"}
     assert all(resource.path != "solution/answer.json" for resource in task.resources.worker)
     missing_command = calendar_tasks.normalize(replace(row, data={**row.data, "files": {}}))

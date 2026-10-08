@@ -9,8 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    FileReward,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -76,7 +84,7 @@ def test_math_binding_keeps_text_actor_original_private_scorer_and_actual_golden
     original, task = fixture.original, fixture.task
     assert task.answer_type == AnswerType.TEXT
     assert task.environment_requirements == EnvironmentRequirements()
-    assert task.output_paths == ("/app/answer.txt",)
+    assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path == "/app/answer.txt"
     assert not task.resources.all and not task.resources.worker
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     for path, content in original.files.items():
@@ -91,9 +99,12 @@ def test_math_binding_keeps_text_actor_original_private_scorer_and_actual_golden
 def test_math_original_runner_is_bound_without_rewriting(math_task, name):
     fixture = math_task(name)
     task = fixture.task
-    spec = NativeCommandSpec.model_validate_json(task.verifier.parameters_json)
-    assert spec.argv == ("bash", "-c", "python3 /tests/runtime_check.py && bash /tests/test.sh")
-    assert spec.result_path == "/logs/verifier/reward.txt"
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    assert grader.argv == ("bash", "-c", "python3 /tests/runtime_check.py && bash /tests/test.sh")
+    assert grader.reward == FileReward(
+        files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)
+    )
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     assert private["verifier.py"] == fixture.original.files["tests/verifier.py"]
     assert private["test.sh"] == fixture.original.files["tests/test.sh"]

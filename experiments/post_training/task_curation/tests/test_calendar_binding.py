@@ -11,18 +11,16 @@ import pytest
 from shellbox.machine import DockerImage, ExitReason, MachineSpec, Result
 from taskcompendium.datasets.nemotron_ultra import normalization
 from taskcompendium.grader import grader_config
-from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, ConversationTrace, EnvironmentRequirements, Source, TextMessage
+from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.models import ConversationTrace, ScriptGrader, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, NormalizedTask, RawRow
-from taskcompendium.runtime.models import RuntimeEvidence
+from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import FinalAction, PlainText
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading import calendar_binding
 from lib.taskcompendium.tests.test_executable_ingestion import GradingMachine, GradingMachines
 from lib.taskcompendium.tests.test_runtime import LocalGradingMachines
 
-PLAIN = PlainText(id="plain")
 VALID = [
     {"event_id": 0, "start_time": "10:00", "duration": 30},
     {"event_id": 1, "start_time": "11:00", "duration": 30},
@@ -35,8 +33,6 @@ class SourceScoreMachine(GradingMachine):
         if command.argv[0] == "rm":
             self.files.pop(command.argv[-1], None)
             return Result(0, b"", b"", False, False, ExitReason.EXITED)
-        if command.argv[0] == "test":
-            return Result(0 if command.argv[-1] in self.files else 1, b"", b"", False, False, ExitReason.EXITED)
         if command.argv[0] == "python3" and self.verdict_status == "infra_error":
             raise OSError("Grading service failed")
         result = await super().run(command)
@@ -90,32 +86,25 @@ def task_for(row):
     return result.task
 
 
+def grader_image(task: TaskSpec) -> str:
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    image = grader.environment.docker_image
+    assert image is not None
+    return image
+
+
 def grade(task, candidate):
     pytest.importorskip(
         "skyrl_gym.envs.nemotron_ultra.answer_extraction", reason="Requires installed original scorer assets"
     )
-    image = task.verifier.environment_requirements.docker_image or "fixture@sha256:" + "1" * 64
-    task = task.model_copy(
-        update={
-            "verifier": task.verifier.model_copy(
-                update={
-                    "environment_requirements": EnvironmentRequirements(
-                        docker_image=image, compatible_backends=(LocalGradingMachines.backend,)
-                    )
-                }
-            )
-        }
-    )
     event = TextMessage(role="assistant", content=candidate) if isinstance(candidate, str) else candidate
-    convention = FinalAction(id="fixture") if task.answer_type == AnswerType.NATIVE_ACTION else PLAIN
     with TemporaryDirectory() as directory:
         return grade_task(
             task,
-            convention,
-            ConversationTrace(events=(*task.context.events, event)),
-            RuntimeEvidence({}, "{}"),
+            grading_attempt(ConversationTrace(events=(*task.context.events, event)), RuntimeEvidence({}, "{}")),
             machine_factory=LocalGradingMachines(Path(directory)),
-            machine_spec=MachineSpec(DockerImage(image)),
+            machine_spec=MachineSpec(DockerImage(grader_image(task))),
         )
 
 
@@ -150,12 +139,12 @@ def test_empty_calendar_retains_original_vacuous_success_after_reasoning_extract
     assert grade(task, "<think>reasoning</think>").reward == 1.0
 
 
-def test_invalid_source_calendar_constraint_is_invalid_task(row):
+def test_invalid_source_calendar_constraint_writes_no_reward(row):
     row.data["exp_cal_state"]["0"]["constraint"] = "unknown constraint"
     result = grade(task_for(row), json.dumps(VALID))
-    assert result.status == Outcome.INVALID_TASK
+    assert (result.status, result.failure) == (Outcome.INFRA_ERROR, GradingFailure.MISSING_REWARD)
     assert result.reward is None
-    assert result.error is not None and "Unknown calendar constraint" in result.error
+    assert "Unknown calendar constraint" in result.diagnostics["stderr"]
 
 
 def test_calendar_request_and_constraints_keep_original_private_boundary(row):
@@ -172,7 +161,7 @@ def test_calendar_request_and_constraints_keep_original_private_boundary(row):
         "config.json",
     }
     assert task.environment_requirements.docker_image is None
-    assert task.verifier.environment_requirements.docker_image == "fixture@sha256:" + "1" * 64
+    assert grader_image(task) == "fixture@sha256:" + "1" * 64
 
 
 def test_semantic_judge_agent_cannot_use_calendar_binding(row):
@@ -188,22 +177,19 @@ def test_semantic_judge_agent_cannot_use_calendar_binding(row):
 
 @pytest.mark.parametrize(
     "verdict_status,expected",
-    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)],
+    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.INFRA_ERROR), ("infra_error", CheckStatus.INFRA_ERROR)],
 )
 @pytest.mark.asyncio
 async def test_runtime_and_negative_control_never_invent_positive_witness(row, verdict_status, expected):
     task = task_for(row)
     machines = SourceScoreMachines(verdict_status=verdict_status)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await calendar_binding.isolated_checks(
-        task, factory=machines, machine_spec=MachineSpec(DockerImage(image)), timeout=10
+        task, factory=machines, machine_spec=MachineSpec(DockerImage(grader_image(task))), timeout=10
     )
     assert [(check.check, check.status) for check in report.checks] == [
         ("native_runtime", expected),
         ("positive_witness", CheckStatus.SKIPPED),
     ]
     assert all(machine.closed for machine in machines.machines)
-    assert [machine.files[calendar_binding.ANSWER_PATH] for machine in machines.machines] == [
-        b"[]",
-    ]
+    assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path is not None
+    assert [machine.files[task.grader.answer_path] for machine in machines.machines] == [b"[]"]

@@ -16,13 +16,11 @@ from taskcompendium.models import (
     Source,
 )
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
-from taskcompendium.submission import PlainText
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading import structured_output_binding
 
-from .test_calendar_binding import SourceScoreMachine, SourceScoreMachines, grade
+from .test_calendar_binding import SourceScoreMachine, SourceScoreMachines, grade, grader_image
 
-PLAIN = PlainText(id="plain")
 SCHEMA = {
     "type": "object",
     "properties": {"count": {"type": "integer"}},
@@ -154,10 +152,10 @@ def test_original_malformed_source_schema_keeps_zero_reward_diagnostic(row, nati
     task = task_for(row)
     config = grader_config(task)
     config["contract"]["schema_str"] = "malformed JSON schema"
-    package = structured_output_binding.grader_package(config)
+    package = structured_output_binding.grader_package(config, grader_image(task))
     historical_task = task.model_copy(
         update={
-            "verifier": package.verifier,
+            "grader": package.grader,
             "resources": task.resources.model_copy(update={"verifier": package.resources}),
         }
     )
@@ -200,16 +198,14 @@ def test_original_fixed_dialect_accepts_numeric_exclusive_bound_despite_declared
 
 @pytest.mark.parametrize(
     "verdict_status,expected",
-    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)],
+    [("scored", CheckStatus.PASS), ("invalid_task", CheckStatus.INFRA_ERROR), ("infra_error", CheckStatus.INFRA_ERROR)],
 )
 @pytest.mark.asyncio
 async def test_runtime_diagnostic_never_certifies_schema_correctness(row, verdict_status, expected):
     task = task_for(row)
     machines = SourceScoreMachines(verdict_status=verdict_status)
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await structured_output_binding.isolated_checks(
-        task, factory=machines, machine_spec=MachineSpec(DockerImage(image)), timeout=10
+        task, factory=machines, machine_spec=MachineSpec(DockerImage(grader_image(task))), timeout=10
     )
     assert [(check.check, check.status) for check in report.checks] == [
         ("native_runtime", expected),
@@ -231,10 +227,8 @@ async def test_runtime_diagnostic_never_certifies_schema_correctness(row, verdic
 async def test_source_schema_errors_reject_runtime_but_wrong_candidates_do_not(row, error_type, error_message, expected):
     task = task_for(row)
     machines = DiagnosticMachines(diagnostic={"error_type": error_type, "error_message": error_message})
-    image = task.verifier.environment_requirements.docker_image
-    assert image is not None
     report = await structured_output_binding.isolated_checks(
-        task, factory=machines, machine_spec=MachineSpec(DockerImage(image)), timeout=10
+        task, factory=machines, machine_spec=MachineSpec(DockerImage(grader_image(task))), timeout=10
     )
     assert report.checks[0].status == expected
     assert report.checks[1].status == CheckStatus.SKIPPED

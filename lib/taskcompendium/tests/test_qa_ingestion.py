@@ -14,7 +14,7 @@ from taskcompendium.datasets import nemo_actions, qa_tasks
 from taskcompendium.datasets.source_definitions import unpack_task_binary
 from taskcompendium.grader import grader_config
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
+from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     CheckStatus,
@@ -31,14 +31,12 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import PlainText
 
 
 def grade(task, answer):
     return grade_task(
         task,
-        PlainText(id="plain"),
-        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
+        GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))),
     )
 
 
@@ -106,7 +104,7 @@ def test_openqa_retains_original_private_exact_gate_and_judge():
     source = Source(dataset="open-thoughts/TaskTrove", revision="fixture-v1", row="fixture", importer_revision="1")
     task = qa_tasks.normalize(RawRow("openqa", source, decoded))
     assert isinstance(task, TaskSpec)
-    assert task.verifier.kind == "source_unavailable"
+    assert isinstance(task.grader, NoGrader)
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     for path in ("tests/test.sh", "tests/exact_gate", "tests/sitecustomize.py", "tests/judge.toml"):
         assert private[path.removeprefix("tests/")] == base64.b64decode(decoded["files"][path])

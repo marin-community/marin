@@ -12,13 +12,12 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal
 
-from shellbox.machine import Backend, MachineFactory, MachineSpec
-from taskcompendium.datasets import instruction_tasks
+from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.skyrl_ifeval_mapping import nemotron_constraint
-from taskcompendium.grader import GraderPackage, grader_config, native_command_package
+from taskcompendium.grader import GraderPackage, grader_config
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.pipeline.execution_binding import grading_environment
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -29,10 +28,11 @@ from taskcompendium.pipeline.models import (
     RawRow,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import machine_spec_identity
 from verifyit.execution import source_callable
+
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 UPSTREAM_REVISION = "544d5d6f14116a06bde0209352585903133bd618"
 EXECUTION_REVISION = "3-native-image"
@@ -44,7 +44,7 @@ REWARD_PATH = "/logs/verifier/reward.json"
 SOURCE_CALLABLE = Path(source_callable.__file__)
 
 
-def grader_package(constraints: dict | list[dict], input_format: str) -> GraderPackage:
+def grader_package(constraints: dict | list[dict], input_format: str, image: str) -> GraderPackage:
     """Run the installed upstream scorer with normalized private constraints."""
     config = {
         "constraints": constraints,
@@ -62,8 +62,8 @@ def grader_package(constraints: dict | list[dict], input_format: str) -> GraderP
         "args": ["answer", "contract.constraints"],
         "reward_key": "score",
     }
-    return native_command_package(
-        NativeCommandSpec(
+    return GraderPackage(
+        ScriptGrader(
             argv=(
                 "python3",
                 "/tests/source_callable.py",
@@ -73,8 +73,9 @@ def grader_package(constraints: dict | list[dict], input_format: str) -> GraderP
                 REWARD_PATH,
             ),
             cwd="/",
-            result_format="score_json",
-            result_path=REWARD_PATH,
+            environment=grading_environment(image),
+            answer_path=ANSWER_PATH,
+            reward=FileReward(files=(RewardFile(path=REWARD_PATH, format=RewardFileFormat.JSON),)),
             timeout=40,
         ),
         (
@@ -85,7 +86,7 @@ def grader_package(constraints: dict | list[dict], input_format: str) -> GraderP
     )
 
 
-def _bound_task(task: TaskSpec | ImportRejection, input_format: str) -> TaskSpec | ImportRejection:
+def _bound_task(task: TaskSpec | ImportRejection, input_format: str, image: str) -> TaskSpec | ImportRejection:
     if isinstance(task, ImportRejection):
         return task
     contract = grader_config(task)["contract"]
@@ -107,22 +108,13 @@ def _bound_task(task: TaskSpec | ImportRejection, input_format: str) -> TaskSpec
             return ImportRejection(
                 kind=ImportFailureKind.UNSUPPORTED, reason="unsupported_ifeval_constraint", detail=str(error)
             )
-    package = grader_package(constraints, input_format)
+    package = grader_package(constraints, input_format, image)
     return task.model_copy(
         update={
-            "verifier": package.verifier,
+            "grader": package.grader,
             "resources": task.resources.model_copy(update={"verifier": package.resources}),
-            "output_paths": (ANSWER_PATH,),
         }
     )
-
-
-def normalize_nemotron(row: RawRow) -> TaskSpec | ImportRejection:
-    return _bound_task(instruction_tasks.normalize_nemotron_if(row), "nemotron")
-
-
-def normalize_rlvr(row: RawRow) -> TaskSpec | ImportRejection:
-    return _bound_task(instruction_tasks.normalize_rlvr_ifeval(row), "rlvr")
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
@@ -159,25 +151,15 @@ def normalize_isolated(
     input_format: Literal["nemotron", "rlvr"],
     image: str,
 ) -> TaskSpec | ImportRejection:
-    task = _bound_task(normalize_task(row), input_format)
-    if isinstance(task, ImportRejection):
-        return task
-    verifier = task.verifier.model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                docker_image=image, compatible_backends=(Backend.DOCKER, Backend.GVISOR, Backend.QEMU)
-            )
-        }
-    )
-    return task.model_copy(update={"verifier": verifier})
+    return _bound_task(normalize_task(row), input_format, image)
 
 
 async def isolated_checks(
     task: TaskSpec, *, factory: MachineFactory, machine_spec: MachineSpec, timeout: float
 ) -> VerificationReport:
     """Probe execution without asserting a semantically correct response."""
-    result = await grade_submission(
-        task, {"/app/answer.txt": b"Runtime diagnostic response."}, factory, machine_spec=machine_spec, timeout=timeout
+    result = await grade_final_message(
+        task, TextMessage(role="assistant", content="Runtime diagnostic response."), factory, machine_spec, timeout
     )
     diagnostic = result.error
     if not diagnostic and result.detail:

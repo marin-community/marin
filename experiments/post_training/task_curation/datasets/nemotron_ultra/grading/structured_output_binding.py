@@ -14,7 +14,7 @@ from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.nemotron_ultra.normalization import VERIFIER_REVISION
 from taskcompendium.grader import GraderPackage, grader_config
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.models import AnswerType, AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import bind_grader_recipe
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -26,15 +26,14 @@ from taskcompendium.pipeline.models import (
     RawRow,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import grade_submission
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading.binding import (
     ANSWER_EXTRACTOR,
-    ANSWER_PATH,
     invocation_bytes,
     normalize_terminal_grader,
     score_package,
 )
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 CALL = {
     "function": "skyrl_gym.envs.nemotron_ultra.structured_outputs:grade_structured_output",
@@ -44,7 +43,7 @@ CALL = {
 }
 
 
-def grader_package(config: dict) -> GraderPackage:
+def grader_package(config: dict, image: str) -> GraderPackage:
     return score_package(
         config,
         invocation={
@@ -52,6 +51,7 @@ def grader_package(config: dict) -> GraderPackage:
             "input_format": "event" if config["contract"].get("response_mode", "text") == "tool_call" else "text",
         },
         timeout=60,
+        image=image,
     )
 
 
@@ -114,29 +114,20 @@ async def isolated_checks(
     if contract.get("response_mode", "text") == "tool_call":
         payload_key = contract.get("tool_payload_key")
         arguments = {payload_key: {}} if payload_key else {}
-        diagnostic = json.dumps(
-            {
-                "type": "assistant_tool_calls",
-                "content": None,
-                "calls": [
-                    {
-                        "call_id": "diagnostic",
-                        "name": contract.get("tool_name") or task.final_tools[0].name,
-                        "arguments": arguments,
-                    }
-                ],
-            }
-        ).encode()
+        call = ConversationToolCall(
+            call_id="diagnostic", name=contract.get("tool_name") or task.final_tools[0].name, arguments=arguments
+        )
+        diagnostic: TextMessage | AssistantToolCalls = AssistantToolCalls(calls=(call,))
     else:
         candidates = {
-            "json": b"{}",
-            "yaml": b"{}",
-            "toml": b"diagnostic = 1",
-            "xml": b"<diagnostic />",
-            "csv": b"diagnostic\n1\n",
+            "json": "{}",
+            "yaml": "{}",
+            "toml": "diagnostic = 1",
+            "xml": "<diagnostic />",
+            "csv": "diagnostic\n1\n",
         }
-        diagnostic = candidates[str(contract.get("schema_type", "json")).lower()]
-    result = await grade_submission(task, {ANSWER_PATH: diagnostic}, factory, machine_spec=machine_spec, timeout=timeout)
+        diagnostic = TextMessage(role="assistant", content=candidates[str(contract.get("schema_type", "json")).lower()])
+    result = await grade_final_message(task, diagnostic, factory, machine_spec, timeout)
     details = result.detail or {}
     broken_schema = details.get("error_type") == "schema_error" or (
         details.get("error_type") == "validation_error"

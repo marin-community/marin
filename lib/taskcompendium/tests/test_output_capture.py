@@ -4,19 +4,18 @@
 """Exercise directory evidence through real filesystem reads and private grading upload."""
 
 import asyncio
-import json
 from dataclasses import dataclass
 
 import pytest
 from shellbox.machine import Backend, DockerImage, ExitReason, MachineSpec, Result, UnsupportedMachineSpec
 
-from taskcompendium.models import OutputDirectory, TaskSpec
-from taskcompendium.runtime.grading import grade_submission
+from taskcompendium.models import GradingAttempt, OutputDirectory, TaskSpec, VerifyitGrader
+from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, ShellFactory
 
 from . import test_executable_ingestion
 from .test_executable_ingestion import GradingMachines
-from .test_runtime import FileMachine, FileMachines
+from .test_runtime import FileMachine, FileMachines, finished
 
 executable_row = test_executable_ingestion.executable_row
 executable_task = test_executable_ingestion.executable_task
@@ -35,10 +34,18 @@ class DirectoryMachine(FileMachine):
         return Result(process.returncode, stdout[:limit], stderr[:limit], len(stdout) > limit, False, ExitReason.EXITED)
 
 
+def grading_machine(task: TaskSpec) -> MachineSpec:
+    """A machine from the image the task's verifyit grader declares."""
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader) and grader.environment is not None
+    assert grader.environment.docker_image is not None
+    return MachineSpec(DockerImage(grader.environment.docker_image))
+
+
 @pytest.fixture
 def directory_task(executable_task, tmp_path):
-    parameters = json.loads(executable_task.verifier.parameters_json)
-    parameters["workspace"] = str(tmp_path)
+    grader = executable_task.grader
+    assert isinstance(grader, VerifyitGrader)
     task = executable_task.model_copy(
         update={
             "output_paths": (str(tmp_path / "canonical.yml"),),
@@ -48,7 +55,7 @@ def directory_task(executable_task, tmp_path):
             "output_directories": (
                 OutputDirectory(root=str(tmp_path), patterns=("*.yml", "*.yaml"), max_files=8, max_bytes=1024),
             ),
-            "verifier": executable_task.verifier.model_copy(update={"parameters_json": json.dumps(parameters)}),
+            "grader": grader.model_copy(update={"parameters": {**grader.parameters, "workspace": str(tmp_path)}}),
         }
     )
     return TaskSpec.model_validate_json(task.model_dump_json())
@@ -75,11 +82,9 @@ async def test_directory_evidence_round_trip_preserves_valid_names_and_skips_lin
     evidence = await environment.evidence()
     assert evidence.files == {str(canonical): b"jobs: {}\n", str(workflow): b"jobs: {}\n"}
     machines = GradingMachines()
-    await grade_submission(
-        directory_task,
-        {**evidence.files, "/tests/reference.yml": b"tampered", "/solution/secret.yml": b"tampered"},
-        machines,
-        machine_spec=MachineSpec(DockerImage(directory_task.verifier.environment_requirements.docker_image)),
+    files = {**evidence.files, "/tests/reference.yml": b"tampered", "/solution/secret.yml": b"tampered"}
+    await grade_in_sandbox(
+        directory_task, GradingAttempt(finished(directory_task), files), machines, grading_machine(directory_task)
     )
     uploaded = machines.machines[0].files
     assert uploaded[str(workflow)] == b"jobs: {}\n"
@@ -98,13 +103,10 @@ async def test_directory_over_budget_never_returns_partial_evidence(directory_ta
     # grader, even when supplied by a caller other than the shell runtime.
     machines = GradingMachines()
     task = directory_task.model_copy(update={"output_directories": (selection,)})
-    result = await grade_submission(
-        task,
-        {str(tmp_path / "first.yml"): b"aa", str(tmp_path / "second.yml"): b"bb"},
-        machines,
-        machine_spec=MachineSpec(DockerImage(task.verifier.environment_requirements.docker_image)),
-    )
-    assert result.status == "infra_error" and not machines.machines
+    files = {str(tmp_path / "first.yml"): b"aa", str(tmp_path / "second.yml"): b"bb"}
+    with pytest.raises(RuntimeError, match="exceeds its budget"):
+        await grade_in_sandbox(task, GradingAttempt(finished(task), files), machines, grading_machine(task))
+    assert not machines.machines
     (tmp_path / "second.yml").unlink()
     assert (await environment.evidence()).files == {str(tmp_path / "first.yml"): b"aa"}
 
@@ -118,18 +120,18 @@ async def test_directory_private_or_outside_root_rejected_before_capture_and_upl
     with pytest.raises(ValueError, match=r"private mounts|workspace"):
         await ShellFactory(machines, MachineSpec(DockerImage("test")), {}, 1, 1024).create(task)
     with pytest.raises(ValueError, match=r"private mounts|workspace"):
-        await grade_submission(task, {root + "/file.yml": b"x"}, machines, machine_spec=MachineSpec(DockerImage("test")))
+        await grade_in_sandbox(
+            task, GradingAttempt(finished(task), {root + "/file.yml": b"x"}), machines, grading_machine(task)
+        )
     assert not machines.machines
 
 
 async def test_directory_traversal_candidate_cannot_overwrite_private_grader(directory_task, tmp_path):
     machines = GradingMachines()
+    files = {str(tmp_path) + "/../tests/reference.yml": b"tampered"}
     with pytest.raises(ValueError, match="normalized"):
-        await grade_submission(
-            directory_task,
-            {str(tmp_path) + "/../tests/reference.yml": b"tampered"},
-            machines,
-            machine_spec=MachineSpec(DockerImage(directory_task.verifier.environment_requirements.docker_image)),
+        await grade_in_sandbox(
+            directory_task, GradingAttempt(finished(directory_task), files), machines, grading_machine(directory_task)
         )
     assert not machines.machines
 

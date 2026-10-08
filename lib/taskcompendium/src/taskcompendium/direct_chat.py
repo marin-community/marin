@@ -3,7 +3,7 @@
 
 """Validate semantic requirements before presenting a task as chat."""
 
-from taskcompendium.models import AnswerType, EnvironmentRequirements, TaskSpec
+from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, VerifyitGrader
 
 
 def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]:
@@ -28,8 +28,9 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         features.append("output_paths")
     if specification.output_directories:
         features.append("output_directories")
-    if specification.verifier.environment_requirements != EnvironmentRequirements():
-        features.append("verifier.environment_requirements")
+    grader = specification.grader
+    if isinstance(grader, ScriptGrader | VerifyitGrader) and grader.environment is not None:
+        features.append("grader.environment")
     resources = specification.resources
     if resources.all or resources.worker or resources.oracle:
         features.append("resources")

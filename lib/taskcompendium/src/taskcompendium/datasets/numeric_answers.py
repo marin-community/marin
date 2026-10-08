@@ -6,8 +6,15 @@
 from verifyit.numeric import numeric_literal
 from verifyit.spec import NumericSpec
 
-from taskcompendium.grader import grader_package
-from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.models import (
     ImportFailureKind,
     ImportRejection,
@@ -34,7 +41,8 @@ def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=problem.strip()),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=grader_package(NumericSpec(answer.strip(), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
+        answer_format=PlainText(),
+        grader=verifyit_package(NumericSpec(answer.strip(), tolerance_abs=0.0, tolerance_rel=0.0)).grader,
         source=row.source,
     )
 
@@ -62,7 +70,8 @@ def normalize_svamp(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=f"{body.strip()} {question.strip()}"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=grader_package(NumericSpec(answer.strip(), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
+        answer_format=PlainText(),
+        grader=verifyit_package(NumericSpec(answer.strip(), tolerance_abs=0.0, tolerance_rel=0.0)).grader,
         source=row.source,
     )
 

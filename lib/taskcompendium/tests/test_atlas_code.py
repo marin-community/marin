@@ -7,7 +7,7 @@ import base64
 import json
 
 import pytest
-from shellbox.machine import DockerImage, ExitReason, MachineSpec, Result
+from shellbox.machine import ExitReason, Result
 from verifyit.spec import StdioSpec, spec_to_table
 
 from taskcompendium.datasets import atlas_code
@@ -17,7 +17,7 @@ from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
 from . import test_executable_ingestion
-from .test_executable_ingestion import GradingMachine, GradingMachines
+from .test_executable_ingestion import GradingMachine, GradingMachines, grading_spec
 
 executable_row = test_executable_ingestion.executable_row
 executable_task = test_executable_ingestion.executable_task
@@ -45,17 +45,16 @@ async def test_exit_status_control_checks_installed_grader_and_preserves_source(
 
     # Replace only the external machine's response to the private grader command.
     monkeypatch.setattr(GradingMachine, "run", installed_grader)
-    parameters = json.loads(executable_task.verifier.parameters_json)
-    parameters["min_cases"] = 2
+    grader = executable_task.grader
     task = executable_task.model_copy(
-        update={"verifier": executable_task.verifier.model_copy(update={"parameters_json": json.dumps(parameters)})}
+        update={"grader": grader.model_copy(update={"parameters": {**grader.parameters, "min_cases": 2}})}
     )
     original = task.model_dump_json()
     machines = GradingMachines()
     result = await exit_status_result(
         task,
         factory=machines,
-        machine_spec=MachineSpec(DockerImage(task.verifier.environment_requirements.docker_image)),
+        machine_spec=grading_spec(task),
         timeout=10,
     )
     assert result.status == expected_status

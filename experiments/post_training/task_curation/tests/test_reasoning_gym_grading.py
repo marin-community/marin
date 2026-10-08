@@ -16,8 +16,7 @@ from taskcompendium.datasets import reasoning_tasks
 from taskcompendium.datasets.nemotron_ultra import normalization
 from taskcompendium.datasets.reasoning_gym.source import _json_value
 from taskcompendium.datasets.source_definitions import unpack_task_binary
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -63,10 +62,13 @@ def test_ultra_binding_declares_image_scorer_and_preserves_source_contract():
     )
     assert isinstance(result, NormalizedTask)
     task = result.task
-    command = NativeCommandSpec.model_validate_json(task.verifier.parameters_json)
-    assert command.argv == ("python3", "/tests/grade.py")
-    assert command.result_format == "score_json"
-    assert task.output_paths == ("/app/answer.txt",)
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    assert grader.argv == ("python3", "/tests/grade.py")
+    assert grader.reward == FileReward(
+        files=(RewardFile(path="/logs/verifier/score.json", format=RewardFileFormat.JSON),)
+    )
+    assert grader.answer_path == "/app/answer.txt"
     private = {item.path: resource_bytes(item) for item in task.resources.verifier}
     assert set(private) == {"grade.py", "reasoning_contract.json"}
     assert json.loads(private["reasoning_contract.json"])["contract"]["metadata"] == row.data["metadata"]
@@ -83,10 +85,11 @@ def test_tasktrove_binding_runs_original_archive_command_without_synthetic_confi
         normalize_task=reasoning_tasks.normalize_reasoning,
     )
     assert isinstance(task, TaskSpec)
-    command = NativeCommandSpec.model_validate_json(task.verifier.parameters_json)
-    assert command.argv == ("bash", "/tests/test.sh")
-    assert command.env == {"PYTHONPATH": "/opt/reasoning-gym-tasktrove"}
-    assert task.output_paths == ("/app/answer.txt",)
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    assert grader.argv == ("bash", "/tests/test.sh")
+    assert grader.env == {"PYTHONPATH": "/opt/reasoning-gym-tasktrove"}
+    assert grader.answer_path == "/app/answer.txt"
     private = {item.path: resource_bytes(item) for item in task.resources.verifier}
     assert "config.json" not in private
     assert private["test.sh"] == reasoning_tasks.snapshot_file(row, "tests/test.sh")

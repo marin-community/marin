@@ -1,16 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private grader packages and their observable verdicts."""
+"""Grader packages and their observable verdicts."""
 
 import json
+from dataclasses import replace
 
 import pytest
-from shellbox.machine import Backend, DockerImage, MachineSpec
-from verifyit.spec import JsonSchemaSpec, ScriptSpec
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend, MachineSpec, RegistryImage, ShellSimBuiltins
+from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 
-from taskcompendium.grader import GraderPackage, grader_package
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grader import GraderPackage, verifyit_package
+from taskcompendium.grading import parse_grade_result
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -18,180 +21,186 @@ from taskcompendium.models import (
     ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    FileReward,
+    FinalAction,
     FunctionDefinition,
+    GradingAttempt,
+    PlainText,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     Source,
+    StateSubmission,
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import FinalAction, PlainText
 
-from .test_executable_ingestion import GradingMachines
+IMAGE = "fixture@sha256:" + "0" * 64
+GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
 
-PLAIN = PlainText(id="plain")
+
+class FixtureImageFactory:
+    """Run the pinned fixture image's commands on the ShellSim built-ins."""
+
+    backend = Backend.DOCKER
+
+    async def create(self, spec):
+        return await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
 
 
-def _task(package, answer_type=AnswerType.TEXT):
-    return TaskSpec(
+def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):
+    task = TaskSpec(
         id="private-grader",
         context=ConversationInput(events=(TextMessage(role="user", content="Submit an answer"),)),
         environment_requirements=EnvironmentRequirements(),
+        final_tools=final_tools,
         answer_type=answer_type,
-        verifier=package.verifier,
+        answer_format=answer_format,
+        grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
         source=Source(dataset="test", revision="1", row="1", importer_revision="1"),
-    )
-
-
-def _conversation(task, answer):
-    return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
-
-
-def test_json_schema_grader_reads_private_schema_and_scores_document():
-    package = grader_package(
-        JsonSchemaSpec(schema="schema.json"),
-        (inline_resource("schema.json", b'{"type":"object","required":["value"]}'),),
-    )
-    task = _task(package)
-    task = TaskSpec.model_validate_json(task.model_dump_json())
-
-    good = grade_task(task, PLAIN, _conversation(task, '{"value": 1}'))
-    bad = grade_task(task, PLAIN, _conversation(task, "{}"))
-
-    assert (good.status, good.reward) == (Outcome.GRADED, 1.0)
-    assert (bad.status, bad.reward) == (Outcome.GRADED, 0.0)
-
-
-def test_script_grader_reads_private_configuration_and_captured_state():
-    script = b"""import json
-import os
-from pathlib import Path
-
-tests = Path(os.environ['VERIFYIT_TESTS_DIR'])
-workspace = Path(os.environ['VERIFYIT_WORKSPACE'])
-logs = Path(os.environ['VERIFYIT_LOGS_DIR'])
-expected = json.loads((tests / 'config.json').read_text())['expected']
-fixture = (tests / 'config.json').stat()
-assert fixture.st_mode & 0o777 == 0o600
-assert fixture.st_mtime_ns == 1234567890
-actual = json.loads((workspace / 'state.json').read_text())['value']
-reward = float(actual == expected)
-status = 'infra_error' if actual == -2 else 'invalid_task' if actual < 0 else 'scored'
-verdict = {
-    'status': status,
-    'reward': 0 if actual < 0 else reward,
-    'detail': {'error': 'runner failed' if actual == -2 else 'bad reference'} if actual < 0
-        else {'reason': 'invalid_numeric_candidate'},
-}
-(logs / 'verdict.json').write_text(json.dumps(verdict))
-"""
-    package = grader_package(
-        ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=60),
-        (inline_resource("grader.py", script), inline_resource("config.json", b'{"expected": 3}')),
-    )
-    config_resource = package.resources[1].model_copy(update={"mode": "0600", "mtime_ns": 1_234_567_890})
-    package = GraderPackage(package.verifier, (package.resources[0], config_resource))
-    original = _task(package, AnswerType.STATE)
-    task = TaskSpec.model_validate_json(original.model_dump_json())
-
-    good = grade_task(task, PLAIN, _conversation(task, "Done"), RuntimeEvidence({}, '{"value":3}'))
-    bad = grade_task(task, PLAIN, _conversation(task, "Done"), RuntimeEvidence({}, '{"value":4}'))
-    invalid = grade_task(task, PLAIN, _conversation(task, "Done"), RuntimeEvidence({}, '{"value":-1}'))
-    infrastructure = grade_task(task, PLAIN, _conversation(task, "Done"), RuntimeEvidence({}, '{"value":-2}'))
-
-    assert (good.status, good.reward) == (Outcome.GRADED, 1.0)
-    assert (bad.status, bad.reward) == (Outcome.GRADED, 0.0)
-    assert good.detail["reason"] == bad.detail["reason"] == "invalid_numeric_candidate"
-    assert (invalid.status, invalid.reward, invalid.error) == (Outcome.INVALID_TASK, None, "bad reference")
-    assert (infrastructure.status, infrastructure.reward, infrastructure.error) == (
-        Outcome.INFRA_ERROR,
-        None,
-        "runner failed",
-    )
-
-
-@pytest.fixture
-def native_script_task():
-    script = b"""import json
-import os
-from pathlib import Path
-
-workspace = Path(os.environ['VERIFYIT_WORKSPACE'])
-logs = Path(os.environ['VERIFYIT_LOGS_DIR'])
-event = json.loads((workspace / 'answer.txt').read_text())
-reward = float(event['type'] == 'assistant_tool_calls'
-    and len(event['calls']) == 1
-    and event['calls'][0]['name'] == 'lookup'
-    and event['calls'][0]['arguments'] == {'index': 3})
-(logs / 'verdict.json').write_text(json.dumps({'status': 'scored', 'reward': reward, 'detail': {}}))
-"""
-    task = _task(
-        grader_package(
-            ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=60),
-            (inline_resource("grader.py", script),),
-        )
-    ).model_copy(
-        update={
-            "answer_type": AnswerType.NATIVE_ACTION,
-            "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
-        }
     )
     return TaskSpec.model_validate_json(task.model_dump_json())
 
 
-@pytest.mark.parametrize(
-    "event, expected_reward",
-    [
-        (
-            AssistantToolCalls(calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": 3}),)),
-            1.0,
-        ),
-        (
-            AssistantToolCalls(calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": "3"}),)),
-            0.0,
-        ),
-        (TextMessage(role="assistant", content="lookup(index=3)"), 0.0),
-    ],
-)
-def test_native_script_grader_receives_terminal_call_and_argument_types(native_script_task, event, expected_reward):
-    trace = ConversationTrace(events=(*native_script_task.context.events, event))
-    result = grade_task(native_script_task, FinalAction(id="native"), trace)
-    assert (result.status, result.reward) == (Outcome.GRADED, expected_reward)
+def _attempt(task, final, state=None):
+    return GradingAttempt(ConversationTrace(events=(*task.context.events, final)), state=state)
 
 
-def test_isolated_native_script_receives_terminal_event_in_submission_archive(native_script_task):
-    image = "test@sha256:" + "a" * 64
-    task = native_script_task.model_copy(
-        update={
-            "verifier": native_script_task.verifier.model_copy(
-                update={
-                    "environment_requirements": EnvironmentRequirements(
-                        docker_image=image, compatible_backends=(Backend.DOCKER,)
-                    )
-                }
-            )
-        }
+def test_json_schema_grader_reads_private_schema_and_scores_document():
+    package = verifyit_package(
+        JsonSchemaSpec(schema="schema.json"),
+        (inline_resource("schema.json", b'{"type":"object","required":["value"]}'),),
     )
-    event = AssistantToolCalls(
-        calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": 3}),),
-        content="A native action",
+    task = _task(package)
+
+    good = grade_task(task, _attempt(task, TextMessage(role="assistant", content='{"value": 1}')))
+    bad = grade_task(task, _attempt(task, TextMessage(role="assistant", content="{}")))
+
+    assert (good.status, good.reward) == (Outcome.GRADED, 1.0)
+    assert (bad.status, bad.reward) == (Outcome.GRADED, 0.0)
+
+
+STATE_GRADER = b"""import json
+import os
+
+config = '/tests/config.json'
+assert os.stat(config).st_mode & 0o777 == 0o600
+expected = json.load(open(config))['expected']
+actual = json.load(open('/app/state.json'))['value']
+with open('/logs/verifier/reward.json', 'w') as reward:
+    json.dump({'reward': float(actual == expected), 'detail': {'actual': actual}}, reward)
+"""
+
+
+@pytest.mark.parametrize("value,reward,passed", [(3, 1.0, True), (4, 0.0, False)])
+def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed):
+    grader = ScriptGrader(
+        argv=("python3", "/tests/grade.py"),
+        environment=GRADING_ENVIRONMENT,
+        answer_path=None,
+        reward=FileReward(
+            files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5
+        ),
     )
-    machines = GradingMachines()
+    config = inline_resource("config.json", b'{"expected": 3}').model_copy(update={"mode": "0600"})
+    task = _task(GraderPackage(grader, (inline_resource("grade.py", STATE_GRADER), config)), AnswerType.STATE)
     result = grade_task(
         task,
-        FinalAction(id="native"),
-        ConversationTrace(events=(*task.context.events, event)),
-        RuntimeEvidence({}, "{}"),
-        machine_factory=machines,
-        machine_spec=MachineSpec(DockerImage(image)),
+        _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": value})),
+        machine_factory=FixtureImageFactory(),
+        machine_spec=GRADING_MACHINE,
     )
-    assert result.status == Outcome.GRADED
-    assert json.loads(machines.machines[0].files["/app/answer.txt"]) == {
-        "type": "assistant_tool_calls",
-        "calls": [{"call_id": "call-1", "name": "lookup", "arguments": {"index": 3}}],
-        "content": "A native action",
-    }
-    assert machines.machines[0].closed
+    assert (result.status, result.reward, result.passed, result.detail) == (
+        Outcome.GRADED,
+        reward,
+        passed,
+        {"actual": value},
+    )
+
+
+@pytest.mark.parametrize(
+    "spec,verdict,expected",
+    [
+        (
+            ScriptSpec(path="grade.py"),
+            {"status": "scored", "reward": 1, "detail": {"reason": "invalid_numeric_candidate"}},
+            (Outcome.GRADED, 1.0, None, None),
+        ),
+        (
+            NumericSpec("12", tolerance_abs=0.0, tolerance_rel=0.0),
+            {"status": "scored", "reward": 0, "detail": {"reason": "invalid_numeric_candidate", "error": "no number"}},
+            (Outcome.SUBMISSION_FAILURE, 0.0, "no number", None),
+        ),
+        (
+            ScriptSpec(path="grade.py"),
+            {"status": "invalid_task", "reward": 0, "detail": {"error": "bad reference"}},
+            (Outcome.INVALID_TASK, None, "bad reference", None),
+        ),
+        (
+            ScriptSpec(path="grade.py"),
+            {"status": "infra_error", "reward": 0, "detail": {"error": "runner failed"}},
+            (Outcome.INFRA_ERROR, None, "runner failed", None),
+        ),
+        (
+            ScriptSpec(path="grade.py"),
+            {"status": "scored", "reward": 2, "detail": {}},
+            (Outcome.INFRA_ERROR, None, "Invalid verifier verdict", GradingFailure.INVALID_REWARD),
+        ),
+        (
+            ScriptSpec(path="grade.py"),
+            {"status": "invalid_task", "reward": 1, "detail": {}},
+            (Outcome.INFRA_ERROR, None, "Invalid verifier verdict", GradingFailure.INVALID_REWARD),
+        ),
+    ],
+)
+def test_verifyit_verdict_file_maps_to_grade_outcome(spec, verdict, expected):
+    result = parse_grade_result(spec, json.dumps(verdict).encode())
+    assert (result.status, result.reward, result.error, result.failure) == expected
+
+
+NATIVE_ACTION_GRADER = b"""import json
+
+expected = {
+    'type': 'assistant_tool_calls',
+    'calls': [{'call_id': 'call-1', 'name': 'lookup', 'arguments': {'index': 3}}],
+    'content': 'A native action',
+}
+print(float(json.load(open('/app/answer.txt')) == expected))
+"""
+
+
+def _lookup(index, content="A native action"):
+    return AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="call-1", name="lookup", arguments={"index": index}),), content=content
+    )
+
+
+@pytest.mark.parametrize(
+    "answer_format,final,expected",
+    [
+        (FinalAction(), _lookup(3), (Outcome.GRADED, 1.0)),
+        (FinalAction(), _lookup("3"), (Outcome.GRADED, 0.0)),
+        (FinalAction(), _lookup(3, content=None), (Outcome.GRADED, 0.0)),
+        (FinalAction(), TextMessage(role="assistant", content="lookup(index=3)"), (Outcome.GRADED, 0.0)),
+        (
+            FinalAction(require_call=True),
+            TextMessage(role="assistant", content="lookup(index=3)"),
+            (Outcome.SUBMISSION_FAILURE, 0.0),
+        ),
+    ],
+)
+def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected):
+    grader = ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADING_ENVIRONMENT)
+    task = _task(
+        GraderPackage(grader, (inline_resource("grade.py", NATIVE_ACTION_GRADER),)),
+        AnswerType.NATIVE_ACTION,
+        answer_format,
+        final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+    )
+    result = grade_task(task, _attempt(task, final), machine_factory=FixtureImageFactory(), machine_spec=GRADING_MACHINE)
+    assert (result.status, result.reward) == expected

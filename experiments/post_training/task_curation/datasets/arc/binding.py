@@ -18,9 +18,17 @@ from taskcompendium.datasets.executable_tasks import SubmissionControl, executab
 from taskcompendium.datasets.nemotron_ultra.normalization import VERIFIER_REVISION
 from taskcompendium.datasets.reasoning_tasks import snapshot_file
 from taskcompendium.datasets.source_definitions import archive_resources
-from taskcompendium.grader import GraderPackage, grader_config, native_command_package
-from taskcompendium.models import AnswerType, EnvironmentRequirements, TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.grader import GraderPackage, grader_config
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    FileReward,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.execution_binding import bound_grader_task
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -34,10 +42,11 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import control_result
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.runtime.shell import machine_spec_identity
 from verifyit.execution import source_callable
+
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 RUNNER = Path(__file__).with_name("runner.py")
 SOURCE_CALLABLE = Path(source_callable.__file__)
@@ -45,6 +54,7 @@ BACKENDS = (Backend.GVISOR, Backend.QEMU)
 TASKTROVE_PIN = ("open-thoughts/TaskTrove", "02923004846e4e73862c20962f823a6d05100e7a")
 ULTRA_PIN = ("nvidia/Nemotron-RL-Ultra-Training-Blends", "482392c14c6418e26804ea2e5d10359df9877df4")
 ANSWER_PATH = "/app/answer.txt"
+REWARD_PATH = "/logs/verifier/reward.json"
 AGENTS = ("nvarc_inductive_simple_agent", "nvarc_transductive_simple_agent")
 
 
@@ -53,24 +63,28 @@ class ArcSource(StrEnum):
     ULTRA = "ultra"
 
 
-def original_package(config: dict) -> GraderPackage:
+def arc_environment(image: str) -> EnvironmentRequirements:
+    return EnvironmentRequirements(docker_image=image, compatible_backends=BACKENDS)
+
+
+def original_package(config: dict, image: str) -> GraderPackage:
     """Declare the image-installed SkyRL scorer and official NeMo Skills server."""
+    reward = FileReward(files=(RewardFile(path=REWARD_PATH, format=RewardFileFormat.JSON),))
     if config["contract"]["agent_ref"]["name"] == AGENTS[1]:
-        result_path = "/logs/verifier/reward.json"
-        return native_command_package(
-            NativeCommandSpec(
+        return GraderPackage(
+            ScriptGrader(
                 argv=(
                     "python3",
                     "/tests/source_callable.py",
                     "/tests/invocation.json",
                     "/tests/arc_contract.json",
                     ANSWER_PATH,
-                    result_path,
+                    REWARD_PATH,
                 ),
                 cwd="/",
-                env={},
-                result_format="score_json",
-                result_path=result_path,
+                environment=arc_environment(image),
+                answer_path=ANSWER_PATH,
+                reward=reward,
                 timeout=45,
             ),
             (
@@ -88,13 +102,13 @@ def original_package(config: dict) -> GraderPackage:
                 inline_resource("arc_contract.json", json.dumps(config, allow_nan=False).encode()),
             ),
         )
-    return native_command_package(
-        NativeCommandSpec(
+    return GraderPackage(
+        ScriptGrader(
             argv=("python3", "/tests/grade.py"),
             cwd="/",
-            env={},
-            result_format="score_json",
-            result_path="/logs/verifier/reward.json",
+            environment=arc_environment(image),
+            answer_path=ANSWER_PATH,
+            reward=reward,
             timeout=45,
         ),
         (
@@ -138,18 +152,8 @@ def normalize_isolated(
                 reason="unsupported_native_text_tool_request",
                 detail="This original stateless evaluator accepts terminal text only",
             )
-        package = original_package(config)
-        task = bound_grader_task(task, package=package, image=image).model_copy(update={"answer_type": AnswerType.TEXT})
-        task = task.model_copy(
-            update={
-                "verifier": task.verifier.model_copy(
-                    update={
-                        "environment_requirements": EnvironmentRequirements(
-                            docker_image=image, compatible_backends=BACKENDS
-                        )
-                    }
-                )
-            }
+        task = bound_grader_task(task, original_package(config, image)).model_copy(
+            update={"answer_type": AnswerType.TEXT}
         )
         return replace(result, task=task) if isinstance(result, NormalizedTask) else task
     result = normalize_task(row)
@@ -171,28 +175,21 @@ def normalize_isolated(
     source_task = snapshot_file(row, "task.toml")
     assert source_task is not None
     source_timeout = float(tomllib.loads(source_task.decode())["verifier"]["timeout_sec"])
-    package = native_command_package(
-        NativeCommandSpec(
-            argv=("bash", "/tests/test.sh"),
-            cwd="/",
-            env={},
-            result_format="reward_file",
-            result_path="/logs/verifier/reward.txt",
-            timeout=source_timeout,
-        ),
-        archive.verifier,
+    grader = ScriptGrader(
+        argv=("bash", "/tests/test.sh"),
+        cwd="/",
+        environment=arc_environment(image),
+        answer_path=None,
+        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
+        timeout=source_timeout,
     )
     task = task.model_copy(
         update={
-            "verifier": package.verifier.model_copy(
-                update={
-                    "environment_requirements": EnvironmentRequirements(docker_image=image, compatible_backends=BACKENDS)
-                }
-            ),
+            "grader": grader,
             "resources": task.resources.model_copy(
                 update={
                     "worker": archive.worker,
-                    "verifier": package.resources,
+                    "verifier": archive.verifier,
                     "oracle": archive.oracle,
                 }
             ),
@@ -249,8 +246,8 @@ async def isolated_checks(
         )
     checks = []
     for name, answer, expected in controls:
-        result = await grade_submission(
-            task, {ANSWER_PATH: answer.encode()}, factory, machine_spec=machine_spec, timeout=timeout
+        result = await grade_final_message(
+            task, TextMessage(role="assistant", content=answer), factory, machine_spec, timeout
         )
         check = control_result(result, name, expected)
         if result.error:

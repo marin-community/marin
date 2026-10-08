@@ -6,20 +6,23 @@
 import base64
 import re
 
-from verifyit.grade import InvalidTask
 from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.numeric import numeric_literal
 from verifyit.spec import MathSpec, MathType, McqSpec, NumericSpec
 
 from taskcompendium.datasets.direct_contracts import source_contract_package
-from taskcompendium.grader import grader_package
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    NoGrader,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -34,7 +37,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.task_grading import resolve_verifier
 
 OPTION_LINE = re.compile(r"^[ \t]*([A-Z])[.):][ \t]", re.MULTILINE)
 MCQ_REGEX = r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])\s*"
@@ -118,9 +120,9 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             expected = data["expected_answer"]
             if not isinstance(expected, str) or not expected.strip():
                 raise ValueError("A nonempty typed math reference is required")
-            spec = grader_package(MathSpec(expected=expected, math_type=MathType(data["answer_type"])))
+            package = verifyit_package(MathSpec(expected=expected, math_type=MathType(data["answer_type"])))
         elif name == "advanced_calculations":
-            spec = grader_package(
+            package = verifyit_package(
                 NumericSpec(
                     _numeric_reference(data["expected_value"]),
                     data["tolerance_abs"],
@@ -137,13 +139,13 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             options = max((ord(letter) - 64 for letter in letters), default=0)
             if letters != {chr(65 + index) for index in range(options)} or not letters:
                 raise ValueError("Options must be a contiguous labeled sequence beginning at A")
-            spec = grader_package(McqSpec(data["expected_answer"], options))
+            package = verifyit_package(McqSpec(data["expected_answer"], options))
         elif name == "qa_abstention":
             if not isinstance(data["expected_answer"], str) or not normalize_reference(data["expected_answer"]):
                 raise ValueError("A nonempty reference answer is required")
             if not isinstance(data["question"], str) or not data["question"].strip():
                 raise ValueError("The source question is required")
-            spec = source_contract_package(
+            package = source_contract_package(
                 "TaskTrove:tests/test.sh",
                 row.source.revision,
                 {
@@ -163,7 +165,7 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
         )
     files = row.data.get("files", {})
     resources = ResourceGroups(
-        verifier=spec.resources
+        verifier=package.resources
         + tuple(
             inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
             for path, encoded in files.items()
@@ -182,19 +184,18 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
         environment_requirements=EnvironmentRequirements(),
         resources=resources,
         answer_type=AnswerType.TEXT,
-        verifier=spec.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    if task.verifier.kind == "source_unavailable":
+    if isinstance(task.grader, NoGrader):
         return VerificationReport(checks=verify_task(task))
-    verifier = resolve_verifier(task.verifier)
+    assert isinstance(task.grader, VerifyitGrader)
+    verifier = verifyit_spec(task.grader)
     if isinstance(verifier, MathSpec):
-        try:
-            checks = verify_witness(task, rf"\boxed{{{verifier.expected}}}", "__incorrect_math_answer__")
-        except InvalidTask as error:
-            checks = [CheckResult(check="cleanup_math_reference", status=CheckStatus.UNSUPPORTED, detail=str(error))]
+        checks = verify_witness(task, rf"\boxed{{{verifier.expected}}}", "__incorrect_math_answer__")
         checks.append(
             CheckResult(
                 check="original_math_comparator",

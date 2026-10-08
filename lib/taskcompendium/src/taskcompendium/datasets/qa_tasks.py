@@ -11,6 +11,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    PlainText,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -94,7 +95,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     package = source_contract_package(
         "TaskTrove:tests/test.sh",
         row.source.revision,
-        {"references": references, "question": question, "source_judge_data": data},
+        {"references": [*references], "question": question, "source_judge_data": data},
         ("Original TaskTrove exact gate and credentialed RewardKit semantic judge",),
     )
     archive = archive_resources(row.data) if row.data.get("file_metadata") else ResourceGroups()
@@ -108,7 +109,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        answer_format=PlainText(),
+        grader=package.grader,
         resources=archive,
         source=row.source,
     )

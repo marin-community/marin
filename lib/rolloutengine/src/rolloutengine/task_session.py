@@ -11,13 +11,17 @@ from typing import Any
 from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import AnswerType, AssistantToolCalls, TaskSpec
-from taskcompendium.submission import (
+from taskcompendium.models import (
     ANSWER_CALL_NAME,
+    CONVERSATION_ANSWERS,
     AnswerCall,
+    AnswerType,
+    AssistantToolCalls,
     FinalAction,
-    JsonValueAnswer,
-    SubmissionConvention,
+    SessionGrader,
+    TaskSpec,
+)
+from taskcompendium.submission import (
     answer_call_tool,
     conversation_messages,
     submission_compatibility,
@@ -48,45 +52,30 @@ SHELL_TOOL = {
 }
 
 
-def _task_submission(task: TaskSpec, convention: SubmissionConvention) -> SubmissionConvention:
-    if task.answer_type == AnswerType.NATIVE_ACTION and not isinstance(convention, FinalAction):
-        return FinalAction(id="final-action")
-    if task.answer_type == AnswerType.JSON and not isinstance(convention, JsonValueAnswer):
-        return JsonValueAnswer(id="json-value")
-    return convention
-
-
-def session_start(task: TaskSpec, convention: SubmissionConvention) -> SessionStart:
-    """Render only public task fields, with the selected final-action limits."""
-    convention = _task_submission(task, convention)
-    messages = conversation_messages(task.context)
+def session_start(task: TaskSpec) -> SessionStart:
+    """Render only public task fields, with the answer format's instruction and tools."""
+    answer_format = task.answer_format
+    messages = conversation_messages(task.context.events)
     options: dict[str, Any] = {}
     tools: list[dict[str, Any]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}
         for function in (*task.final_tools, *task.interaction_tools)
     ]
-    if task.verifier.kind != "external" and task.answer_type not in {
-        AnswerType.FILE,
-        AnswerType.STATE,
-        AnswerType.WORKSPACE_STATE,
-    }:
-        if task.verifier.kind not in {"shell", "skipped"}:
-            compatibility = submission_compatibility(task, convention)
-            if not compatibility.compatible:
-                raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
-        elif not convention.supports(task.answer_type):
-            raise ValueError("Submission convention is incompatible with the task")
-        instruction = submission_instruction(convention)
+    if not isinstance(task.grader, SessionGrader) and task.answer_type in CONVERSATION_ANSWERS:
+        compatibility = submission_compatibility(task)
+        if not compatibility.compatible:
+            raise ValueError(f"Answer format is incompatible: {compatibility.reasons}")
+        instruction = submission_instruction(answer_format)
         if instruction:
             messages.append({"role": "user", "content": instruction})
-        if isinstance(convention, AnswerCall):
+        if isinstance(answer_format, AnswerCall):
             tools.append(answer_call_tool())
             if not task.final_tools:
                 options.update(tool_choice="required", parallel_tool_calls=False)
-        if isinstance(convention, FinalAction):
-            if convention.require_call:
+        if isinstance(answer_format, FinalAction):
+            if answer_format.require_call:
                 options["tool_choice"] = "required"
-            if convention.max_calls == 1:
+            if answer_format.max_calls == 1:
                 options["parallel_tool_calls"] = False
     if "shell" in task.environment_requirements.capabilities:
         if any(function.name == SHELL_TOOL_NAME for function in (*task.final_tools, *task.interaction_tools)):
@@ -106,20 +95,18 @@ class _ShellboxTaskSession:
         self,
         lowered: LoweredTaskSpec,
         machine: Machine | None,
-        convention: SubmissionConvention,
         factories: Mapping[str, MachineFactory],
         cleanup: _Cleanup,
         resources: AsyncExitStack,
     ):
         self.lowered = lowered
         self.machine = machine
-        self.convention = _task_submission(lowered.task, convention)
         self.factories = factories
         self.cleanup = cleanup
         self.resources = resources
 
     async def prepare(self) -> SessionStart:
-        return session_start(self.lowered.task, self.convention)
+        return session_start(self.lowered.task)
 
     async def advance(self, turn: ModelTurn) -> Transition:
         try:
@@ -131,7 +118,8 @@ class _ShellboxTaskSession:
         observations = []
         final_tools = {function.name for function in self.lowered.task.final_tools}
         for call in message.calls:
-            if call.name in final_tools or (isinstance(self.convention, AnswerCall) and call.name == ANSWER_CALL_NAME):
+            answer_call = isinstance(self.lowered.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
+            if call.name in final_tools or answer_call:
                 return Transition(done=True)
             if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
                 observations.append(
@@ -176,9 +164,7 @@ class _ShellboxTaskSession:
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult:
-        return await _grade_rollout(
-            self.lowered, self.convention, messages, self.machine, self.factories, self.cleanup, self.resources
-        )
+        return await _grade_rollout(self.lowered, messages, self.machine, self.factories, self.cleanup, self.resources)
 
     async def close(self) -> None:
         pass

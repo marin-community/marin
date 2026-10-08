@@ -3,23 +3,17 @@
 
 """Validate runtime selections before an attempt acquires resources."""
 
-import json
 from collections.abc import Callable, Mapping
-from pathlib import PurePosixPath
 
 from shellbox.machine import Machine, MachineFactory
-from taskcompendium.grading_contract import resolve_verifier
-from taskcompendium.models import AnswerType, EnvironmentRequirements, TaskSpec
-from taskcompendium.shell_verifier import ShellVerifierSpec
-from verifyit.spec import (
-    DEFAULT_OUTPUT,
-    GotestSpec,
-    JunitSpec,
-    PredictedActionSpec,
-    PytestSpec,
-    ScriptSpec,
-    StdioSpec,
-    StructuredExactSpec,
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    NoGrader,
+    ScriptGrader,
+    SessionGrader,
+    TaskSpec,
+    VerifyitGrader,
 )
 
 from rolloutengine.contracts import TaskSession
@@ -50,20 +44,18 @@ def validate_lowered_task(
 ) -> None:
     """Reject unknown providers and unsupported task requirements before startup."""
     task = lowered.task
-    if task.verifier.kind == "shell":
-        if lowered.runtime.verifier_machine is None:
-            raise ValueError("Shell grading requires a separate verifier machine")
-        if task.verifier.environment_requirements.docker_image is None:
-            raise ValueError("Shell grading requires a prebuilt, digest-pinned verifier image")
+    grader = task.grader
+    verifier_machine = lowered.runtime.verifier_machine
+    grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
+    if grader_environment is not None and verifier_machine is None:
+        raise ValueError("A grader with an environment requires a verifier machine")
+    if grader_environment is None and verifier_machine is not None:
+        raise ValueError("Only a grader with an environment uses a verifier machine")
     task_resources = task.resources.all + task.resources.worker
-    for selection, requirements, resources in (
-        (lowered.runtime.task_machine, task.environment_requirements, task_resources),
-        (
-            lowered.runtime.verifier_machine,
-            task.verifier.environment_requirements,
-            task.resources.all + task.resources.verifier,
-        ),
-    ):
+    selections = [(lowered.runtime.task_machine, task.environment_requirements, task_resources)]
+    if grader_environment is not None:
+        selections.append((verifier_machine, grader_environment, task_resources + task.resources.verifier))
+    for selection, requirements, resources in selections:
         if selection is None:
             if requirements != EnvironmentRequirements():
                 raise ValueError("Environment requirements need a selected machine")
@@ -83,8 +75,10 @@ def validate_lowered_task(
         and limits.command_timeout >= limits.tool_turn_timeout
     ):
         raise ValueError("The command timeout must be less than the tool-turn timeout")
-    if task.verifier.kind == "external":
-        raise ValueError("External grading requires a registered task session")
+    if isinstance(grader, SessionGrader):
+        raise ValueError("Session grading requires a registered task session")
+    if task.answer_type == AnswerType.STATE:
+        raise NotImplementedError("The Shellbox session does not capture state answers")
     if task.interaction_tools or task.environment_requirements.tool_providers:
         raise NotImplementedError("Native tool providers require a registered task session")
     if set(task.environment_requirements.capabilities) - {"shell", "filesystem"}:
@@ -95,36 +89,11 @@ def validate_lowered_task(
         or task.answer_type in {AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE}
     ):
         raise ValueError("Workspace tasks require a task machine")
-    if task.verifier.kind == "skipped":
-        if not isinstance(json.loads(task.verifier.parameters_json).get("reason"), str):
-            raise ValueError("Skipped grading requires a reason")
+    if isinstance(grader, NoGrader):
         return
-    if task.verifier.kind == "shell":
-        verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
-        if (verifier.collect or verifier.artifacts) and lowered.runtime.task_machine is None:
-            raise ValueError("Artifact grading requires a task machine")
-        return
-    verifier = resolve_verifier(task.verifier)
-    executable = isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec)
-    if executable and lowered.runtime.verifier_machine is None:
-        raise ValueError("Executable grading requires a separate verifier machine")
-    if lowered.runtime.verifier_machine is None:
-        return
-    if isinstance(verifier, PredictedActionSpec):
-        raise NotImplementedError("Predicted-action grading does not support a separate verifier machine")
-    if isinstance(verifier, StructuredExactSpec) or task.answer_type == AnswerType.JSON:
-        raise NotImplementedError("Structured candidate grading does not support a separate verifier machine")
-    paths = task.output_paths
-    if task.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}:
-        if isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec):
-            raise ValueError("Executable graders require workspace submissions")
-        paths += (DEFAULT_OUTPUT if isinstance(verifier, ScriptSpec) else verifier.output,)
-    for path in paths:
-        candidate = PurePosixPath(path)
-        if (
-            not candidate.is_absolute()
-            or ".." in candidate.parts
-            or candidate.is_relative_to("/tests")
-            or candidate.is_relative_to("/logs/verifier")
-        ):
-            raise ValueError(f"Submission overlaps private grading files: {path}")
+    if (
+        isinstance(grader, ScriptGrader)
+        and (grader.collect or grader.artifacts)
+        and lowered.runtime.task_machine is None
+    ):
+        raise ValueError("Artifact grading requires a task machine")

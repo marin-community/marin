@@ -5,10 +5,8 @@
 
 from verifyit.spec import Mode
 
-from taskcompendium.grader import SOURCE_UNAVAILABLE_KIND
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import SCHEMA_VERSION, TaskSpec
-from taskcompendium.native_grader import NATIVE_COMMAND_KIND
+from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import DatasetRecipe
 
 NORMALIZATION_STAGE_REVISION = "8"
@@ -33,11 +31,12 @@ def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     content = task.model_dump(mode="json", exclude={"id", "source"})
     # Oracle scripts are executable witnesses, not task semantics.
     content["resources"]["oracle"] = []
-    if include_reference and task.verifier.kind in (Mode.MATH, Mode.MCQ):
+    grader = task.grader
+    if include_reference and isinstance(grader, VerifyitGrader) and grader.mode in (Mode.MATH, Mode.MCQ):
         # These graders read only their parameters; derivations and provenance are audit evidence.
         content["resources"]["verifier"] = []
     if not include_reference:
-        content.pop("verifier")
+        content.pop("grader")
         content["resources"]["verifier"] = []
     return canonical_sha256(content)
 
@@ -46,7 +45,8 @@ def deduplication_key(task: TaskSpec) -> str:
     """Opaque evaluator inputs and preference candidates define distinct task records."""
     # Different opaque contracts do not establish conflicting answer keys. Their
     # quality review checks reference agreement; exact copies still deduplicate.
-    return semantic_digest(
-        task,
-        include_reference=task.verifier.kind in (Mode.SCRIPT, NATIVE_COMMAND_KIND, SOURCE_UNAVAILABLE_KIND),
+    grader = task.grader
+    opaque = isinstance(grader, ScriptGrader | NoGrader) or (
+        isinstance(grader, VerifyitGrader) and grader.mode == Mode.SCRIPT
     )
+    return semantic_digest(task, include_reference=opaque)

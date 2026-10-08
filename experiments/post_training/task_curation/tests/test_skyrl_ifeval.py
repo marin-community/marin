@@ -7,14 +7,16 @@ import hashlib
 import json
 
 import pytest
+from taskcompendium.datasets import instruction_tasks
 from taskcompendium.grader import grader_config
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.execution import source_callable
 
 from experiments.post_training.task_curation.datasets.skyrl import ifeval_native_binding as skyrl_ifeval
+
+IMAGE = "fixture@sha256:" + "0" * 64
 
 
 @pytest.fixture
@@ -24,7 +26,7 @@ def source():
 
 def test_rlvr_binds_native_pinned_scorer_without_rewriting_unknown_functions(source):
     constraints = {"func_name": "unknown_constraint"}
-    task = skyrl_ifeval.normalize_rlvr(
+    task = skyrl_ifeval.normalize_isolated(
         RawRow(
             "rlvr",
             source,
@@ -32,12 +34,16 @@ def test_rlvr_binds_native_pinned_scorer_without_rewriting_unknown_functions(sou
                 "messages": [{"role": "user", "content": "Follow the instruction."}],
                 "ground_truth": json.dumps(constraints),
             },
-        )
+        ),
+        normalize_task=instruction_tasks.normalize_rlvr_ifeval,
+        input_format="rlvr",
+        image=IMAGE,
     )
     assert isinstance(task, TaskSpec)
-    assert task.verifier.kind == "native_command"
-    command = NativeCommandSpec.model_validate_json(task.verifier.parameters_json)
-    assert command.result_format == "score_json"
+    assert isinstance(task.grader, ScriptGrader)
+    assert task.grader.reward == FileReward(
+        files=(RewardFile(path=skyrl_ifeval.REWARD_PATH, format=RewardFileFormat.JSON),)
+    )
     assert grader_config(task)["constraints"] == constraints
     invocation = next(resource for resource in task.resources.verifier if resource.path == "invocation.json")
     descriptor = json.loads(resource_bytes(invocation))
@@ -46,7 +52,7 @@ def test_rlvr_binds_native_pinned_scorer_without_rewriting_unknown_functions(sou
 
 
 def test_unmappable_nemotron_constraint_is_unsupported(source):
-    result = skyrl_ifeval.normalize_nemotron(
+    result = skyrl_ifeval.normalize_isolated(
         RawRow(
             "unknown",
             source,
@@ -54,7 +60,10 @@ def test_unmappable_nemotron_constraint_is_unsupported(source):
                 "input": [{"role": "user", "content": "Follow the instruction."}],
                 "args": {"instruction_id_list": ["unknown"], "instruction_kwargs": [{}]},
             },
-        )
+        ),
+        normalize_task=instruction_tasks.normalize_nemotron_if,
+        input_format="nemotron",
+        image=IMAGE,
     )
     assert isinstance(result, ImportRejection)
     assert result.kind == ImportFailureKind.UNSUPPORTED

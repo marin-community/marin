@@ -11,19 +11,23 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
-from shellbox.machine import Backend, MachineFactory, MachineSpec
+from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.nemotron_ultra.normalization import VERIFIER_REVISION
-from taskcompendium.grader import GraderPackage, grader_config, native_command_package
+from taskcompendium.grader import GraderPackage, grader_config
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationToolCall,
-    EnvironmentRequirements,
+    FileReward,
+    FinalAction,
+    PlainText,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.native_grader import NativeCommandSpec
-from taskcompendium.pipeline.execution_binding import bind_grader_recipe, bound_grader_task
+from taskcompendium.pipeline.execution_binding import bind_grader_recipe, bound_grader_task, grading_environment
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     ImportFailureKind,
@@ -33,9 +37,10 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import control_result
-from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.execution import source_callable
+
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 SOURCE_CALLABLE = Path(source_callable.__file__)
 ANSWER_EXTRACTOR = "skyrl_gym.envs.nemotron_ultra.answer_extraction:final_answer_text"
@@ -50,33 +55,34 @@ TOOL_CALL = {
     "answer_extractor": ANSWER_EXTRACTOR,
     "input_format": "event",
 }
-BACKENDS = (Backend.DOCKER, Backend.GVISOR, Backend.QEMU)
 ANSWER_PATH = "/app/answer.txt"
+SCORE_PATH = "/logs/verifier/score.json"
 
 
 def invocation_bytes(invocation: dict) -> bytes:
     return json.dumps(invocation, sort_keys=True, allow_nan=False).encode() + SOURCE_CALLABLE.read_bytes()
 
 
-def score_package(config: dict, *, invocation: dict, timeout: float, state_path: str | None = None) -> GraderPackage:
-    result_path = "/logs/verifier/score.json"
+def score_package(
+    config: dict, *, invocation: dict, timeout: float, image: str, state_path: str | None = None
+) -> GraderPackage:
     argv = (
         "python3",
         "/tests/source_callable.py",
         "/tests/invocation.json",
         "/tests/config.json",
         ANSWER_PATH,
-        result_path,
+        SCORE_PATH,
     )
     if state_path is not None:
         argv = (*argv, state_path)
-    return native_command_package(
-        NativeCommandSpec(
+    return GraderPackage(
+        ScriptGrader(
             argv=argv,
             cwd="/",
-            env={},
-            result_format="score_json",
-            result_path=result_path,
+            environment=grading_environment(image),
+            answer_path=ANSWER_PATH,
+            reward=FileReward(files=(RewardFile(path=SCORE_PATH, format=RewardFileFormat.JSON),)),
             timeout=timeout,
         ),
         (
@@ -93,7 +99,7 @@ def normalize_terminal_grader(
     image: str,
     normalize_task: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection],
     allowed_agents: tuple[str, ...],
-    package: Callable[[dict], GraderPackage],
+    package: Callable[[dict, str], GraderPackage],
     answer_type: AnswerType,
 ) -> TaskSpec | NormalizedTask | ImportRejection:
     """Replace a stateless terminal evaluator while preserving the source contract."""
@@ -114,20 +120,9 @@ def normalize_terminal_grader(
             reason="unsupported_native_text_tool_request",
             detail="This original stateless evaluator accepts terminal text only",
         )
-    grader = package(config)
-    task = task.model_copy(
-        update={
-            "answer_type": answer_type,
-            "environment_requirements": EnvironmentRequirements(),
-            "interaction_tools": (),
-            "output_paths": (ANSWER_PATH,),
-            "verifier": grader.verifier.model_copy(
-                update={
-                    "environment_requirements": EnvironmentRequirements(docker_image=image, compatible_backends=BACKENDS)
-                }
-            ),
-            "resources": task.resources.model_copy(update={"verifier": grader.resources}),
-        }
+    answer_format = FinalAction() if answer_type == AnswerType.NATIVE_ACTION else PlainText()
+    task = bound_grader_task(
+        task.model_copy(update={"answer_type": answer_type, "answer_format": answer_format}), package(config, image)
     )
     return replace(result, task=task) if isinstance(result, NormalizedTask) else task
 
@@ -163,8 +158,7 @@ def normalize_rdkit(
             reason="nonfinite_chemistry_target",
             detail="The native rounded comparator requires a finite target",
         )
-    package = score_package(config, invocation=RDKIT_CALL, timeout=60)
-    task = bound_grader_task(task, package=package, image=image)
+    task = bound_grader_task(task, score_package(config, invocation=RDKIT_CALL, timeout=60, image=image))
     return replace(result, task=task) if isinstance(result, NormalizedTask) else task
 
 
@@ -181,8 +175,8 @@ async def rdkit_checks(
         ("perturbed", wrapper % (expected + 1), 0.0),
         ("unwrapped", str(expected), 0.0),
     ):
-        grade = await grade_submission(
-            task, {ANSWER_PATH: answer.encode()}, factory, machine_spec=machine_spec, timeout=timeout
+        grade = await grade_final_message(
+            task, TextMessage(role="assistant", content=answer), factory, machine_spec, timeout
         )
         checks.append(control_result(grade, name, reward))
     return VerificationReport(checks)
@@ -244,11 +238,9 @@ def normalize_tool_action(
         return ImportRejection(
             kind=ImportFailureKind.UNSUPPORTED, reason="unsupported_native_action_type", detail=expected["type"]
         )
-    package = score_package(config, invocation=TOOL_CALL, timeout=60)
     task = bound_grader_task(
-        task.model_copy(update={"answer_type": AnswerType.NATIVE_ACTION}),
-        package=package,
-        image=image,
+        task.model_copy(update={"answer_type": AnswerType.NATIVE_ACTION, "answer_format": FinalAction()}),
+        score_package(config, invocation=TOOL_CALL, timeout=60, image=image),
     )
     return replace(result, task=task) if isinstance(result, NormalizedTask) else task
 
@@ -282,9 +274,7 @@ async def tool_action_checks(
         )
     checks = []
     for name, event, reward in controls:
-        grade = await grade_submission(
-            task, {ANSWER_PATH: event.model_dump_json().encode()}, factory, machine_spec=machine_spec, timeout=timeout
-        )
+        grade = await grade_final_message(task, event, factory, machine_spec, timeout)
         checks.append(control_result(grade, name, reward))
     return VerificationReport(checks)
 

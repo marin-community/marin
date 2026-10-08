@@ -3,36 +3,43 @@
 
 """Apply positive and negative controls to task graders."""
 
+import json
+
 from verifyit.grade import negative_candidate, positive_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, NumericSpec, PredictedActionSpec
 
-from taskcompendium.grader import SOURCE_UNAVAILABLE_KIND
-from taskcompendium.grading_contract import resolve_verifier
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    ANSWER_CALL_NAME,
+    ANSWER_FIELD,
+    AnswerCall,
     AssistantToolCalls,
     ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    GradingAttempt,
+    JsonAnswer,
+    NoGrader,
+    SessionGrader,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
-from taskcompendium.native_grader import NATIVE_COMMAND_KIND
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import FinalAction, PlainText
-
-PLAIN = PlainText(id="pipeline-plain")
 
 
 def control_result(grade: GradeResult, name: str, expected_reward: float) -> CheckResult:
-    """Require a scored reward while retaining task failures and runtime errors."""
+    """Require the expected reward, counting a rejected submission as zero, while retaining runtime errors."""
     if grade.status == Outcome.UNAVAILABLE:
         status = CheckStatus.UNSUPPORTED
     elif grade.status == Outcome.INFRA_ERROR:
         status = CheckStatus.INFRA_ERROR
-    elif grade.status == Outcome.GRADED and grade.reward == expected_reward:
+    elif (grade.status == Outcome.GRADED and grade.reward == expected_reward) or (
+        grade.status == Outcome.SUBMISSION_FAILURE and expected_reward == 0.0
+    ):
         status = CheckStatus.PASS
     else:
         status = CheckStatus.FAIL
@@ -55,28 +62,19 @@ def grader_readiness(checks: list[CheckResult]) -> GraderReadiness:
 
 def verify_task(task: TaskSpec) -> list[CheckResult]:
     """Check the answer grader and record unsupported runtime requirements."""
-    if task.verifier.kind == SOURCE_UNAVAILABLE_KIND:
+    grader = task.grader
+    if isinstance(grader, NoGrader):
+        return [CheckResult(check="source_evaluator", status=CheckStatus.UNSUPPORTED, detail=grader.reason)]
+    if isinstance(grader, SessionGrader):
         return [
             CheckResult(
-                check="source_evaluator", status=CheckStatus.UNSUPPORTED, detail="Source evaluator is unavailable"
+                check="runtime", status=CheckStatus.UNSUPPORTED, detail="A session grader runs in its rollout session"
             )
         ]
-    if task.verifier.kind == NATIVE_COMMAND_KIND:
-        return [
-            CheckResult(
-                check="runtime",
-                status=CheckStatus.UNSUPPORTED,
-                detail="A private native grading environment is required",
-            )
-        ]
-    if task.verifier.environment_requirements != EnvironmentRequirements():
-        return [
-            CheckResult(
-                check="runtime", status=CheckStatus.UNSUPPORTED, detail="A private grading environment is required"
-            )
-        ]
+    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
+        return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="A grading environment is required")]
     try:
-        verifier = resolve_verifier(task.verifier)
+        verifier = verifyit_spec(grader)
     except ValueError as error:
         return [CheckResult(check="verifier_contract", status=CheckStatus.FAIL, detail=str(error))]
 
@@ -103,18 +101,28 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
         assert positive is not None
         negative = f"{positive}\n__incorrect_answer__"
     else:
-        return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=task.verifier.kind)]
+        return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=grader.mode)]
 
     return answer_checks(task, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0)))
 
 
+def _control_response(task: TaskSpec, answer: str) -> TextMessage | AssistantToolCalls:
+    """Present a control answer in the task's answer format."""
+    if isinstance(task.answer_format, AnswerCall):
+        call = ConversationToolCall(call_id="control", name=ANSWER_CALL_NAME, arguments={ANSWER_FIELD: answer})
+        return AssistantToolCalls(calls=(call,))
+    if isinstance(task.answer_format, JsonAnswer):
+        return TextMessage(role="assistant", content=json.dumps({ANSWER_FIELD: answer}))
+    return TextMessage(role="assistant", content=answer)
+
+
 def _grade_control(task: TaskSpec, answer: str) -> GradeResult:
-    events = (*task.context.events, TextMessage(role="assistant", content=answer))
-    return grade_task(task, PLAIN, ConversationTrace(events=events))
+    events = (*task.context.events, _control_response(task, answer))
+    return grade_task(task, GradingAttempt(ConversationTrace(events=events)))
 
 
 def answer_checks(task: TaskSpec, controls: tuple[tuple[str, str, float], ...]) -> list[CheckResult]:
-    """Grade plain-response controls while retaining unavailable graders as unsupported."""
+    """Grade control answers while retaining unavailable graders as unsupported."""
     results = []
     for name, answer, expected in controls:
         result = _grade_control(task, answer)
@@ -136,7 +144,6 @@ def verify_witness(task: TaskSpec, witness: str, negative: str) -> list[CheckRes
 
 
 def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckResult]:
-    convention = FinalAction(id="pipeline-action", require_call=True, max_calls=len(verifier.expected_calls))
     calls = tuple(
         ConversationToolCall(call_id=f"control-{index}", name=call.name, arguments=call.arguments)
         for index, call in enumerate(verifier.expected_calls)
@@ -149,7 +156,7 @@ def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckR
         ("reference", reference, 1.0),
         ("perturbed", wrong, 0.0),
     ):
-        grade = grade_task(task, convention, ConversationTrace(events=(*task.context.events, response)))
+        grade = grade_task(task, GradingAttempt(ConversationTrace(events=(*task.context.events, response))))
         passed = grade.status == Outcome.GRADED and grade.reward == expected
         passed = passed or (expected == 0.0 and grade.status == Outcome.SUBMISSION_FAILURE)
         results.append(

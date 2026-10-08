@@ -8,8 +8,7 @@ import json
 from functools import partial
 
 from taskcompendium.datasets import atlas_arc_injection
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.native_grader import NativeCommandSpec
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -70,9 +69,13 @@ def test_tasktrove_runtime_preserves_archived_command_and_private_files():
     assert isinstance(task, TaskSpec)
     assert [resource.path for resource in task.resources.oracle] == ["task.toml", "solution/solve.sh"]
     assert task.resources.worker == ()
-    command = NativeCommandSpec.model_validate_json(task.verifier.parameters_json)
-    assert command.argv == ("bash", "/tests/test.sh")
-    assert command.result_path == "/logs/verifier/reward.txt"
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    assert grader.argv == ("bash", "/tests/test.sh")
+    assert grader.answer_path is None
+    assert grader.reward == FileReward(
+        files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)
+    )
     mounted = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     assert mounted["test.sh"] == files["tests/test.sh"]
     assert mounted["verifier.py"] == files["tests/verifier.py"]
@@ -96,15 +99,19 @@ def test_tasktrove_transductive_binds_original_command_without_solution_program(
     assert {resource.path: resource_bytes(resource) for resource in task.resources.verifier}["verifier.py"] == files[
         "tests/verifier.py"
     ]
-    assert NativeCommandSpec.model_validate_json(task.verifier.parameters_json).argv == ("bash", "/tests/test.sh")
+    assert isinstance(task.grader, ScriptGrader) and task.grader.argv == ("bash", "/tests/test.sh")
 
 
 def test_ultra_declares_image_scorer_and_private_contract():
     contract = {"agent_ref": {"name": arc_binding.AGENTS[0]}, "test_input": [[1, 2]], "expected_output": [[2, 1]]}
-    package = arc_binding.original_package({"evaluator": "ultra", "contract": contract})
-    command = NativeCommandSpec.model_validate_json(package.verifier.parameters_json)
-    assert command.argv == ("python3", "/tests/grade.py")
-    assert command.result_format == "score_json"
+    package = arc_binding.original_package({"evaluator": "ultra", "contract": contract}, IMAGE)
+    grader = package.grader
+    assert isinstance(grader, ScriptGrader)
+    assert grader.argv == ("python3", "/tests/grade.py")
+    assert grader.answer_path == "/app/answer.txt"
+    assert grader.reward == FileReward(
+        files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),)
+    )
     resources = {resource.path: resource_bytes(resource) for resource in package.resources}
     assert set(resources) == {"grade.py", "arc_contract.json"}
     assert json.loads(resources["arc_contract.json"])["contract"] == contract
@@ -112,9 +119,8 @@ def test_ultra_declares_image_scorer_and_private_contract():
 
 def test_ultra_transductive_uses_shared_original_callable_transport():
     contract = {"agent_ref": {"name": arc_binding.AGENTS[1]}, "test_input": [[1, 2]], "expected_output": [[2, 1]]}
-    package = arc_binding.original_package({"evaluator": "ultra", "contract": contract})
-    command = NativeCommandSpec.model_validate_json(package.verifier.parameters_json)
-    assert command.argv[1] == "/tests/source_callable.py"
+    package = arc_binding.original_package({"evaluator": "ultra", "contract": contract}, IMAGE)
+    assert isinstance(package.grader, ScriptGrader) and package.grader.argv[1] == "/tests/source_callable.py"
     resources = {resource.path: resource_bytes(resource) for resource in package.resources}
     assert json.loads(resources["invocation.json"]) == {
         "function": "skyrl_gym.envs.nemotron_ultra.nvarc:grade_transductive_arc",

@@ -10,7 +10,7 @@ from functools import partial
 from shellbox.machine import MachineFactory, MachineSpec
 from taskcompendium.datasets.nemotron_ultra.normalization import VERIFIER_REVISION
 from taskcompendium.grader import GraderPackage
-from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.models import AnswerType, TaskSpec, TextMessage
 from taskcompendium.pipeline.execution_binding import bind_grader_recipe, native_runtime_report
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
@@ -19,15 +19,14 @@ from taskcompendium.pipeline.models import (
     RawRow,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import grade_submission
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.grading.binding import (
     ANSWER_EXTRACTOR,
-    ANSWER_PATH,
     invocation_bytes,
     normalize_terminal_grader,
     score_package,
 )
+from experiments.post_training.task_curation.datasets.shared import grade_final_message
 
 CALL = {
     "function": "skyrl_gym.envs.nemotron_ultra.calendar:grade_calendar",
@@ -36,8 +35,8 @@ CALL = {
 }
 
 
-def grader_package(config: dict) -> GraderPackage:
-    return score_package(config, invocation=CALL, timeout=60)
+def grader_package(config: dict, image: str) -> GraderPackage:
+    return score_package(config, invocation=CALL, timeout=60, image=image)
 
 
 def normalize_isolated(
@@ -60,7 +59,9 @@ async def isolated_checks(
     task: TaskSpec, *, factory: MachineFactory, machine_spec: MachineSpec, timeout: float
 ) -> VerificationReport:
     """Check runtime without assuming any response universally fails the source constraints."""
-    diagnostic = await grade_submission(task, {ANSWER_PATH: b"[]"}, factory, machine_spec=machine_spec, timeout=timeout)
+    diagnostic = await grade_final_message(
+        task, TextMessage(role="assistant", content="[]"), factory, machine_spec, timeout
+    )
     return native_runtime_report(diagnostic, "The source supplies constraints without a passing schedule witness")
 
 

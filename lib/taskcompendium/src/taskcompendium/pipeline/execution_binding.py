@@ -21,7 +21,14 @@ from taskcompendium.datasets.executable_tasks import DEFAULT_OUTPUT_PATHS, Execu
 from taskcompendium.datasets.raw_conversion import RawConverter
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import DOCKER_IMAGE_PATTERN, EnvironmentRequirements, OutputDirectory, TaskSpec
+from taskcompendium.models import (
+    DOCKER_IMAGE_PATTERN,
+    EnvironmentRequirements,
+    OutputDirectory,
+    ScriptGrader,
+    TaskSpec,
+    VerifyitGrader,
+)
 from taskcompendium.pipeline.inputs import SourceFiles, hub_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -44,7 +51,6 @@ IRIS_JOB_TTL = 1800
 PINNED_IMAGE = re.compile(DOCKER_IMAGE_PATTERN)
 VerificationRuntime = Literal["local-gvisor", "iris-gvisor", "qemu"]
 BACKENDS = (Backend.DOCKER, Backend.GVISOR, Backend.QEMU)
-ANSWER_PATH = "/app/answer.txt"
 
 
 class PrivateGraderBinder(Protocol):
@@ -212,18 +218,21 @@ def bind_private_grader(
     )
 
 
-def bound_grader_task(task: TaskSpec, *, package: GraderPackage, image: str) -> TaskSpec:
-    """Bind isolated script grading without adding tools or requirements to the worker."""
+def grading_environment(image: str) -> EnvironmentRequirements:
+    """A grader environment that runs ``image`` on any backend these bindings construct."""
+    return EnvironmentRequirements(docker_image=image, compatible_backends=BACKENDS)
+
+
+def bound_grader_task(task: TaskSpec, package: GraderPackage) -> TaskSpec:
+    """Grade in the package's own machine without adding tools or requirements to the worker."""
+    grader = package.grader
+    if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
+        raise TypeError(f"A {grader.kind} grader without an environment cannot grade in its own machine")
     return task.model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(),
             "interaction_tools": (),
-            "output_paths": (ANSWER_PATH,),
-            "verifier": package.verifier.model_copy(
-                update={
-                    "environment_requirements": EnvironmentRequirements(docker_image=image, compatible_backends=BACKENDS)
-                }
-            ),
+            "grader": grader,
             "resources": task.resources.model_copy(update={"verifier": package.resources}),
         }
     )

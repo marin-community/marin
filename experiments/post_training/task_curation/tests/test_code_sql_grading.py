@@ -13,7 +13,7 @@ import pytest
 from taskcompendium.datasets.code_contracts import normalize_apps
 from taskcompendium.datasets.gretel_text_to_sql import normalize as normalize_gretel
 from taskcompendium.grader import grader_config
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -39,7 +39,7 @@ def apps_upstream_source() -> Path:
 def run_original(
     tmp_path: Path, evaluator: str, contract: dict, answer: str, *, apps_source: Path | None = None
 ) -> dict:
-    package = original_package({"evaluator": evaluator, "contract": contract})
+    package = original_package({"evaluator": evaluator, "contract": contract}, "authored-native@sha256:" + "0" * 64)
     for resource in package.resources:
         (tmp_path / resource.path).write_bytes(resource_bytes(resource))
     (tmp_path / "answer.txt").write_text(answer)
@@ -238,7 +238,7 @@ def test_gretel_preparation_binds_seeded_tasks_and_rejects_schema_only_as_unsupp
         return
     assert isinstance(result, TaskSpec)
     config = grader_config(result)
-    assert result.verifier.kind == "native_command"
+    assert isinstance(result.grader, ScriptGrader)
     assert config["contract"]["sql"] == "SELECT v FROM t"
 
 
@@ -256,7 +256,7 @@ def test_apps_alternative_stdout_outputs_bind_to_original_evaluator():
     )
     result = normalize_isolated(row, normalize_task=normalize_apps, image="authored-native@sha256:" + "0" * 64)
     assert isinstance(result, TaskSpec)
-    assert result.verifier.kind == "native_command"
+    assert isinstance(result.grader, ScriptGrader)
 
 
 @pytest.mark.parametrize("input_output", ['{"inputs": [], "outputs": []}', "not JSON"])
