@@ -169,6 +169,10 @@ Python unit-test conversion installs `mock` when the task's tests import it and 
 Python encodings. Stack tasks `stack-pytest-0249`, `stack-pytest-0380`, and `stack-pytest-0474`
 are excluded through `reviewed_defects.json` for ambiguous or incomplete test contracts.
 
+NL2Bash output grading rejects contradictory named and standalone counts while retaining harmless
+logs. Tasks `task_1492` and `task_3002` are excluded through `reviewed_defects.json`: the first
+has an incorrect file-difference oracle, and the second grades solver-chosen text against one fixed dump.
+
 ## Validate and inspect
 
 ```bash
