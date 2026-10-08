@@ -330,7 +330,7 @@ def test_rows_become_conversation_tasks_with_the_source_grader(name):
         ("tasktrove-math_gym", MATH_GYM, None),
     ],
 )
-def test_math_runs_the_source_scorer_and_its_oracle(name, files, golden):
+def test_math_ships_the_archived_scorer_and_its_oracle(name, files, golden):
     task = task_of(name, tasktrove_row(files))
     grader = task.grader
     assert isinstance(grader, ScriptGrader)

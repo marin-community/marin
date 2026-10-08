@@ -37,6 +37,8 @@ from taskcompendium.convert.nemotron_ultra import (
     blend_task,
     text_request,
 )
+from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasktrove import ANSWER_PATH
 from taskcompendium.grader import grader_config
 from taskcompendium.models import (
     AnswerType,
@@ -63,13 +65,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.datasets.grade_scripts import (
-    ANSWER_PATH,
-    grade_script,
-    grader_package,
-    vendored_files,
-)
-
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 """The NeMo Gym revision whose agents grade the pinned Ultra blends."""
 PLACEHOLDER_SOURCE_FIELD = "placeholder_source"
@@ -84,7 +79,7 @@ SHIPS = (SCORERS,)
 CODE_SHIPS = (SCORERS, SKYRL_SCORERS)
 """The vendored directories a component's tasks ship files from; code tasks also ship LiveCodeBench."""
 ULTRA_ENVS = "skyrl_gym/envs/nemotron_ultra"
-ULTRA_BASE = vendored_files(
+ULTRA_BASE = shipped_files(
     SCORERS,
     "skyrl_gym/__init__.py",
     "skyrl_gym/envs/__init__.py",
@@ -99,7 +94,7 @@ LIVECODEBENCH = inline_resource("skyrl_gym/envs/lcb/livecodebench.py", (SKYRL_SC
 
 def ultra_grade_script(script: str, *modules: str) -> tuple[TaskResource, ...]:
     """A grade script beside this module with the Ultra base and the named ``nemotron_ultra`` modules."""
-    return grade_script(HERE / script, *ULTRA_BASE, *vendored_files(SCORERS, *(f"{ULTRA_ENVS}/{m}.py" for m in modules)))
+    return grade_script(HERE / script, *ULTRA_BASE, *shipped_files(SCORERS, *(f"{ULTRA_ENVS}/{m}.py" for m in modules)))
 
 
 CALENDAR_GRADE = ultra_grade_script("calendar_grade.py", "calendar")
@@ -141,7 +136,7 @@ def _scored(
     timeout: float = SCORER_TIMEOUT,
     env: Mapping[str, str] | None = None,
 ) -> NormalizedTask:
-    package = grader_package(
+    package = script_package(
         files,
         {"contract": request.contract},
         environment=required_grader_environment(context),

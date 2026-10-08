@@ -19,20 +19,24 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, FAILING_PROGRAM, THREAD_ENVIRONMENT, python_reply
+from taskcompendium.convert.conversation import conversation_task
+from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasktrove import ANSWER_PATH
 from taskcompendium.grader import grader_config
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
 
-from experiments.post_training.task_curation.datasets.skyrl.scorer_tasks import SCORERS, scorer_task
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
-APPS_GRADE = Path(__file__).with_name("apps_grade.py")
-LCB_GRADE = Path(__file__).with_name("lcb_grade.py")
-SQL_GRADE = Path(__file__).with_name("sql_grade.py")
+HERE = Path(__file__).parent
+SCORERS = HERE / "scorers"
+APPS_GRADE = grade_script(HERE / "apps_grade.py", *shipped_files(SCORERS, "apps_testing_util.py"))
+LCB_GRADE = grade_script(HERE / "lcb_grade.py", *shipped_files(SCORERS, "livecodebench.py"))
+SQL_GRADE = grade_script(HERE / "sql_grade.py", *shipped_files(SCORERS, "text_to_sql_scoring.py"))
 GRADER_TIMEOUT = 330.0
 CODE_INSTRUCTION = "\nReturn the complete Python solution in this format:\n```python\n# solution\n```"
 SQL_INSTRUCTION = (
@@ -85,23 +89,20 @@ def scored_task(
     *,
     events: Sequence[TextMessage],
     instruction: str,
-    script: Path,
-    scorer: str,
+    grade: tuple[TaskResource, ...],
     config: Mapping[str, Any],
     evidence: Mapping[str, Any],
 ) -> TaskSpec:
-    """A conversation task whose reply ``script`` grades with the vendored ``scorer``."""
-    return scorer_task(
-        row,
-        events=_with_instruction(events, instruction),
-        script=script,
-        scorer=scorer,
-        config=config,
+    """A conversation task whose reply the ``grade`` script scores with its vendored scorer."""
+    package = script_package(
+        grade,
+        config,
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
+        answer_path=ANSWER_PATH,
         env=THREAD_ENVIRONMENT,
-        evidence=evidence,
     )
+    return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
 
 
 def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -129,8 +130,7 @@ def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRe
         context,
         events=(TextMessage(role="user", content=prompt),),
         instruction=CODE_INSTRUCTION,
-        script=APPS_GRADE,
-        scorer="apps_testing_util.py",
+        grade=APPS_GRADE,
         config={
             "input_output": tests,
             "reference_reply": next((reply for reply in map(python_reply, solutions) if reply is not None), None),
@@ -176,8 +176,7 @@ def _lcb_task(
         context,
         events=events,
         instruction=CODE_INSTRUCTION,
-        script=LCB_GRADE,
-        scorer="livecodebench.py",
+        grade=LCB_GRADE,
         config={"test_cases": cases, "reference_reply": reference},
         evidence=evidence,
     )
@@ -258,8 +257,7 @@ def convert_gretel_text_to_sql(row: RawRow, context: ConversionContext) -> TaskS
         context,
         events=(TextMessage(role="user", content=f"{question}\n\nDatabase context:\n{sql_context}"),),
         instruction=SQL_INSTRUCTION,
-        script=SQL_GRADE,
-        scorer="text_to_sql_scoring.py",
+        grade=SQL_GRADE,
         config={"ground_truth": ground_truth, "reference_reply": f"<solution>{reference}</solution>"},
         evidence={
             key: row.data[key] for key in ("sql_explanation", "sql_complexity", "sql_task_type", "id") if key in row.data

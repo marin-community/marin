@@ -4,77 +4,41 @@
 """SkyRL grade scripts score replies with the vendored scorers in the grader image.
 
 Each test converts a fixture row and grades it the way a campaign does, in a fresh container of the
-locally built grader image, which stands in for the task's pinned grader image. Build it from the
-repository root with::
-
-    docker build --platform linux/amd64 --build-context verifyit=lib/verifyit/src/verifyit \\
-        -t local/task-curation-grader:test experiments/post_training/task_curation/images/grader
+locally built grader image. See ``local_grader`` for building the image these tests run.
 """
 
-import asyncio
 import json
-import shutil
-import subprocess
-from dataclasses import replace
-from typing import Any
 
 import pytest
-from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
-from shellbox.machine import Backend, DockerImage, MachineSpec
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.controls import answer_reply, run_controls
 from taskcompendium.pipeline.models import CheckStatus
-from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.tests.conversion import converted_task
+from experiments.post_training.task_curation.tests.local_grader import (
+    LocalGraderMachines,
+    local_grader_machines,
+    with_verifier_file,
+)
+from experiments.post_training.task_curation.tests.local_grader import grade as grade_submission
 from experiments.post_training.task_curation.tests.test_skyrl import PIPELINES, ROWS, SUM_SOLUTION
 
 pytestmark = pytest.mark.docker
 
-GRADER_IMAGE = "local/task-curation-grader:test"
 GRADING_MEMORY_MB = 5120
 NOISY_ADD = '```python\ndef add(a, b):\n    print("x" * 20000)\n    return a + b\n```'
 """A correct function that prints more than the runtime keeps of a grader's stdout."""
 
 
-class LocalGraderImage:
-    """Starts the locally built grader image whatever grader image the task pins."""
-
-    backend = Backend.DOCKER
-
-    async def create(self, spec: MachineSpec) -> DockerMachine:
-        return await DockerMachineFactory().create(replace(spec, source=DockerImage(GRADER_IMAGE)))
-
-
-class LocalGradingMachines:
-    """Grading machines from the local Docker daemon, requested the way a campaign's controls request them."""
-
-    def identity(self) -> dict[str, Any]:
-        return {"backend": Backend.DOCKER}
-
-    def machine(self, image: str, memory_mb: int) -> tuple[LocalGraderImage, MachineSpec]:
-        return LocalGraderImage(), MachineSpec(DockerImage(image), memory_mb=memory_mb)
-
-
 @pytest.fixture(scope="module")
-def machines() -> LocalGradingMachines:
-    if shutil.which("docker") is None:
-        pytest.skip("Docker is not installed")
-    inspected = subprocess.run(["docker", "image", "inspect", GRADER_IMAGE], capture_output=True, check=False)
-    if inspected.returncode != 0:
-        pytest.skip(f"{GRADER_IMAGE} is not built; see this module's docstring")
-    return LocalGradingMachines()
+def machines() -> LocalGraderMachines:
+    return local_grader_machines()
 
 
-def grade(task: TaskSpec, reply: str, machines: LocalGradingMachines) -> GradeResult:
-    assert task.grader.environment is not None and task.grader.environment.docker_image is not None
-    attempt = GradingAttempt(
-        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
-    )
-    machine = machines.machine(task.grader.environment.docker_image, GRADING_MEMORY_MB)
-    return asyncio.run(grade_in_sandbox(task, attempt, *machine))
+def grade(task: TaskSpec, reply: str, machines: LocalGraderMachines) -> GradeResult:
+    return grade_submission(task, answer_reply(task, reply), machines, GRADING_MEMORY_MB)
 
 
 @pytest.mark.parametrize(
@@ -107,10 +71,8 @@ def test_declared_controls_pass_in_the_grader_image(name, golden, machines):
     ],
 )
 def test_grade_script_fails_rather_than_scoring_when_its_scorer_cannot_import(name, scorer, machines):
-    task = converted_task(PIPELINES[name], ROWS[name])
     broken = inline_resource(scorer, b"import package_missing_from_the_grader_image\n")
-    verifier = tuple(broken if resource.path == scorer else resource for resource in task.resources.verifier)
-    task = task.model_copy(update={"resources": task.resources.model_copy(update={"verifier": verifier})})
+    task = with_verifier_file(converted_task(PIPELINES[name], ROWS[name]), broken)
     result = grade(task, f"```python\n{SUM_SOLUTION}\n```", machines)
     assert result.status == Outcome.INFRA_ERROR
     assert result.diagnostics is not None and result.diagnostics["exit_code"] != 0

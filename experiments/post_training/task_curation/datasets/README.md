@@ -17,10 +17,13 @@ artifact each declaration produces.
    field mapping, prompt rewrites, rubrics and constants in the declaring module.
 3. If the grader needs a script, put it next to the module as `<name>_grade.py`;
    vendor an upstream scorer under `<family>/scorers/` and list that directory
-   in the declaration's `ships`. Read the bytes in the converter and ship them in
-   the task's verifier resources. A sandboxed grader runs in the grader image:
-   set `grader_image=GRADER` from [images/recipes.py](../images/recipes.py) and
-   use `required_grader_environment(context)` as its environment.
+   in the declaration's `ships`. Build the grader with `grade_script`,
+   `shipped_files` and `script_package` from
+   `taskcompendium.convert.script_grader`, which ship the script, the scorer
+   files and the row's `config.json` in the task's verifier resources. A
+   sandboxed grader runs in the grader image: set `grader_image=GRADER` from
+   [images/recipes.py](../images/recipes.py) and use
+   `required_grader_environment(context)` as its environment.
 4. Add a representative raw row to the family test's `ROWS` and add the module's
    `pipelines()` to [sources.py](../sources.py).
 
@@ -33,7 +36,7 @@ unreviewed, and without controls sandbox-graded rows stay out of `final/`.
 | --- | --- |
 | [skyrl/math.py](skyrl/math.py) | MarinSkyRL math and numeric-answer sets, graded in process. |
 | [skyrl/code.py](skyrl/code.py) | APPS, Eurus-2 code, verifiable coding problems and Gretel text-to-SQL, graded by `apps_grade.py`, `lcb_grade.py` and `sql_grade.py` in the grader image. |
-| [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by the pinned SkyRL IFEval scorer. |
+| [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by `ifeval_grade.py` with the vendored SkyRL IFEval scorer in the grader image; a reply that violates every constraint is the negative control. |
 | [skyrl/mcq.py](skyrl/mcq.py) | GPQA and OpenScience multiple choice. |
 | [skyrl/preference.py](skyrl/preference.py) | HH-RLHF and KTO preference components; no runnable grader. |
 | [nemotron_ultra/components.py](nemotron_ultra/components.py) | Nemotron RL Ultra blends: one `COMPONENTS` table over the mopd, rlvr1 and rlvr2 blends. [graders.py](nemotron_ultra/graders.py) converts the rows; a graded component ships a `*_grade.py` script with the vendored NeMo Gym scorer it calls. |

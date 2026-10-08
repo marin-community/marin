@@ -17,7 +17,8 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
-from taskcompendium.convert.tasktrove import archive_resources
+from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_resources
 from taskcompendium.grader import GraderPackage, grader_config
 from taskcompendium.models import (
     AnswerType,
@@ -40,12 +41,6 @@ from taskcompendium.pipeline.models import (
     WorkspaceFiles,
 )
 
-from experiments.post_training.task_curation.datasets.grade_scripts import (
-    ANSWER_PATH,
-    grade_script,
-    grader_package,
-    vendored_files,
-)
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
@@ -65,7 +60,7 @@ NVARC_MODULES = "skyrl_gym/envs/nemotron_ultra"
 ARC_GRADE = grade_script(
     HERE / "arc_grade.py",
     *ULTRA_BASE,
-    *vendored_files(SCORERS, f"{NVARC_MODULES}/nvarc.py", f"{NVARC_MODULES}/sandbox.py", "local_sandbox.py"),
+    *shipped_files(SCORERS, f"{NVARC_MODULES}/nvarc.py", f"{NVARC_MODULES}/sandbox.py", "local_sandbox.py"),
 )
 SOLUTION_PATH = "/app/solution.py"
 # NVARC gives the transform 30 seconds; the rest covers interpreter start-up and imports.
@@ -132,7 +127,7 @@ def reference_rejection(mode: ArcMode, record: Mapping[str, Any]) -> ImportRejec
 def arc_package(
     mode: ArcMode, record: Mapping[str, Any], context: ConversionContext, answer_path: str | None
 ) -> GraderPackage:
-    return grader_package(
+    return script_package(
         ARC_GRADE,
         {"mode": mode, "contract": record},
         environment=required_grader_environment(context),

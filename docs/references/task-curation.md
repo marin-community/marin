@@ -27,7 +27,7 @@ Building the catalog performs no downloads, inference or job submission.
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
 | `taskcompendium.runtime` | Grading in fresh Shellbox machines |
-| `verifyit` | Stock graders and the bridge to source scorers shipped with a task |
+| `verifyit` | Stock grading modes, in process or in a grader machine |
 | `shellbox` | Isolated machines and their backends |
 
 TaskCompendium does not import experiments, name datasets, or construct
@@ -69,17 +69,34 @@ A task's grader is one of four kinds:
 - `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
   in process; with `environment=required_grader_environment(context)` it grades
   in a fresh machine of the grader image.
-- `ScriptGrader` runs a command in a fresh machine of the grader image and reads
-  its reward from the last nonempty stdout line, its exit code, or a reward file.
-  A dataset-specific script is a `<name>_grade.py` file next to its declaration,
-  and vendored upstream scorers live under `datasets/<family>/scorers/`, listed
-  in the declaration's `ships`. Both are shipped in the task's verifier resources
-  under `/tests`. Source scorers are called through
-  `verifyit/execution/source_callable.py` with an `invocation.json`, built by
-  `taskcompendium.convert.source_scorer`.
+- `ScriptGrader` runs a command in a fresh machine of the grader image. Archived
+  TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
+  to a file (`FileReward`).
 - `SessionGrader` marks a task graded by its registered interactive session.
 - `NoGrader` records a source evaluator this repository cannot run, with the
   source contract. Its rows never reach `final/`.
+
+A source whose scorer is upstream code grades with a script. The script is a
+`<name>_grade.py` file next to the declaration, and the upstream scorer is
+vendored under `datasets/<family>/scorers/`, a directory listed in the
+declaration's `ships`. `taskcompendium.convert.script_grader` builds the
+package:
+
+- `grade_script` installs the script as `/tests/grade.py`, with the files it
+  imports; `shipped_files` places vendored scorer files at their package paths
+  under `/tests`, so the script imports them as upstream does;
+- `script_package` adds the row's hidden data as `/tests/config.json` (sorted
+  keys) and grades with `ScriptGrader(argv=("python3", "/tests/grade.py"),
+  cwd="/", reward=StdoutReward())` in the grader image.
+
+The script puts `/tests` on its import path, reads `config.json` and the reply
+at `/app/answer.txt` (or the conversation at `/tests/conversation.json`), and
+prints the reward, fractional when the scorer is, as its last nonempty stdout
+line. The runtime keeps the first 16 KiB of stdout, so the script keeps its
+output below that. It exits nonzero when it cannot import its scorer or a
+dependency, which the runtime reports as an infrastructure error, never a zero
+reward. The grader image supplies third-party dependencies only; scorer code
+always ships with the task.
 
 Conversion preserves the source's grading semantics. It does not repair
 comparators or rewrite tests to accept a reference.

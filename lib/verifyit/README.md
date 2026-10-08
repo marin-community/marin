@@ -143,11 +143,9 @@ uv run --group test pytest lib/verifyit/tests
 
 ## Candidate scoring
 
-Callers that already extracted an answer use `verifyit.candidate.grade_candidate` for the in-process modes, or the per-mode candidate functions in `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions remain in the pinned source package or the dataset's own grader scripts.
+Callers that already extracted an answer use `verifyit.candidate.grade_candidate` for the in-process modes, or the per-mode candidate functions in `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions stay with the dataset, in its grade scripts and the vendored source scorers they ship.
 
 A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
-
-For a pinned Python source scorer, [`execution/source_callable.py`](src/verifyit/execution/source_callable.py) is a transport script. It reads the task's descriptor, passes declared inputs to the original image-installed function, and writes its returned reward and detail. It does not define a scoring rule. The dataset declaration chooses the source function, input projection, image, and source hash. See the [execution](src/verifyit/execution/README.md) and [mode](src/verifyit/modes/README.md) boundaries.
 
 `StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
 Its TOML reference is encoded as a JSON string so null and nested JSON types survive

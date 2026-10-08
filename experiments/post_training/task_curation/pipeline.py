@@ -221,7 +221,10 @@ def converter_identity(pipeline: RlDataPipeline, grader_image: str | None) -> di
     """The converter, every file it can package into a task, and the image its graders run in.
 
     Files are the converter module's directory's ``*.py`` and everything below ``ships``, keyed
-    by path relative to the module's directory.
+    by path relative to the module's directory. Library code the converter calls, such as
+    ``taskcompendium.convert.script_grader``, is not hashed: as for every ``taskcompendium.convert``
+    helper, a library change that alters tasks bumps the normalization stage revision or the
+    declaration's ``version``.
     """
     module = sys.modules[callable_module(pipeline.convert)]
     assert module.__file__ is not None

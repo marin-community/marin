@@ -18,18 +18,22 @@ from typing import Any
 
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
+from taskcompendium.convert.conversation import conversation_task
+from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasktrove import ANSWER_PATH
 from taskcompendium.grader import grader_config
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
 
-from experiments.post_training.task_curation.datasets.skyrl.scorer_tasks import SCORERS, scorer_task
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 
-IFEVAL_GRADE = Path(__file__).with_name("ifeval_grade.py")
+HERE = Path(__file__).parent
+SCORERS = HERE / "scorers"
+IFEVAL_GRADE = grade_script(HERE / "ifeval_grade.py", *shipped_files(SCORERS, "ifeval_utils.py"))
 GRADER_TIMEOUT = 40.0
 FILLER = "vx"
 """A word no constraint names; the violating reply pads counts with it."""
@@ -133,17 +137,14 @@ def ifeval_task(
         normalized = json.loads(ifeval_utils.normalize_ground_truth(constraints))
     except (ValueError, TypeError) as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
-    return scorer_task(
-        row,
-        events=events,
-        script=IFEVAL_GRADE,
-        scorer="ifeval_utils.py",
-        config={"constraints": normalized},
+    package = script_package(
+        IFEVAL_GRADE,
+        {"constraints": normalized},
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
-        env={},
-        evidence=evidence,
+        answer_path=ANSWER_PATH,
     )
+    return conversation_task(row, events=events, package=package, evidence=evidence)
 
 
 def convert_nemotron_if(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:

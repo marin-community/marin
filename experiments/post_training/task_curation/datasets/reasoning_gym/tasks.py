@@ -27,7 +27,8 @@ from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import archive_resources, archive_script_grader
+from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_resources, archive_script_grader
 from taskcompendium.grader import grader_config
 from taskcompendium.models import (
     AnswerType,
@@ -49,13 +50,8 @@ from taskcompendium.pipeline.models import (
     RawRow,
     Reply,
 )
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.grade_scripts import (
-    ANSWER_PATH,
-    grade_script,
-    grader_package,
-)
 from experiments.post_training.task_curation.datasets.tasktrove.archives import ANSWER_FILE_DELIVERY, tasktrove_source
 from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
@@ -81,7 +77,7 @@ EXCLUDED_GENERATORS = (
     ),
 )
 PYTHON_HASH_SEED = 0
-GENERATED_GRADE = grade_script(HERE / "reasoning_gym_grade.py", inline_resource("generate.py", GENERATE.read_bytes()))
+GENERATED_GRADE = grade_script(HERE / "reasoning_gym_grade.py", *shipped_files(HERE, GENERATE.name))
 
 TASKTROVE_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
 SCORER_TIMEOUT = 60.0
@@ -219,7 +215,7 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
         "recorded_pinned_generator_controls": recorded.model_dump(mode="json"),
     }
-    package = grader_package(
+    package = script_package(
         GENERATED_GRADE,
         {"contract": contract},
         environment=required_grader_environment(context),

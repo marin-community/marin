@@ -45,18 +45,20 @@ RlDataPipeline(
   [`taskcompendium.convert`](../../../lib/taskcompendium/src/taskcompendium/convert/):
   `math_answer_task`, `numeric_answer_task`, `mcq_task`, `exact_answer_task`,
   `ifeval_task` and `json_schema_task` build conversation tasks graded in
-  process by verifyit; `source_scorer_package` calls a scorer in the grader
-  machine; the TaskTrove helpers unpack archives.
+  process by verifyit; `script_grader` packages a grade script with the row's
+  `config.json` and the vendored scorer files it imports; the TaskTrove
+  helpers unpack archives.
 - **Graders.** A task's grader is one of:
   - a `VerifyitGrader` with no environment, graded in process;
   - a `ScriptGrader` or `VerifyitGrader` with
     `environment=required_grader_environment(context)`, graded in a fresh
     machine of the grader image. A dataset-specific script is a `<name>_grade.py`
     file next to the declaration, and vendored upstream scorers live under
-    `datasets/<family>/scorers/` and are listed in `ships`. The converter reads
-    their bytes and ships them in the task's verifier resources (mounted at
-    `/tests`). A `StdoutReward` grader prints its reward as the last nonempty
-    stdout line;
+    `datasets/<family>/scorers/` and are listed in `ships`. The converter ships
+    the script as `/tests/grade.py`, the row's hidden data as
+    `/tests/config.json` and the scorer files at their package paths under
+    `/tests`; the script prints its reward as the last nonempty stdout line
+    (`StdoutReward`) and exits nonzero when it cannot score;
   - `NoGrader`, when no runnable grader exists. Such rows never reach `final/`.
 - **Environment.** `ShellSim()` for conversation tasks; an `AgentImage` pinned
   by digest when the agent works in a container. Agent images are separate from

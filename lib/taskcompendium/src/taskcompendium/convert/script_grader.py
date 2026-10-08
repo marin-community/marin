@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ship a grade script with a row's hidden data and the vendored scorer files it imports.
+"""Ship a grade script with a row's hidden data and the scorer files it imports.
 
-The grader runs ``python3 /tests/grade.py`` in the grader image. The script reads ``/tests/config.json``,
-the reply at ``/app/answer.txt`` or the conversation at ``/tests/conversation.json``, imports its scorer
-from the vendored files under ``/tests``, and prints the reward as its last line of output. It exits
-nonzero when it cannot score, so a missing module or dependency is an infrastructure error, never a zero.
+The grader runs ``python3 /tests/grade.py`` from ``/`` in the grader image. The script puts
+``/tests`` on its import path, reads ``/tests/config.json``, the reply at the answer path or the
+conversation at ``/tests/conversation.json``, scores with the shipped scorer modules, and prints
+the reward as its last line of output. It exits nonzero when it cannot score, so a missing module
+or dependency is an infrastructure error, never a zero.
 """
 
 import json
@@ -19,20 +20,22 @@ from taskcompendium.models import EnvironmentRequirements, ScriptGrader, StdoutR
 from taskcompendium.runtime.resources import inline_resource
 
 GRADE_ARGV = ("python3", "/tests/grade.py")
-ANSWER_PATH = "/app/answer.txt"
 
 
-def vendored_files(root: Path, *paths: str) -> tuple[TaskResource, ...]:
-    """The files at ``paths`` below a ``scorers`` directory, installed at the same paths below ``/tests``."""
+def shipped_files(root: Path, *paths: str) -> tuple[TaskResource, ...]:
+    """The files at ``paths`` below ``root``, installed at the same relative paths below ``/tests``.
+
+    Keeping a vendored module's package path lets the script import it as upstream does.
+    """
     return tuple(inline_resource(path, (root / path).read_bytes()) for path in paths)
 
 
 def grade_script(script: Path, *imports: TaskResource) -> tuple[TaskResource, ...]:
-    """``script`` installed as ``/tests/grade.py``, with the vendored files it imports."""
+    """``script`` installed as ``/tests/grade.py``, with the files it imports."""
     return (inline_resource("grade.py", script.read_bytes()), *imports)
 
 
-def grader_package(
+def script_package(
     files: tuple[TaskResource, ...],
     config: Mapping[str, Any],
     *,
