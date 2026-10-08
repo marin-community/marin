@@ -270,7 +270,7 @@ def test_specs_the_host_cannot_honor_are_rejected(factory, spec):
         asyncio.run(factory.create(spec))
 
 
-def test_a_shared_root_keeps_its_files_and_loses_only_the_machine_uploads(tmp_path, roots):
+def test_a_shared_root_keeps_its_files_and_loses_what_the_machine_added(tmp_path, roots):
     shared = tmp_path / "shared"
     shared.mkdir()
     (shared / "kept.txt").write_text("host")
@@ -287,8 +287,9 @@ def test_a_shared_root_keeps_its_files_and_loses_only_the_machine_uploads(tmp_pa
             await machine.close()
 
     assert asyncio.run(scenario()).stdout == b"host7"
-    assert (shared / "kept.txt").exists() and (shared / "made.txt").exists()
-    assert not (shared / "staged").exists()
+    assert (shared / "kept.txt").exists()
+    # A grader that unpacks its inputs into the workspace must not leave them for the next machine.
+    assert not (shared / "made.txt").exists() and not (shared / "staged").exists()
 
 
 def test_an_archive_extracts_at_the_filesystem_root_into_an_owned_root(tmp_path, roots, factory):

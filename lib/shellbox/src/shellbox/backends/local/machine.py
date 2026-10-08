@@ -132,6 +132,16 @@ def _first_new_path(path: Path) -> Path:
     return path
 
 
+def _shared_entries(shared: Iterable[PurePosixPath]) -> dict[PurePosixPath, frozenset[str]]:
+    """The entries of each shared root before the machine runs; anything added beside them is the machine's."""
+    return {root: frozenset(os.listdir(root)) for root in shared}
+
+
+def _remove_added_entries(before: dict[PurePosixPath, frozenset[str]]) -> None:
+    for root, entries in before.items():
+        _remove(Path(root) / name for name in os.listdir(root) if name not in entries)
+
+
 def _reset_roots(roots: Iterable[PurePosixPath], shared: Iterable[PurePosixPath], workdir: PurePosixPath | None) -> None:
     _remove(map(Path, roots))
     for root in roots:
@@ -261,10 +271,12 @@ class LocalMachine:
         lock: int,
         no_new_privs: bool,
         landlock: LandlockRuleset | None,
+        shared_entries: dict[PurePosixPath, frozenset[str]],
     ):
         self.spec = spec
         self.owned_roots = owned_roots
         self.shared_roots = shared_roots
+        self._shared_entries = shared_entries
         self.environment = environment
         self.home = home
         self._lock = lock
@@ -360,6 +372,7 @@ class LocalMachine:
         self._closed = True
         try:
             await asyncio.to_thread(_remove, [*map(Path, self.owned_roots), *self._scratch, self.home])
+            await asyncio.to_thread(_remove_added_entries, self._shared_entries)
         finally:
             os.close(self._lock)
 
@@ -375,7 +388,8 @@ class LocalMachineFactory:
     interpreter or working directory. ``shared_roots`` are directories commands may also write and
     uploads may target, such as a workspace the host process itself runs from; ``create`` makes them
     without emptying them and ``close`` removes only the machine's uploads there, so files a command
-    writes to a shared root remain for the next machine. An exclusive ``flock`` on ``lock_path``
+    entries a machine adds at the top of a shared root, by upload or by command, are removed at ``close``; files that
+    existed before it stay, even when a command rewrote them. An exclusive ``flock`` on ``lock_path``
     lets only one machine exist at a time, across processes that share the path. Commands
     never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
     a private ``HOME``, ``LANG``, the host's ``PYTHONHASHSEED`` if set, and the spec's and
@@ -432,6 +446,7 @@ class LocalMachineFactory:
         lock = await _exclusive_lock(self.lock_path)
         try:
             await asyncio.to_thread(_reset_roots, self.owned_roots, self.shared_roots, workdir)
+            shared_entries = await asyncio.to_thread(_shared_entries, self.shared_roots)
             home = Path(tempfile.mkdtemp(prefix="shellbox-local-home-"))
         except BaseException:
             os.close(lock)
@@ -466,4 +481,5 @@ class LocalMachineFactory:
             lock=lock,
             no_new_privs=self.lockdown.no_new_privs,
             landlock=landlock,
+            shared_entries=shared_entries,
         )
