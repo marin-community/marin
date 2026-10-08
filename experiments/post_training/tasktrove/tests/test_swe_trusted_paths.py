@@ -248,8 +248,10 @@ def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(
 
 @pytest.mark.docker
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("repository", ["seperman__deepdiff.ed252022", "conan-io__conan.86f29e13"])
-def test_swesmith_preserves_project_pytest_and_installs_conan_dependencies(repository, tmp_path):
+@pytest.mark.parametrize(
+    "repository", ["seperman__deepdiff.ed252022", "conan-io__conan.86f29e13", "oauthlib__oauthlib.1fd52536"]
+)
+def test_swesmith_preserves_project_pytest_and_installs_test_dependencies(repository, tmp_path):
     task = read_task_binary(_fixture())
     task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
     task.files[DOCKERFILE] = b"FROM python:3.10-bookworm\nRUN pip install pytest pytest-json-report\n"
@@ -261,12 +263,28 @@ def test_swesmith_preserves_project_pytest_and_installs_conan_dependencies(repos
         # shared upper bound must allow that subsequent project installation.
         dockerfile += "\nRUN python -m pip install pytest==8.3.4\n"
         probe += "    assert pytest.__version__ == '8.3.4'\n"
-    else:
+    elif repository.startswith("conan-io__"):
         probe += (
             "\ndef test_project_dependencies():\n"
             "    import mock, webtest, jwt, bottle, parameterized\n"
             "    assert jwt.decode(jwt.encode({'ok': True}, 'key', algorithm='HS256'), "
             "'key', algorithms=['HS256']) == {'ok': True}\n"
+        )
+    else:
+        probe += (
+            "\ndef test_project_dependencies():\n"
+            "    import blinker, jwt\n"
+            "    from cryptography.hazmat.primitives.asymmetric import rsa\n"
+            "    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)\n"
+            "    token = jwt.encode({'ok': True}, key, algorithm='RS256')\n"
+            "    assert jwt.decode(token, key.public_key(), algorithms=['RS256']) == {'ok': True}\n"
+            "    seen = []\n"
+            "    def receiver(sender):\n"
+            "        seen.append(sender)\n"
+            "    signal = blinker.Signal()\n"
+            "    signal.connect(receiver)\n"
+            "    signal.send('scope')\n"
+            "    assert seen == ['scope']\n"
         )
     (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
     (tmp_path / "test_probe.py").write_text(probe)

@@ -176,6 +176,8 @@ def swe_test_environment(dockerfile: str, instruction: str) -> str:
         packages += " simplejson"
     elif match["repo"] == "conan-io__conan.86f29e13":
         packages += " mock webtest PyJWT bottle parameterized"
+    elif match["repo"] == "oauthlib__oauthlib.1fd52536":
+        packages += " PyJWT cryptography blinker"
     return (
         dockerfile.rstrip("\n")
         + f"\nRUN printf '{SWESMITH_PYTEST}\\n' > {PYTEST_CONSTRAINT}\n"
