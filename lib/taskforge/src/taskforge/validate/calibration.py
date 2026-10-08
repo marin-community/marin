@@ -456,7 +456,7 @@ def output_tokens(rollout: RolloutData) -> int:
     return sum(int(step.turn.metadata["usage"]["completion_tokens"]) for step in rollout.steps)
 
 
-def commands(rollout: RolloutData) -> list[str]:
+def tool_call_arguments(rollout: RolloutData) -> list[str]:
     """The arguments of every tool call the model made, in order."""
     return [
         call["function"]["arguments"] for step in rollout.steps for call in step.turn.message.get("tool_calls") or ()
@@ -495,7 +495,7 @@ def _trial_lines(name: str, outcome: Outcome) -> list[str]:
         return [head]
     return [
         f"{head}, stop reason {rollout.stop_reason}, {len(rollout.steps)} model turns",
-        f"  commands: {_clip(json.dumps(commands(rollout), ensure_ascii=False))}",
+        f"  commands: {_clip(json.dumps(tool_call_arguments(rollout), ensure_ascii=False))}",
         f"  final reply: {_clip(json.dumps(final_reply(rollout), ensure_ascii=False))}",
     ]
 

@@ -9,9 +9,9 @@ One round runs the file task of ``conftest``; the other runs the newest draft th
 under ``<evidence_root>/build/live-test/`` and skips when there is none. ``evidence_root`` is the fixture in
 ``tests/conftest.py``. Each writes ``<evidence_root>/validate/{g_adversary_round,h_built_adversary_round}-<utc>/``:
 the round's attempt files and ledger, ``calibration.json``, and ``summary.json`` (per-trial outcome, reward, stop
-reason, shell commands and final reply, each adversary trial's submissions, claim, tier and signals, role
-statistics, findings, notes, wall time). Model behaviour (claims, the submission that passed first, the exploit,
-budget use) is recorded, not asserted.
+reason, tool-call arguments (key ``commands``) and final reply, each adversary trial's submissions, claim, tier
+and signals, role statistics, findings, notes, wall time). Model behaviour (claims, the submission that passed
+first, the exploit, budget use) is recorded, not asserted.
 """
 
 import asyncio
@@ -49,11 +49,11 @@ from taskforge.validate.calibration import (
     CalibrationBand,
     CalibrationSummary,
     DefectTier,
-    commands,
     final_reply,
     load_summary,
     summarize,
     task_facts,
+    tool_call_arguments,
     write_summary,
 )
 from taskforge.validate.controls import ControlOutcome, ServerTokenizer
@@ -93,7 +93,7 @@ def trial_summary(outcome: Outcome) -> dict[str, object]:
     common = {
         "stop_reason": None if rollout is None else rollout.stop_reason,
         "turns": 0 if rollout is None else len(rollout.steps),
-        "commands": [] if rollout is None else commands(rollout),
+        "commands": [] if rollout is None else tool_call_arguments(rollout),
         "final_reply": None if rollout is None else final_reply(rollout),
     }
     if isinstance(outcome, Graded):
