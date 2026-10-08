@@ -71,7 +71,8 @@ def test_rows_round_trip_through_finelog_server(embedded_server):
     finally:
         reader.close()
     assert row["run_id"] == "run-1" and row["item_id"] == "item-1" and row["kind"] == "llm_call"
-    assert (row["started_ms"], row["ended_ms"], row["timestamp_ms"], row["wall"]) == (100_000, 102_500, 102_500, 2.5)
+    assert (row["started_ms"], row["ended_ms"], row["timestamp_ms"]) == (100_000, 102_500, 102_500)
+    assert row["wall_time"] == 2.5
     assert (row["model"], row["tokens_in"], row["tokens_out"]) == ("glm-5.3", 7, None)
     assert dict(row["attrs"]) == {"tier": "high"}
 
