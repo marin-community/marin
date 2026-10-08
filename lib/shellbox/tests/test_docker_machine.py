@@ -4,7 +4,9 @@
 """Docker file transfer through the command boundary."""
 
 import asyncio
+import os
 import shutil
+import signal
 import sys
 import tracemalloc
 from pathlib import Path
@@ -18,7 +20,7 @@ from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 def test_docker_candidate_output_is_drained_with_bounded_memory(monkeypatch, output_limit):
     create_process = asyncio.create_subprocess_exec
     script = (
-        "import os, sys\nassert len(sys.stdin.buffer.read()) == 196608\n"
+        "import os, sys\nos.write(1, b'SHELLBOX_PGID:42\\n')\nassert len(sys.stdin.buffer.read()) == 196608\n"
         "for _ in range(512):\n os.write(1, b'x' * 65536)\n os.write(2, b'y' * 65536)\n"
     )
 
@@ -44,25 +46,100 @@ def test_docker_candidate_output_is_drained_with_bounded_memory(monkeypatch, out
 
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_leader(monkeypatch):
-    async def docker_exec(*args, stdin=b"", timeout=None, output_limit_bytes=None):
-        process = await asyncio.create_subprocess_exec(
-            *args[args.index("shellbox-test-container") + 1 :],
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
-        stdout, stderr = await asyncio.wait_for(process.communicate(stdin), timeout=timeout)
-        return DockerCommandResult(process.returncode, stdout, stderr)
+    create_process = asyncio.create_subprocess_exec
 
-    monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker_exec)
+    async def local_process(*args, **kwargs):
+        return await create_process(
+            *args[args.index("shellbox-test-container") + 1 :],
+            start_new_session=True,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
     machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")))
+    payload = b"SHELLBOX_PGID:7\nanswer\x00\xff"
     result = asyncio.run(
         machine.run(
-            Command(("sh", "-c", 'read -r value; printf "%s\\n" "$value"; exit 23'), stdin=b"answer\n", timeout=5)
+            Command(
+                (sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.exit(23)"),
+                stdin=payload,
+                timeout=5,
+            )
         )
     )
-    assert (result.exit_code, result.stdout, result.reason) == (23, b"answer\n", ExitReason.EXITED)
+    assert (result.exit_code, result.stdout, result.reason) == (23, payload, ExitReason.EXITED)
+
+
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
+@pytest.mark.parametrize("candidate_state", ["delete", "forge", "completed"])
+def test_docker_deadline_preserves_the_machine_after_pid_tampering_or_completion(tmp_path, monkeypatch, candidate_state):
+    create_process = asyncio.create_subprocess_exec
+    executions = []
+
+    async def remote_exec(*args, timeout=None, **kwargs):
+        # STOP or container disposal must end the guest operation after the client deadline.
+        execution = asyncio.create_task(docker(*args, timeout=None, **kwargs))
+        executions.append(execution)
+        result = await asyncio.wait_for(asyncio.shield(execution), timeout=timeout)
+        if "completed-at-deadline" in args:
+            raise TimeoutError("Docker exec response arrived after the command deadline")
+        return result
+
+    async def local_process(*args, **kwargs):
+        if args[1:3] == ("rm", "-f"):
+            child_path = tmp_path / "child.pid"
+            if child_path.exists():
+                try:
+                    os.killpg(os.getpgid(int(child_path.read_text())), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            return await create_process("true", **kwargs)
+        # Keep a restored guest PID-file implementation inside this fake's private /tmp.
+        argv = tuple(
+            arg.replace("/tmp/.shellbox-command-", str(tmp_path / ".shellbox-command-"))
+            for arg in args[args.index("shellbox-test-container") + 1 :]
+        )
+        return await create_process(*argv, start_new_session=True, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
+    monkeypatch.setattr("shellbox.backends.docker.machine.docker", remote_exec)
+    mutation = 'rm -f "$file"' if candidate_state == "delete" else 'printf "999999999\\n" > "$file"'
+
+    async def scenario():
+        machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)))
+        try:
+            argv = ("printf", "completed-at-deadline")
+            if candidate_state != "completed":
+                argv = (
+                    "sh",
+                    "-c",
+                    f'for file in {tmp_path}/.shellbox-command-*; do [ ! -f "$file" ] || {mutation}; done; '
+                    f"sleep 3600 & echo $! > {tmp_path}/child.pid; wait",
+                )
+            result = await machine.run(Command(argv, timeout=0.5))
+            assert result.reason is ExitReason.TIMED_OUT
+            followup = await machine.run(Command(("printf", "ready")))
+            assert (followup.exit_code, followup.stdout) == (0, b"ready")
+            if candidate_state != "completed":
+                child = int((tmp_path / "child.pid").read_text())
+                stopped = await machine.run(
+                    Command(
+                        (
+                            "sh",
+                            "-c",
+                            'if [ -f "/proc/$1/stat" ]; then read pid comm state rest < "/proc/$1/stat"; '
+                            'test "$state" = Z; fi',
+                            "child-state",
+                            str(child),
+                        )
+                    )
+                )
+                assert stopped.exit_code == 0
+        finally:
+            await machine.close()
+            await asyncio.gather(*executions)
+
+    asyncio.run(scenario())
 
 
 def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_path, monkeypatch):
@@ -167,7 +244,8 @@ def test_cancelled_docker_start_removes_a_container_before_returning(monkeypatch
 
 @pytest.mark.docker
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interruption):
+@pytest.mark.parametrize("user", [None, "12345"])
+def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interruption, user):
     async def scenario():
         machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/tmp"))
         try:
@@ -178,6 +256,7 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
                     machine.run(
                         Command(
                             ("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"),
+                            user=user,
                             timeout=5 if interruption == "timeout" else None,
                         )
                     )
@@ -221,7 +300,7 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeypatch, interruption):
+def test_interrupted_docker_start_without_a_process_group_disposes_the_container(monkeypatch, interruption):
     containers = set()
 
     async def scenario():
@@ -235,8 +314,6 @@ def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeyp
                 if interruption == "timeout":
                     raise TimeoutError("Docker exec startup timed out")
                 await asyncio.Future()
-            elif args[0] == "exec" and "stop-command" in args:
-                return DockerCommandResult(1, b"", b"Command PID is not available")
             elif args[:2] == ("rm", "-f"):
                 containers.remove(args[2])
             return DockerCommandResult(0, b"", b"")
@@ -250,6 +327,64 @@ def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeyp
         with pytest.raises(asyncio.CancelledError if interruption == "cancel" else TimeoutError):
             await pending
         assert containers == set()
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("probe", ["live", "provider_error", "timeout"])
+def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypatch, probe):
+    containers = set()
+
+    async def provider(*args, **kwargs):
+        if args[0] == "run":
+            containers.add(args[args.index("--name") + 1])
+        elif args[:2] == ("exec", "-i"):
+            kwargs["process_group"].set_result(42)
+            raise TimeoutError("Docker exec command deadline expired")
+        elif "stop-command" in args:
+            return DockerCommandResult(1, b"", b"Cannot stop the command group")
+        elif "probe-command" in args:
+            if probe == "timeout":
+                raise TimeoutError("Provider probe timed out")
+            return DockerCommandResult(0 if probe == "live" else 125, b"", b"Provider probe failed")
+        elif args[:2] == ("rm", "-f"):
+            containers.remove(args[2])
+        return DockerCommandResult(0, b"", b"")
+
+    monkeypatch.setattr("shellbox.backends.docker.machine.docker", provider)
+
+    async def scenario():
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("fixture")))
+        with pytest.raises(TimeoutError):
+            await machine.run(Command(("candidate",), user="12345"))
+        assert not containers
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("frame", ["invalid", "overlong"])
+def test_docker_malformed_process_group_frame_disposes_the_container(monkeypatch, frame):
+    create_process = asyncio.create_subprocess_exec
+    containers = {"frame-fixture"}
+
+    async def local_process(*args, **kwargs):
+        if args[1:3] == ("rm", "-f"):
+            containers.remove(args[3])
+            return await create_process("true", **kwargs)
+        payload = "b'invalid framing\\n'" if frame == "invalid" else "b'x' * 196608"
+        return await create_process(sys.executable, "-c", f"import os; os.write(1, {payload})", **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
+
+    async def scenario():
+        machine = DockerMachine("frame-fixture", MachineSpec(DockerImage("fixture")))
+        with pytest.raises((RuntimeError, ExceptionGroup)):
+            await machine.run(Command(("candidate",)))
+        assert not containers
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))
 

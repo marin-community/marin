@@ -30,16 +30,14 @@ logger = logging.getLogger(__name__)
 # The parent waits so setsid is not a process-group leader and cannot detach.
 # Keep stdin available because non-interactive shells redirect background jobs to /dev/null.
 START_COMMAND = 'exec 3<&0; setsid "$@" <&3 3<&- & wait "$!"'
-RUN_COMMAND = 'pidfile=$1; shift; echo $$ > "$pidfile"; ' 'trap \'rm -f "$pidfile"\' EXIT; "$@"'
+PROCESS_GROUP_PREFIX = b"SHELLBOX_PGID:"
+PROCESS_GROUP_HEADER_LIMIT_BYTES = 64
+RUN_COMMAND = 'printf "SHELLBOX_PGID:%s\\n" "$$"; exec "$@"'
 INTERRUPT_TIMEOUT = 10
 OUTPUT_READ_CHUNK_BYTES = 64 * 1024
-STOP_COMMAND = (
-    '[ -f "$1" ] || exit 1; read -r pid < "$1"; '
-    'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
-    '[ "$pid" -gt 1 ] || exit 1; '
-    'kill -KILL "-$pid" || exit 1; '
-    'rm -f "$1"'
-)
+KILL_PROCESS_GROUP_COMMAND = 'kill -KILL "-$1"'
+PROCESS_GROUP_ABSENT_EXIT_CODE = 3
+PROBE_PROCESS_GROUP_COMMAND = f'kill -0 "-$1" || exit {PROCESS_GROUP_ABSENT_EXIT_CODE}'
 
 
 @dataclass(frozen=True)
@@ -49,7 +47,22 @@ class DockerCommandResult:
     stderr: bytes
 
 
-async def _read_limited(stream: asyncio.StreamReader, limit: int) -> bytes:
+async def _read_limited(
+    stream: asyncio.StreamReader, limit: int, process_group: asyncio.Future[int] | None = None
+) -> bytes:
+    if process_group is not None:
+        header = await stream.readline()
+        if header:
+            value = header.removeprefix(PROCESS_GROUP_PREFIX).rstrip(b"\n")
+            if (
+                len(header) > PROCESS_GROUP_HEADER_LIMIT_BYTES
+                or not header.startswith(PROCESS_GROUP_PREFIX)
+                or not header.endswith(b"\n")
+                or not value.isdigit()
+                or int(value) <= 1
+            ):
+                raise RuntimeError("Invalid Docker process-group header")
+            process_group.set_result(int(value))
     retained = bytearray()
     while chunk := await stream.read(OUTPUT_READ_CHUNK_BYTES):
         retained.extend(chunk[: max(0, limit + 1 - len(retained))])
@@ -57,8 +70,13 @@ async def _read_limited(stream: asyncio.StreamReader, limit: int) -> bytes:
 
 
 async def docker(
-    *args: str, stdin: bytes = b"", timeout: float | None = None, output_limit_bytes: int | None = None
+    *args: str,
+    stdin: bytes = b"",
+    timeout: float | None = None,
+    output_limit_bytes: int | None = None,
+    process_group: asyncio.Future[int] | None = None,
 ) -> DockerCommandResult:
+    assert process_group is None or output_limit_bytes is not None
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -69,7 +87,7 @@ async def docker(
             else:
                 assert process.stdout is not None and process.stderr is not None and process.stdin is not None
                 async with asyncio.TaskGroup() as readers:
-                    stdout_task = readers.create_task(_read_limited(process.stdout, output_limit_bytes))
+                    stdout_task = readers.create_task(_read_limited(process.stdout, output_limit_bytes, process_group))
                     stderr_task = readers.create_task(_read_limited(process.stderr, output_limit_bytes))
                     try:
                         process.stdin.write(stdin)
@@ -82,8 +100,13 @@ async def docker(
                     await process.wait()
                 stdout, stderr = stdout_task.result(), stderr_task.result()
     except BaseException:
-        process.kill()
-        await process.wait()
+        if process.returncode is None:
+            process.kill()
+        assert process.stdout is not None and process.stderr is not None
+        async with asyncio.TaskGroup() as readers:
+            readers.create_task(_read_limited(process.stdout, 0))
+            readers.create_task(_read_limited(process.stderr, 0))
+            await process.wait()
         raise
     assert process.returncode is not None
     return DockerCommandResult(process.returncode, stdout, stderr)
@@ -140,7 +163,7 @@ class DockerMachine:
             args.extend(("--user", command.user))
         for key, value in command.env.items():
             args.extend(("-e", f"{key}={value}"))
-        pidfile = f"/tmp/.shellbox-command-{uuid.uuid4().hex}"
+        process_group: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         args.extend(
             (
                 self.name,
@@ -152,17 +175,22 @@ class DockerMachine:
                 "-c",
                 RUN_COMMAND,
                 "shellbox-command",
-                pidfile,
                 *command.argv,
             )
         )
         try:
             completed = await docker(
-                *args, stdin=command.stdin, timeout=command.timeout, output_limit_bytes=command.output_limit_bytes
+                *args,
+                stdin=command.stdin,
+                timeout=command.timeout,
+                output_limit_bytes=command.output_limit_bytes,
+                process_group=process_group,
             )
         except (TimeoutError, asyncio.CancelledError) as interruption:
             try:
-                await self._interrupt(pidfile, command.user)
+                if not process_group.done():
+                    raise RuntimeError("Docker exec did not supply a process-group ID")
+                await self._interrupt(process_group.result(), command.user)
             except Exception:
                 logger.exception("Cannot stop the Docker command process group")
                 try:
@@ -172,6 +200,9 @@ class DockerMachine:
             if isinstance(interruption, asyncio.CancelledError):
                 raise
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        except Exception:
+            await self.close()
+            raise
         limit = command.output_limit_bytes
         return Result(
             completed.exit_code,
@@ -182,22 +213,30 @@ class DockerMachine:
             ExitReason.EXITED,
         )
 
-    async def _interrupt(self, pidfile: str, user: str | None) -> None:
+    async def _interrupt(self, process_group: int, user: str | None) -> None:
         args = ["exec"]
         if user is not None:
             args.extend(("--user", user))
-        result = await docker(
-            *args,
-            self.name,
-            "sh",
-            "-c",
-            STOP_COMMAND,
-            "stop-command",
-            pidfile,
-            timeout=INTERRUPT_TIMEOUT,
-        )
-        if result.exit_code:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            result = await docker(
+                *args, self.name, "sh", "-c", KILL_PROCESS_GROUP_COMMAND, "stop-command", str(process_group)
+            )
+            if result.exit_code == 0:
+                return
+            # Signal 0 as root distinguishes an absent group from a user permission failure.
+            probe = await docker(
+                "exec",
+                "--user",
+                "0",
+                self.name,
+                "sh",
+                "-c",
+                PROBE_PROCESS_GROUP_COMMAND,
+                "probe-command",
+                str(process_group),
+            )
+            if probe.exit_code != PROCESS_GROUP_ABSENT_EXIT_CODE:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def upload(self, source: Path, target: str) -> None:
         parent = str(PurePosixPath(target).parent)

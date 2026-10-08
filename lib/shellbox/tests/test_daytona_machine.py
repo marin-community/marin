@@ -19,6 +19,7 @@ pytest.importorskip("daytona")
 
 from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
 from daytona_api_client_async import SnapshotState
+from rigging.timing import ExponentialBackoff
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
 from shellbox.image import DockerfileSource, RegistryImage
@@ -240,27 +241,53 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
     asyncio.run(scenario())
 
 
-def test_daytona_command_finishes_at_deadline_without_disposing_the_sandbox(tmp_path):
-    class CompletedAtDeadline(LocalProcess):
+def test_daytona_completion_at_pid_removal_preserves_the_sandbox(tmp_path):
+    armed, removed, released = (tmp_path / name for name in ("armed", "removed", "released"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    removal = bin_dir / "rm"
+    # Pause after the trap's PID-file removal, before its remaining work can finish.
+    removal.write_text(
+        '#!/bin/sh\n/bin/rm "$@"\ncase "$2" in */pid)\n'
+        f'if [ -f "{armed}" ] && [ ! -f "{removed}" ]; then touch "{removed}"; '
+        f'while [ ! -f "{released}" ]; do /bin/sleep 0.01; done; fi;; esac\n'
+    )
+    removal.chmod(0o755)
+    executions = []
+
+    class DeadlineAtRemoval(LocalProcess):
         async def exec(self, command, **kwargs):
-            response = await super().exec(command, **kwargs)
             if "candidate-finished" in command:
-                raise TimeoutError("Response arrived after the command deadline")
-            return response
+                execution = asyncio.create_task(super().exec(command, **kwargs))
+                executions.append(execution)
+                backoff = ExponentialBackoff(initial=0.001, maximum=0.01)
+                async with asyncio.timeout(5):
+                    while not removed.exists():
+                        await asyncio.sleep(backoff.next_interval())
+                raise TimeoutError("The command deadline expired after PID removal")
+            return await super().exec(command, **kwargs)
+
+        async def close(self):
+            released.touch()
+            await super().close()
 
     async def scenario():
         client = LocalDaytona()
-        client.sandbox.process = CompletedAtDeadline()
+        client.sandbox.process = DeadlineAtRemoval()
         machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+            MachineSpec(
+                RegistryImage("ubuntu:24.04"), workdir=str(tmp_path), env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            )
         )
         try:
-            result = await machine.run(Command(("printf", "candidate-finished"), timeout=5))
+            result = await machine.run(Command(("sh", "-c", f"touch {armed}; printf candidate-finished"), timeout=5))
             assert result.reason is ExitReason.TIMED_OUT
             following = await machine.run(Command(("printf", "still-ready")))
             assert (following.exit_code, following.stdout) == (0, b"still-ready")
             assert not client.deleted
         finally:
+            released.touch()
+            await asyncio.gather(*executions)
             await machine.close()
 
     asyncio.run(scenario())

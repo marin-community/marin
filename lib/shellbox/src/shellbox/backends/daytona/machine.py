@@ -33,12 +33,21 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, RUN_COMMAND, START_COMMAND, STOP_COMMAND
+from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.file_transfer import write_download
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+RUN_COMMAND = (
+    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
+    'trap \'touch "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
+)
+STOP_COMMAND = (
+    '[ -f "$1" ] || exit 1; read -r pid < "$1"; '
+    'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
+    '[ "$pid" -gt 1 ] || exit 1; set -- "$pid"; ' + KILL_PROCESS_GROUP_COMMAND
+)
 
 
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
@@ -149,12 +158,12 @@ class DaytonaMachine:
             RUN_COMMAND,
             "shellbox-command",
             pidfile,
+            completed_path,
             *argv,
         )
         script = (
             f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}; "
-            f"status=$?; touch {shlex.quote(completed_path)}; exit $status"
+            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
             prepared = await self.sandbox.process.exec(f"umask 077; mkdir {shlex.quote(prefix)}")

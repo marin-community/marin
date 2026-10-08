@@ -130,21 +130,12 @@ def test_bounded_download_preserves_binary_files_or_existing_target(tmp_path, mo
 
 @pytest.mark.docker
 @pytest.mark.parametrize("backend", ["docker", "daytona"])
-def test_nonroot_pid_tampering_cannot_authorize_a_root_kill(backend, monkeypatch):
+@pytest.mark.parametrize("tampering", ["delete", "forge"])
+def test_nonroot_pid_tampering_cannot_authorize_a_root_kill(backend, tampering):
     # The Daytona SDK boundary uses Docker only to test real guest UIDs and processes.
     # This is not a live Daytona service test.
     async def scenario():
         guest = await DockerMachineFactory().create(MachineSpec(DockerImage("ubuntu:24.04"), workdir="/tmp"))
-        victim_survived = False
-
-        async def checked_docker(*args, **kwargs):
-            nonlocal victim_survived
-            if args[:2] == ("rm", "-f"):
-                result = await docker("exec", "--user", "0", guest.name, "sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')
-                victim_survived = result.exit_code == 0
-            return await docker(*args, **kwargs)
-
-        monkeypatch.setattr("shellbox.backends.docker.machine.docker", checked_docker)
 
         class GuestProcess:
             async def exec(self, command, cwd=None, env=None, timeout=None):
@@ -171,44 +162,40 @@ def test_nonroot_pid_tampering_cannot_authorize_a_root_kill(backend, monkeypatch
         )
         try:
             await guest.run(Command(("sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")))
+            mutation = 'rm -f "$file"' if tampering == "delete" else 'printf "%s\\n" "$victim" > "$file"'
             candidate = Command(
                 (
                     "sh",
                     "-c",
                     "victim=$(cat /tmp/victim.pid); "
                     "for file in /tmp/.shellbox-command-* /tmp/.shellbox-*/pid; do "
-                    '[ ! -w "$file" ] || printf "%s\\n" "$victim" > "$file"; done; '
+                    f'[ ! -w "$file" ] || {mutation}; done; '
                     "sleep 3600 & echo $! > /tmp/candidate-child.pid; wait",
                 ),
                 user="nobody",
                 timeout=1,
             )
-            if backend == "docker":
-                with pytest.raises(TimeoutError):
-                    await machine.run(candidate)
-                assert victim_survived
-                disposed = await docker("inspect", guest.name)
-                assert disposed.exit_code != 0
-            else:
-                result = await machine.run(candidate)
-                assert result.reason is ExitReason.TIMED_OUT
-                result = await guest.run(Command(("sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')))
-                assert result.exit_code == 0
-                followup = await machine.run(Command(("printf", "ready"), user="nobody"))
-                assert (followup.exit_code, followup.stdout) == (0, b"ready")
-                child = await guest.run(
-                    Command(
-                        (
-                            "sh",
-                            "-c",
-                            'path="/proc/$(cat /tmp/candidate-child.pid)/stat"; '
-                            'if [ -f "$path" ]; then read pid comm state rest < "$path"; test "$state" = Z; fi',
-                        )
+            result = await machine.run(candidate)
+            assert result.reason is ExitReason.TIMED_OUT
+            result = await guest.run(Command(("sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')))
+            assert result.exit_code == 0
+            followup = await machine.run(Command(("printf", "ready"), user="nobody"))
+            assert (followup.exit_code, followup.stdout) == (0, b"ready")
+            child = await guest.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        'path="/proc/$(cat /tmp/candidate-child.pid)/stat"; '
+                        'if [ -f "$path" ]; then read pid comm state rest < "$path"; test "$state" = Z; fi',
                     )
                 )
-                assert child.exit_code == 0
+            )
+            assert child.exit_code == 0
         finally:
             await machine.close()
+        disposed = await docker("inspect", guest.name)
+        assert disposed.exit_code != 0
 
     asyncio.run(scenario())
 
