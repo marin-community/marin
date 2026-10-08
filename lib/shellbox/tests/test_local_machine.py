@@ -335,3 +335,28 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
 
     asyncio.run(scenario())
     assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()
+
+
+def test_a_venv_linked_through_an_alias_directory_runs_its_own_interpreter(tmp_path):
+    # uv links a venv's python through ``cpython-3.12-<platform>``, an alias symlink beside the resolved install.
+    interpreter = Path(os.path.realpath(sys.executable))
+    real = tmp_path / "real"
+    (real / "bin").mkdir(parents=True)
+    (real / "bin" / "python3").symlink_to(interpreter)
+    (tmp_path / "alias").symlink_to(real, target_is_directory=True)
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(tmp_path / "alias" / "bin" / "python3")
+    (venv / "bin" / "python3").symlink_to("python")
+    (venv / "pyvenv.cfg").write_text(f"home = {tmp_path / 'alias' / 'bin'}\nversion = 3\n")
+    factory = make_factory(bin_dirs=(venv / "bin",))
+
+    async def scenario() -> Result:
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            return await machine.run(Command(("python3", "-c", "import sys; print(sys.prefix)")))
+        finally:
+            await machine.close()
+
+    result = asyncio.run(scenario())
+    assert result.stdout.decode().strip() == str(venv), result.stderr.decode()
