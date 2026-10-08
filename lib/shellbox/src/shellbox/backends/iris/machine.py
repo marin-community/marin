@@ -13,6 +13,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Mapping
+from contextlib import aclosing
 from pathlib import Path, PurePosixPath
 
 from connectrpc.code import Code
@@ -28,6 +29,7 @@ from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSE
 from rigging.secrets import SecretSpec, resolve_secret_spec
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
+from shellbox.file_transfer import file_chunks, write_download
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
@@ -207,7 +209,11 @@ class IrisMachine:
             return
         await self._upload_bytes(source.read_bytes(), target)
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+        if max_bytes is not None:
+            async with aclosing(file_chunks(self, source, max_bytes)) as chunks:
+                await write_download(chunks, target, max_bytes)
+            return
         probe = await self._script(f"test -d {shlex.quote(source)}")
         if probe.exit_code == 0:
             remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"

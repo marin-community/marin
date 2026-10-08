@@ -12,7 +12,8 @@ from tempfile import TemporaryDirectory
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
+from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
+from shellbox.machine import Command, DownloadLimitExceeded, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -57,6 +58,12 @@ from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeS
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
+
+
+async def local_file_chunks(path):
+    with path.open("rb") as file:
+        while chunk := file.read(DOWNLOAD_CHUNK_BYTES):
+            yield chunk
 
 
 @dataclass
@@ -316,8 +323,8 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target):
-            await self.machine.download(source, target)
+        async def download(self, source, target, *, max_bytes=None):
+            await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def close(self):
             await self.machine.close()
@@ -1010,14 +1017,14 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
                 raise OSError("Cannot remove artifact archive")
             return await self.machine.run(command)
 
-        async def download(self, source, target):
+        async def download(self, source, target, *, max_bytes=None):
             if source.startswith("/tmp/taskcompendium-artifact-"):
                 if download_failed:
                     raise ConnectionError("Artifact download failed")
                 with tarfile.open(target, "w") as archive:
                     archive.add(answer, arcname="answer")
                 return
-            await self.machine.download(source, target)
+            await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def upload(self, source, target):
             await self.machine.upload(source, target)
@@ -1117,11 +1124,14 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target):
+        async def download(self, source, target, *, max_bytes=None):
             if source == "/logs/verifier/verdict.json":
-                target.write_text(json.dumps(self.verdict))
+                data = json.dumps(self.verdict).encode()
+                if max_bytes is not None and len(data) > max_bytes:
+                    raise DownloadLimitExceeded("Candidate file exceeds the download limit")
+                target.write_bytes(data)
             else:
-                await self.machine.download(source, target)
+                await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def close(self):
             await self.machine.close()

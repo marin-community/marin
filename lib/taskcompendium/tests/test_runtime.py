@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, Result
+from shellbox.machine import Command, DockerImage, DownloadLimitExceeded, ExitReason, MachineSpec, Result
 
 from taskcompendium.grader import grader_config
 from taskcompendium.models import ConversationTrace, FunctionCall, Source, TaskSpec, TextMessage
@@ -111,7 +111,9 @@ class FileMachine:
     async def upload(self, source: Path, target: str):
         self.files[target] = source.read_bytes()
 
-    async def download(self, source: str, target: Path):
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None):
+        if max_bytes is not None and len(self.files[source]) > max_bytes:
+            raise DownloadLimitExceeded("Candidate file exceeds the download limit")
         target.write_bytes(self.files[source])
 
     async def close(self):

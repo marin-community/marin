@@ -366,7 +366,8 @@ jobs:
         run: >-
           uv run --project lib/rolloutengine --frozen --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
-          lib/shellbox/tests/test_docker_machine.py -q
+          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py
+          lib/shellbox/tests/test_download_limits.py -q
 
       - name: Test Docker command interruption
         run: |

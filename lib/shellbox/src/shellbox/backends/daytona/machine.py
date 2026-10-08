@@ -13,11 +13,12 @@ import stat
 import tarfile
 import tempfile
 import uuid
-from collections.abc import Callable
-from contextlib import AsyncExitStack
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 from daytona import (
     AsyncDaytona,
@@ -32,6 +33,7 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.file_transfer import write_download
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
@@ -193,9 +195,18 @@ class DaytonaMachine:
         if result.exit_code:
             raise RuntimeError(f"Failed to upload {source}: {result.result}")
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
+        if max_bytes is not None:
+            regular = await self.sandbox.process.exec(f"test -f {shlex.quote(source)}")
+            if regular.exit_code != 0:
+                raise UnsupportedMachineSpec("A download byte limit requires a regular file")
+            # The pinned SDK returns an async generator with an AsyncIterator annotation.
+            stream = cast(AsyncGenerator[bytes, None], await self.sandbox.fs.download_file_stream(source))
+            async with aclosing(stream):
+                await write_download(stream, target, max_bytes)
+            return
         probe = await self.sandbox.process.exec(f"test -d {shlex.quote(source)}")
         if probe.exit_code == 0:
             remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"

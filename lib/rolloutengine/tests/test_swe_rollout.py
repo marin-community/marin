@@ -8,16 +8,18 @@ import json
 import os
 import shutil
 import subprocess
+from contextlib import aclosing
 
 import pytest
-from shellbox.machine import ExitReason, Result
+from shellbox.file_transfer import write_download
+from shellbox.machine import ExitReason, Result, UnsupportedMachineSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import EnvironmentRequirements, Source, TaskSpec, TextMessage
 
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
-from .test_rollout import ReplayModel, engine, lowered, machine_runtime
+from .test_rollout import ReplayModel, engine, local_file_chunks, lowered, machine_runtime
 
 
 class LocalGitMachine:
@@ -51,7 +53,14 @@ class LocalGitMachine:
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, path)
 
-    async def download(self, source, target):
+    async def download(self, source, target, *, max_bytes=None):
+        if max_bytes is not None:
+            path = self.path(source)
+            if path.is_dir():
+                raise UnsupportedMachineSpec("A download byte limit requires a regular file")
+            async with aclosing(local_file_chunks(path)) as chunks:
+                await write_download(chunks, target, max_bytes)
+            return
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.path(source), target)
 

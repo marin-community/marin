@@ -32,8 +32,8 @@ class _UserMachine:
     async def upload(self, source: Path, target: str) -> None:
         await self.machine.upload(source, target)
 
-    async def download(self, source: str, target: Path) -> None:
-        await self.machine.download(source, target)
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+        await self.machine.download(source, target, max_bytes=max_bytes)
 
     async def close(self) -> None:
         await self.machine.close()

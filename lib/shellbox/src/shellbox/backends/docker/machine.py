@@ -6,11 +6,15 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
+from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES, write_download
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
 from shellbox.machine import (
+    DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Backend,
     Command,
     DockerImage,
@@ -105,6 +109,34 @@ async def docker(
         raise
     assert process.returncode is not None
     return DockerCommandResult(process.returncode, stdout, stderr)
+
+
+async def _download_chunks(name: str, source: str) -> AsyncGenerator[bytes, None]:
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "exec",
+        "--user",
+        "0",
+        name,
+        "cat",
+        source,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    stderr = asyncio.create_task(_read_limited(process.stderr, DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES))
+    try:
+        while chunk := await process.stdout.read(DOWNLOAD_CHUNK_BYTES):
+            yield chunk
+        await process.wait()
+        if process.returncode:
+            raise RuntimeError((await stderr).decode(errors="replace"))
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await _read_limited(process.stdout, 0)
+        await process.wait()
+        await stderr
 
 
 class DockerMachine:
@@ -219,7 +251,14 @@ class DockerMachine:
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
-    async def download(self, source: str, target: Path) -> None:
+    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+        if max_bytes is not None:
+            probe = await docker("exec", "--user", "0", self.name, "test", "-f", source)
+            if probe.exit_code != 0:
+                raise UnsupportedMachineSpec("A download byte limit requires a regular file")
+            async with aclosing(_download_chunks(self.name, source)) as chunks:
+                await write_download(chunks, target, max_bytes)
+            return
         target.parent.mkdir(parents=True, exist_ok=True)
         copy_source = f"{source}/." if target.is_dir() else source
         result = await docker("cp", f"{self.name}:{copy_source}", str(target))
