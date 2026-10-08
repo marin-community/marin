@@ -40,7 +40,7 @@ from experiments.post_training.task_curation.images.build import (
 )
 
 LOCAL_PYTHON_VERSION = "3.12.12"
-"""The CPython the worker installs for local graders: the newest 3.12 patch the worker image's uv (0.10.3) can download."""
+"""The CPython the worker installs for local graders; the worker image's uv must be able to download it."""
 assert LOCAL_PYTHON_VERSION.startswith(f"{PYTHON_VERSION}.")
 
 COMPLETE_MARKER = ".complete"

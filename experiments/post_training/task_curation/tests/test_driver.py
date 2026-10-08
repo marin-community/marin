@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 from dataclasses import replace
 
 import pytest
@@ -114,7 +115,7 @@ def test_iris_schedules_each_grader_image_on_the_controller_without_network():
     assert spec.memory_mb == 2048
 
 
-def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch):
+def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
     environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
@@ -126,6 +127,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     machines = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL)
     factory, spec = machines.machine(environment_requirements(environment, artifact), 2048)
     runtime = local_runtime(artifact.lock_url)
+    request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
     assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)
     assert isinstance(factory, LocalMachineFactory)
     assert built == [runtime.root]

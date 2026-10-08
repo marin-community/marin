@@ -41,11 +41,13 @@ cannot convert.
    reference/wrong-answer checks for in-process numeric, MCQ, exact and action
    graders. The driver deduplicates the checked panel and saves its review
    batches.
-3. **Review.** With a rubric, the GLM reviewer judges the sample. More than 90%
-   known-good judgments accept the source without reviewing the remainder; more
-   than 50% known defects reject it; otherwise the full source is reviewed.
-   Both fractions use the whole panel as the denominator. Without a rubric,
-   `skip_source_review` keeps every converted row with
+3. **Review.** With a rubric, the GLM reviewer judges the sample. These reviews
+   are the only model reviews of the source: more than 50% known defects reject
+   it, and otherwise it is accepted. The fraction uses the whole panel as the
+   denominator; uncertain judgments, unsupported conversions and duplicate rows
+   are not defects. Unavailable reviews leave the source `incomplete` only when
+   they could still push the defects above 50%; a rerun resumes the same sample.
+   Without a rubric, `skip_source_review` keeps every converted row with
    `quality_basis="unreviewed"` and rejects the source only when converter
    defects and failed checks exceed the rejection threshold.
 4. **Full expansion.** In full mode an accepted source converts and audits every
@@ -153,7 +155,7 @@ review records that do not count as source defects. GLM completions use an
 exact-request cache keyed by the complete request and the declared model
 revision, read through FineStore, so unrelated catalog changes do not repeat
 inference. The quality review reads the cache once for all of a source's sampled
-requests; reviewing the remainder of a source reads it once per batch.
+requests.
 
 GLM sees resource paths, roles, SHA-256 hashes, byte counts and UTF-8 previews.
 Up to 256 files share 32,768 preview characters: each text file first receives up
@@ -181,7 +183,7 @@ A source runs these phases in order:
 | `sample_prepare` | The driver deduplicates the panel and saves its review batches. |
 | `quality_review` | With a rubric, the driver reads the review cache once and one execution reviews the sample; without one, the driver decides from conversion and check failures. |
 | `full_prepare` | Full mode only: one execution converts, deduplicates and checks every row. |
-| `audit_review` | One execution applies the source decision to every prepared row and reviews the remainder of a source that needs a full review. |
+| `audit_review` | One execution reuses the panel's reviews and applies the source decision to every other prepared row, without model requests. |
 | `filter` | One execution writes the filtered audit and its kept rows. |
 | `verification` | With controls, the executions of [source verification](#verification-trials). |
 | `export` | One execution shuffles the checked rows by task ID into the normalized shards and writes the `normalize`, `review`, `verify` and `final` views, with the unprocessed review rows of an unexpanded sample. |

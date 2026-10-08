@@ -5,6 +5,7 @@
 
 import gzip
 import json
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -360,9 +361,9 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     assert {row["task_id"] for row in raw} == {row["task_id"] for row in review}
     assert all("task_json" not in row and "raw_json" not in row for row in review)
     assert not report["raw_population_census"]
-    assert report["quality"]["status"] == {"bad": "reject", "good": "trust", "some_issues": "full_review"}[quality]
+    assert report["quality"]["status"] == {"bad": "reject", "good": "trust", "some_issues": "trust"}[quality]
     reviewed = sum(len(requests) for requests in service.files.values())
-    assert reviewed == (125 if quality == "some_issues" else 100)
+    assert reviewed == 100
     if quality == "bad":
         assert all(row["filter_status"] == "reject" for row in review)
         assert not parquet_rows(result.final_path)
@@ -371,7 +372,12 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
         assert {row["admission"] for row in verified} == {"admitted"}
         assert len(parquet_rows(result.final_path)) == len(verified) == expected_conversions
     else:
-        assert {row["filter_status"] for row in review} == {"reject"}
+        # Uncertain panel judgments are not source defects: the reviewed rows are
+        # rejected individually and the unreviewed rows inherit the source decision.
+        assert Counter((row["quality_basis"], row["filter_status"]) for row in review) == {
+            ("direct_review", "reject"): 100,
+            ("inferred_from_source", "keep"): 25,
+        }
 
 
 @pytest.mark.parametrize("population_count", [10, 125])
@@ -527,7 +533,7 @@ class PartiallyUnavailableReview(BatchService):
         (SourceProcessingMode.SAMPLE, 125, 0, "trust", 100, "skipped"),
         (SourceProcessingMode.FULL, 125, 0, "trust", 125, "skipped"),
         (SourceProcessingMode.SAMPLE, 30, 0, "census", 30, "skipped"),
-        (SourceProcessingMode.FULL, 125, 20, "full_review", 125, "skipped"),
+        (SourceProcessingMode.FULL, 125, 20, "trust", 125, "skipped"),
         (SourceProcessingMode.SAMPLE, 125, 0, "trust", 100, "rejected"),
     ],
 )
@@ -564,7 +570,7 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
 
 @pytest.mark.parametrize(
     "unavailable,bad_count,quality,status,admitted",
-    [(3, 20, "full_review", "completed", 102), (10, 0, "incomplete", "incomplete", 0)],
+    [(3, 20, "trust", "completed", 102), (10, 45, "incomplete", "incomplete", 0)],
     ids=["decision_reached", "decision_open"],
 )
 def test_unavailable_reviews_leave_a_source_incomplete_only_when_the_gate_cannot_decide(

@@ -59,8 +59,8 @@ def reviewed(task_id, quality=Quality.GOOD, confidence=Confidence.HIGH):
     )
 
 
-@pytest.mark.parametrize("good,expected", [(49, "reject"), (50, "full_review"), (90, "full_review"), (91, "trust")])
-def test_fixed_sample_success_fraction_controls_extrapolation(good, expected):
+@pytest.mark.parametrize("good,expected", [(49, "reject"), (50, "trust")])
+def test_fixed_sample_defect_fraction_decides_the_whole_source(good, expected):
     ids = tuple(str(i) for i in range(100))
     sample = QualitySample(10000, 10000, {}, {"numeric": 10000}, ids)
     reviews = [reviewed(task_id, Quality.GOOD if i < good else Quality.BAD) for i, task_id in enumerate(ids)]
@@ -134,44 +134,18 @@ def test_census_rejects_when_known_defects_alone_exceed_threshold(unresolved):
         assert report.defect_fraction is None
 
 
-@pytest.mark.parametrize("known_good,expected", [(90, "incomplete"), (91, "trust"), (0, "incomplete")])
-def test_missing_responses_do_not_count_as_defects_or_replace_trust_threshold(known_good, expected):
-    ids = tuple(str(i) for i in range(100))
-    reviews = [
-        (
-            reviewed(task_id)
-            if i < known_good
-            else ReviewRecord(task_id=task_id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="Upload timed out")
-        )
-        for i, task_id in enumerate(ids)
-    ]
-    report = source_quality_report(
-        QualitySample(10000, 10000, {}, {"numeric": 10000}, ids),
-        reviews,
-        SourceQualityPolicy(),
-        coverage=QualitySampleCoverage.SAMPLE,
-    )
-    assert report.status == expected
-    assert report.assessments.get(Assessment.DEFECT, 0) == 0
-    assert report.assessments[Assessment.UNAVAILABLE] == 100 - known_good
-
-
 @pytest.mark.parametrize(
     "good,defects,uncertain,expected",
     [
-        (80, 19, 0, "full_review"),
-        (89, 10, 0, "full_review"),
-        (90, 9, 0, "incomplete"),
-        (50, 49, 0, "full_review"),
+        (50, 49, 0, "trust"),
         (49, 50, 0, "incomplete"),
-        (50, 10, 0, "full_review"),
+        (50, 10, 0, "trust"),
         (49, 11, 0, "incomplete"),
-        (51, 9, 0, "incomplete"),
-        (50, 48, 1, "full_review"),
-        (49, 49, 1, "full_review"),
+        (49, 49, 1, "trust"),
+        (0, 0, 0, "incomplete"),
     ],
 )
-def test_missing_reviews_cannot_block_a_certain_middle_band(good, defects, uncertain, expected):
+def test_missing_responses_defer_the_source_only_while_they_could_reject_it(good, defects, uncertain, expected):
     ids = tuple(str(i) for i in range(100))
     reviews = (
         [reviewed(task_id) for task_id in ids[:good]]
@@ -195,7 +169,7 @@ def test_missing_reviews_cannot_block_a_certain_middle_band(good, defects, uncer
     assert report.defect_fraction is None
 
 
-@pytest.mark.parametrize("unavailable,expected", [(2, "full_review"), (3, "incomplete")])
+@pytest.mark.parametrize("unavailable,expected", [(2, "trust"), (3, "incomplete")])
 def test_unusable_raw_rows_do_not_count_as_resolvable_when_bounding_the_decision(unavailable, expected):
     """A raw panel with 48 defects, 20 unsupported rows and 2 missing reviews is decided: even two more
     defects reach only the 50% threshold, so resuming the sample cannot change the outcome."""
@@ -408,9 +382,4 @@ def test_raw_conversion_gaps_and_duplicates_are_neutral(exclusion, usable):
     assert report.assessments.get(Assessment.DEFECT, 0) == 0
     assert report.assessments[Assessment.UNUSABLE] == 100 - usable
     assert report.defect_fraction is None
-    assert (
-        report.status
-        == {0: SourceQualityStatus.INCOMPLETE, 49: SourceQualityStatus.FULL_REVIEW, 99: SourceQualityStatus.TRUST}[
-            usable
-        ]
-    )
+    assert report.status == (SourceQualityStatus.TRUST if usable else SourceQualityStatus.INCOMPLETE)

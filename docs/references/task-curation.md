@@ -168,9 +168,10 @@ are admitted like rows of in-process graders.
    (`task-curation/download/<hash>`).
 2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
    checks.
-3. With a rubric, send bounded batches to the GLM reviewer. More than 90% known
-   good judgments accepts the source without reviewing the rest; more than 50%
-   known defects rejects it. Both use the whole panel as the denominator.
+3. With a rubric, send the panel in bounded batches to the GLM reviewer. More
+   than 50% known defects, over the whole panel, rejects the source; otherwise
+   it is accepted. Uncertain judgments, unsupported conversions and duplicate
+   rows are not defects. Rows outside the panel are never reviewed individually.
    Without a rubric, rows are kept as `unreviewed`.
 4. In full mode, convert and audit every row of an accepted source.
 5. Filter rows into kept, rejected and deferred.

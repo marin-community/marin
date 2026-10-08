@@ -644,7 +644,9 @@ def _complete_audit_batch(
         if quality_exclusion(audit) is not None:
             yield audit_columns(audit)
             continue
-        if report is None or report.status == SourceQualityStatus.FULL_REVIEW:
+        # Without a quality report every eligible row is reviewed. A report's decision covers
+        # the rows outside its panel, which are never reviewed individually.
+        if report is None:
             remainder.append(record)
             continue
         if report.status == SourceQualityStatus.CENSUS:
@@ -726,9 +728,10 @@ def audit_prepared_source(
     telemetry: PhaseTelemetry | None = None,
     context: ZephyrContext | None = None,
 ) -> AuditOutcome:
-    """Reuse sampled reviews and review or classify the remaining prepared records.
+    """Reuse sampled reviews and classify the remaining prepared records by the source decision.
 
-    ``review=None`` requires a source without a rubric, whose eligible rows are kept unreviewed.
+    Without ``quality_path``, every eligible record is reviewed. ``review=None`` requires a source
+    without a rubric, whose eligible rows are kept unreviewed.
     One execution writes and counts each audit shard; a shard an earlier attempt wrote is kept.
     """
     if (review is None) != (recipe.rubric is None):

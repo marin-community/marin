@@ -26,7 +26,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
 
-SOURCE_QUALITY_REVISION = "7"
+SOURCE_QUALITY_REVISION = "8"
 
 
 @dataclass(frozen=True)
@@ -34,19 +34,17 @@ class SourceQualityPolicy:
     sample_size: int = 100
     seed: int = 0
     reject_above: float = 0.50
-    trust_below: float = 0.10
 
     def __post_init__(self):
         if self.sample_size < 1:
             raise ValueError("Sampling requires a positive size")
-        if not 0 <= self.trust_below < self.reject_above <= 1:
-            raise ValueError("Source quality thresholds must satisfy 0 <= trust < reject <= 1")
+        if not 0 < self.reject_above <= 1:
+            raise ValueError("The source rejection threshold must satisfy 0 < reject <= 1")
 
 
 class SourceQualityStatus(StrEnum):
     UNREVIEWED = "unreviewed"
     CENSUS = "census"
-    FULL_REVIEW = "full_review"
     TRUST = "trust"
     REJECT = "reject"
     INCOMPLETE = "incomplete"
@@ -201,7 +199,11 @@ def source_quality_report(
     *,
     coverage: QualitySampleCoverage,
 ) -> SourceQualityReport:
-    """Decide once on the fixed panel; missing observations never support extrapolation."""
+    """Gate the whole source once on the fixed panel; rows outside the panel are never reviewed.
+
+    Known defects above ``reject_above`` reject the source. Unavailable responses leave it
+    incomplete only while resolving them could still push defects above that threshold.
+    """
     if (
         len(sample.task_ids) != min(sample.eligible_count, policy.sample_size)
         or len(reviews) != len(sample.task_ids)
@@ -226,40 +228,25 @@ def source_quality_report(
     # Source defects are observed failures; unsupported conversion and duplicates
     # provide neither good judgments nor evidence of bad source content.
     known_defects = counts[Assessment.DEFECT] / panel_size if panel_size else 0.0
-    known_good = counts[Assessment.GOOD] / panel_size if panel_size else 0.0
     # Only unavailable responses change on resume; uncertain judgments and unusable rows stay as they are.
     resolvable = counts[Assessment.UNAVAILABLE]
-    possible_good = (counts[Assessment.GOOD] + resolvable) / panel_size if panel_size else 0.0
-    possible_defects = (counts[Assessment.DEFECT] + resolvable) / panel_size if panel_size else 0.0
     if known_defects > policy.reject_above:
         status, reason = SourceQualityStatus.REJECT, "Known defects exceed the rejection threshold over the whole panel"
     elif not reviews:
         status, reason = SourceQualityStatus.INCOMPLETE, "No usable tasks in the fixed raw panel; no source inference"
     elif census:
         status, reason = SourceQualityStatus.CENSUS, "Review attempted for every eligible unique task; no extrapolation"
-    elif known_good > 1 - policy.trust_below:
+    elif (counts[Assessment.DEFECT] + resolvable) / panel_size > policy.reject_above:
         status, reason = (
-            SourceQualityStatus.TRUST,
-            "Known good judgments exceed the trust threshold over the whole panel",
-        )
-    elif (
-        counts[Assessment.UNAVAILABLE]
-        and possible_good <= 1 - policy.trust_below
-        and possible_defects <= policy.reject_above
-    ):
-        status, reason = (
-            SourceQualityStatus.FULL_REVIEW,
-            "Resolving missing observations cannot cross either source decision threshold",
-        )
-    elif counts[Assessment.UNAVAILABLE]:
-        status, reason = SourceQualityStatus.INCOMPLETE, "Missing or invalid model responses; resume the same sample"
-    elif counts[Assessment.UNCERTAIN] or counts[Assessment.UNUSABLE]:
-        status, reason = (
-            SourceQualityStatus.FULL_REVIEW,
-            "Unassessed raw rows or semantic uncertainty prevent source extrapolation",
+            SourceQualityStatus.INCOMPLETE,
+            "Missing or invalid model responses could still reject the source; resume the same sample",
         )
     else:
-        status, reason = SourceQualityStatus.FULL_REVIEW, "Sample quality falls between the decision thresholds"
+        status, reason = (
+            SourceQualityStatus.TRUST,
+            "Known defects stay within the rejection threshold over the whole panel; "
+            "uncertain judgments and unusable rows are not defects",
+        )
     return SourceQualityReport(
         policy=policy,
         population=sample,

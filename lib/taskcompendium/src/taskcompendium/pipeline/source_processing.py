@@ -87,15 +87,8 @@ VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output; a later run of the source reuses its trials."""
 NO_CONTROLS_REASON = "The source declares no controls"
 JUDGE_GRADED_REASON = "judge grader; no control path yet"
-EXPANDED_QUALITY = frozenset(
-    {
-        SourceQualityStatus.UNREVIEWED,
-        SourceQualityStatus.TRUST,
-        SourceQualityStatus.CENSUS,
-        SourceQualityStatus.FULL_REVIEW,
-    }
-)
-"""Panel decisions that let a full-mode run convert every row."""
+EXPANDED_QUALITY = frozenset({SourceQualityStatus.UNREVIEWED, SourceQualityStatus.TRUST, SourceQualityStatus.CENSUS})
+"""Panel decisions that let a full-mode run convert every row; rows outside the panel inherit the decision."""
 
 
 class SourceProcessingMode(StrEnum):

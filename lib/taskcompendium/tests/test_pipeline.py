@@ -9,7 +9,6 @@ import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -1050,7 +1049,9 @@ class OneMissingResponseService(BatchService):
         return Output("\n".join(rows[1:] if batch["id"] == "batch-0" else rows))
 
 
-class CertainMiddleBatchService(BatchService):
+class PanelDefectsBatchService(BatchService):
+    """Judge 19 requests of the first batch bad and omit its last response; judge the rest good."""
+
     def output(self, batch):
         if batch["id"] != "batch-0":
             return super().output(batch)
@@ -1062,33 +1063,35 @@ class CertainMiddleBatchService(BatchService):
         return Output("".join(json.dumps(record) + "\n" for record in records))
 
 
-def test_certain_middle_panel_reviews_remaining_tasks_without_imputing_missing_verdict(
-    tmp_path, apple_row, svamp_recipe
-):
+def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them(tmp_path, apple_row, svamp_recipe):
     staged, prepared, quality, audited, filtered = (
         tmp_path / name for name in ("staged", "prepared", "quality", "audited", "filtered")
     )
     staged.mkdir()
     rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(120)]
     (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    service = CertainMiddleBatchService()
+    service = PanelDefectsBatchService()
     reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
     config = review_config(reviewer)
     execution = AuditExecution(max_workers=1, review_batch_size=100, reviewer=reviewer)
     prepare_source(str(staged), str(prepared), svamp_recipe, None, execution)
     report = assess_source_quality(str(prepared), str(quality), svamp_recipe, config, SourceQualityPolicy(), execution)
-    assert report.status == "full_review"
+    assert report.status == "trust"
     audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
     manifest = filter_source(str(audited), str(filtered), FilterPolicy(), max_workers=1)
     records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
-    requests = [request["custom_id"] for batch in service.batches.values() for request in batch]
-    assert len(requests) == len(set(requests)) == 120
+    requests = {request["custom_id"] for batch in service.batches.values() for request in batch}
+    assert requests == set(report.population.task_ids) and len(requests) == 100
     assert manifest["dispositions"] == {"keep": 100, "reject": 19, "defer": 1}
     missing = [row for row in records if row["review_status"] == "unavailable"]
     assert len(missing) == 1
     assert missing[0]["filter_status"] == "defer"
     assert missing[0]["review_quality"] is None
-    assert all(row["quality_basis"] != "inferred_from_source" for row in records)
+    unsampled = [row for row in records if row["task_id"] not in requests]
+    assert len(unsampled) == 20
+    assert {(row["quality_basis"], row["review_status"], row["filter_status"]) for row in unsampled} == {
+        ("inferred_from_source", None, "keep")
+    }
 
 
 @pytest.mark.parametrize(
@@ -1097,7 +1100,6 @@ def test_certain_middle_panel_reviews_remaining_tasks_without_imputing_missing_v
         (BatchService, "trust", {"reviewed"}),
         (OneMissingResponseService, "trust", {"reviewed", "unavailable"}),
         (MixedQualityBatchService, "reject", {"reviewed"}),
-        (partial(BatchService, quality="unknown"), "full_review", {"reviewed"}),
         (UnavailableBatchService, "incomplete", {"unavailable"}),
         (FirstBatchUnavailableService, "incomplete", {"unavailable", "reviewed"}),
     ],
@@ -1130,7 +1132,7 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
         str(quality),
         svamp_recipe,
         config,
-        SourceQualityPolicy(sample_size=30, trust_below=0.15, reject_above=0.20),
+        SourceQualityPolicy(sample_size=30, reject_above=0.20),
         execution,
     )
     assert report.status == status
@@ -1146,7 +1148,7 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     assert sum(record["duplicate_of"] is not None for record in records) == 1
     assert sum(record["normalization_reason"] is not None for record in records) == 1
     requests = [request["custom_id"] for batch in service.batches.values() for request in batch]
-    assert len(requests) == len(set(requests)) == (100 if status == "full_review" else 30)
+    assert len(requests) == len(set(requests)) == 30
     sample_rows = [record for record in records if record["task_id"] in sampled_ids]
     assert {record["review_status"] for record in sample_rows} == sample_review_statuses
     if status == "trust":
@@ -1169,11 +1171,8 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     elif status == "reject":
         assert manifest["dispositions"] == {"reject": 102}
         assert {record["review_quality"] for record in sample_rows} == {"good", "bad"}
-    elif status == "incomplete":
-        assert manifest["dispositions"] == {"defer": 100, "reject": 2}
     else:
-        assert manifest["reviewed_rows"] == 100
-        assert all(record["quality_basis"] != "inferred_from_source" for record in records)
+        assert manifest["dispositions"] == {"defer": 100, "reject": 2}
 
 
 def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path, apple_row, svamp_recipe):
