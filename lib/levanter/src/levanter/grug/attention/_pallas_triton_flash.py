@@ -121,9 +121,10 @@ def _key_lower_bounds(mask: AttentionMask, *, batch: int, seq_len: int) -> Int[A
 def _dkv_query_ranges(
     lower: Int[Array, "B S"], *, block_k: int, block_q: int
 ) -> tuple[Int[Array, "B Nk"], Int[Array, "B Nk"]]:
-    """Per key block: the query count that may see it, and the count of query tiles that see all of it.
+    """Per key block, the ends of the query ranges its lower bounds allow; the dK/dV kernel applies causality.
 
-    ``lower`` is nondecreasing along the sequence, so "queries with ``lower <= x``" is a prefix.
+    ``reach`` counts the queries whose lower bound admits some key of the block, and ``full`` counts the query tiles
+    whose lower bounds admit all of its keys. ``lower`` is nondecreasing along the sequence, so both are prefixes.
     """
     seq_len = lower.shape[1]
     starts = jnp.arange(0, seq_len, block_k, dtype=jnp.int32)
