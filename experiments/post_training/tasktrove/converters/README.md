@@ -1,5 +1,0 @@
-# TaskTrove converters
-
-[`registry.py`](registry.py) maps a source family and archive file shape to one converter. A converter reads `TaskFiles` and returns the typed [`ConvertedTask`](../../../../lib/taskcompendium/src/taskcompendium/convert/tasktrove_converted_task.py) or `Rejected` result. The result preserves the task instruction, VerifyIT mode, private files, optional oracle solution, and adjusted source Dockerfile. Unrecognized or unsound variants are rejected by their converter.
-
-Modules such as [`tasktrove_python_unit_tests.py`](../../../../lib/taskcompendium/src/taskcompendium/convert/tasktrove_python_unit_tests.py), [`agent_calendar.py`](agent_calendar.py), [`judge_rubric.py`](judge_rubric.py), and [`tasktrove_stdio_cases.py`](../../../../lib/taskcompendium/src/taskcompendium/convert/tasktrove_stdio_cases.py) handle distinct archived task layouts. The [TaskTrove release README](../README.md) explains the conversion stages and how to add a converter. The task curation experiment adapts these results in its [TaskTrove declarations](../../task_curation/datasets/README.md).

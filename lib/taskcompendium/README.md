@@ -4,7 +4,6 @@ The [task curation pipeline](../../docs/references/task-curation.md) downloads p
 
 For ingestion work, start with the [pipeline overview](src/taskcompendium/pipeline/README.md)
 and the [experiment flow](../../experiments/post_training/task_curation/README.md).
-The [package index](src/taskcompendium/README.md) links the implementation areas.
 The sections below describe the task model and its presentation and grading contracts.
 
 ## What problem does it solve?
@@ -306,7 +305,7 @@ def score_final_response(content: str):
 Three functions grade an attempt:
 
 - `taskcompendium.grading.grade_answer(task, attempt)` grades with an in-process `VerifyitGrader`. The answer format extracts the submission, or `attempt.state` supplies it for a `state` answer, and `verifyit.candidate.grade_candidate` scores it. It raises `TypeError` for other graders.
-- `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate. The [runtime README](src/taskcompendium/runtime/README.md) lists the files it stages.
+- `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
 - `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. An in-process grader uses `grade_answer`. A grader with an environment uses `grade_in_sandbox` after `grade_task` checks the factory's backend against `environment.compatible_backends`. A missing factory or machine specification, and a machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
 
 RolloutEngine's Shellbox session calls `grade_answer` or `grade_in_sandbox` after the turn loop; see [task rollouts](../../docs/references/task-rollouts.md).
