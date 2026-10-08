@@ -54,14 +54,14 @@ FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission 
 
 
 class GradingMachines(Protocol):
-    """Fresh grading machines for a campaign's verification backend."""
+    """Fresh grading machines for a campaign's verification backends."""
 
     def identity(self) -> dict[str, Any]:
-        """Backend, worker image and other settings that can change a control's outcome."""
+        """Backends, worker image and other settings that can change a control's outcome."""
         ...
 
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """A factory and specification that run ``image`` with network access denied."""
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        """A factory and specification for ``environment``, on a backend it declares, with network access denied."""
         ...
 
 
@@ -152,9 +152,8 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
 def _image_machine(
     machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
 ) -> tuple[MachineFactory, MachineSpec]:
-    """A machine of ``environment``'s image, on a backend the environment declares compatible."""
-    assert environment.docker_image is not None
-    factory, spec = machines.machine(environment.docker_image, memory_mb)
+    """A machine for ``environment``, on a backend the environment declares compatible."""
+    factory, spec = machines.machine(environment, memory_mb)
     require_compatible_backend(environment, factory.backend)
     return factory, spec
 
@@ -168,7 +167,11 @@ class _Sandbox:
     grader: tuple[MachineFactory, MachineSpec]
 
     def oracle(self, task: TaskSpec) -> tuple[MachineFactory, MachineSpec]:
-        """The agent's image, whose tools and directories an oracle expects; the grader's when there is none."""
+        """The agent's image, whose tools and directories an oracle expects; the grader's machine when there is none.
+
+        The agent's environment chooses the oracle's backend, so a grader that runs locally still gets its
+        golden from a sandbox of the agent's image.
+        """
         if task.environment_requirements.docker_image is None:
             return self.grader
         return _image_machine(self.machines, task.environment_requirements, self.memory_mb)

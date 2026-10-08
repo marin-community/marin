@@ -323,6 +323,10 @@ class EnvironmentRequirements(BaseModel):
             raise ValueError("Compatible backends must be unique")
         if Backend.SHELLSIM in self.compatible_backends and self.docker_image is not None:
             raise ValueError("ShellSim cannot satisfy a required Docker image")
+        # The local backend runs on a host that reproduces the image's dependencies, so the image still
+        # names what the environment provides.
+        if Backend.LOCAL in self.compatible_backends and self.docker_image is None:
+            raise ValueError("A local environment requires the image whose dependencies the host provides")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):

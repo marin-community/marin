@@ -269,6 +269,41 @@ def test_specs_the_host_cannot_honor_are_rejected(factory, spec):
         asyncio.run(factory.create(spec))
 
 
+def test_a_shared_root_keeps_its_files_and_loses_only_the_machine_uploads(tmp_path, roots):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "kept.txt").write_text("host")
+    upload = tmp_path / "answer.txt"
+    upload.write_text("7")
+    factory = LocalMachineFactory(tuple(map(str, roots)), shared_roots=(str(shared),), lock_path=tmp_path / "lock")
+
+    async def scenario() -> Result:
+        machine = await factory.create(MachineSpec(HostImage(), workdir=str(shared)))
+        try:
+            await machine.upload(upload, str(shared / "staged" / "answer.txt"))
+            return await machine.run(Command(("sh", "-c", "cat kept.txt staged/answer.txt && echo written > made.txt")))
+        finally:
+            await machine.close()
+
+    assert asyncio.run(scenario()).stdout == b"host7"
+    assert (shared / "kept.txt").exists() and (shared / "made.txt").exists()
+    assert not (shared / "staged").exists()
+
+
+def test_the_filesystem_root_as_workdir_runs_commands_there(factory):
+    # Grader scripts that read absolute paths run with cwd "/", which no machine owns.
+    assert run_command(factory, MachineSpec(HostImage(), workdir="/"), Command(("pwd",))).stdout == b"/\n"
+
+
+def test_a_factory_cannot_own_the_directory_its_process_runs_from(tmp_path, monkeypatch):
+    bundle = tmp_path / "app"
+    (bundle / "lib").mkdir(parents=True)
+    monkeypatch.chdir(bundle / "lib")
+    with pytest.raises(ValueError, match="runs from"):
+        LocalMachineFactory((str(bundle),), lock_path=tmp_path / "local.lock")
+    assert (bundle / "lib").is_dir()
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="Root may run commands as any user")
 def test_a_non_root_host_runs_only_its_own_user(factory, spec):
     async def scenario(machine: LocalMachine) -> Result:

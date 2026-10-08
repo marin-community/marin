@@ -187,5 +187,6 @@ class FixtureGradingMachines:
     def identity(self) -> dict[str, Any]:
         return {"backend": "fixture", "network": "deny"}
 
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        return self.factory, MachineSpec(DockerImage(image), memory_mb=memory_mb)
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        assert environment.docker_image is not None
+        return self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)

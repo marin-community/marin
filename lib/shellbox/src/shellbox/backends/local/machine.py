@@ -132,10 +132,12 @@ def _first_new_path(path: Path) -> Path:
     return path
 
 
-def _reset_roots(roots: Iterable[PurePosixPath], workdir: PurePosixPath | None) -> None:
+def _reset_roots(roots: Iterable[PurePosixPath], shared: Iterable[PurePosixPath], workdir: PurePosixPath | None) -> None:
     _remove(map(Path, roots))
     for root in roots:
         Path(root).mkdir(parents=True)
+    for root in shared:
+        Path(root).mkdir(parents=True, exist_ok=True)
     if workdir is not None:
         Path(workdir).mkdir(parents=True, exist_ok=True)
 
@@ -250,6 +252,7 @@ class LocalMachine:
         spec: MachineSpec,
         *,
         owned_roots: tuple[PurePosixPath, ...],
+        shared_roots: tuple[PurePosixPath, ...],
         environment: dict[str, str],
         home: Path,
         lock: int,
@@ -258,6 +261,7 @@ class LocalMachine:
     ):
         self.spec = spec
         self.owned_roots = owned_roots
+        self.shared_roots = shared_roots
         self.environment = environment
         self.home = home
         self._lock = lock
@@ -332,10 +336,11 @@ class LocalMachine:
         self._check_open()
         path = _absolute_path(target)
         if not _within(path, self.owned_roots):
-            if path == SCRATCH_ROOT or not path.is_relative_to(SCRATCH_ROOT):
+            if path in (*self.shared_roots, SCRATCH_ROOT) or not _within(path, (*self.shared_roots, SCRATCH_ROOT)):
                 raise UnsupportedMachineSpec(
-                    f"The local backend uploads only into its owned roots or {SCRATCH_ROOT}, not {target}"
+                    f"The local backend uploads only into its owned or shared roots or {SCRATCH_ROOT}, not {target}"
                 )
+            # Shared roots and scratch outlive the machine, so only what this upload adds is removed at close.
             self._scratch.append(_first_new_path(Path(path)))
         await asyncio.to_thread(_copy, source, Path(path))
 
@@ -363,7 +368,11 @@ class LocalMachineFactory:
     network. Each command runs under resource limits and whatever confinement ``lockdown``
     reports this host's kernel allows; a command may escape where the kernel does not.
     ``memory_mb`` is ignored. Each machine owns ``owned_roots``: ``create`` empties them and
-    ``close`` removes them with the machine's uploads. An exclusive ``flock`` on ``lock_path``
+    ``close`` removes them with the machine's uploads, so no owned root may hold this process's
+    interpreter or working directory. ``shared_roots`` are directories commands may also write and
+    uploads may target, such as a workspace the host process itself runs from; ``create`` makes them
+    without emptying them and ``close`` removes only the machine's uploads there, so files a command
+    writes to a shared root remain for the next machine. An exclusive ``flock`` on ``lock_path``
     lets only one machine exist at a time, across processes that share the path. Commands
     never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
     a private ``HOME``, ``LANG``, the host's ``PYTHONHASHSEED`` if set, and the spec's and
@@ -376,13 +385,23 @@ class LocalMachineFactory:
         self,
         owned_roots: tuple[str, ...],
         *,
+        shared_roots: tuple[str, ...] = (),
         bin_dirs: tuple[Path, ...] = (),
         lock_path: Path = DEFAULT_LOCK_PATH,
     ):
         roots = tuple(_absolute_path(root) for root in owned_roots)
-        if PurePosixPath("/") in roots:
-            raise ValueError("The filesystem root cannot be an owned root")
+        shared = tuple(_absolute_path(root) for root in shared_roots)
+        if PurePosixPath("/") in (*roots, *shared):
+            raise ValueError("The filesystem root cannot be an owned or shared root")
+        if any(_within(root, roots) or any(_within(owned, (root,)) for owned in roots) for root in shared):
+            raise ValueError("A shared root cannot overlap an owned root")
+        # create() deletes the owned roots, so a root holding this process's interpreter or working directory,
+        # as /app holds an Iris task's bundle and venv, would delete the running worker.
+        for path in (os.getcwd(), sys.prefix, sys.executable):
+            if _within(_absolute_path(path), roots):
+                raise ValueError(f"An owned root holds {path}, which this process runs from")
         self.owned_roots = roots
+        self.shared_roots = shared
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
         self.lock_path = lock_path
         no_new_privs = launch.no_new_privs_available()
@@ -401,12 +420,15 @@ class LocalMachineFactory:
             raise UnsupportedMachineSpec(f"The local backend requires HostImage, not {type(spec.source).__name__}")
         if spec.cpus is not None or spec.storage_mb is not None or spec.gpus:
             raise UnsupportedMachineSpec("The local backend does not provide CPU, storage, or GPU allocations")
-        workdir = _absolute_path(spec.workdir) if spec.workdir else None
-        if workdir is not None and not _within(workdir, self.owned_roots):
-            raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} must lie in an owned root")
+        # Commands run in / without a workdir; / always exists, so it needs no owned root.
+        workdir = _absolute_path(spec.workdir) if spec.workdir not in ("", "/") else None
+        if workdir is not None and not _within(workdir, (*self.owned_roots, *self.shared_roots)):
+            raise UnsupportedMachineSpec(
+                f"The local backend's workdir {spec.workdir} must lie in an owned or shared root"
+            )
         lock = await _exclusive_lock(self.lock_path)
         try:
-            await asyncio.to_thread(_reset_roots, self.owned_roots, workdir)
+            await asyncio.to_thread(_reset_roots, self.owned_roots, self.shared_roots, workdir)
             home = Path(tempfile.mkdtemp(prefix="shellbox-local-home-"))
         except BaseException:
             os.close(lock)
@@ -423,12 +445,19 @@ class LocalMachineFactory:
             landlock = _landlock_ruleset(
                 self._landlock_abi,
                 readable=(*SYSTEM_READ_ROOTS, *_interpreter_roots(self.bin_dirs)),
-                writable=(*map(str, self.owned_roots), str(home), str(SCRATCH_ROOT), SHARED_MEMORY),
+                writable=(
+                    *map(str, self.owned_roots),
+                    *map(str, self.shared_roots),
+                    str(home),
+                    str(SCRATCH_ROOT),
+                    SHARED_MEMORY,
+                ),
                 network=spec.network,
             )
         return LocalMachine(
             spec,
             owned_roots=self.owned_roots,
+            shared_roots=self.shared_roots,
             environment=environment,
             home=home,
             lock=lock,

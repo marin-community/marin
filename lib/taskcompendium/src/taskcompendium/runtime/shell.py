@@ -17,6 +17,7 @@ from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
+    HostImage,
     Machine,
     MachineFactory,
     MachineSpec,
@@ -25,6 +26,7 @@ from shellbox.machine import (
 )
 
 from taskcompendium.models import (
+    EnvironmentRequirements,
     FunctionCall,
     FunctionDefinition,
     OutputDirectory,
@@ -66,6 +68,15 @@ def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
     if isinstance(machine_spec.source, QemuBundle):
         identity["source"] = {"path": str(machine_spec.source.path)}
     return identity
+
+
+def require_environment_source(machine_spec: MachineSpec, environment: EnvironmentRequirements) -> None:
+    """Check the machine against the environment: the host for a local environment, otherwise its pinned image."""
+    if isinstance(machine_spec.source, HostImage) and Backend.LOCAL in environment.compatible_backends:
+        return
+    if environment.docker_image is None:
+        raise ValueError("The environment names no image for the machine to use")
+    require_image(machine_spec, environment.docker_image)
 
 
 def require_image(machine_spec: MachineSpec, image: str) -> None:

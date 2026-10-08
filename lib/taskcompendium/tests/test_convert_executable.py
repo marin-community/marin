@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineFactory, MachineSpec, Result
+from shellbox.machine import Backend, Command, DockerImage, ExitReason, HostImage, MachineFactory, MachineSpec, Result
 from verifyit.spec import StdioSpec
 
 from taskcompendium.convert.executable import (
@@ -134,6 +134,10 @@ class GradingMachine:
                     assert stream is not None
                     self.files["/" + member.name] = stream.read()
             return EXITED
+        if program == "/bin/bash" and "/solution/solve.sh" in self.files:
+            # The oracle command runs the fixture's solve.sh, which writes the reference program.
+            self.files["/app/solution.py"] = b"print(7)\n"
+            return EXITED
         if program == "python3":
             # The verdict depends on the submitted program, never on a verdict an agent supplied.
             reward = {b"print(7)\n": 1.0, b"partial": 0.25}.get(self.files.get("/app/solution.py", b""), 0.0)
@@ -160,7 +164,7 @@ class GradingMachine:
 
 @dataclass
 class GradingMachines:
-    backend = Backend.DOCKER
+    backend: Backend = Backend.DOCKER
     machines: list[GradingMachine] = field(default_factory=list)
     verdict_status: str = "scored"
 
@@ -179,8 +183,26 @@ class ControlMachines:
     def identity(self) -> dict:
         return {"backend": "fixture"}
 
-    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        return self.factory, MachineSpec(DockerImage(image), memory_mb=memory_mb)
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        assert environment.docker_image is not None
+        return self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
+
+
+@dataclass
+class RoutedMachines:
+    """A campaign that grades local environments on the host and runs every image in a sandbox."""
+
+    local: GradingMachines = field(default_factory=lambda: GradingMachines(backend=Backend.LOCAL))
+    sandbox: GradingMachines = field(default_factory=GradingMachines)
+
+    def identity(self) -> dict:
+        return {"backend": "fixture"}
+
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        if Backend.LOCAL in environment.compatible_backends:
+            return self.local, MachineSpec(HostImage())
+        assert environment.docker_image is not None
+        return self.sandbox, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
 
 
 def grading_spec(task: TaskSpec) -> MachineSpec:
@@ -286,6 +308,19 @@ async def test_agent_machine_rejects_an_incompatible_backend_before_start(execut
     with pytest.raises(ValueError, match="not declared compatible"):
         await factory.create(incompatible(executable_task, "worker"))
     assert not machines.machines
+
+
+def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image(executable_task):
+    data = executable_task.model_dump(mode="json")
+    data["grader"]["environment"]["compatible_backends"] = ["local"]
+    machines = RoutedMachines()
+    report = run_controls(TaskSpec.model_validate_json(json.dumps(data)), controls=CONTROLS, machines=machines)
+    assert checks(report) == {"golden": CheckStatus.PASS}
+    (oracle,) = machines.sandbox.machines
+    (grader,) = machines.local.machines
+    assert "/solution/solve.sh" in oracle.files and "/solution/solve.sh" not in grader.files
+    assert grader.files["/app/solution.py"] == b"print(7)\n"
+    assert oracle.closed and grader.closed
 
 
 def test_grader_controls_reject_an_incompatible_backend_before_start(executable_task):

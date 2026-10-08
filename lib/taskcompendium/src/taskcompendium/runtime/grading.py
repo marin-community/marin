@@ -54,7 +54,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.output_capture import selected_directory_files, validate_output_directories
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE, require_image
+from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE, require_environment_source
 from taskcompendium.submission import conversation_messages, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
@@ -385,8 +385,7 @@ def _sandbox_grading(
         )
     if (grading.collect or grading.artifacts) and task_machine is None:
         raise ValueError("Collecting grader inputs requires the task machine")
-    assert grading.environment.docker_image is not None
-    require_image(machine_spec, grading.environment.docker_image)
+    require_environment_source(machine_spec, grading.environment)
     validate_output_directories(task.output_directories, grading.workspace)
     return grading
 
