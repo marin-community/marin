@@ -18,6 +18,8 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
+from harbor_config.errors import ErrorCategory
+
 from verifyit.execution.command import run_command
 from verifyit.file_ops.read import read_text
 from verifyit.file_ops.restore import restore
@@ -87,21 +89,39 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
             result = run_command(argv, directory, remaining)
             if result.timed_out:
                 return scored(0.0, reason="timeout", passed=0, total=0)
-            if result.returncode not in (0, 1, 5):
-                raise RuntimeError(
-                    f"pytest producer failed before a usable json report (exit {result.returncode}): "
-                    f"{_tail(result.stderr or result.stdout)}"
-                )
-            if not report_path.is_file():
+            if result.returncode not in (0, 1, 2, 5) or not report_path.is_file():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return scored(0.0, reason="timeout", passed=0, total=0)
+                if _pytest_available(spec.python, Path(scratch), remaining):
+                    return scored(
+                        0.0,
+                        reason="startup_error",
+                        category=ErrorCategory.AGENT,
+                        exit_code=result.returncode,
+                        output=_tail(result.stderr or result.stdout),
+                        passed=0,
+                        total=0,
+                    )
                 raise RuntimeError(
                     f"pytest wrote no json report (exit {result.returncode}): "
                     f"{_tail(result.stderr or result.stdout)}"
                 )
             report = json.loads(read_text(report_path))
+            # Candidate syntax and import errors can stop test collection. The
+            # source's golden control must establish that its suite can run.
+            if any(collector.get("outcome") == "failed" for collector in report.get("collectors", [])):
+                return scored(
+                    0.0,
+                    reason="collection_error",
+                    category=ErrorCategory.AGENT,
+                    exit_code=result.returncode,
+                    output=_tail(result.stderr or result.stdout),
+                )
+            if result.returncode == 2:
+                raise RuntimeError("pytest interrupted without a reported collection failure")
             if result.returncode == 5:
                 return scored(0.0, reason="no_tests", passed=0, total=0, exit_code=5)
-            if any(collector.get("outcome") == "failed" for collector in report.get("collectors", [])):
-                raise RuntimeError("pytest report contains collection failures")
             _validate_summary(report)
             root = Path(report.get("root", directory))
             reported_ids.update(_rebase(test["nodeid"], root, directory) for test in report.get("tests", []))
@@ -125,6 +145,37 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
     if reward.reward < 1.0:
         reward = replace(reward, detail={**reward.detail, "output": _tail(output, STDERR_TAIL)})
     return reward
+
+
+def _pytest_available(python: str, directory: Path, timeout: float) -> bool:
+    # Candidate modules can shadow pytest's dependencies before collection.
+    # Probe the installed interpreter/plugin without importing any task code.
+    test = directory / "test_availability.py"
+    test.write_text("def test_available():\n    assert True\n")
+    config = directory / "pytest.ini"
+    config.write_text("[pytest]\n")
+    report = directory / "availability.json"
+    result = run_command(
+        [
+            python,
+            "-I",
+            "-m",
+            "pytest",
+            "--json-report",
+            f"--json-report-file={report}",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "addopts=",
+            "-c",
+            str(config),
+            str(test),
+        ],
+        directory,
+        timeout,
+        env={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "", "PYTEST_ADDOPTS": "", "PYTEST_PLUGINS": ""},
+    )
+    return not result.timed_out and result.returncode == 0 and report.is_file()
 
 
 def _match_partial_ids(outcomes: dict[str, bool], reported_ids: set[str], required: tuple[str, ...]) -> dict[str, bool]:

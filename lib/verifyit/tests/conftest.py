@@ -1,12 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
 from pathlib import Path
 
-import pytest
-
-
-@pytest.fixture
-def importable_grading_modules(monkeypatch):
-    # Spawned grading workers must import the trusted test scorer package.
-    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+# Collection and spawned grading workers import the same test scorer package.
+sys.path.insert(0, str(Path(__file__).parent))

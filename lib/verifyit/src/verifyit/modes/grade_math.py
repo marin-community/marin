@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from verifyit.grade import (
+    GradingInfraError,
     InvalidTask,
     Reward,
     empty_output_policy,
@@ -205,20 +206,25 @@ def _additive_constant_match(expected: list, candidate: list) -> bool:
     return False
 
 
-def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
-    """Score extracted math content; backend deadlines become infrastructure failures."""
+def validate_math(spec: MathSpec) -> None:
+    """Check the parsing policy; the reference itself is parsed only when grading."""
     empty_output_policy(spec)
     if type(spec.allow_additive_constant) is not bool:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+
+
+def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
+    """Score extracted math content; backend deadlines become infrastructure failures."""
+    validate_math(spec)
     from math_verify.errors import TimeoutException  # noqa: PLC0415
 
     try:
         return _grade_math_candidate(spec, candidate)
     except TimeoutException as error:
         # This backend exception inherits BaseException, unlike Python's TimeoutError.
-        raise RuntimeError("math verifier deadline exhausted") from error
+        raise GradingInfraError("math verifier deadline exhausted") from error
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
@@ -304,17 +310,22 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
 
 
+def math_answer(spec: MathSpec, text: str) -> str:
+    """The math content of an answer: all of it for the raw profile, else its last box or last line."""
+    if spec.profile is MathProfile.RAW:
+        return text
+    if BOXED in text:
+        return extract_boxed(text) or ""
+    return last_line(text) or ""
+
+
 def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
         # Validate the reference even when no candidate was submitted.
         grade_math_candidate(spec, "")
         return scored(0.0, reason="no_output")
-    if spec.profile is MathProfile.RAW:
-        return grade_math_candidate(spec, text)
-    boxed = extract_boxed(text)
-    candidate = (boxed or "") if BOXED in text else last_line(text) or ""
-    return grade_math_candidate(spec, candidate)
+    return grade_math_candidate(spec, math_answer(spec, text))
 
 
 def _numeric_rows(value: object) -> list[list[float]]:
