@@ -47,13 +47,12 @@ from taskforge.ledger.records import Ledger
 from taskforge.llm.client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import TOKEN_FIELDS, served_tokens
+from taskforge.sandbox.images import DEFAULT_MODE
 from taskforge.spec.controls import Control, Workspace, reply, shell_turn, validate_controls
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
 WORKSPACE_REPLY = "The workspace is ready for grading."
-DEFAULT_FILE_MODE = "644"
-"""The mode a workspace file without one gets, as RolloutEngine installs a resource without one."""
 NO_GENERATION_PROMPT: dict[str, object] = {"add_generation_prompt": False}
 
 
@@ -202,7 +201,7 @@ def workspace_turn(index: int, file: TaskResource) -> AssistantToolCalls:
     path = shlex.quote(str(target))
     directory = shlex.quote(str(target.parent))
     data = shlex.quote(base64.b64encode(resource_bytes(file)).decode())
-    mode = file.mode or DEFAULT_FILE_MODE
+    mode = file.mode or DEFAULT_MODE
     command = f"mkdir -p {directory} && printf %s {data} | base64 -d > {path} && chmod {mode} {path}"
     return shell_turn((f"workspace-{index}", command))
 
