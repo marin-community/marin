@@ -48,6 +48,8 @@ from taskcompendium.runtime.models import RolloutRecord
 
 SOURCE_VERIFICATION_REVISION = "6"
 VERIFICATION_REPORT_FILENAME = "verification.json"
+INFRA_ERROR_RETRIES = 2
+"""Extra runs of one attempt whose controls hit an infrastructure error, such as a sandbox that never started."""
 """The verified stage's report; a rerun reuses its matching control trials."""
 
 
@@ -376,26 +378,34 @@ def _verify_sample_with_evidence(
                 metrics.update_counter(f"verification/suite/{suite.id}/reused_attempts", 1)
                 continue
             history.append(HistoricalTrial(trial=saved.trial, evidence=saved.evidence))
-        started = time.monotonic()
-        try:
-            report = suite.run(task)
-        except UnsupportedMachineSpec as error:
-            report = VerificationReport(
-                [
-                    CheckResult(
-                        check="runtime_compatibility",
-                        status=CheckStatus.UNSUPPORTED,
-                        detail=str(error),
-                    )
-                ]
-            )
-        finally:
-            metrics.update_counter("verification/attempts", 1)
-            metrics.update_counter("verification/executed_attempts", 1)
-            elapsed = time.monotonic() - started
-            metrics.update_counter("verification/attempt_seconds", elapsed)
-            metrics.update_counter(f"verification/suite/{suite.id}/executed_attempts", 1)
-            metrics.update_counter(f"verification/suite/{suite.id}/attempt_seconds", elapsed)
+        for retry in range(INFRA_ERROR_RETRIES + 1):
+            started = time.monotonic()
+            try:
+                report = suite.run(task)
+            except UnsupportedMachineSpec as error:
+                report = VerificationReport(
+                    [
+                        CheckResult(
+                            check="runtime_compatibility",
+                            status=CheckStatus.UNSUPPORTED,
+                            detail=str(error),
+                        )
+                    ]
+                )
+            finally:
+                metrics.update_counter("verification/attempts", 1)
+                metrics.update_counter("verification/executed_attempts", 1)
+                elapsed = time.monotonic() - started
+                metrics.update_counter("verification/attempt_seconds", elapsed)
+                metrics.update_counter(f"verification/suite/{suite.id}/executed_attempts", 1)
+                metrics.update_counter(f"verification/suite/{suite.id}/attempt_seconds", elapsed)
+            # An infrastructure error says nothing about the task; rerun the attempt before recording it.
+            if (
+                not any(check.status == CheckStatus.INFRA_ERROR for check in report.checks)
+                or retry == INFRA_ERROR_RETRIES
+            ):
+                break
+            metrics.update_counter("verification/infra_error_retries", 1)
         for check in report.checks:
             metrics.update_counter(f"verification/control/{check.check}/{check.status.value}", 1)
         status = _trial_status(report.checks)

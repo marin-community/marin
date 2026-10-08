@@ -46,7 +46,7 @@ from experiments.post_training.task_curation.pipeline import RlDataArtifact, RlD
 from experiments.post_training.task_curation.sources import all_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
-IRIS_SCHEDULING_TIMEOUT = 180
+IRIS_SCHEDULING_TIMEOUT = 600
 IRIS_JOB_TTL = 1800
 
 

@@ -20,8 +20,17 @@ from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.controls import answer_reply, control_suite, wrong_reply
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
-from taskcompendium.pipeline.models import CheckResult, CheckStatus, Controls, GraderReadiness, RawRow, Reply
+from taskcompendium.pipeline.models import (
+    CheckResult,
+    CheckStatus,
+    Controls,
+    GraderReadiness,
+    RawRow,
+    Reply,
+    VerificationReport,
+)
 from taskcompendium.pipeline.source_verification import (
+    INFRA_ERROR_RETRIES,
     SOURCE_VERIFICATION_REVISION,
     SampleResult,
     SourceVerificationPolicy,
@@ -191,6 +200,35 @@ def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_
         saved_trials(str(original_path), identity=verification_identity(suite, replace(policy, seed=1)), attempts=2)
         == {}
     )
+
+
+@pytest.mark.parametrize("outages", [1, INFRA_ERROR_RETRIES + 1])
+def test_attempt_with_infrastructure_error_is_rerun_before_it_is_recorded(reusable_schema_row, outages):
+    """A sandbox that never started says nothing about the task, so the attempt runs again; only
+    an outage that outlasts every retry is recorded."""
+    suite = control_suite(SCHEMA_CONTROLS, None)
+    runs = []
+
+    def flaky(task):
+        runs.append(task.id)
+        if len(runs) <= outages:
+            return VerificationReport(
+                [CheckResult(check="golden", status=CheckStatus.INFRA_ERROR, detail="sandbox did not start")]
+            )
+        return suite.run(task)
+
+    policy = SourceVerificationPolicy(1, 0, 1, 1.0)
+    identity = verification_identity(replace(suite, run=flaky), policy)
+    verified = _verify_sample_with_evidence(
+        reusable_schema_row, suite=replace(suite, run=flaky), attempts=1, identity=identity, report_path="r"
+    )
+    [trial] = verified.result.trials
+    if outages <= INFRA_ERROR_RETRIES:
+        assert trial.status == CheckStatus.PASS
+        assert len(runs) == outages + 1
+    else:
+        assert trial.status == CheckStatus.INFRA_ERROR
+        assert len(runs) == INFRA_ERROR_RETRIES + 1
 
 
 @pytest.mark.parametrize("second_failed", [True, False])
