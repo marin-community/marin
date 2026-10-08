@@ -5,6 +5,8 @@
 
 import asyncio
 import shutil
+import sys
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -12,9 +14,37 @@ from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine,
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 
 
+@pytest.mark.parametrize("output_limit", [0, 1024])
+def test_docker_candidate_output_is_drained_with_bounded_memory(monkeypatch, output_limit):
+    create_process = asyncio.create_subprocess_exec
+    script = (
+        "import os, sys\nassert len(sys.stdin.buffer.read()) == 196608\n"
+        "for _ in range(512):\n os.write(1, b'x' * 65536)\n os.write(2, b'y' * 65536)\n"
+    )
+
+    async def local_process(*args, **kwargs):
+        assert args[0] == "docker"
+        return await create_process(sys.executable, "-c", script, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
+    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
+    tracemalloc.start()
+    try:
+        result = asyncio.run(
+            machine.run(Command(("candidate",), stdin=b"abc" * 65536, output_limit_bytes=output_limit, timeout=10))
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert (result.exit_code, result.reason) == (0, ExitReason.EXITED)
+    assert (result.stdout, result.stderr) == (b"x" * output_limit, b"y" * output_limit)
+    assert result.stdout_truncated and result.stderr_truncated
+    assert peak < 8 * 1024**2
+
+
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_leader(monkeypatch):
-    async def docker_exec(*args, stdin=b"", timeout=None):
+    async def docker_exec(*args, stdin=b"", timeout=None, output_limit_bytes=None):
         process = await asyncio.create_subprocess_exec(
             *args[args.index("shellbox-test-container") + 1 :],
             stdin=asyncio.subprocess.PIPE,

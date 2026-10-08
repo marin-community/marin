@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 START_COMMAND = 'exec 3<&0; setsid "$@" <&3 3<&- & wait "$!"'
 RUN_COMMAND = 'pidfile=$1; shift; echo $$ > "$pidfile"; ' 'trap \'rm -f "$pidfile"\' EXIT; "$@"'
 INTERRUPT_TIMEOUT = 10
+OUTPUT_READ_CHUNK_BYTES = 64 * 1024
 STOP_COMMAND = (
     '[ -f "$1" ] || exit 1; read -r pid < "$1"; '
     'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
@@ -44,12 +45,38 @@ class DockerCommandResult:
     stderr: bytes
 
 
-async def docker(*args: str, stdin: bytes = b"", timeout: float | None = None) -> DockerCommandResult:
+async def _read_limited(stream: asyncio.StreamReader, limit: int) -> bytes:
+    retained = bytearray()
+    while chunk := await stream.read(OUTPUT_READ_CHUNK_BYTES):
+        retained.extend(chunk[: max(0, limit + 1 - len(retained))])
+    return bytes(retained)
+
+
+async def docker(
+    *args: str, stdin: bytes = b"", timeout: float | None = None, output_limit_bytes: int | None = None
+) -> DockerCommandResult:
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(stdin), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            if output_limit_bytes is None:
+                stdout, stderr = await process.communicate(stdin)
+            else:
+                assert process.stdout is not None and process.stderr is not None and process.stdin is not None
+                async with asyncio.TaskGroup() as readers:
+                    stdout_task = readers.create_task(_read_limited(process.stdout, output_limit_bytes))
+                    stderr_task = readers.create_task(_read_limited(process.stderr, output_limit_bytes))
+                    try:
+                        process.stdin.write(stdin)
+                        await process.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        # A command can finish before it reads all of stdin.
+                        pass
+                    finally:
+                        process.stdin.close()
+                    await process.wait()
+                stdout, stderr = stdout_task.result(), stderr_task.result()
     except BaseException:
         process.kill()
         await process.wait()
@@ -71,6 +98,8 @@ class DockerMachine:
             raise RuntimeError("Machine is closed")
         if not command.argv:
             raise ValueError("Command argv is empty")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
         args = ["exec", "-i"]
         workdir = command.cwd or self.spec.workdir
         if workdir:
@@ -96,7 +125,9 @@ class DockerMachine:
             )
         )
         try:
-            completed = await docker(*args, stdin=command.stdin, timeout=command.timeout)
+            completed = await docker(
+                *args, stdin=command.stdin, timeout=command.timeout, output_limit_bytes=command.output_limit_bytes
+            )
         except (TimeoutError, asyncio.CancelledError) as interruption:
             try:
                 await self._interrupt(pidfile)
