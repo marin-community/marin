@@ -23,7 +23,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import NoGrader, TaskSpec, VerifyitGrader, grades_in_process
+from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME, SourceTelemetry, execute_phase
@@ -64,12 +64,14 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import normalize_row, row_source, row_task_id
 
-SOURCE_PIPELINE_REVISION = "8"
+SOURCE_PIPELINE_REVISION = "9"
 PANEL_ROWS_PER_SHARD = 16
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
 SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified")
 VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output; a later run of the source reuses its trials."""
+NO_CONTROLS_REASON = "The source declares no controls"
+JUDGE_GRADED_REASON = "judge grader; no control path yet"
 EXPANDED_QUALITY = frozenset(
     {
         SourceQualityStatus.UNREVIEWED,
@@ -287,8 +289,12 @@ def _unprocessed_review(
     }
 
 
+def _judge_grader(grader: Grader) -> bool:
+    return isinstance(grader, VerifyitGrader) and grader.mode == Mode.JUDGE
+
+
 def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -> Admission:
-    """Admit kept rows whose grader runs in process or passed source verification."""
+    """Admit kept rows whose grader runs in process, is a judge, or passed source verification."""
     if row["filter_status"] == Disposition.REJECT.value:
         return Admission.REJECTED
     if row["filter_status"] == Disposition.DEFER.value:
@@ -296,9 +302,7 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
     grader = TaskSpec.model_validate_json(row["task_json"]).grader
     if isinstance(grader, NoGrader):
         return Admission.NO_GRADER
-    if isinstance(grader, VerifyitGrader) and grader.mode == Mode.JUDGE:
-        return Admission.JUDGE_DEFERRED
-    if grades_in_process(grader) or verification == SourceVerificationStatus.PASSED:
+    if grades_in_process(grader) or _judge_grader(grader) or verification == SourceVerificationStatus.PASSED:
         return Admission.ADMITTED
     return Admission.UNVERIFIED
 
@@ -322,11 +326,7 @@ def _merge_admissions(parts: Iterator[Counter[str]]) -> Counter[str]:
 
 def source_admission(counts: Mapping[str, int]) -> str:
     """Summarize whether a source reaches the final export."""
-    if counts.get(Admission.ADMITTED.value):
-        return "admitted"
-    if counts.get(Admission.JUDGE_DEFERRED.value):
-        return Admission.JUDGE_DEFERRED.value
-    return "none"
+    return "admitted" if counts.get(Admission.ADMITTED.value) else "none"
 
 
 def _written_output(path: str, view: str) -> str:
@@ -358,13 +358,13 @@ def _sidecar_schema(columns: tuple[str, ...]) -> pa.Schema:
     return pa.schema([*(TASK_SCHEMA.field(column) for column in columns), *IDENTITY_FIELDS[1:]])
 
 
-def _skipped_verification(filtered: StoragePath) -> dict[str, Any]:
+def _skipped_verification(filtered: StoragePath, reason: str) -> dict[str, Any]:
     manifest = _read_json(filtered / "manifest.json")
     return {
         **manifest,
         "verification": {
             "status": SourceVerificationStatus.SKIPPED.value,
-            "reason": "The source declares no controls",
+            "reason": reason,
             "counts": asdict(VerificationCounts()),
             "results": [],
         },
@@ -548,11 +548,23 @@ def _filter(run: _SourceRun) -> None:
         )
 
 
-def _verify(run: _SourceRun, previous_verification_report: str | None) -> tuple[dict[str, Any], StoragePath]:
+def _judge_graded(panel: _Panel) -> bool:
+    """Whether a verifyit judge grades every task the panel converted."""
+    tasks = [row["audit"]["normalized"] for row in panel.normalized if row["audit"]["normalized"] is not None]
+    return bool(tasks) and all(_judge_grader(TaskSpec.model_validate(task).grader) for task in tasks)
+
+
+def _verify(
+    run: _SourceRun, panel: _Panel, previous_verification_report: str | None
+) -> tuple[dict[str, Any], StoragePath]:
     """Run the recipe's controls on the filtered rows; return the verified manifest and its stage directory."""
     filtered = run.scratch("filtered")
+    # TODO(rl-data): judge test path. A judge control would verify judge-graded sources here
+    # instead of skipping them; see the rl-data judge test path issue.
+    if _judge_graded(panel):
+        return _skipped_verification(filtered, JUDGE_GRADED_REASON), filtered
     if run.recipe.controls is None:
-        return _skipped_verification(filtered), filtered
+        return _skipped_verification(filtered, NO_CONTROLS_REASON), filtered
     verified = run.scratch("verified")
     with run.telemetry.phase("verification") as phase:
         verification = verify_source(
@@ -809,7 +821,7 @@ def _run_source_pipeline(run: _SourceRun, *, previous_verification_report: str |
     prepared = _expand_full(run, panel) if expanded and not panel.census else run.scratch("sample")
     unavailable_reviews = _audit(run, prepared, review)
     _filter(run)
-    verification, checked = _verify(run, previous_verification_report)
+    verification, checked = _verify(run, panel, previous_verification_report)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)

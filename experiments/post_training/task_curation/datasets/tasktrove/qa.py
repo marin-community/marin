@@ -4,9 +4,9 @@
 """TaskTrove question-answering sources: open-ended answers judged against references, and MCQA.
 
 The open-ended sources grade with the Nemotron harness's exact gate followed by a semantic judge;
-verifyit's ``reference`` judge rubric is a port of that harness. Judged tasks wait for a judge
-endpoint, so those sources have no offline controls. The multiple-choice source grades the option
-letter in process.
+verifyit's ``reference`` judge rubric is a port of that harness. Verification cannot reach a judge
+endpoint, so those sources have no controls and their kept rows are admitted without them. The
+multiple-choice source grades the option letter in process.
 """
 
 import re
@@ -17,7 +17,7 @@ from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasktrove import archive_resources
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import reference_reply, wrong_reply
+from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.modes.grade_judge import normalize as normalize_reference
@@ -204,7 +204,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=KNOWLEDGE_MCQA_RUBRIC,
-            controls=Controls(golden=reference_reply, negative=wrong_reply),
+            controls=Controls(golden=reference_reply),
             atlas_id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
         ),
     ]

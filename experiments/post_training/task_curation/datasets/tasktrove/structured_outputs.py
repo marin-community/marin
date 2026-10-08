@@ -29,7 +29,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     Reply,
 )
-from taskcompendium.pipeline.verification import MALFORMED_JSON
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
@@ -134,16 +133,6 @@ def structured_witness(task: TaskSpec) -> Reply | None:
     return None
 
 
-def structured_negative(task: TaskSpec) -> Reply:
-    """Malformed JSON or XML, or a CSV header without a row."""
-    spec = _grader_spec(task)
-    if isinstance(spec, XmlElementsSpec):
-        return answer_reply(task, "<control>")
-    if isinstance(spec, CsvColumnsSpec):
-        return answer_reply(task, _csv([_names(spec)]))
-    return answer_reply(task, MALFORMED_JSON)
-
-
 def pipelines() -> list[RlDataPipeline]:
     return [
         RlDataPipeline(
@@ -154,7 +143,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=STRUCTURED_OUTPUTS_RUBRIC,
-            controls=Controls(golden=structured_witness, negative=structured_negative),
+            controls=Controls(golden=structured_witness),
             atlas_id=f"Task Trove:{CONFIG}",
         )
     ]

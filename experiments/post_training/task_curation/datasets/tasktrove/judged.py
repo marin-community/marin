@@ -7,8 +7,8 @@ Each archive asks for a free-form answer in ``/app/response.txt`` and grades it 
 numeric judgement over a short rubric (``tests/judge.toml``, ``tests/verifier_data.json``). The
 task asks for the answer in the reply instead, and verifyit's checklist judge asks one yes/no
 question per source criterion and scores the fraction met. The source's judge configuration and
-data stay beside the grader for review. Judged tasks wait for a judge endpoint, so these sources
-have no offline controls.
+data stay beside the grader for review. Verification cannot reach a judge endpoint, so these
+sources have no controls and their kept rows are admitted without them.
 """
 
 import re

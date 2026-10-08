@@ -36,23 +36,23 @@ def grade(task: TaskSpec, reply: str, machines: LocalGraderMachines) -> GradeRes
 
 
 @pytest.mark.parametrize(
-    ("name", "golden"),
+    ("name", "control"),
     [
-        ("apps", CheckStatus.PASS),
-        ("eurus2_code", CheckStatus.SKIPPED),
-        ("verifiable_code", CheckStatus.PASS),
-        ("gretel_text_to_sql", CheckStatus.PASS),
-        ("nemotron_if", CheckStatus.SKIPPED),
-        ("rlvr_ifeval", CheckStatus.SKIPPED),
+        ("apps", "golden"),
+        ("eurus2_code", "empty"),
+        ("verifiable_code", "golden"),
+        ("gretel_text_to_sql", "golden"),
+        ("nemotron_if", "empty"),
+        ("rlvr_ifeval", "empty"),
     ],
 )
-def test_declared_controls_pass_in_the_grader_image(name, golden, machines):
-    """An empty and a wrong reply score 0, and the source's known solution, where it has one, scores 1."""
+def test_declared_control_passes_in_the_grader_image(name, control, machines):
+    """The source's known solution scores 1, or an empty reply scores 0 where it has none."""
     pipeline = PIPELINES[name]
     assert pipeline.controls is not None
     report = run_controls(converted_task(pipeline, ROWS[name]), controls=pipeline.controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"empty": CheckStatus.PASS, "golden": golden, "negative": CheckStatus.PASS}, report.checks
+    assert statuses == {control: CheckStatus.PASS}, report.checks
 
 
 @pytest.mark.parametrize(

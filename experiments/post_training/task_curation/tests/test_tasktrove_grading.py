@@ -8,10 +8,9 @@ path. See ``local_grader`` for building the image these tests run.
 """
 
 import pytest
-from taskcompendium.convert.executable import broken_submission
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import ScriptGrader, TaskSpec
-from taskcompendium.pipeline.controls import run_controls, wrong_reply
+from taskcompendium.pipeline.controls import answer_reply, run_controls
 from taskcompendium.pipeline.models import CheckStatus, WorkspaceFiles
 from taskcompendium.runtime.resources import inline_resource
 
@@ -50,6 +49,7 @@ def main(version: bool = typer.Option(False, "--version", help="Show the version
     ),
 }
 """An implementation of the ``stack_pytest`` fixture's request; its hidden tests import ``typer``."""
+BROKEN_PACKAGE = {"/app/funk_lines/__init__.py": b"raise RuntimeError('__broken_package__')\n"}
 
 
 def fixture_task(name: str, fixture: str) -> TaskSpec:
@@ -71,12 +71,12 @@ def without_module(task: TaskSpec, module: str) -> TaskSpec:
 
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("name, fixture", ARCHIVE_GRADERS)
-def test_archive_grader_passes_its_golden_and_fails_its_negative(machines, name, fixture):
+def test_archive_grader_passes_its_golden(machines, name, fixture):
     controls = PIPELINES[name].controls
     assert controls is not None
     report = run_controls(fixture_task(name, fixture), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"empty": CheckStatus.PASS, "golden": CheckStatus.PASS, "negative": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS}, report
 
 
 # The gym scorer is absent: its runner writes reward 0 before scoring and the scorer turns any exception into 0,
@@ -88,14 +88,13 @@ def test_archive_grader_passes_its_golden_and_fails_its_negative(machines, name,
 )
 def test_archive_grader_reports_an_unimportable_dependency_as_a_grading_failure(machines, name, fixture, module):
     task = without_module(fixture_task(name, fixture), module)
-    result = grade(task, wrong_reply(task), machines, GRADING_MEMORY_MB)
+    result = grade(task, answer_reply(task, "__incorrect_answer__"), machines, GRADING_MEMORY_MB)
     assert (result.status, result.failure) == (Outcome.INFRA_ERROR, GradingFailure.MISSING_REWARD), result
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("files, reward", [(TYPER_PACKAGE, 1.0), (None, 0.0)])
+@pytest.mark.parametrize("files, reward", [(TYPER_PACKAGE, 1.0), (BROKEN_PACKAGE, 0.0)])
 def test_stack_pytest_runs_hidden_tests_that_need_a_third_party_package(machines, files, reward):
     task = fixture_task("tasktrove-stack_pytest", "stack_pytest")
-    submission = broken_submission(task) if files is None else WorkspaceFiles(files)
-    result = grade(task, submission, machines, GRADING_MEMORY_MB)
+    result = grade(task, WorkspaceFiles(files), machines, GRADING_MEMORY_MB)
     assert (result.status, result.reward) == (Outcome.GRADED, reward), result

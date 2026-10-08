@@ -66,7 +66,6 @@ SOLUTION_PATH = "/app/solution.py"
 # NVARC gives the transform 30 seconds; the rest covers interpreter start-up and imports.
 GRADER_TIMEOUT = 45.0
 GRADER_MEMORY_MB = 4096
-FAILING_TRANSFORM = "def transform(grid):\n    raise RuntimeError('__negative_control__')\n"
 
 
 class ArcMode(StrEnum):
@@ -220,13 +219,6 @@ def tasktrove_golden(task: TaskSpec) -> WorkspaceFiles:
     return WorkspaceFiles({ANSWER_PATH: (grid_text(record["expected_output"]) + "\n").encode()})
 
 
-def tasktrove_negative(task: TaskSpec) -> WorkspaceFiles:
-    mode, _ = _record(task)
-    if mode == ArcMode.INDUCTIVE:
-        return WorkspaceFiles({SOLUTION_PATH: FAILING_TRANSFORM.encode()})
-    return WorkspaceFiles({ANSWER_PATH: b"__incorrect_grid__\n"})
-
-
 def ultra_arc_golden(task: TaskSpec) -> Reply:
     """The expected grid, or a fenced transform returning it."""
     mode, record = _record(task)
@@ -235,18 +227,8 @@ def ultra_arc_golden(task: TaskSpec) -> Reply:
     return answer_reply(task, grid_text(record["expected_output"]))
 
 
-def ultra_arc_negative(task: TaskSpec) -> Reply:
-    """A raising transform, or the expected grid with its first cell changed."""
-    mode, record = _record(task)
-    if mode == ArcMode.INDUCTIVE:
-        return answer_reply(task, f"```python\n{FAILING_TRANSFORM}```")
-    wrong = [list(row) for row in record["expected_output"]]
-    wrong[0][0] = (wrong[0][0] + 1) % 10
-    return answer_reply(task, grid_text(wrong))
-
-
-TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden, negative=tasktrove_negative, memory_mb=GRADER_MEMORY_MB)
-ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, negative=ultra_arc_negative, memory_mb=GRADER_MEMORY_MB)
+TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden, memory_mb=GRADER_MEMORY_MB)
+ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, memory_mb=GRADER_MEMORY_MB)
 
 
 def pipelines() -> list[RlDataPipeline]:

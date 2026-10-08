@@ -14,7 +14,6 @@ from dataclasses import dataclass
 
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
-    broken_submission,
     solve_script,
     tasktrove_archive_task,
     tasktrove_python_task,
@@ -37,7 +36,7 @@ STACK_PYTEST_AGENT_IMAGE = AgentImage(
 )
 """The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
 
-PYTHON_TESTS_CONTROLS = Controls(golden=solve_script, negative=broken_submission)
+PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
 PUBLIC_FIXTURE_CRITERION = """
 Oracle solutions and hidden tests must not be shown to the solver; explicitly public setup tests are part

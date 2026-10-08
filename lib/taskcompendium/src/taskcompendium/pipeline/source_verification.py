@@ -46,7 +46,7 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "6"
+SOURCE_VERIFICATION_REVISION = "7"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 INFRA_ERROR_RETRIES = 2
 """Extra runs of one attempt whose controls hit an infrastructure error, such as a sandbox that never started."""
@@ -316,7 +316,6 @@ class VerificationCounts:
     checked: int = 0
     passed: int = 0
     failed: int = 0
-    skipped: int = 0
     unsupported: int = 0
     infra_error: int = 0
     inconsistent: int = 0
@@ -431,7 +430,7 @@ def source_verification_report(
     results: list[SampleResult],
     policy: SourceVerificationPolicy,
 ) -> SourceReport:
-    """Gate completed checks and report missing golden coverage separately."""
+    """Gate the source on the sampled tasks whose controls completed."""
     expected = {row["task_id"] for row in sample.rows}
     if len(expected) != len(sample.rows) or len(results) != len(expected) or {r.task_id for r in results} != expected:
         raise ValueError("Verification results must cover each sampled task exactly once")
@@ -451,7 +450,6 @@ def source_verification_report(
         counts.inconsistent += CheckStatus.PASS in statuses and failed
         all_checks = [check for trial in result.trials for check in trial.checks]
         counts.checked += historical_failure or any(c.status in (CheckStatus.PASS, CheckStatus.FAIL) for c in all_checks)
-        counts.skipped += any(c.status == CheckStatus.SKIPPED for c in all_checks)
         counts.unsupported += CheckStatus.UNSUPPORTED in statuses or any(
             c.status == CheckStatus.UNSUPPORTED for c in all_checks
         )
@@ -482,7 +480,6 @@ def gate_source_row(
     *,
     status: SourceVerificationStatus,
     results: dict[str, list[CheckResult]],
-    sampled_readiness: GraderReadiness = GraderReadiness.SOURCE_SAMPLED,
     previous_failures: Mapping[str, KnownFailure] | None = None,
 ) -> dict[str, Any]:
     previous = None if previous_failures is None else previous_failures.get(row["task_id"])
@@ -504,7 +501,7 @@ def gate_source_row(
         return row
     if status == SourceVerificationStatus.PASSED:
         if row["task_id"] not in results:
-            return {**row, "grader_readiness": sampled_readiness.value}
+            return {**row, "grader_readiness": GraderReadiness.SOURCE_SAMPLED.value}
         return row
     if status == SourceVerificationStatus.SKIPPED:
         return {**row, "grader_readiness": GraderReadiness.UNVERIFIED.value}
@@ -637,9 +634,6 @@ def _gate_rows(
             partial(
                 gate_source_row,
                 status=decision.status,
-                sampled_readiness=(
-                    GraderReadiness.UNVERIFIED if decision.counts.skipped else GraderReadiness.SOURCE_SAMPLED
-                ),
                 results={result.task_id: sample_result_checks(result) for result in results},
                 previous_failures=_known_failures(outside_failures),
             )

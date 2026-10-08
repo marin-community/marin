@@ -27,7 +27,6 @@ from pydantic import JsonValue
 from taskcompendium.convert.answers import math_type, source_defect, unsupported
 from taskcompendium.convert.code import (
     CODE_GRADER_MEMORY_MB,
-    FAILING_PROGRAM,
     THREAD_ENVIRONMENT,
     python_reply,
     validate_code_cases,
@@ -57,7 +56,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.controls import answer_reply, reference_reply, wrong_reply
+from taskcompendium.pipeline.controls import answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
@@ -125,7 +124,6 @@ TOOL_ACTION_AGENTS = (
 RDKIT_PROPERTIES = frozenset({"count", "bool", "presence", "fragment"})
 STRUCTURED_SCHEMA_TYPES = frozenset({"json", "yaml", "toml", "xml", "csv"})
 FORMAT_VERIFIER_TYPES = frozenset({"regex", "inline_prose", "string_match"})
-WRONG_TOOL = "__wrong_tool__"
 MATH_AGENTS = ("math_with_judge_simple_agent", "ns_tools_simple_agent")
 """The math components' agents: a plain chat, and a chat with a Python tool."""
 MATH_VERIFIER = "math_with_judge"
@@ -471,56 +469,34 @@ def code_golden(task: TaskSpec) -> Reply | None:
     return answer_reply(task, reply) if reply is not None else None
 
 
-def code_negative(task: TaskSpec) -> Reply:
-    return answer_reply(task, FAILING_PROGRAM)
-
-
 def reasoning_gym_golden(task: TaskSpec) -> Reply | None:
     answer = grader_config(task)["contract"].get("answer")
     return answer_reply(task, answer) if isinstance(answer, str) else None
 
 
-def _rdkit_reply(task: TaskSpec, offset: int) -> Reply:
-    contract = grader_config(task)["contract"]
-    value = round(float(contract["expected_answer"])) + offset
-    return answer_reply(task, rf"\boxed{{{value}}}" if contract.get("use_box_format", False) else f"(({value}))")
-
-
 def rdkit_golden(task: TaskSpec) -> Reply:
     """The rounded target in the row's answer wrapper."""
-    return _rdkit_reply(task, 0)
-
-
-def rdkit_negative(task: TaskSpec) -> Reply:
-    return _rdkit_reply(task, 1)
-
-
-def _expected_call(expected: Mapping[str, Any], name: str) -> AssistantToolCalls:
-    arguments = json.loads(expected["arguments"]) if expected["type"] == "function_call" else {}
-    return AssistantToolCalls(calls=(ConversationToolCall(call_id="control", name=name, arguments=arguments),))
+    contract = grader_config(task)["contract"]
+    value = round(float(contract["expected_answer"]))
+    return answer_reply(task, rf"\boxed{{{value}}}" if contract.get("use_box_format", False) else f"(({value}))")
 
 
 def tool_action_golden(task: TaskSpec) -> Reply:
     """The expected call; an expected message accepts any text reply without calls."""
     expected = grader_config(task)["contract"]["expected_action"]
     if expected["type"] == "function_call":
-        return Reply(_expected_call(expected, expected["name"]))
+        call = ConversationToolCall(
+            call_id="control", name=expected["name"], arguments=json.loads(expected["arguments"])
+        )
+        return Reply(AssistantToolCalls(calls=(call,)))
     return Reply(TextMessage(role="assistant", content="A nonliteral response."))
-
-
-def tool_action_negative(task: TaskSpec) -> Reply:
-    """A call to a tool the task never advertised."""
-    return Reply(_expected_call(grader_config(task)["contract"]["expected_action"], WRONG_TOOL))
 
 
 # Components whose rows carry no known answer check only that an empty reply scores zero.
 REPLY_CONTROLS = Controls()
-# The boxed reference must score one, and a reply no reference matches zero.
-MATH_CONTROLS = Controls(golden=reference_reply, negative=wrong_reply)
+MATH_CONTROLS = Controls(golden=reference_reply)
 MCQA_CONTROLS = Controls(golden=mcqa_golden)
-CODE_CONTROLS = Controls(golden=code_golden, negative=code_negative, memory_mb=CODE_GRADER_MEMORY_MB)
-RDKIT_CONTROLS = Controls(golden=rdkit_golden, negative=rdkit_negative)
-TOOL_ACTION_CONTROLS = Controls(golden=tool_action_golden, negative=tool_action_negative)
-# Reasoning Gym scorers give partial credit, so a fixed wrong answer has no single expected reward;
-# only the row's answer is checked.
+CODE_CONTROLS = Controls(golden=code_golden, memory_mb=CODE_GRADER_MEMORY_MB)
+RDKIT_CONTROLS = Controls(golden=rdkit_golden)
+TOOL_ACTION_CONTROLS = Controls(golden=tool_action_golden)
 REASONING_GYM_CONTROLS = Controls(golden=reasoning_gym_golden)

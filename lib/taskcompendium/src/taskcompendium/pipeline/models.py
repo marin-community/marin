@@ -115,15 +115,15 @@ type ControlSubmission = Reply | WorkspaceFiles | OracleCommand
 
 @dataclass(frozen=True)
 class Controls:
-    """Known-correct and known-wrong submissions that test a source's grader.
+    """The one control submission that tests a source's grader on each sampled task.
 
-    Every task is also graded on an empty submission, which must score zero. ``golden`` returns
-    ``None`` for a task whose source supplies no known-correct answer. ``memory_mb`` sizes each
-    fresh grading machine.
+    ``golden(task)`` is a known-correct submission, which must score one. When ``golden`` is
+    absent or returns ``None`` because the source supplies no known-correct answer, the task is
+    graded on an empty submission instead, which must score zero. ``memory_mb`` sizes each fresh
+    grading machine.
     """
 
     golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
-    negative: Callable[[TaskSpec], ControlSubmission] | None = None
     memory_mb: int = 512
 
 
@@ -132,7 +132,7 @@ class SourceRecipe:
     """One staged source and how its rows become reviewed, verified tasks.
 
     ``rubric=None`` skips model review. ``controls=None`` skips grader verification, so sandbox
-    graders remain unverified. ``inputs`` holds staged auxiliary input paths by name, and
+    graders other than judges remain unverified. ``inputs`` holds staged auxiliary input paths by name, and
     ``grader_environment`` the source's grader image; both reach the source callables through
     their ``ConversionContext``. A task whose decoded resources exceed ``resource_budget_bytes``
     is deferred as ``resources_over_budget``.
@@ -187,7 +187,6 @@ class Admission(StrEnum):
     REJECTED = "rejected"
     DEFERRED = "deferred"
     NO_GRADER = "no_grader"
-    JUDGE_DEFERRED = "deferred:judge"
     UNVERIFIED = "unverified"
 
 

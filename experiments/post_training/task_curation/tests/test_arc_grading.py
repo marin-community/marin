@@ -48,12 +48,12 @@ def tasks() -> dict[str, tuple[TaskSpec, arc.Controls]]:
 @pytest.mark.parametrize(
     "name", ["tasktrove-arc_inductive", "tasktrove-arc_transductive", arc.INDUCTIVE_AGENT, arc.TRANSDUCTIVE_AGENT]
 )
-def test_controls_score_the_reference_one_and_wrong_submissions_zero(name, machines):
+def test_golden_control_scores_the_reference_one(name, machines):
     task, controls = tasks()[name]
     assert controls is not None
     report = run_controls(task, controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"empty": CheckStatus.PASS, "golden": CheckStatus.PASS, "negative": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS}, report
 
 
 def test_transform_cannot_read_the_hidden_record(machines):

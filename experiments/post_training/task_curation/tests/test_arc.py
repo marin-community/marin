@@ -66,20 +66,18 @@ TASKTROVE = {
         ("/app/solution.py", "/app/answer.txt"),
         {"mode": "inductive", "contract": {"test_input": GRID, "expected_output": GRID}},
         {"/app/solution.py": arc.literal_transform(GRID).encode()},
-        {"/app/solution.py": arc.FAILING_TRANSFORM.encode()},
     ),
     "tasktrove-arc_transductive": (
         ("/app/answer.txt",),
         {"mode": "transductive", "contract": {"expected_output": GRID}},
         {"/app/answer.txt": b"0 1\n2 9\n"},
-        {"/app/answer.txt": b"__incorrect_grid__\n"},
     ),
 }
 
 
 @pytest.mark.parametrize("name", sorted(ROWS))
 def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
-    output_paths, config, golden, negative = TASKTROVE[name]
+    output_paths, config, golden = TASKTROVE[name]
     task = converted_task(PIPELINES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
@@ -94,9 +92,8 @@ def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
     assert {resource.path for resource in task.resources.verifier} == SHIPPED
     assert grader_config(task) == config
     controls = PIPELINES[name].controls
-    assert controls is not None and controls.golden is not None and controls.negative is not None
+    assert controls is not None and controls.golden is not None
     assert controls.golden(task) == WorkspaceFiles(golden)
-    assert controls.negative(task) == WorkspaceFiles(negative)
 
 
 @pytest.mark.parametrize(
@@ -154,25 +151,22 @@ def reply(content: str) -> Reply:
     return Reply(TextMessage(role="assistant", content=content))
 
 
-def test_ultra_transductive_controls_submit_the_expected_grid_and_a_changed_grid():
+def test_ultra_transductive_golden_submits_the_expected_grid():
     result = arc.convert_ultra_arc(ultra_row(arc.TRANSDUCTIVE_AGENT, expected_output=GRID), ULTRA_CONTEXT)
     assert not isinstance(result, ImportRejection)
     task = result.task
     assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path == "/app/answer.txt"
     assert grader_config(task)["mode"] == "transductive"
     assert arc.ultra_arc_golden(task) == reply("0 1\n2 9")
-    assert arc.ultra_arc_negative(task) == reply("1 1\n2 9")
 
 
-def test_ultra_inductive_controls_submit_a_literal_transform_and_a_raising_one():
+def test_ultra_inductive_golden_submits_a_literal_transform():
     row = ultra_row(arc.INDUCTIVE_AGENT, test_input=GRID, expected_output=GRID)
     result = arc.convert_ultra_arc(row, ULTRA_CONTEXT)
     assert not isinstance(result, ImportRejection)
     task = result.task
     assert {resource.path for resource in task.resources.verifier} == SHIPPED
     assert arc.ultra_arc_golden(task) == reply(f"```python\n{arc.literal_transform(GRID)}```")
-    negative = arc.ultra_arc_negative(task)
-    assert isinstance(negative.event, TextMessage) and "raise RuntimeError" in negative.event.content
 
 
 def test_ultra_inductive_row_without_a_test_input_is_rejected():

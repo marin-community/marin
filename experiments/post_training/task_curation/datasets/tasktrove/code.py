@@ -5,12 +5,11 @@
 
 The agent writes a program in the executable image; the grader runs it on the hidden cases in a
 fresh machine of the grader image (``images.recipes.GRADER``). Controls run the source's
-``solution/solve.sh`` oracle when the archive ships one, and a crashing program as the negative.
+``solution/solve.sh`` oracle when the archive ships one, and otherwise grade an empty submission.
 """
 
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
-    broken_submission,
     solve_script,
     tasktrove_archive_task,
     tasktrove_python_task,
@@ -35,7 +34,7 @@ AGENT_IMAGE = AgentImage(
 )
 """The executable image the agent writes and runs its program in."""
 
-EXECUTABLE_CONTROLS = Controls(golden=solve_script, negative=broken_submission)
+EXECUTABLE_CONTROLS = Controls(golden=solve_script)
 
 ANSWERABILITY_CRITERIA = """
 Judge whether the underlying request is comprehensible and answerable using the public inputs.

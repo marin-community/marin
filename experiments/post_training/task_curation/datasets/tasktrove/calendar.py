@@ -8,8 +8,7 @@ meets the final event constraints. It needs only the Python standard library (th
 ``python:3.11-slim``), so it runs as archived in the grader image (``images.recipes.GRADER``). The
 archive asks for the calendar in ``/app/answer.txt``; the task asks for it in the reply, which the
 runtime writes to that file for the verifier. A source witness (``solution/answer.json``) is the
-golden control, and the witness without its first event is the negative; an archive whose witness
-is not a nonempty JSON list of events is a source defect.
+golden control; an archive whose witness is not a nonempty JSON list of events is a source defect.
 """
 
 import json
@@ -26,7 +25,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.controls import answer_reply, wrong_reply
+from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
@@ -151,14 +150,6 @@ def calendar_golden(task: TaskSpec) -> Reply | None:
     return None if witness is None else answer_reply(task, witness)
 
 
-def calendar_negative(task: TaskSpec) -> Reply:
-    """The witness without its first event: a required event is missing, so no slot has to be guessed."""
-    witness = witness_text(task)
-    if witness is None:
-        return wrong_reply(task)
-    return answer_reply(task, json.dumps(json.loads(witness)[1:]))
-
-
 def pipelines() -> list[RlDataPipeline]:
     sources = (
         ("tasktrove-calendar", "laion__nemotron-gym-agent-calendar-v2", CALENDAR_RUBRIC),
@@ -173,7 +164,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
-            controls=Controls(golden=calendar_golden, negative=calendar_negative),
+            controls=Controls(golden=calendar_golden),
             atlas_id=f"Task Trove:{config}",
             grader_image=GRADER,
         )

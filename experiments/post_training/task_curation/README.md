@@ -68,9 +68,11 @@ RlDataPipeline(
   the manifest counts it.
 - **Rubric.** Optional. Without one, rows skip model review and are kept as
   `unreviewed`.
-- **Controls.** `Controls(golden, negative)` grades a known-correct and a
-  known-wrong submission per sampled task, plus an empty one. Without controls,
-  verification is skipped and sandbox-graded rows stay out of `final/`.
+- **Controls.** `Controls(golden)` grades one submission per sampled task: the
+  known-correct `golden(task)`, which must score 1, or an empty submission,
+  which must score 0, when the task has no golden. Without controls,
+  verification is skipped and sandbox-graded rows stay out of `final/`. Rows
+  graded by an LLM judge are never sampled and reach `final/` without controls.
 
 To add a dataset, copy the closest declaration, set its source, converter,
 environment and rubric, add a fixture row to the family test's `ROWS`, and add
@@ -93,10 +95,9 @@ download/   normalize/   review/   verify/   final/   manifest.json   telemetry.
 ```
 
 `final/` holds rows that passed filtering and have a ready grader: an in-process
-verifyit grader, or a sandbox grader whose source verification passed.
-`manifest.json` records counts, the quality and verification reports, and the
-source's `admission` (`admitted`, `deferred:judge` for judge-graded sources, or
-`none`). The [pipeline contract](../../../lib/taskcompendium/src/taskcompendium/pipeline/README.md)
+verifyit grader, a verifyit judge, or a sandbox grader whose source verification
+passed. `manifest.json` records counts, the quality and verification reports,
+and the source's `admission` (`admitted` or `none`). The [pipeline contract](../../../lib/taskcompendium/src/taskcompendium/pipeline/README.md)
 describes each stage.
 
 ## Running a campaign

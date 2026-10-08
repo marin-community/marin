@@ -28,7 +28,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.controls import answer_reply, wrong_reply
+from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
@@ -202,7 +202,7 @@ def math_golden(task: TaskSpec) -> ControlSubmission:
     return answer_reply(task, rf"\boxed{{{expected}}}")
 
 
-MATH_CONTROLS = Controls(golden=math_golden, negative=wrong_reply)
+MATH_CONTROLS = Controls(golden=math_golden)
 
 
 @dataclass(frozen=True)

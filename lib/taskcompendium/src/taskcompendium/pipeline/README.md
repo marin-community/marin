@@ -16,7 +16,7 @@ does not import experiments or construct ArtifactSteps.
 | `source` | `SourceFiles`: the staged dataset, revision, file patterns, format, and optional `select`, `decode` and `read` callables. |
 | `convert` | `RawRow -> TaskSpec | NormalizedTask | ImportRejection`. The converter fixes the grader. |
 | `rubric` | A `ReviewRubric` for model review, or `None` to skip review. |
-| `controls` | `Controls(golden, negative, memory_mb)` for grader verification, or `None` to skip it. |
+| `controls` | `Controls(golden, memory_mb)` for grader verification, or `None` to skip it. |
 | `intended_use` | `train` or `eval`. |
 | `inputs` | Auxiliary staged inputs, passed by name to the source callables. |
 
@@ -53,12 +53,12 @@ cannot convert.
    `unavailable_reviews`. They make the source `incomplete` only when resolving
    them could change the quality decision.
 6. **Verify.** With controls, [source_verification.py](source_verification.py)
-   samples kept rows and grades three submissions per task through the same
-   grading path rollouts use ([controls.py](controls.py)):
-   - an empty submission, which must score 0;
+   samples kept rows and grades one control submission per task through the
+   same grading path rollouts use ([controls.py](controls.py)):
    - `golden(task)`, a known-correct `Reply`, `WorkspaceFiles` or
-     `OracleCommand`, which must score 1 (`None` records a skipped golden);
-   - `negative(task)`, a known-wrong submission, which must score 0.
+     `OracleCommand`, which must score 1;
+   - otherwise, when the declaration has no `golden` or it returns `None`, an
+     empty submission, which must score 0.
 
    An `OracleCommand` runs with the task's worker and oracle resources
    installed in a fresh machine of the task's agent image, whose tools and
@@ -68,16 +68,19 @@ cannot convert.
    get their machines from the campaign's `GradingMachines`, always with network
    access denied. Without controls the stage is skipped and sandbox graders stay
    unverified.
+
+   A source whose converted panel tasks are all graded by a verifyit judge is
+   not sampled, with or without controls: no judge control exists yet, so the
+   report records `skipped` with reason `judge grader; no control path yet`.
 7. **Admit and export.** Each row gets an `admission`:
 
    | Admission | Meaning |
    | --- | --- |
-   | `admitted` | Kept, and the grader runs in process or passed source verification. |
+   | `admitted` | Kept, and the grader runs in process, is a verifyit judge, or passed source verification. |
    | `rejected` | Rejected by conversion, checks, review or verification. |
    | `deferred` | Held back for unavailable review or inconclusive verification. |
    | `no_grader` | The converter found no runnable grader (`NoGrader`). |
-   | `deferred:judge` | The grader is a verifyit judge; judge sources are not admitted yet. |
-   | `unverified` | A sandbox grader without passing source verification. |
+   | `unverified` | A sandbox grader, other than a judge, without passing source verification. |
 
 Output layout of one source:
 
@@ -92,20 +95,23 @@ telemetry.json Zephyr execution IDs, counters and phase wall times
 ```
 
 The manifest's `admission` field summarizes the source: `admitted` when any row
-is admitted, `deferred:judge` when none is admitted but some wait for a judge,
-otherwise `none`.
+is admitted, otherwise `none`.
 
 ## Verification trials
 
 Verification samples up to the configured sample size with seeded task-ID hashes
-across all shards and runs every control twice in fresh environments. A task
-passes when every executed control passes on every attempt; tasks whose only
-checks were skipped count as neither. The source passes when the pass fraction
-meets `minimum_pass_fraction` (the driver uses 95%). Unsupported runtimes,
+across all shards (the driver samples at most 20 tasks by default) and runs each
+task's control in a fresh environment once per attempt (the driver makes one
+attempt). An attempt
+whose control hits an infrastructure error runs again, up to two more times,
+before it is recorded. A task passes when its control passes on every attempt and
+no earlier trial failed; a task with both a pass and a definite failure counts as
+inconsistent. The source passes when the pass fraction meets
+`minimum_pass_fraction` (the driver uses 95%). Unsupported runtimes,
 infrastructure errors and an empty sample make the source inconclusive, which
 defers its eligible rows. Failed controls reject the affected tasks even when the
-source passes. Unsampled rows inherit `source_sampled` readiness only from a
-passing sample without skipped controls.
+source passes. Unsampled rows of a passing source get `source_sampled`
+readiness.
 
 Reruns reuse complete trials from a previous `verify/report.json`. Trial identity
 covers the whole task, the controls code, the machine backend and worker image,

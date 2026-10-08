@@ -154,11 +154,6 @@ def answer_checks(task: TaskSpec, controls: tuple[tuple[str, str, float], ...]) 
     return results
 
 
-def verify_witness(task: TaskSpec, witness: str, negative: str) -> list[CheckResult]:
-    """Check a separately supplied feasible answer and two failing submissions."""
-    return answer_checks(task, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
-
-
 def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckResult]:
     calls = tuple(
         ConversationToolCall(call_id=f"control-{index}", name=call.name, arguments=call.arguments)

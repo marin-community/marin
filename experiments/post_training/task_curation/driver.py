@@ -167,7 +167,7 @@ def _pipeline_config(
     return SourcePipelineConfig(
         mode=mode,
         quality_policy=SourceQualityPolicy(sample_size=100, seed=seed),
-        verification_policy=SourceVerificationPolicy(verification_sample_size, seed, 2, 0.95),
+        verification_policy=SourceVerificationPolicy(verification_sample_size, seed, 1, 0.95),
         review=review,
         execution=AuditExecution(
             max_workers=max_workers,
@@ -266,7 +266,7 @@ def _full_steps(
     help="Iris controller for --verification-backend iris; inside an Iris job, defaults to the job's controller.",
 )
 @click.option("--seed", type=int, default=0)
-@click.option("--verification-sample-size", type=click.IntRange(min=1), default=100)
+@click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
 @click.option("--report-path", required=True)
 @click.option("--sample-report", help="Terminal sample campaign report required before executing full mode.")
 @click.option("--source", "sources", multiple=True, help="Catalog source name to execute; repeat to select multiple.")

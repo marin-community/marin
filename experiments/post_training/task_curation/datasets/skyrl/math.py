@@ -3,7 +3,7 @@
 
 """SkyRL math and numeric-answer sources, graded in process by verifyit.
 
-Symbolic answers use the verifyit math comparator and need golden and negative controls; integer
+Symbolic answers use the verifyit math comparator and need a golden control; integer
 and numeric answers use the numeric comparator, which the structural checks already exercise.
 """
 
@@ -16,14 +16,14 @@ from typing import Any
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import math_answer_task, numeric_answer_task, source_defect, unsupported
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import reference_reply, wrong_reply
+from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
 
-MATH_CONTROLS = Controls(golden=reference_reply, negative=wrong_reply)
+MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
 ASDIV_REVISION = "883f90a9a65bf00304ba8f37423910fe743abc47"
 NUMINA_PROOF_REQUEST = re.compile(r"\b(?:prove|show)\s+that\b", re.IGNORECASE)

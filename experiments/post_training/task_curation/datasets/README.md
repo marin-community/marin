@@ -28,7 +28,8 @@ artifact each declaration produces.
    `pipelines()` to [sources.py](../sources.py).
 
 A rubric and controls can come later: without a rubric rows are kept
-unreviewed, and without controls sandbox-graded rows stay out of `final/`.
+unreviewed, and without controls sandbox-graded rows other than judge-graded
+ones stay out of `final/`.
 
 ## Families
 
@@ -36,7 +37,7 @@ unreviewed, and without controls sandbox-graded rows stay out of `final/`.
 | --- | --- |
 | [skyrl/math.py](skyrl/math.py) | MarinSkyRL math and numeric-answer sets, graded in process. |
 | [skyrl/code.py](skyrl/code.py) | APPS, Eurus-2 code, verifiable coding problems and Gretel text-to-SQL, graded by `apps_grade.py`, `lcb_grade.py` and `sql_grade.py` in the grader image. |
-| [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by `ifeval_grade.py` with the vendored SkyRL IFEval scorer in the grader image; a reply that violates every constraint is the negative control. |
+| [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by `ifeval_grade.py` with the vendored SkyRL IFEval scorer in the grader image; the only control is an empty reply, since the sources publish no passing replies. |
 | [skyrl/mcq.py](skyrl/mcq.py) | GPQA and OpenScience multiple choice. |
 | [skyrl/preference.py](skyrl/preference.py) | HH-RLHF and KTO preference components; no runnable grader. |
 | [nemotron_ultra/components.py](nemotron_ultra/components.py) | Nemotron RL Ultra blends: one `COMPONENTS` table over the mopd, rlvr1 and rlvr2 blends. [graders.py](nemotron_ultra/graders.py) converts the rows; a graded component ships a `*_grade.py` script with the vendored NeMo Gym scorer it calls, except the math components, which the verifyit math comparator grades in process. |
@@ -48,16 +49,18 @@ unreviewed, and without controls sandbox-graded rows stay out of `final/`.
 | [tasktrove/repositories.py](tasktrove/repositories.py) | TaskTrove SWE repositories; no agent image covers their per-task repositories. |
 | [tasktrove/structured_outputs.py](tasktrove/structured_outputs.py), [tasktrove/instruction_following.py](tasktrove/instruction_following.py) | Structured-output and instruction-following tasks, graded in process. |
 | [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by each archive's SymPy scorer and `test.sh` in the grader image. |
-| [tasktrove/judged.py](tasktrove/judged.py), [tasktrove/qa.py](tasktrove/qa.py) | Judged responses and open QA (verifyit judge; not admitted until a judge runs), and knowledge MCQA. |
+| [tasktrove/judged.py](tasktrove/judged.py), [tasktrove/qa.py](tasktrove/qa.py) | Judged responses and open QA (verifyit judge, admitted without controls), and knowledge MCQA. |
 | [tasktrove/calendar.py](tasktrove/calendar.py), [tasktrove/multichallenge.py](tasktrove/multichallenge.py), [tasktrove/puzzles.py](tasktrove/puzzles.py) | Calendar scheduling (the archive's checker in the grader image), multi-turn challenges (verifyit judge) and puzzles. |
 
 ## Judge-graded sources
 
-The judged, open-QA and MultiChallenge sources grade with verifyit's judge mode, so
-their rows are kept as `deferred:judge` and never reach `final/`. No judge runs yet:
-the grader image has no judge client (`openai`), and grading machines deny network
-access, so a sandboxed judge cannot reach an endpoint. Choosing where the judge runs
-and how it receives the endpoint and credentials is follow-up work.
+The judged, open-QA and MultiChallenge sources grade with verifyit's judge mode.
+Verification cannot run their graders yet: the grader image has no judge client
+(`openai`), and grading machines deny network access, so a sandboxed judge cannot
+reach an endpoint. Their verification stage is therefore empty: no task is sampled,
+`verify/report.json` records `skipped` with reason `judge grader; no control path
+yet`, and kept rows are admitted to `final/`. Choosing where the judge runs and how
+it receives the endpoint and credentials is follow-up work.
 
 ## Sources not declared
 

@@ -7,8 +7,8 @@ Each archive's ``tests/judge.toml`` lists yes/no requirements that the source's 
 to a Together-hosted judge, passing a response only when every requirement held. The task asks
 verifyit's checklist judge about each requirement separately, with the conversation
 (``tests/conversation.txt``) as reference context, and scores the fraction met. The source's judge
-configuration stays beside the grader for review. Judged tasks wait for a judge endpoint, so the
-source has no offline controls.
+configuration stays beside the grader for review. Verification cannot reach a judge endpoint, so the
+source has no controls and its kept rows are admitted without them.
 """
 
 import tomllib

@@ -20,7 +20,7 @@ from taskcompendium.models import (
     VerifyitGrader,
     verifyit_spec,
 )
-from taskcompendium.pipeline.controls import reference_reply, wrong_reply
+from taskcompendium.pipeline.controls import answer_reply, reference_reply
 from taskcompendium.pipeline.models import (
     ImportFailureKind,
     ImportRejection,
@@ -460,7 +460,7 @@ def test_mcqa_keeps_question_constraints_and_grades_the_option_letter(wrapper, o
     golden = reference_reply(task)
     assert golden is not None
     assert grade_reply(task, golden) == 1.0
-    assert grade_reply(task, wrong_reply(task)) == 0.0
+    assert grade_reply(task, answer_reply(task, "__incorrect_answer__")) == 0.0
 
 
 def test_mcqa_rejects_unknown_answer_extraction():
@@ -468,7 +468,7 @@ def test_mcqa_rejects_unknown_answer_extraction():
     assert rejection.reason == "unsupported_answer_contract"
 
 
-def test_calendar_runs_the_source_verifier_with_its_timeout_and_witness_controls():
+def test_calendar_runs_the_source_verifier_with_its_timeout_and_witness_golden():
     task = task_of("tasktrove-calendar", ROWS["tasktrove-calendar"])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
@@ -479,15 +479,11 @@ def test_calendar_runs_the_source_verifier_with_its_timeout_and_witness_controls
     golden = calendar_sources.calendar_golden(task)
     assert golden is not None and isinstance(golden.event, TextMessage)
     assert json.loads(golden.event.content) == CALENDAR_EVENTS
-    negative = calendar_sources.calendar_negative(task).event
-    assert isinstance(negative, TextMessage)
-    assert json.loads(negative.content) == CALENDAR_EVENTS[1:]
 
 
-def test_calendar_without_a_witness_has_no_golden_and_a_wrong_negative():
+def test_calendar_without_a_witness_has_no_golden():
     task = task_of("tasktrove-if_calendar", ROWS["tasktrove-if_calendar"])
     assert calendar_sources.calendar_golden(task) is None
-    assert calendar_sources.calendar_negative(task) == wrong_reply(task)
 
 
 @pytest.mark.parametrize("events", [{}, {"x": {"duration": 30}}, {"0": {"duration": 0}}, {"0": {"duration": True}}])
@@ -533,7 +529,7 @@ def test_structured_output_grades_schema_validity():
     task = task_of("tasktrove-structured", ROWS["tasktrove-structured"])
     assert "Return your final JSON in the assistant response." in prompt_of(task)
     assert grade_reply(task, Reply(TextMessage(role="assistant", content='{"file": "part.gcode"}'))) == 1.0
-    assert grade_reply(task, instruction_following.malformed_json(task)) == 0.0
+    assert grade_reply(task, Reply(TextMessage(role="assistant", content="[}"))) == 0.0
 
 
 @pytest.mark.parametrize(
@@ -552,7 +548,7 @@ def test_puzzles_grade_by_answer_type_and_pass_their_reference(gold, expected):
     golden = reference_reply(task)
     assert golden is not None
     assert grade_reply(task, golden) == 1.0
-    assert grade_reply(task, wrong_reply(task)) == 0.0
+    assert grade_reply(task, answer_reply(task, "__incorrect_answer__")) == 0.0
 
 
 @pytest.mark.parametrize("gold", [{"gold": "", "answer_type": "exact"}, {"gold": "x", "answer_type": "regex"}])

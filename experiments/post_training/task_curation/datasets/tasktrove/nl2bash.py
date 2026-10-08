@@ -9,7 +9,7 @@ recorded output as an order-insensitive multiset of normalized lines. The oracle
 source's ``solution/solve.sh``.
 """
 
-from taskcompendium.convert.executable import broken_submission, solve_script, tasktrove_archive_task
+from taskcompendium.convert.executable import solve_script, tasktrove_archive_task
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bash
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -61,7 +61,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=AGENT_IMAGE,
             intended_use=IntendedUse.TRAIN,
             rubric=NL2BASH_RUBRIC,
-            controls=Controls(golden=solve_script, negative=broken_submission),
+            controls=Controls(golden=solve_script),
             atlas_id=f"Task Trove:{CONFIG}",
             grader_image=GRADER,
         )

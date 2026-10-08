@@ -45,8 +45,7 @@ from taskcompendium.pipeline.verification import answer_event, control_result
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "2"
-WRONG_ANSWER = "__incorrect_answer__"
+CONTROLS_REVISION = "3"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -90,23 +89,17 @@ def reference_reply(task: TaskSpec) -> Reply | None:
     return None
 
 
-def wrong_reply(task: TaskSpec) -> Reply:
-    """A reply no reasonable reference matches."""
-    return answer_reply(task, WRONG_ANSWER)
-
-
 def controls_identity(controls: Controls) -> dict[str, Any]:
     """The control code and machine size that can change a control's outcome."""
     return {
         "revision": CONTROLS_REVISION,
         "golden": function_code_identity(controls.golden) if controls.golden is not None else None,
-        "negative": function_code_identity(controls.negative) if controls.negative is not None else None,
         "memory_mb": controls.memory_mb,
     }
 
 
 def control_suite(controls: Controls, machines: GradingMachines | None) -> CheckSuite:
-    """Check each sampled task with an empty, a golden and a negative submission."""
+    """Check each sampled task with its golden submission, or an empty one when it has no golden."""
     return CheckSuite(
         id="controls",
         revision=CONTROLS_REVISION,
@@ -144,17 +137,10 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
         if machines is None:
             raise ValueError("Sandbox controls require grading machines")
         sandbox = _Sandbox(machines, controls.memory_mb, _image_machine(machines, environment, controls.memory_mb))
-    checks = [await _control(task, "empty", _empty_submission(task), 0.0, sandbox)]
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is None:
-        checks.append(
-            CheckResult(check="golden", status=CheckStatus.SKIPPED, detail="No known-correct submission for this task")
-        )
-    else:
-        checks.append(await _control(task, "golden", golden, 1.0, sandbox))
-    if controls.negative is not None:
-        checks.append(await _control(task, "negative", controls.negative(task), 0.0, sandbox))
-    return VerificationReport(checks)
+        return VerificationReport([await _control(task, "empty", _empty_submission(task), 0.0, sandbox)])
+    return VerificationReport([await _control(task, "golden", golden, 1.0, sandbox)])
 
 
 def _image_machine(

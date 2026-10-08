@@ -41,7 +41,6 @@ from taskcompendium.pipeline.models import (
     NormalizedTask,
     OracleCommand,
     RawRow,
-    WorkspaceFiles,
 )
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import BASH, INTERFACE
@@ -50,8 +49,6 @@ SHELL_CAPABILITIES = ("shell", "filesystem")
 SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 """The program files a competitive-programming grader runs, whichever language the agent chose."""
 ORACLE_COMMAND = f"bash /{SOLVE_SH}"
-BROKEN_PYTHON = b"raise RuntimeError('__negative_control__')\n"
-BROKEN_OUTPUT = b"unexpected error\n"
 
 PYTHON_FILE = re.compile(r"(?<![\w/])(?:/app/|app/)?[A-Za-z_]\w*(?:/[A-Za-z_]\w*)*\.py\b")
 PACKAGE = re.compile(r"(?:package (?:at|under)|package[^\n]{0,30} at) /app/([A-Za-z_]\w*)")
@@ -289,12 +286,6 @@ def solve_script(task: TaskSpec) -> OracleCommand | None:
     if not any(resource.path == SOLVE_SH for resource in task.resources.oracle):
         return None
     return OracleCommand(ORACLE_COMMAND)
-
-
-def broken_submission(task: TaskSpec) -> WorkspaceFiles:
-    """A crashing program, or error output, in the first file the grader captures."""
-    path = task.output_paths[0]
-    return WorkspaceFiles({path: BROKEN_PYTHON if path.endswith(".py") else BROKEN_OUTPUT})
 
 
 def swe_task(row: RawRow, *, workspace: str) -> TaskSpec | ImportRejection:

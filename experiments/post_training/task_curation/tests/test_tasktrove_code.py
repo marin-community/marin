@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from taskcompendium.convert.executable import SOLUTION_PATHS, broken_submission, solve_script
+from taskcompendium.convert.executable import SOLUTION_PATHS, solve_script
 from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
@@ -272,7 +272,7 @@ def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:
     return replace(spec, workspace=str(workspace))
 
 
-def test_codeforces_oracle_passes_and_negative_fails_on_hidden_cases(tmp_path):
+def test_codeforces_oracle_passes_on_hidden_cases(tmp_path):
     task = converted_task(PIPELINES["tasktrove-codeforces"], ROWS["tasktrove-codeforces"])
     write_verifier(task, tmp_path / "tests")
     workspace = tmp_path / "app"
@@ -282,9 +282,6 @@ def test_codeforces_oracle_passes_and_negative_fails_on_hidden_cases(tmp_path):
     oracle.write_bytes(resource_map(task.resources.oracle)[SOLVE_SH])
     subprocess.run(["bash", str(oracle)], check=True, env={**os.environ, "APP_DIR": str(workspace)})
     assert grade(spec, tmp_path / "tests", workspace).reward == 1.0
-    for path, data in broken_submission(task).files.items():
-        (workspace / Path(path).name).write_bytes(data)
-    assert grade(spec, tmp_path / "tests", workspace).reward == 0.0
 
 
 @pytest.mark.parametrize("exit_code, expected_reward", [(0, 1.0), (7, 0.0)])
@@ -378,19 +375,13 @@ def test_structured_outputs_reject_a_required_field_the_schema_forbids():
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "unsatisfiable_schema")
 
 
-@pytest.mark.parametrize(
-    "schema_type, golden", [("json", CheckStatus.SKIPPED), ("xml", CheckStatus.PASS), ("csv", CheckStatus.PASS)]
-)
-def test_structured_outputs_controls_grade_as_expected(schema_type, golden):
+@pytest.mark.parametrize("schema_type, control", [("json", "empty"), ("xml", "golden"), ("csv", "golden")])
+def test_structured_outputs_controls_grade_as_expected(schema_type, control):
     pipeline = PIPELINES["tasktrove-structured_outputs"]
     task = converted_task(pipeline, structured_row(NAME_SCHEMA, schema_type))
     assert pipeline.controls is not None
     report = run_controls(task, controls=pipeline.controls, machines=None)
-    assert {check.check: check.status for check in report.checks} == {
-        "empty": CheckStatus.PASS,
-        "golden": golden,
-        "negative": CheckStatus.PASS,
-    }
+    assert {check.check: check.status for check in report.checks} == {control: CheckStatus.PASS}
 
 
 def test_repository_tasks_keep_source_grading_terms():

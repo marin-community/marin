@@ -19,7 +19,7 @@ from zephyr.plan import compute_plan
 from taskcompendium.grader import verifyit_package
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
-from taskcompendium.pipeline.controls import GradingMachines, reference_reply, wrong_reply
+from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
@@ -57,7 +57,7 @@ from .pipeline_stages import (
 )
 from .test_pipeline import BatchService, Output
 
-REFERENCE_CONTROLS = Controls(golden=reference_reply, negative=wrong_reply)
+REFERENCE_CONTROLS = Controls(golden=reference_reply)
 
 
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ def oracle_answer(_task: TaskSpec) -> OracleCommand:
     return OracleCommand("cp /solution/answer.txt answer.out", answer_file="answer.out")
 
 
-ORACLE_CONTROLS = Controls(golden=oracle_answer, negative=wrong_reply)
+ORACLE_CONTROLS = Controls(golden=oracle_answer)
 
 
 def convert_mixed_graders(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -473,7 +473,9 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(population))
     # A golden the grader rejects fails every sampled control, so the source is rejected.
-    controls = Controls(golden=wrong_reply) if verification == "rejected" else None
+    controls = (
+        Controls(golden=lambda task: answer_reply(task, "__incorrect_answer__")) if verification == "rejected" else None
+    )
     recipe = fixture_recipe(convert_svamp, controls=controls)
     service = PartiallyUnavailableReview(bad_count)
     reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1)
@@ -656,9 +658,8 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
     assert result.manifest_path == str(output / "manifest.json")
     assert manifest["telemetry"] == str(output / "telemetry.json") and (output / "telemetry.json").exists()
     assert manifest["admission_counts"] == {
-        "admitted": 1,
+        "admitted": 2,
         "no_grader": 1,
-        "deferred:judge": 1,
         "unverified": 1,
         "rejected": 1,
     }
@@ -673,13 +674,36 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
     assert by_grader == {
         "in_process": "admitted",
         "none": "no_grader",
-        "judge": "deferred:judge",
+        "judge": "admitted",
         "script": "unverified",
         "invalid": "rejected",
     }
     final = parquet_rows(result.final_path)
-    assert [json.loads(row["task_json"])["grader"]["kind"] for row in final] == ["verifyit"]
-    assert int(final[0]["source_locator"].rsplit(":", 1)[1]) == 0
+    assert sorted(int(row["source_locator"].rsplit(":", 1)[1]) for row in final) == [0, 2]
+
+
+@pytest.mark.parametrize("controls", [None, REFERENCE_CONTROLS], ids=["no_controls", "controls"])
+def test_judge_graded_source_skips_verification_and_admits_its_rows(tmp_path, controls):
+    # The campaign has no grading machines, so running declared controls on a judge task would raise;
+    # the declared-controls case shows that no judge task is sampled.
+    source = tmp_path / "source"
+    write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    result = run_pipeline(
+        fixture_recipe(convert_mixed_graders, rubric=None, controls=controls),
+        source,
+        tmp_path / "output",
+        pipeline_config(SourceProcessingMode.FULL, reviewer),
+    )
+    manifest = read_json(result.manifest_path)
+    verification = read_json(tmp_path / "output/verify/report.json")
+    assert verification["status"] == "skipped"
+    assert verification["reason"] == "judge grader; no control path yet"
+    assert verification["results"] == []
+    assert result.status == "completed"
+    assert manifest["admission"] == "admitted"
+    assert manifest["admission_counts"] == {"admitted": 3}
+    assert len(parquet_rows(result.final_path)) == 3
 
 
 @pytest.mark.parametrize(
@@ -705,8 +729,4 @@ def test_sandbox_rows_reach_final_only_after_source_verification_passes(tmp_path
     assert manifest["admission_counts"] == {admission: 3}
     assert len(parquet_rows(result.final_path)) == (3 if admission == "admitted" else 0)
     checks = {check["check"]: check["status"] for row in parquet_rows(result.verify_path) for check in row["checks"]}
-    assert checks == (
-        {"empty": "pass", "golden": "pass", "negative": "pass"}
-        if admission == "admitted"
-        else {"empty": "pass", "golden": "infra_error", "negative": "infra_error"}
-    )
+    assert checks == {"golden": "pass" if admission == "admitted" else "infra_error"}

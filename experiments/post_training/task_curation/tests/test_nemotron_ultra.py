@@ -46,7 +46,6 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     RDKIT_CONTROLS,
     REASONING_GYM_CONTROLS,
     TOOL_ACTION_CONTROLS,
-    WRONG_TOOL,
 )
 from experiments.post_training.task_curation.pipeline import source_files
 from experiments.post_training.task_curation.tests.conversion import (
@@ -537,31 +536,27 @@ def test_multiple_choice_golden_follows_the_grading_mode(staged, changes, golden
     assert (reply_text(reply) if reply is not None else None) == golden
 
 
-@pytest.mark.parametrize(("box", "golden", "negative"), [(False, "((1))", "((2))"), (True, "\\boxed{1}", "\\boxed{2}")])
-def test_chemistry_controls_use_the_rows_answer_wrapper(staged, box, golden, negative):
+@pytest.mark.parametrize(("box", "golden"), [(False, "((1))"), (True, "\\boxed{1}")])
+def test_chemistry_golden_uses_the_rows_answer_wrapper(staged, box, golden):
     task = task_for("ultra_sft_step3200_rdkit", staged, use_box_format=box)
-    assert RDKIT_CONTROLS.golden is not None and RDKIT_CONTROLS.negative is not None
-    assert (reply_text(RDKIT_CONTROLS.golden(task)), reply_text(RDKIT_CONTROLS.negative(task))) == (golden, negative)
+    assert RDKIT_CONTROLS.golden is not None
+    assert reply_text(RDKIT_CONTROLS.golden(task)) == golden
 
 
-def test_code_controls_submit_the_source_solution_and_a_failing_program(staged):
+def test_code_golden_submits_the_source_solution(staged):
     task = task_for("ultra_sft_step3200_comp_coding", staged)
-    assert CODE_CONTROLS.golden is not None and CODE_CONTROLS.negative is not None
+    assert CODE_CONTROLS.golden is not None
     golden = reply_text(CODE_CONTROLS.golden(task))
     assert golden == "```python\na, b = map(int, input().split())\nprint(a + b)\n```"
-    assert "raise RuntimeError" in reply_text(CODE_CONTROLS.negative(task))
     assert CODE_CONTROLS.golden(task_for("ultra_sft_step3200_comp_coding", staged, gold_standard_solution="")) is None
 
 
-def test_tool_action_controls_call_the_expected_tool_and_an_unadvertised_one(staged):
+def test_tool_action_golden_calls_the_expected_tool(staged):
     task = task_for("ultra_sft_step3200_toolcall_schema", staged)
-    assert TOOL_ACTION_CONTROLS.golden is not None and TOOL_ACTION_CONTROLS.negative is not None
+    assert TOOL_ACTION_CONTROLS.golden is not None
     expected = COMPONENT_ROWS["ultra_sft_step3200_toolcall_schema"]["expected_action"]
     call = ConversationToolCall(call_id="control", name=expected["name"], arguments=json.loads(expected["arguments"]))
     assert TOOL_ACTION_CONTROLS.golden(task) == Reply(AssistantToolCalls(calls=(call,)))
-    negative = TOOL_ACTION_CONTROLS.negative(task).event
-    assert isinstance(negative, AssistantToolCalls) and negative.calls[0].name == WRONG_TOOL
-    assert WRONG_TOOL not in {tool.name for tool in task.final_tools}
 
 
 def test_reasoning_gym_golden_is_the_rows_answer(staged):
@@ -586,12 +581,12 @@ def math_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
 
 
 @pytest.mark.parametrize("path", ["ultra_sft_step3200_math_cot", "ultra_sft_step3200_math_tir"])
-def test_math_controls_score_the_boxed_reference_one_and_a_wrong_reply_zero(staged, path):
+def test_math_golden_scores_the_boxed_reference_one(staged, path):
     controls = PIPELINES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
     report = run_controls(task_for(path, staged), controls=controls, machines=None)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"empty": CheckStatus.PASS, "golden": CheckStatus.PASS, "negative": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS}, report
 
 
 def test_math_grader_compares_the_answer_symbolically_with_the_expected_answer(staged):

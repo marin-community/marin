@@ -13,7 +13,7 @@ from taskcompendium.convert.answers import answer_task, source_defect, unsupport
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasktrove import archive_file
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.controls import reference_reply, wrong_reply
+from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
@@ -75,7 +75,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=RUBRIC,
-            controls=Controls(golden=reference_reply, negative=wrong_reply),
+            controls=Controls(golden=reference_reply),
             atlas_id="Task Trove:laion__all-puzzles-v2",
         )
     ]

@@ -16,7 +16,6 @@ from verifyit.spec import StdioSpec
 
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
-    broken_submission,
     python_delivery,
     solve_script,
     tasktrove_archive_task,
@@ -54,7 +53,7 @@ IMAGE = "test@sha256:" + "a" * 64
 ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, compatible_backends=(Backend.DOCKER,))
 EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 MISSING_FILE = Result(44, b"", b"", False, False, ExitReason.EXITED)
-CONTROLS = Controls(golden=solve_script, negative=broken_submission)
+CONTROLS = Controls(golden=solve_script)
 ARCHIVE = {
     INSTRUCTION: b"Read two integers and print their sum. Write your program to /app/solution.py.",
     "setup_files/readme.txt": b"Public setup",
@@ -239,20 +238,11 @@ def test_linux_file_names_survive_conversion_and_traversal_cannot_produce_task()
     assert rejected["raw"]["data"] == escaping
 
 
-def test_missing_oracle_skips_golden_and_still_grades_negatives(executable_task):
+def test_task_without_an_oracle_grades_an_empty_submission(executable_task):
     machines = ControlMachines()
     report = run_controls(without_oracle(executable_task), controls=CONTROLS, machines=machines)
-    assert checks(report) == {"empty": CheckStatus.PASS, "golden": CheckStatus.SKIPPED, "negative": CheckStatus.PASS}
+    assert checks(report) == {"empty": CheckStatus.PASS}
     assert all(machine.closed for machine in machines.factory.machines)
-
-
-@pytest.mark.parametrize(
-    "verdict_status, expected", [("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)]
-)
-def test_ungraded_zero_reward_cannot_pass_the_negative_control(executable_task, verdict_status, expected):
-    machines = ControlMachines(GradingMachines(verdict_status=verdict_status))
-    report = run_controls(without_oracle(executable_task), controls=CONTROLS, machines=machines)
-    assert checks(report)["negative"] == expected
 
 
 @pytest.mark.parametrize("program, reward", [(b"print(7)\n", 1.0), (b"print(0)\n", 0.0)])

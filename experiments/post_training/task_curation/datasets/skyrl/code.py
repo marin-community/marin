@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, FAILING_PROGRAM, THREAD_ENVIRONMENT, python_reply
+from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, THREAD_ENVIRONMENT, python_reply
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasktrove import ANSWER_PATH
@@ -43,7 +43,6 @@ SQL_INSTRUCTION = (
     "\nTarget dialect is SQLite. Write exactly one SELECT statement (a leading WITH is allowed) that "
     "answers the question. Return only the query, inside <solution></solution>."
 )
-FAILING_SQL = "SELECT FROM"
 GEEKSFORGEEKS_HOST = "geeksforgeeks.org"
 
 APPS_RUBRIC = """
@@ -281,16 +280,7 @@ def reference_solution(task: TaskSpec) -> Reply | None:
     return answer_reply(task, reply) if reply is not None else None
 
 
-def failing_code(task: TaskSpec) -> Reply:
-    return answer_reply(task, FAILING_PROGRAM)
-
-
-def failing_sql(task: TaskSpec) -> Reply:
-    return answer_reply(task, FAILING_SQL)
-
-
-CODE_CONTROLS = Controls(golden=reference_solution, negative=failing_code, memory_mb=CODE_GRADER_MEMORY_MB)
-SQL_CONTROLS = Controls(golden=reference_solution, negative=failing_sql, memory_mb=CODE_GRADER_MEMORY_MB)
+CONTROLS = Controls(golden=reference_solution, memory_mb=CODE_GRADER_MEMORY_MB)
 
 
 def pipelines() -> list[RlDataPipeline]:
@@ -305,7 +295,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=APPS_RUBRIC,
-            controls=CODE_CONTROLS,
+            controls=CONTROLS,
             grader_image=GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:apps",
@@ -324,7 +314,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=EURUS2_CODE_RUBRIC,
-            controls=CODE_CONTROLS,
+            controls=CONTROLS,
             grader_image=GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:eurus2_code",
@@ -342,7 +332,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=VERIFIABLE_CODE_RUBRIC,
-            controls=CODE_CONTROLS,
+            controls=CONTROLS,
             grader_image=GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:verifiable_code",
@@ -360,7 +350,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
-            controls=SQL_CONTROLS,
+            controls=CONTROLS,
             grader_image=GRADER,
             ships=(SCORERS,),
             atlas_id="MarinSkyRL:gretel_text_to_sql",

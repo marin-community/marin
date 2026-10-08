@@ -18,7 +18,7 @@ from taskcompendium.convert.answers import json_schema_task
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
-from taskcompendium.pipeline.controls import answer_reply, control_suite, wrong_reply
+from taskcompendium.pipeline.controls import answer_reply, control_suite
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -60,9 +60,9 @@ def count_reply(task: TaskSpec) -> Reply:
     return answer_reply(task, json.dumps({"count": 1}))
 
 
-# A JSON schema grader has no reference instance, so these controls have no golden.
-SCHEMA_CONTROLS = Controls(negative=wrong_reply)
-COUNT_CONTROLS = Controls(golden=count_reply, negative=wrong_reply)
+# A JSON schema grader has no reference instance, so these controls grade an empty submission.
+SCHEMA_CONTROLS = Controls()
+COUNT_CONTROLS = Controls(golden=count_reply)
 
 
 def schema_task(task_id: str, schema: dict) -> TaskSpec:
@@ -181,9 +181,6 @@ def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_
         assert reused.execution_id == original.execution_id
         assert reused.original_report == str(original_path)
         assert reused.reused_from == str(original_path)
-    assert all(
-        any(check.status == CheckStatus.SKIPPED for check in trial.checks) for trial in resumed.results[0].result.trials
-    )
     changed = TaskSpec.model_validate_json(reusable_schema_row["task_json"])
     changed = changed.model_copy(update={"tags": (*changed.tags, "changed-private-contract")})
     with pytest.raises(ValueError, match="exact selected task"):
@@ -509,7 +506,7 @@ def test_source_decision_counts_tasks_and_requires_complete_coverage(
         assert gated["grader_readiness"] == "unverified"
 
 
-def test_missing_schema_golden_keeps_available_checks_and_does_not_certify_tasks(tmp_path):
+def test_task_without_a_golden_is_verified_by_its_empty_submission(tmp_path):
     task = schema_task("schema-task", OBJECT_SCHEMA)
     row = {"task_id": task.id, "task_json": task.model_dump_json(), "filter_status": "keep", "filter_reasons": []}
     source = tmp_path / "source"
@@ -522,57 +519,51 @@ def test_missing_schema_golden_keeps_available_checks_and_does_not_certify_tasks
         manifest = verify_source(
             str(source),
             str(output),
-            SourceVerificationPolicy(1, 0, 2, 1.0),
+            SourceVerificationPolicy(1, 0, 1, 1.0),
             control_suite(SCHEMA_CONTROLS, None),
             1,
             context=context,
             telemetry=telemetry,
         )
     report = manifest["verification"]
-    result = SampleResult.model_validate(report["results"][0])
+    [trial] = SampleResult.model_validate(report["results"][0]).trials
     metrics = next(execution.counters for execution in telemetry.executions if execution.operation == "trials")
-    assert metrics["verification/attempts"] == 2
-    assert metrics["verification/control/golden/skipped"] == 2
-    assert metrics["verification/control/empty/pass"] == metrics["verification/control/negative/pass"] == 2
-    assert metrics["verification/trial/pass"] == 2
-    for trial in result.trials:
-        checks = {check.check: check.status for check in trial.checks}
-        assert checks == {"empty": CheckStatus.PASS, "golden": CheckStatus.SKIPPED, "negative": CheckStatus.PASS}
+    assert metrics["verification/attempts"] == 1
+    assert metrics["verification/control/empty/pass"] == metrics["verification/trial/pass"] == 1
+    assert {check.check: check.status for check in trial.checks} == {"empty": CheckStatus.PASS}
     assert report["status"] == "passed"
-    assert report["counts"]["checked"] == report["counts"]["skipped"] == 1
+    assert report["counts"]["checked"] == report["counts"]["passed"] == 1
     gated = pq.read_table(output / "audit").to_pylist()[0]
     assert gated["filter_status"] == "keep"
-    assert gated["grader_readiness"] == "unverified"
+    assert gated["grader_readiness"] == GraderReadiness.READY
     unsampled = gate_source_row(
         {**row, "task_id": "unsampled"},
         status=SourceVerificationStatus(report["status"]),
-        results={task.id: [check for trial in result.trials for check in trial.checks]},
-        sampled_readiness=GraderReadiness.UNVERIFIED,
+        results={task.id: trial.checks},
     )
     assert unsampled["filter_status"] == "keep"
-    assert unsampled["grader_readiness"] == "unverified"
+    assert unsampled["grader_readiness"] == GraderReadiness.SOURCE_SAMPLED
 
 
 def test_source_decision_preserves_infrastructure_failure_alongside_failed_control():
     sample = VerificationSample(1, [{"task_id": "one"}])
+    outcomes = [(CheckStatus.FAIL, "wrong output"), (CheckStatus.INFRA_ERROR, "machine unavailable")]
     results = [
         SampleResult(
             task_id="one",
             source=Source(dataset="fixture", revision="1", row="one", importer_revision="1"),
             trials=[
                 VerificationTrial(
-                    attempt=0,
-                    status=CheckStatus.FAIL,
-                    checks=[
-                        CheckResult(check="oracle", status=CheckStatus.FAIL, detail="wrong output"),
-                        CheckResult(check="negative", status=CheckStatus.INFRA_ERROR, detail="machine unavailable"),
-                    ],
+                    attempt=attempt,
+                    status=status,
+                    checks=[CheckResult(check="golden", status=status, detail=detail)],
                     rollouts=(),
                 )
+                for attempt, (status, detail) in enumerate(outcomes)
             ],
         )
     ]
-    report = source_verification_report(sample, results, SourceVerificationPolicy(1, 0, 1, 1.0))
+    report = source_verification_report(sample, results, SourceVerificationPolicy(1, 0, 2, 1.0))
     assert report.status == "inconclusive"
     assert report.counts.failed == report.counts.infra_error == 1
 
@@ -603,12 +594,13 @@ def test_source_gate_preserves_unavailable_review_for_retry(source_status):
 
 def test_inconclusive_source_defers_eligible_rows_but_preserves_failed_controls():
     row = {"task_id": "one", "filter_status": "keep", "filter_reasons": [], "grader_readiness": "unverified"}
-    checks = [CheckResult(check="oracle", status=CheckStatus.INFRA_ERROR, detail="machine unavailable")]
+    checks = [CheckResult(check="golden", status=CheckStatus.INFRA_ERROR, detail="machine unavailable")]
     deferred = gate_source_row(row, status=SourceVerificationStatus.INCONCLUSIVE, results={"one": checks})
     assert deferred["filter_status"] == "defer"
     assert deferred["filter_reasons"] == ["source_verification:inconclusive"]
 
-    checks.append(CheckResult(check="negative", status=CheckStatus.FAIL, detail="incorrect submission accepted"))
+    # A definite failure from an earlier trial outlasts a later infrastructure error.
+    checks.append(CheckResult(check="golden", status=CheckStatus.FAIL, detail="correct submission rejected"))
     rejected = gate_source_row(row, status=SourceVerificationStatus.INCONCLUSIVE, results={"one": checks})
     assert rejected["filter_status"] == "reject"
-    assert rejected["filter_reasons"] == ["check:negative"]
+    assert rejected["filter_reasons"] == ["check:golden"]

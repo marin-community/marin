@@ -75,12 +75,12 @@ def test_grade_script_scores_the_reply(path, submission, reward, machines):
     "path",
     ["ultra_sft_step3200_comp_coding", "ultra_sft_step3200_rdkit", "ultra_sft_step3200_toolcall_schema"],
 )
-def test_controls_score_the_reference_one_and_wrong_replies_zero(path, machines):
+def test_golden_control_scores_the_reference_one(path, machines):
     controls = PIPELINES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
     report = run_controls(task(path), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"empty": CheckStatus.PASS, "golden": CheckStatus.PASS, "negative": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS}, report
 
 
 @pytest.mark.parametrize(

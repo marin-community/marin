@@ -12,7 +12,6 @@ CODE_GRADER_MEMORY_MB = 5120
 """The LiveCodeBench child process may use 4 GiB; the grading machine also needs room for its runtime."""
 THREAD_ENVIRONMENT = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 """Run each test's numeric libraries on one thread."""
-FAILING_PROGRAM = '```python\nraise RuntimeError("negative control")\n```'
 CODE_BLOCK = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
 """A fenced code block as the source scorers match one; they run the last block in a reply."""
 

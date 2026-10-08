@@ -289,8 +289,6 @@ def tasktrove_golden(task: TaskSpec) -> Reply:
     return answer_reply(task, entry["answer"])
 
 
-# Scorers give partial credit, so a fixed wrong answer has no single expected reward; only the
-# known answer is checked.
 GENERATED_CONTROLS = Controls(golden=generated_golden)
 TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden)
 

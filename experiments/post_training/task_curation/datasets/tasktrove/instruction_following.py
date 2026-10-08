@@ -17,10 +17,8 @@ from taskcompendium.convert.answers import ifeval_task, json_schema_task, source
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow, Reply
-from taskcompendium.pipeline.verification import MALFORMED_JSON
+from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
@@ -204,10 +202,6 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 
-def malformed_json(task: TaskSpec) -> Reply:
-    return answer_reply(task, MALFORMED_JSON)
-
-
 def pipelines() -> list[RlDataPipeline]:
     return [
         RlDataPipeline(
@@ -228,7 +222,7 @@ def pipelines() -> list[RlDataPipeline]:
             environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=STRUCTURED_RUBRIC,
-            controls=Controls(negative=malformed_json),
+            controls=Controls(),
             atlas_id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
         ),
     ]

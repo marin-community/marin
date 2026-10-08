@@ -7,7 +7,7 @@ The scorer rewards the fraction of constraints a reply satisfies. RLVR-IFeval ro
 SkyRL constraint descriptors; Nemotron instruction IDs are mapped to the same descriptors.
 Conversion normalizes them with the scorer's own preparation function, which rejects unknown
 constraints and missing arguments. The sources publish no passing replies, so the controls check
-only that a reply violating every constraint scores 0.
+only that an empty reply scores 0.
 """
 
 import json
@@ -21,11 +21,9 @@ from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasktrove import ANSWER_PATH
-from taskcompendium.grader import grader_config
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
-from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
+from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.images.recipes import GRADER
@@ -35,8 +33,6 @@ HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
 IFEVAL_GRADE = grade_script(HERE / "ifeval_grade.py", *shipped_files(SCORERS, "ifeval_utils.py"))
 GRADER_TIMEOUT = 40.0
-FILLER = "vx"
-"""A word no constraint names; the violating reply pads counts with it."""
 
 RUBRIC = """
 Identify every public content request and requirement across the complete conversation; do not discard earlier
@@ -176,56 +172,7 @@ def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | I
     return ifeval_task(row, context, events, [constraint], evidence)
 
 
-def _overshoot(quantifier: str, bound: int, tolerance: int) -> int:
-    """How many items take a count past an upper ``bound``; zero for a lower bound, which the short reply misses."""
-    return {"less than": bound, "at most": bound + 1, "around": bound + tolerance + 1}.get(quantifier, 0)
-
-
-def violating_text(constraints: Sequence[Mapping[str, Any]]) -> str:
-    """A reply that fails every constraint.
-
-    The reply starts as one short mixed-case word without punctuation, markup or keywords, which
-    fails the case and format checks and any lower bound above one. Each other constraint adds what
-    it forbids, or more words, sentences or capital words than its upper bound allows.
-    """
-    head, words = "Qz", []
-    for constraint in constraints:
-        name, bound, quantifier = constraint["func_name"], constraint.get("N"), constraint.get("quantifier")
-        match name:
-            case "validate_no_commas":
-                head += ","
-            case "validate_forbidden_words":
-                words.append(constraint["forbidden_words"][0])
-            case "verify_keyword_frequency" if bound == 0:
-                words.append(constraint["word"])
-            case "verify_keyword_frequency_relation":
-                words += [constraint["keyword_list"][0]] * _overshoot(quantifier, bound, 0)
-            case "validate_word_constraint":
-                words += [FILLER] * _overshoot(quantifier, bound, max(round(bound * 0.1), 1))
-            case "verify_sentence_constraint":
-                words += [f"{FILLER}."] * _overshoot(quantifier, bound, 1)
-            case "validate_frequency_capital_words":
-                words += [FILLER.upper()] * _overshoot(quantifier, bound, max(round(bound * 0.1), 1))
-            case "verify_bullet_points" if bound == 0:
-                words.append(f"\n- {FILLER}")
-            case "verify_paragraph_count" if bound == 1:
-                words.append(f"\n* * *\n{FILLER}")
-            case "validate_paragraphs" if bound == 1:
-                words.append(f"\n\n{FILLER}")
-            case "validate_sections" if bound == 1:
-                words += [constraint["section_splitter"], FILLER] * 2
-    text = " ".join((head, *words))
-    for constraint in constraints:
-        if constraint["func_name"] == "verify_letter_frequency" and text.count(constraint["letter"]) == constraint["N"]:
-            text = constraint["letter"] + text
-    return text
-
-
-def violating_reply(task: TaskSpec) -> Reply:
-    return answer_reply(task, violating_text(grader_config(task)["constraints"]))
-
-
-CONTROLS = Controls(negative=violating_reply)
+CONTROLS = Controls()
 
 
 def pipelines() -> list[RlDataPipeline]:

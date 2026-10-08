@@ -8,7 +8,7 @@ Each family test module (`test_skyrl.py`, `test_nemotron_ultra.py`, `test_arc.py
 
 ## Grading in the grader image
 
-[`test_skyrl_grading.py`](test_skyrl_grading.py), [`test_nemotron_ultra_grading.py`](test_nemotron_ultra_grading.py), [`test_arc_grading.py`](test_arc_grading.py), [`test_reasoning_gym_grading.py`](test_reasoning_gym_grading.py) and [`test_tasktrove_grading.py`](test_tasktrove_grading.py) grade converted fixture rows, and run their declared controls, in the locally built grader image through [`local_grader.py`](local_grader.py), whose machines reach them as the `machines` fixture from [`conftest.py`](conftest.py). They check that each grade script scores a wrong answer 0 and the source's reference answer 1 where it has one, and that a scorer module or dependency that cannot import is an infrastructure error, never a zero.
+[`test_skyrl_grading.py`](test_skyrl_grading.py), [`test_nemotron_ultra_grading.py`](test_nemotron_ultra_grading.py), [`test_arc_grading.py`](test_arc_grading.py), [`test_reasoning_gym_grading.py`](test_reasoning_gym_grading.py) and [`test_tasktrove_grading.py`](test_tasktrove_grading.py) grade converted fixture rows, and run their declared controls, in the locally built grader image through [`local_grader.py`](local_grader.py), whose machines reach them as the `machines` fixture from [`conftest.py`](conftest.py). They check that each declared control passes, that grade scripts score representative right and wrong answers as their scorers do, and that a scorer module or dependency that cannot import is an infrastructure error, never a zero.
 
 These modules carry the `docker` marker, which the default test run excludes. Build the image and select them with `-m docker`:
 

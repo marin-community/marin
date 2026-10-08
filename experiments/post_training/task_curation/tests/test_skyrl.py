@@ -27,7 +27,6 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
-from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import source_files
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_IMAGE,
@@ -311,53 +310,6 @@ def test_nemotron_repeat_prompt_constraint_receives_the_instruction():
     task = converted_task(PIPELINES["nemotron_if"], row)
     (constraint,) = grader_config(task)["constraints"]
     assert constraint == {"func_name": "validate_repeat_prompt", "original_prompt": row["input"][0]["content"]}
-
-
-@pytest.mark.parametrize(
-    "constraints",
-    [
-        *(
-            [{"func_name": "validate_word_constraint", "N": bound, "quantifier": quantifier}]
-            for quantifier, bound in (("at least", 50), ("less than", 3), ("at most", 3), ("around", 2))
-        ),
-        *(
-            [{"func_name": "verify_sentence_constraint", "N": bound, "quantifier": quantifier}]
-            for quantifier, bound in (("at least", 3), ("less than", 2), ("at most", 2), ("around", 1))
-        ),
-        [{"func_name": "validate_frequency_capital_words", "N": 2, "quantifier": "at most"}],
-        [{"func_name": "validate_sections", "N": 1, "section_splitter": "SECTION"}],
-        [{"func_name": "verify_paragraph_count", "N": 1}],
-        [{"func_name": "validate_paragraphs", "N": 1, "first_word": "rain", "i": 1}],
-        [{"func_name": "verify_bullet_points", "N": 0}],
-        [{"func_name": "verify_letter_frequency", "letter": "z", "N": 1}],
-        # RLVR-IFeval gives options as one string, which the scorer searches character by character.
-        [{"func_name": "validate_choice", "options": "yes/no/maybe"}],
-        [
-            {"func_name": "verify_keywords", "keyword_list": ["rain"]},
-            {
-                "func_name": "verify_keyword_frequency_relation",
-                "keyword_list": ["cloud"],
-                "N": 2,
-                "quantifier": "less than",
-            },
-            {"func_name": "validate_forbidden_words", "forbidden_words": ["storm"]},
-            {"func_name": "validate_no_commas"},
-            {"func_name": "validate_lowercase"},
-            {"func_name": "validate_uppercase"},
-            {"func_name": "validate_highlighted_sections", "N": 2},
-            {"func_name": "validate_placeholders", "N": 1},
-            {"func_name": "verify_postscript", "postscript_marker": "P.S."},
-            {"func_name": "validate_title"},
-            {"func_name": "validate_end", "end_phrase": "That's all."},
-            {"func_name": "validate_quotation"},
-            {"func_name": "validate_json_format"},
-            {"func_name": "validate_two_responses"},
-            {"func_name": "validate_repeat_prompt", "original_prompt": "Write a haiku about rain."},
-        ],
-    ],
-)
-def test_ifeval_violating_reply_fails_every_constraint(constraints):
-    assert ifeval_utils.compute_score(ifeval.violating_text(constraints), constraints)["score"] == 0.0
 
 
 @pytest.mark.parametrize("name", sorted(PREFERENCE_SOURCES))

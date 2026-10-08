@@ -46,7 +46,7 @@ An `RlDataPipeline` has these fields:
 | `environment` | `ShellSim()` for conversation tasks, or an `AgentImage` pinned by digest for agentic tasks. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
-| `controls` | Optional `Controls(golden, negative, memory_mb)` for grader verification. |
+| `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
 | `grader_image` | `GRADER` when graders run in a sandbox; the converter reads the built image as `ConversionContext.grader_environment`. |
@@ -102,15 +102,21 @@ Conversion preserves the source's grading semantics. It does not repair
 comparators or rewrite tests to accept a reference.
 
 Controls check a grader before its tasks are admitted. For each sampled task the
-pipeline grades an empty submission (must score 0), `golden(task)` (must score 1)
-and `negative(task)` (must score 0). A golden is a `Reply`, `WorkspaceFiles`, or
-an `OracleCommand`, such as a TaskTrove `solution/solve.sh`, run with the task's
-worker and oracle files in a fresh machine of the task's agent image, whose tools
-and directories the oracle expects. A task without an agent image, such as a
-conversation task, runs its oracle in the grader image. The oracle's output is
-then graded like any other submission. A task without a known answer returns
-`None`, which records a skipped golden. In-process numeric, MCQ, exact and
-action graders are also checked per task during preparation.
+pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
+when the declaration has no `golden` or it returns `None` because the task has no
+known answer, an empty submission, which must score 0. A golden is a `Reply`,
+`WorkspaceFiles`, or an `OracleCommand`, such as a TaskTrove `solution/solve.sh`,
+run with the task's worker and oracle files in a fresh machine of the task's agent
+image, whose tools and directories the oracle expects. A task without an agent
+image, such as a conversation task, runs its oracle in the grader image. The
+oracle's output is then graded like any other submission. In-process numeric,
+MCQ, exact and action graders are also checked per task during preparation.
+
+Sources graded by an LLM judge (verifyit's judge mode), such as the TaskTrove
+judged, open-QA and MultiChallenge sources, have no control path yet. When every
+task the panel converts is judge-graded, verification samples nothing and
+records `skipped` with reason `judge grader; no control path yet`, and kept rows
+are admitted like rows of in-process graders.
 
 ## Source procedure
 
@@ -124,8 +130,10 @@ action graders are also checked per task during preparation.
    Without a rubric, rows are kept as `unreviewed`.
 4. In full mode, convert and audit every row of an accepted source.
 5. Filter rows into kept, rejected and deferred.
-6. With controls, verify a seeded sample of kept rows: every control runs twice
-   in fresh machines, and the source passes at a 95% pass fraction.
+6. With controls, verify a seeded sample of at most 20 kept rows
+   (`--verification-sample-size`): each task's one control runs once in a fresh
+   machine, rerun up to twice more after an infrastructure error, and the source
+   passes at a 95% pass fraction. Judge-graded sources skip this step.
 7. Admit rows and write the outputs.
 
 The campaign runs source procedures in threads over one Zephyr context and
@@ -193,8 +201,8 @@ Each source artifact `data/rl/<name>-<hash>` contains:
 | `manifest.json` | Status, counts, revisions, reports and the source admission |
 | `telemetry.json` | Zephyr execution IDs, counters and phase wall times |
 
-Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader`,
-`deferred:judge` or `unverified`; `final/` holds the admitted rows. Sidecars
+Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader` or
+`unverified`; `final/` holds the admitted rows. Sidecars
 join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
 `raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
 every `*.py` file in the converter module's directory, every file below `ships`,
