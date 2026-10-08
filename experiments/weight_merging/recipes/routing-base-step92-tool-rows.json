@@ -1,0 +1,39 @@
+{
+  "anchor": {
+    "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+  },
+  "donors": [
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04_fd07ef0f2b78a83099a0042e59c00de986e7b647-7774bde0c20b769f",
+      "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92_fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab-c869d77c2f029573",
+      "revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"
+    }
+  ],
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/routing-base-step92-tool-rows",
+  "parameters": {
+    "method": "average",
+    "coefficients": [
+      0.0,
+      1.0
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 42
+  },
+  "preserve_rows": {
+    "model.embed_tokens.weight": [
+      128005,
+      128011
+    ],
+    "lm_head.weight": [
+      128005,
+      128011
+    ]
+  },
+  "tensor_coefficients": {},
+  "row_overrides": {}
+}

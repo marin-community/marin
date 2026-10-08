@@ -1,0 +1,8926 @@
+{
+  "anchor": {
+    "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+  },
+  "donors": [
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04_fd07ef0f2b78a83099a0042e59c00de986e7b647-7774bde0c20b769f",
+      "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92_fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab-c869d77c2f029573",
+      "revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"
+    }
+  ],
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/routing-bfcl016-step92-native-rows",
+  "parameters": {
+    "method": "average",
+    "coefficients": [
+      0.0,
+      1.0
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 42
+  },
+  "preserve_rows": {
+    "model.embed_tokens.weight": [],
+    "lm_head.weight": []
+  },
+  "tensor_coefficients": {},
+  "row_overrides": {
+    "model.layers.0.mlp.experts.gate_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 50,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 98,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 114,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 124,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 189,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 207,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.0.mlp.experts.up_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 50,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 98,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 114,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 124,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 189,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 207,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.0.mlp.experts.down_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 50,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 98,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 114,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 124,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 189,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 207,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.1.mlp.experts.gate_proj.weight": [
+      {
+        "row": 4,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 29,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 58,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 69,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 102,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 145,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 179,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 192,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 199,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 237,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 244,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.1.mlp.experts.up_proj.weight": [
+      {
+        "row": 4,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 29,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 58,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 69,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 102,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 145,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 179,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 192,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 199,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 237,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 244,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.1.mlp.experts.down_proj.weight": [
+      {
+        "row": 4,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 29,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 58,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 69,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 102,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 145,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 179,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 192,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 199,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 237,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 244,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.2.mlp.experts.gate_proj.weight": [
+      {
+        "row": 19,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 28,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 35,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 36,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 138,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 172,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 180,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 230,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.2.mlp.experts.up_proj.weight": [
+      {
+        "row": 19,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 28,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 35,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 36,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 138,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 172,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 180,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 230,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.2.mlp.experts.down_proj.weight": [
+      {
+        "row": 19,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 28,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 35,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 36,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 138,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 172,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 180,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 230,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.3.mlp.experts.gate_proj.weight": [
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 15,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 36,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 64,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 86,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 93,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 98,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 152,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 176,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.3.mlp.experts.up_proj.weight": [
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 15,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 36,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 64,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 86,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 93,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 98,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 152,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 176,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.3.mlp.experts.down_proj.weight": [
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 15,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 36,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 64,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 86,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 93,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 98,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 152,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 176,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.4.mlp.experts.gate_proj.weight": [
+      {
+        "row": 14,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 17,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 30,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 44,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 48,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 79,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 85,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 115,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 146,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 232,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 246,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.4.mlp.experts.up_proj.weight": [
+      {
+        "row": 14,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 17,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 30,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 44,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 48,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 79,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 85,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 115,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 146,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 232,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 246,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.4.mlp.experts.down_proj.weight": [
+      {
+        "row": 14,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 17,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 30,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 44,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 48,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 79,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 85,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 115,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 146,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 232,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 246,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.5.mlp.experts.gate_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 64,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 116,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 123,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 176,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 248,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.5.mlp.experts.up_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 64,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 116,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 123,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 176,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 248,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.5.mlp.experts.down_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 64,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 116,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 123,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 176,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 248,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.6.mlp.experts.gate_proj.weight": [
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 34,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 53,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 109,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 112,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 138,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 157,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 206,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 227,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 235,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.6.mlp.experts.up_proj.weight": [
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 34,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 53,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 109,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 112,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 138,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 157,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 206,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 227,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 235,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.6.mlp.experts.down_proj.weight": [
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 34,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 53,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 109,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 112,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 138,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 157,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 206,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 227,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 235,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.7.mlp.experts.gate_proj.weight": [
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 65,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 69,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 99,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 115,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 172,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.7.mlp.experts.up_proj.weight": [
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 65,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 69,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 99,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 115,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 172,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.7.mlp.experts.down_proj.weight": [
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 65,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 69,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 99,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 101,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 115,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 172,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.8.mlp.experts.gate_proj.weight": [
+      {
+        "row": 21,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 23,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 41,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 149,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 191,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 197,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 217,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 254,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.8.mlp.experts.up_proj.weight": [
+      {
+        "row": 21,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 23,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 41,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 149,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 191,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 197,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 217,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 254,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.8.mlp.experts.down_proj.weight": [
+      {
+        "row": 21,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 23,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 41,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 149,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 191,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 197,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 217,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 254,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.9.mlp.experts.gate_proj.weight": [
+      {
+        "row": 2,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 3,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 35,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 44,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 48,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 202,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 226,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 242,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 250,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.9.mlp.experts.up_proj.weight": [
+      {
+        "row": 2,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 3,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 35,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 44,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 48,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 202,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 226,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 242,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 250,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.9.mlp.experts.down_proj.weight": [
+      {
+        "row": 2,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 3,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 35,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 44,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 48,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 135,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 202,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 226,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 242,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 250,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.10.mlp.experts.gate_proj.weight": [
+      {
+        "row": 1,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 23,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 158,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 168,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 184,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 194,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 247,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.10.mlp.experts.up_proj.weight": [
+      {
+        "row": 1,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 23,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 158,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 168,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 184,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 194,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 247,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.10.mlp.experts.down_proj.weight": [
+      {
+        "row": 1,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 12,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 23,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 158,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 168,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 174,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 184,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 194,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 247,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.11.mlp.experts.gate_proj.weight": [
+      {
+        "row": 10,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 17,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 56,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 57,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 89,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 119,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 125,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 139,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 154,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 248,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.11.mlp.experts.up_proj.weight": [
+      {
+        "row": 10,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 17,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 56,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 57,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 89,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 119,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 125,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 139,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 154,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 248,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.11.mlp.experts.down_proj.weight": [
+      {
+        "row": 10,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 17,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 56,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 57,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 89,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 119,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 125,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 139,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 154,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 181,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 248,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 249,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.12.mlp.experts.gate_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 72,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 114,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 152,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 165,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 178,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 185,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 216,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 253,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.12.mlp.experts.up_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 72,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 114,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 152,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 165,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 178,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 185,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 216,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 253,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.12.mlp.experts.down_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 27,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 72,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 114,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 152,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 160,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 165,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 178,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 185,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 216,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 253,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.13.mlp.experts.gate_proj.weight": [
+      {
+        "row": 3,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 54,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 90,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 164,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 177,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 190,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 220,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 241,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.13.mlp.experts.up_proj.weight": [
+      {
+        "row": 3,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 54,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 90,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 164,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 177,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 190,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 220,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 241,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.13.mlp.experts.down_proj.weight": [
+      {
+        "row": 3,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 42,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 54,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 90,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 126,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 162,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 164,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 177,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 190,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 220,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 241,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.14.mlp.experts.gate_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 65,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 125,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 150,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 210,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 233,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 238,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.14.mlp.experts.up_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 65,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 125,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 150,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 210,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 233,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 238,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.14.mlp.experts.down_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 65,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 125,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 150,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 210,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 233,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 238,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.15.mlp.experts.gate_proj.weight": [
+      {
+        "row": 1,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 34,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 68,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 89,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 159,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 163,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 207,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 211,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 246,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.15.mlp.experts.up_proj.weight": [
+      {
+        "row": 1,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 34,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 68,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 89,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 159,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 163,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 207,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 211,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 246,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.15.mlp.experts.down_proj.weight": [
+      {
+        "row": 1,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 9,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 34,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 68,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 89,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 159,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 163,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 207,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 211,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 246,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.16.mlp.experts.gate_proj.weight": [
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 83,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 128,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 158,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 165,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 166,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 180,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 186,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.16.mlp.experts.up_proj.weight": [
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 83,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 128,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 158,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 165,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 166,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 180,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 186,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.16.mlp.experts.down_proj.weight": [
+      {
+        "row": 7,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 73,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 83,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 128,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 158,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 165,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 166,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 180,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 186,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.17.mlp.experts.gate_proj.weight": [
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 28,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 49,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 51,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 85,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 106,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 112,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 171,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 209,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 215,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 224,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 240,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 242,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.17.mlp.experts.up_proj.weight": [
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 28,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 49,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 51,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 85,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 106,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 112,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 171,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 209,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 215,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 224,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 240,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 242,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.17.mlp.experts.down_proj.weight": [
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 28,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 49,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 51,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 85,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 106,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 112,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 171,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 209,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 214,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 215,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 224,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 240,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 242,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.18.mlp.experts.gate_proj.weight": [
+      {
+        "row": 10,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 59,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 60,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 91,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 139,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 167,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 194,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 251,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 253,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.18.mlp.experts.up_proj.weight": [
+      {
+        "row": 10,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 59,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 60,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 91,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 139,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 167,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 194,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 251,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 253,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.18.mlp.experts.down_proj.weight": [
+      {
+        "row": 10,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 59,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 60,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 91,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 96,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 100,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 139,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 155,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 167,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 169,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 194,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 251,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 253,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.19.mlp.experts.gate_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 86,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 111,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 117,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 141,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 145,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 148,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 179,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 213,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 236,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.19.mlp.experts.up_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 86,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 111,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 117,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 141,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 145,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 148,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 179,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 213,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 236,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.19.mlp.experts.down_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 16,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 37,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 86,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 111,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 117,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 141,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 145,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 148,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 179,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 213,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 236,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.20.mlp.experts.gate_proj.weight": [
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 30,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 90,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 108,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 130,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 168,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.20.mlp.experts.up_proj.weight": [
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 30,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 90,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 108,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 130,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 168,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.20.mlp.experts.down_proj.weight": [
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 11,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 30,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 39,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 90,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 108,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 118,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 130,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 134,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 161,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 168,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 221,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.21.mlp.experts.gate_proj.weight": [
+      {
+        "row": 0,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 71,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 111,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 157,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 166,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 200,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 219,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 238,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.21.mlp.experts.up_proj.weight": [
+      {
+        "row": 0,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 71,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 111,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 157,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 166,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 200,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 219,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 238,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.21.mlp.experts.down_proj.weight": [
+      {
+        "row": 0,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 32,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 46,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 71,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 111,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 157,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 166,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 173,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 200,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 219,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 238,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.22.mlp.experts.gate_proj.weight": [
+      {
+        "row": 2,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 53,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 99,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 105,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 113,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 122,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 199,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 210,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 227,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.22.mlp.experts.up_proj.weight": [
+      {
+        "row": 2,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 53,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 99,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 105,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 113,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 122,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 199,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 210,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 227,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.22.mlp.experts.down_proj.weight": [
+      {
+        "row": 2,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 53,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 62,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 92,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 97,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 99,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 105,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 113,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 122,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 142,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 199,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 210,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 227,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.23.mlp.experts.gate_proj.weight": [
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 15,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 57,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 147,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 171,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 188,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 195,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 197,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 228,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 232,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.23.mlp.experts.up_proj.weight": [
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 15,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 57,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 147,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 171,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 188,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 195,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 197,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 228,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 232,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.23.mlp.experts.down_proj.weight": [
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 15,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 47,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 57,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 144,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 147,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 171,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 188,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 195,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 197,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 228,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 232,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 234,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 243,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 245,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.24.mlp.experts.gate_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 50,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 104,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 133,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 147,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 149,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 183,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.24.mlp.experts.up_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 50,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 104,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 133,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 147,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 149,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 183,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.24.mlp.experts.down_proj.weight": [
+      {
+        "row": 6,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 18,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 20,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 26,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 33,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 50,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 67,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 74,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 104,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 120,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 133,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 147,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 149,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 183,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 203,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 225,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.25.mlp.experts.gate_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 19,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 110,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 131,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 156,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 200,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.25.mlp.experts.up_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 19,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 110,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 131,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 156,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 200,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "model.layers.25.mlp.experts.down_proj.weight": [
+      {
+        "row": 5,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 8,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 19,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 22,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 81,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 110,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 129,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 131,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 136,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 156,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 200,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 205,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 212,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 218,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 223,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "row": 255,
+        "coefficients": [
+          1.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}
