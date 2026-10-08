@@ -18,6 +18,18 @@ Each retained task contains:
 `task_format.py` defines this layout. [`verifyit`](../../../lib/verifyit/README.md)
 defines and executes the grader contract.
 
+Nemotron structured-output tasks require correct extraction as well as valid output structure.
+Their script grader first checks the requested JSON, YAML, TOML, XML, or CSV format, then asks a
+judge whether the field values are supported by the supplied document. A requested value absent
+from the document uses the explicit string `__MISSING__`, including numeric or nested fields;
+the task instruction and effective schema permit this marker. Available facts must still be
+extracted, and using the marker for a supplied fact scores zero. Configure
+`VERIFYIT_JUDGE_BASE_URL`, `VERIFYIT_JUDGE_API_KEY`, and `VERIFYIT_JUDGE_MODEL` in the verifier's
+environment. Unsupported field values score zero. Missing judge configuration or judge execution
+errors produce an unscored infrastructure verdict. Task images
+install the schema and judge dependencies through `ConvertedTask.verifier_extras`; credentials
+are supplied at execution time.
+
 ## Run
 
 The release version and TaskTrove revision are constants in `pipeline.py`. The verifier commit
@@ -152,6 +164,14 @@ can stand alone in `ledger.parquet`. Use a source-level drop only when the sampl
 by the source template. Explicit acceptance clauses can be normalized without recovering an
 answer; for example, stdin/stdout converters use numeric comparison only when the instruction
 states a numeric error tolerance.
+
+Python unit-test conversion installs `mock` when the task's tests import it and rejects malformed
+Python encodings. Stack tasks `stack-pytest-0249`, `stack-pytest-0380`, and `stack-pytest-0474`
+are excluded through `reviewed_defects.json` for ambiguous or incomplete test contracts.
+
+NL2Bash output grading rejects contradictory named and standalone counts while retaining harmless
+logs. Tasks `task_1492` and `task_3002` are excluded through `reviewed_defects.json`: the first
+has an incorrect file-difference oracle, and the second grades solver-chosen text against one fixed dump.
 
 ## Validate and inspect
 

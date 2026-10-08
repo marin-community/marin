@@ -22,6 +22,7 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     ensure_pytest_json_report,
     pytest_selection,
     restore_setup,
+    swe_test_environment,
     test_ids,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
@@ -75,12 +76,13 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         must_pass=selection.must_pass,
         must_not_break=selection.must_not_break,
         setup=restore_setup(trusted, (TRUSTED_TEST_PATHS,), fallback),
+        protected_paths_files=(TRUSTED_TEST_PATHS.removeprefix("tests/"),),
         workspace=TESTBED,
     )
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=ensure_pytest_json_report(task.text(DOCKERFILE)),
+        dockerfile=swe_test_environment(ensure_pytest_json_report(task.text(DOCKERFILE)), task.text(INSTRUCTION)),
         tags=("code", "swe", "swe-repo", "trusted-test-paths"),
         language="python",
         data_files={TRUSTED_TEST_PATHS: task.files[TRUSTED_TEST_PATHS]},
