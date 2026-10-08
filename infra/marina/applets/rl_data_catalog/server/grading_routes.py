@@ -6,14 +6,29 @@
 import ast
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-from .grading_code import PythonModuleSource
+from .grading_code import VERIFYIT_MODES_BINDING, PythonModuleSource
 
 ENVIRONMENT_METHODS = {"__init__", "init", "step", "set_rollout_evidence", "close"}
 NEMOTRON_PREFIX = "skyrl_gym.envs.nemotron_ultra."
 JUDGE_AGENTS = {"abstention_simple_agent", "multichallenge_simple_agent"}
 LCB_EXECUTION_MODULE = "skyrl_gym.envs.lcb.verifyit_execution"
+
+
+class GradingMode(StrEnum):
+    HARBOR = "harbor"
+    VERIFYIT = "verifyit"
+    LEGACY = "legacy"
+
+
+class VerifyitMode(StrEnum):
+    SCRIPT = "script"
+    EXACT = "exact"
+    MATH = "math"
+    JUDGE = "judge"
+    REASONING_GYM = "reasoning-gym"
 
 
 @dataclass(frozen=True)
@@ -45,10 +60,10 @@ def skyrl_grading_routes(
 ) -> list[GradingRoute]:
     """Keep row-selected agents separate and include child-process grading entries."""
     mode = row["verifier_mode"]
-    if mode == "harbor":
+    if mode == GradingMode.HARBOR:
         return [
             GradingRoute(
-                "harbor",
+                GradingMode.HARBOR,
                 {"harbor.verifier.verifier": ["Verifier.__init__", "Verifier.verify"]},
                 {},
                 (),
@@ -59,16 +74,16 @@ def skyrl_grading_routes(
         "verification_from_env_step",
         "fold_verification_results",
     ]
-    bindings = {"self.verifyit_enabled": mode == "verifyit", "verifyit_enabled": mode == "verifyit"}
+    bindings = {"self.verifyit_enabled": mode == GradingMode.VERIFYIT, "verifyit_enabled": mode == GradingMode.VERIFYIT}
     environment = row["environment"]
     if environment != "nemotron_ultra":
-        if environment == "lcb" and mode == "verifyit":
+        if environment == "lcb" and mode == GradingMode.VERIFYIT:
             roots[LCB_EXECUTION_MODULE] = ["_execute"]
-            bindings["__verifyit_modes__"] = ["script", "exact"]
-        elif environment == "text_to_sql" and mode == "verifyit":
-            bindings["__verifyit_modes__"] = ["script"]
-        elif environment == "reasoning_gym" and mode == "verifyit":
-            bindings["__verifyit_modes__"] = ["reasoning-gym"]
+            bindings[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT, VerifyitMode.EXACT]
+        elif environment == "text_to_sql" and mode == GradingMode.VERIFYIT:
+            bindings[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT]
+        elif environment == "reasoning_gym" and mode == GradingMode.VERIFYIT:
+            bindings[VERIFYIT_MODES_BINDING] = [VerifyitMode.REASONING_GYM]
         return [GradingRoute(environment, roots, bindings, ())]
     if not agents:
         raise ValueError("A Nemotron grading route must identify the selected agents")
@@ -77,9 +92,9 @@ def skyrl_grading_routes(
         selected = {module: list(names) for module, names in roots.items()}
         values = {**bindings, "self.agent": agent}
         resources = ()
-        if agent in {"ns_tools_simple_agent", "math_with_judge_simple_agent"} and mode == "verifyit":
+        if agent in {"ns_tools_simple_agent", "math_with_judge_simple_agent"} and mode == GradingMode.VERIFYIT:
             selected[NEMOTRON_PREFIX + "math_judge_verifyit"] = ["_evaluate"]
-            values["__verifyit_modes__"] = ["script", "math", "judge"]
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT, VerifyitMode.MATH, VerifyitMode.JUDGE]
         elif agent in JUDGE_AGENTS or agent.startswith("jailbreak_"):
             kind = (
                 "abstention"
@@ -90,25 +105,25 @@ def skyrl_grading_routes(
                 NEMOTRON_PREFIX + "env:NemotronUltraEnv._grade_judge_profile": {"kind": kind},
                 NEMOTRON_PREFIX + "judge_profiles_verifyit:_evaluate": {"kind": kind},
             }
-            if mode == "verifyit":
+            if mode == GradingMode.VERIFYIT:
                 selected[NEMOTRON_PREFIX + "judge_profiles_verifyit"] = ["_evaluate"]
-                values["__verifyit_modes__"] = ["script", "judge"]
+                values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT, VerifyitMode.JUDGE]
             if agent == "abstention_simple_agent":
                 resources = ("skyrl-gym/skyrl_gym/envs/nemotron_ultra/abstention_prompt.txt",)
             elif agent.startswith("jailbreak_"):
                 resources = ("skyrl-gym/skyrl_gym/envs/nemotron_ultra/jailbreak_verifiers.yaml",)
-        elif agent == "math_formal_lean_refinement_agent" and mode == "verifyit":
+        elif agent == "math_formal_lean_refinement_agent" and mode == GradingMode.VERIFYIT:
             selected[NEMOTRON_PREFIX + "lean_verifyit"] = ["_compile"]
-            values["__verifyit_modes__"] = ["script"]
-        elif agent == "code_gen_simple_agent" and mode == "verifyit":
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT]
+        elif agent == "code_gen_simple_agent" and mode == GradingMode.VERIFYIT:
             selected[LCB_EXECUTION_MODULE] = ["_execute"]
-            values["__verifyit_modes__"] = ["script", "exact"]
-        elif agent == "calendar_simple_agent" and mode == "verifyit":
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT, VerifyitMode.EXACT]
+        elif agent == "calendar_simple_agent" and mode == GradingMode.VERIFYIT:
             selected[NEMOTRON_PREFIX + "calendar_verifyit"] = ["_check"]
-            values["__verifyit_modes__"] = ["script"]
-        elif agent == "reasoning_gym_simple_agent" and mode == "verifyit":
-            values["__verifyit_modes__"] = ["reasoning-gym"]
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT]
+        elif agent == "reasoning_gym_simple_agent" and mode == GradingMode.VERIFYIT:
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.REASONING_GYM]
         elif agent == "indirect_prompt_injection_simple_agent":
-            values["__verifyit_modes__"] = ["script"]
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT]
         routes.append(GradingRoute(agent, selected, values, resources))
     return routes

@@ -15,9 +15,11 @@ from typing import Any
 import httpx
 
 from .grading_code import PythonGradingProgram, python_grading_program
-from .grading_routes import skyrl_grading_routes
+from .grading_routes import GradingMode, skyrl_grading_routes
 
 HARBOR = "marin-community/harbor"
+SKYRL = "marin-community/MarinSkyRL"
+VERIFYIT_DEPENDENCY_PATH = "skyrl-gym/pyproject.toml"
 
 
 @dataclass(frozen=True)
@@ -26,14 +28,6 @@ class GradingRepository:
     revision: str
     source_root: str
     project_path: str
-
-
-@dataclass(frozen=True)
-class GradingFile:
-    repository: str
-    revision: str
-    path: str
-    sha256: str
 
 
 class RepositoryGradingModules:
@@ -76,12 +70,6 @@ class RepositoryGradingModules:
             self.files[(repository.repository, repository.revision, path)] = content
         self.modules[module] = content
         return content
-
-    def provenance(self) -> tuple[GradingFile, ...]:
-        return tuple(
-            GradingFile(repository, revision, path, hashlib.sha256(content.encode()).hexdigest())
-            for (repository, revision, path), content in sorted(self.files.items())
-        )
 
 
 VERIFYIT_REQUIREMENT = re.compile(
@@ -209,7 +197,7 @@ def source_grading_manifest(
             for repository in repositories
         }
         resources = {path: source.file(source.packages["skyrl_gym"], path) for path in route.resources}
-        runtime = source.packages["harbor"] if route.name == "harbor" else source.packages["skyrl_gym"]
+        runtime = source.packages["harbor"] if route.name == GradingMode.HARBOR else source.packages["skyrl_gym"]
         locked = locked_grading_packages(program.external_imports, source.file(runtime, "uv.lock"))
         manifest = grading_manifest(
             program, grading_requirements(program, projects, IMPORT_DISTRIBUTIONS, locked), resources
@@ -221,7 +209,7 @@ def source_grading_manifest(
 
 def grading_modules(client: httpx.Client, skyrl_revision: str, harbor_revision: str) -> RepositoryGradingModules:
     """Read the captured package pins without executing their build or import code."""
-    skyrl = GradingRepository("marin-community/MarinSkyRL", skyrl_revision, "skyrl-gym", "skyrl-gym/pyproject.toml")
+    skyrl = GradingRepository(SKYRL, skyrl_revision, "skyrl-gym", VERIFYIT_DEPENDENCY_PATH)
     source = RepositoryGradingModules(client, {"skyrl_gym": skyrl})
     source.packages["skyrl_train"] = GradingRepository(skyrl.repository, skyrl.revision, "skyrl-train", "pyproject.toml")
     verifyit = verifyit_repository(source.file(skyrl, skyrl.project_path))

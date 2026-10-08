@@ -11,11 +11,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+VERIFYIT_MODES_BINDING = "__verifyit_modes__"
+
 
 @dataclass(frozen=True)
 class PythonGradingCode:
     digest: str
-    definitions: tuple[str, ...]
     imports: tuple[tuple[str, str], ...]
     imported_members: tuple[tuple[str, str, tuple[str, ...]], ...]
     imported_bases: tuple[tuple[str, str], ...]
@@ -36,6 +37,16 @@ class GradingBranches(ast.NodeTransformer):
     def __init__(self, bindings: Mapping[str, Any], preserve_documentation: bool = False):
         self.bindings = bindings
         self.preserve_documentation = preserve_documentation
+
+    def remove_docstring(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
+        if (
+            not self.preserve_documentation
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        ):
+            node.body.pop(0)
 
     def value(self, node: ast.expr) -> Any:
         name = ast.unparse(node)
@@ -81,14 +92,7 @@ class GradingBranches(ast.NodeTransformer):
         return self.visit(node.body if selected else node.orelse)
 
     def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
-        if (
-            not self.preserve_documentation
-            and node.body
-            and isinstance(node.body[0], ast.Expr)
-            and isinstance(node.body[0].value, ast.Constant)
-        ):
-            if isinstance(node.body[0].value.value, str):
-                node.body.pop(0)
+        self.remove_docstring(node)
         if not node.decorator_list:
             node.returns = None
             for argument in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
@@ -108,15 +112,8 @@ class GradingBranches(ast.NodeTransformer):
         return self.visit_FunctionDef(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
-        if (
-            not self.preserve_documentation
-            and node.body
-            and isinstance(node.body[0], ast.Expr)
-            and isinstance(node.body[0].value, ast.Constant)
-        ):
-            if isinstance(node.body[0].value.value, str):
-                node.body.pop(0)
-        modes = self.bindings.get("__verifyit_modes__")
+        self.remove_docstring(node)
+        modes = self.bindings.get(VERIFYIT_MODES_BINDING)
         if modes and self.bindings.get("__name__") == "verifyit.spec" and node.name == "Mode":
             node.body = [
                 item
@@ -128,7 +125,7 @@ class GradingBranches(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        modes = self.bindings.get("__verifyit_modes__")
+        modes = self.bindings.get(VERIFYIT_MODES_BINDING)
         if (
             modes
             and self.bindings.get("__name__") in {"verifyit.grade", "verifyit.spec"}
@@ -350,9 +347,7 @@ def python_grading_code(
     members = tuple(
         sorted((module, symbol, tuple(sorted(names))) for (module, symbol), names in imported_members.items())
     )
-    return PythonGradingCode(
-        digest, tuple(sorted(selected)), tuple(sorted(dependencies)), members, tuple(sorted(imported_bases))
-    )
+    return PythonGradingCode(digest, tuple(sorted(dependencies)), members, tuple(sorted(imported_bases)))
 
 
 def python_grading_program(
@@ -370,7 +365,7 @@ def python_grading_program(
     """
     selected = {module: set(symbols) for module, symbols in roots.items()}
     route_bindings = dict(bindings or {})
-    if route_bindings.get("__verifyit_modes__"):
+    if route_bindings.get(VERIFYIT_MODES_BINDING):
         spec = ast.parse(source.read("verifyit.spec"))
         mode = next(node for node in spec.body if isinstance(node, ast.ClassDef) and node.name == "Mode")
         for member in mode.body:

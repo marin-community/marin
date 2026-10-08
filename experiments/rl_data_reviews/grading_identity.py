@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from infra.marina.applets.rl_data_catalog.server.grading_code import python_grading_program
-from infra.marina.applets.rl_data_catalog.server.grading_routes import skyrl_grading_routes
+from infra.marina.applets.rl_data_catalog.server.grading_routes import GradingMode, skyrl_grading_routes
 
 PACKAGE_LOCATOR = """import importlib.util,json,sys
 result={}
@@ -45,7 +45,7 @@ class ExecutionModules:
 
 
 def verified_execution_grading(config: dict, base: Path) -> dict | None:
-    """Capture selected code before execution; reject a stale or inaccurate snapshot."""
+    """Capture selected code, or return None when no grading snapshot is configured."""
     snapshot_path = config["source"].get("grading_snapshot")
     if snapshot_path is None:
         return None
@@ -59,10 +59,10 @@ def verified_execution_grading(config: dict, base: Path) -> dict | None:
     if digest != snapshot["grading_revision"]:
         raise ValueError("The grading snapshot manifest does not match its revision")
     runtime = config["runtime"]
-    if snapshot["verifier_mode"] != "harbor":
+    if snapshot["verifier_mode"] != GradingMode.HARBOR:
         environment = snapshot["environment"]
         enabled = runtime.get("gym_config", {}).get(environment, {}).get("verifyit_enabled", False)
-        if enabled != (snapshot["verifier_mode"] == "verifyit"):
+        if enabled != (snapshot["verifier_mode"] == GradingMode.VERIFYIT):
             raise ValueError("The effective Gym verifyit mode differs from the captured grading route")
     checkout = Path(runtime["marinskyrl_checkout"])
     packages = {
@@ -72,7 +72,7 @@ def verified_execution_grading(config: dict, base: Path) -> dict | None:
     }
     selected_packages = {module.split(".")[0] for route in manifest["routes"].values() for module in route["modules"]}
     external = sorted(selected_packages - packages.keys())
-    interpreter = runtime["harbor_python"] if snapshot["verifier_mode"] == "harbor" else runtime["gym_python"]
+    interpreter = runtime["harbor_python"] if snapshot["verifier_mode"] == GradingMode.HARBOR else runtime["gym_python"]
     if external:
         locations = json.loads(
             subprocess.check_output([interpreter, "-c", PACKAGE_LOCATOR, json.dumps(external)], text=True)

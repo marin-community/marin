@@ -15,7 +15,15 @@ from typing import Any
 import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
-from .grading_dependencies import HARBOR, annotate_grading_revision, grading_modules, verifyit_repository
+from .grading_dependencies import (
+    HARBOR,
+    SKYRL,
+    VERIFYIT_DEPENDENCY_PATH,
+    annotate_grading_revision,
+    grading_modules,
+    verifyit_repository,
+)
+from .grading_routes import GradingMode
 from .nemotron_counts import NEMOTRON_COUNTS
 from .nemotron_records import SWE_AGENT, record_source
 from .source_annotations import (
@@ -25,7 +33,6 @@ from .source_annotations import (
     GITHUB_DATASETS,
 )
 
-SKYRL = "marin-community/MarinSkyRL"
 TASKTROVE = "open-athena/task-trove"
 SKYRL_ORIGIN = "MarinSkyRL"
 TASKTROVE_ORIGIN = "Task Trove"
@@ -36,7 +43,6 @@ AGENTIC_ENVS = {"search", "searchcode", "text2sql"}
 
 HARBOR_VERIFIER_PATH = "src/harbor/verifier"
 
-VERIFYIT_DEPENDENCY_PATH = "skyrl-gym/pyproject.toml"
 VERIFYIT_CLIENTS_PATH = "skyrl-gym/skyrl_gym/envs/verifyit_clients.py"
 INSTRUCTION_VERIFYIT_PATH = "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py"
 
@@ -453,24 +459,19 @@ def source_components(row: dict[str, Any], info: dict[str, Any]) -> list[dict[st
     return component_rows(row, info)
 
 
-def verifyit_pin(project_text: str) -> str:
-    """Read the exact installed verifyit commit from SkyRL Gym's dependency declaration."""
-    return verifyit_repository(project_text).revision
-
-
-def verifier_mode(row: dict[str, Any]) -> str:
+def verifier_mode(row: dict[str, Any]) -> GradingMode:
     """Return the scorer selected for the Atlas verifyit review campaign."""
     environment = row["environment"]
     if environment == NEMOTRON_ENV:
         agents = nemotron_component_agents(row)
         if SWE_AGENT in agents:
-            return "harbor"
+            return GradingMode.HARBOR
         if agents and "indirect_prompt_injection_simple_agent" not in agents:
-            return "verifyit"
-        return "legacy"
+            return GradingMode.VERIFYIT
+        return GradingMode.LEGACY
     if environment in VERIFYIT_CAPABLE_ENVS:
-        return "verifyit"
-    return "legacy"
+        return GradingMode.VERIFYIT
+    return GradingMode.LEGACY
 
 
 def nemotron_component_agents(row: dict[str, Any]) -> set[str]:
@@ -496,6 +497,7 @@ def shared_verifier_paths(row: dict[str, Any]) -> tuple[str, ...]:
 
 
 def shared_verifier_revision(row: dict[str, Any]) -> tuple[str, str]:
+    """Return the selected adapter identity and its latest revision date."""
     paths = shared_verifier_paths(row)
     commits = row["verifyit_adapter_revisions"]
     revision = hashlib.sha256(
@@ -514,14 +516,14 @@ def annotate_verifier_dependency(
     harbor_revision: str,
     harbor_revised_at: str,
 ) -> None:
-    """Bind an active verifyit route to both its local code and installed package."""
+    """Record Harbor, verifyit or legacy grading provenance for the selected route."""
     path_revision = row["verifier_revision"]
     mode = verifier_mode(row)
     row.update(
         verifier_mode=mode,
         verifier_mode_basis=(
             "Atlas review protocol enables verifyit for this route"
-            if mode == "verifyit"
+            if mode == GradingMode.VERIFYIT
             else "Source review uses Harbor or no supported verifyit route exists"
         ),
         verifier_path_revision=path_revision,
@@ -532,7 +534,7 @@ def annotate_verifier_dependency(
         harbor_verifier_revision=harbor_revision,
         harbor_verifier_revised_at=harbor_revised_at,
     )
-    if mode == "harbor":
+    if mode == GradingMode.HARBOR:
         components = {
             "mode": mode,
             "component": row.get("component_name", ""),
@@ -544,7 +546,7 @@ def annotate_verifier_dependency(
         row["verifier_url"] = f"https://github.com/{HARBOR}/tree/{harbor_revision}/{HARBOR_VERIFIER_PATH}"
         set_revision_date(row)
         return
-    if mode == "legacy":
+    if mode == GradingMode.LEGACY:
         # Preserve the existing identity for routes whose default scorer is unchanged.
         return
     components = {"mode": mode, "route": row["environment"], "path": path_revision, "package": pin}
@@ -603,6 +605,31 @@ def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -
     return refreshed
 
 
+def annotate_cached_grading_rows(
+    client: httpx.Client,
+    revision: str,
+    harbor_revision: str,
+    rows: list[dict[str, Any]],
+    previous: dict[str, dict[str, Any]],
+) -> None:
+    """Reuse source-scoped identities or resolve routes whose grading inputs changed."""
+    source = None
+    for row in rows:
+        agents = tuple(sorted(nemotron_component_agents(row))) if row["environment"] == NEMOTRON_ENV else ()
+        scope = {"entrypoint": row["gym_entrypoint"], "mode": row["verifier_mode"], "agents": list(agents)}
+        saved = previous.get(row["id"], {})
+        harbor_changed = (
+            row["verifier_mode"] == GradingMode.HARBOR and saved.get("harbor_verifier_revision") != harbor_revision
+        )
+        if saved.get("grading_scope") == scope and not harbor_changed:
+            for key in ("grading_revision", "grading_manifest", "grading_repositories", "grading_scope"):
+                row[key] = saved[key]
+            continue
+        if source is None:
+            source = grading_modules(client, revision, harbor_revision)
+        annotate_grading_revision(row, source, agents)
+
+
 def skyrl_snapshot(
     client: httpx.Client, head: dict[str, Any], cached_rows: list[dict[str, Any]] | None = None, force: bool = False
 ) -> Snapshot:
@@ -644,22 +671,9 @@ def skyrl_snapshot(
                 for row in cached_rows
             ],
         )
-        previous = {row["id"]: row for row in cached_rows}
-        source = None
-        for row in rows:
-            agents = tuple(sorted(nemotron_component_agents(row))) if row["environment"] == NEMOTRON_ENV else ()
-            scope = {"entrypoint": row["gym_entrypoint"], "mode": row["verifier_mode"], "agents": list(agents)}
-            saved = previous.get(row["id"], {})
-            harbor_changed = (
-                row["verifier_mode"] == "harbor" and saved.get("harbor_verifier_revision") != harbor_commit["sha"]
-            )
-            if saved.get("grading_scope") == scope and not harbor_changed:
-                for key in ("grading_revision", "grading_manifest", "grading_repositories", "grading_scope"):
-                    row[key] = saved[key]
-                continue
-            if source is None:
-                source = grading_modules(client, revision, harbor_commit["sha"])
-            annotate_grading_revision(row, source, agents)
+        annotate_cached_grading_rows(
+            client, revision, harbor_commit["sha"], rows, {row["id"]: row for row in cached_rows}
+        )
         return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
     raw = f"https://raw.githubusercontent.com/{SKYRL}/{revision}"
     source_text = get_text(client, f"{raw}/{SOURCE_PATH}")
@@ -671,7 +685,7 @@ def skyrl_snapshot(
         client, f"https://api.github.com/repos/{SKYRL}/commits", path=SOURCE_PATH, sha=revision, per_page="1"
     )
     registry_date = commit[0]["commit"]["committer"]["date"]
-    pin = verifyit_pin(get_text(client, f"{raw}/{VERIFYIT_DEPENDENCY_PATH}"))
+    pin = verifyit_repository(get_text(client, f"{raw}/{VERIFYIT_DEPENDENCY_PATH}")).revision
     shared_commits = {
         path: get_json(
             client,

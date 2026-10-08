@@ -233,27 +233,30 @@ def test_grading_program_scopes_namespace_module_imports_to_called_helpers() -> 
     assert python_grading_program(Modules(changed), roots, ("grading",)).digest != original.digest
 
 
-def test_grading_identity_tracks_annotations_used_by_a_runtime_decorator() -> None:
-    source = "from validator import validate\n@validate\ndef grade(candidate: int):\n return candidate == 1\n"
+@pytest.mark.parametrize(
+    "source,old,new",
+    [
+        (
+            "from validator import validate\n@validate\ndef grade(candidate: int):\n return candidate == 1\n",
+            "candidate: int",
+            "candidate: float",
+        ),
+        (
+            'def grade(candidate):\n """correct"""\n return candidate == grade.__doc__\n',
+            '"""correct"""',
+            '"""different"""',
+        ),
+        (
+            "from setup import install\ninstalled = install(1)\ndef grade(x):\n return x == 1\n",
+            "install(1)",
+            "install(2)",
+        ),
+    ],
+    ids=["decorated-annotation", "runtime-docstring", "initialization-side-effect"],
+)
+def test_grading_identity_tracks_runtime_metadata_and_initialization(source: str, old: str, new: str) -> None:
     assert (
-        python_grading_code(source, ["grade"]).digest
-        != python_grading_code(source.replace("candidate: int", "candidate: float"), ["grade"]).digest
-    )
-
-
-def test_grading_identity_tracks_documentation_read_by_the_grader() -> None:
-    source = 'def grade(candidate):\n """correct"""\n return candidate == grade.__doc__\n'
-    assert (
-        python_grading_code(source, ["grade"]).digest
-        != python_grading_code(source.replace('"""correct"""', '"""different"""'), ["grade"]).digest
-    )
-
-
-def test_grading_identity_tracks_assignment_initialization_side_effects() -> None:
-    source = "from setup import install\ninstalled = install(1)\ndef grade(x):\n return x == 1\n"
-    assert (
-        python_grading_code(source, ["grade"]).digest
-        != python_grading_code(source.replace("install(1)", "install(2)"), ["grade"]).digest
+        python_grading_code(source, ["grade"]).digest != python_grading_code(source.replace(old, new), ["grade"]).digest
     )
 
 
