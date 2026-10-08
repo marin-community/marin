@@ -109,6 +109,10 @@ PREAMBLE_SEPARATOR = "\n\n"
 CONTEXT_HEADER = "What the task's consumer adds:"
 SHELL_OUTPUT_LIMIT = 64 * 1024
 """Bytes of stdout and stderr kept per shell command, as ``Build.shell_tool`` keeps."""
+FILE_PROBE_TIMEOUT = 60.0
+"""Seconds ``capture`` waits for the check that a listed path is a regular file."""
+CONTEXT_STOP_REASON = "context"
+"""The stop reason of an agent run whose conversation filled the context window."""
 
 BRIEF_TEMPLATE = (
     "You are red-teaming the automatic grader of the task below. You have two tools. `shell` runs commands in a "
@@ -213,7 +217,7 @@ async def capture(machine: Machine, paths: Sequence[str]) -> tuple[EnvironmentFi
     files = []
     with tempfile.TemporaryDirectory() as directory:
         for index, path in enumerate(sorted(set(paths))):
-            probe = await machine.run(Command(argv=("test", "-f", path), timeout=60))
+            probe = await machine.run(Command(argv=("test", "-f", path), timeout=FILE_PROBE_TIMEOUT))
             if probe.exit_code != 0:
                 raise FileNotFoundError(path)
             target = Path(directory) / str(index)
@@ -322,7 +326,7 @@ AGENT_STOPS: Mapping[AgentStop, str] = {
     AgentStop.ANSWERED: "stop",
     AgentStop.MAX_TURNS: MAX_TURNS_STOP_REASON,
     AgentStop.LENGTH: LENGTH_STOP_REASON,
-    AgentStop.CONTEXT: "context",
+    AgentStop.CONTEXT: CONTEXT_STOP_REASON,
 }
 
 

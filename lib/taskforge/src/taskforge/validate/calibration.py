@@ -56,7 +56,7 @@ from taskforge.spec.controls import (
     reply,
 )
 from taskforge.spec.draft import MACHINE_ANSWER_TYPES
-from taskforge.validate.adversary import AdversaryRole
+from taskforge.validate.adversary import CONTEXT_STOP_REASON, AdversaryRole
 from taskforge.validate.controls import ControlOutcome, ControlVerdict, workspace_turn
 from taskforge.validate.evidence import Complete, Evidence, Incomplete, RewardStats
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
@@ -170,7 +170,7 @@ class Comparison(StrEnum):
     """A machine-state answer, no accepted submission, or no honest submission to compare with."""
 
 
-BUDGET_STOPS = frozenset({LENGTH_STOP_REASON, MAX_TURNS_STOP_REASON, AGENT_TIMEOUT_STOP_REASON, "context"})
+BUDGET_STOPS = frozenset({LENGTH_STOP_REASON, MAX_TURNS_STOP_REASON, AGENT_TIMEOUT_STOP_REASON, CONTEXT_STOP_REASON})
 """Stop reasons that mean the adversary ran out of output, turns, time or context before a verdict."""
 
 UNIQUE_ANSWER_KINDS: frozenset[str] = frozenset(
