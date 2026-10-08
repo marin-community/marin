@@ -20,8 +20,7 @@ exception) is not final: when it is run again, the next event clears ``terminal`
 item resumes where it stopped (the build of the same program, or ``CONTROLS``) with fresh retry
 counts. Whether a launch runs it again is the caller's choice. ``ACCEPTED`` and ``REJECTED`` are final.
 
-Logs written before the single shortcut adversary (``DECIDED`` findings ``leak_passed`` or
-``ambiguous``) do not fold: ``FindingKind`` no longer names those kinds and ``derive_state`` raises.
+A ``DECIDED`` finding kind that ``FindingKind`` does not name makes ``derive_state`` raise.
 """
 
 import time
