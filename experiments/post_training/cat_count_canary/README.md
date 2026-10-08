@@ -34,7 +34,7 @@ uv run python -m experiments.post_training.cat_count_canary \
 ```
 
 Inspect the model, dataset and training artifact versions and the pinned
-MarinSkyRL `launcher_requirement`. Use a fresh calendar version and owned
+MarinSkyRL `runtime.launcher_commit`. Use a fresh calendar version and owned
 job name for every measured run and after any runtime repin.
 
 Check live capacity before submitting:
@@ -130,7 +130,7 @@ responses that are exact. `eval/sampled/train/avg_score` is the stopping signal.
 Exact responses contain lowercase `cat` words separated by single spaces,
 with no punctuation or extra text. The scorer removes outer whitespace and
 trailing end-of-turn markers. `avg_score` is the shaped reward, not the exact
-rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/a0fb65558994b8430c84a9876bd875f800300d65/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
+rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/549e94d0ab98154197780592d48e3ffab4a6547e/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
 defines partial-count rewards and penalties.
 
 `--model` selects `qwen2.5-0.5b-instruct`, `qwen2.5-0.5b`, or `qwen3-0.6b`.
@@ -169,7 +169,7 @@ evaluation and the training-completion marker. Use the actual child duration
 for `CHILD_DURATION_SECONDS`.
 
 Check out the exact MarinSkyRL commit named by the marin plan's
-`launcher_requirement`. From that checkout's `skyrl-train` directory, select
+`runtime.launcher_commit`. From that checkout's `skyrl-train` directory, select
 `ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json`, then run:
 
 ```bash
