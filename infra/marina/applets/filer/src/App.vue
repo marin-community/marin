@@ -95,9 +95,10 @@ const rows = computed(() =>
 const crumbs = computed(() => {
   const match = location.value.match(/^(s3|gs):\/\/([^/]+)(?:\/(.*))?$/);
   if (!match) return [];
-  const parts = [match[2], ...(match[3] || "").split("/").filter(Boolean)];
+  const key = (match[3] || "").replace(/\/$/, "");
+  const parts = [match[2], ...(key ? key.split("/") : [])];
   return parts.map((label, i) => ({
-    label,
+    label: label || "(empty segment)",
     url: `${match[1]}://${parts.slice(0, i + 1).join("/")}`,
   }));
 });

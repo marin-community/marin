@@ -32,6 +32,7 @@ MAX_GROUP_BYTES = 32 * 1024 * 1024
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
 MAX_TEXT_ROWS = 10000
+MAX_ARCHIVE_MEMBERS = 5000
 MEDIA_TYPES = {
     "image/png": "image",
     "image/jpeg": "image",
@@ -196,15 +197,15 @@ def text_preview(url: str, offset: int, limit: int) -> dict:
     return result
 
 
-def create_api(services: AppletServices) -> FastAPI:
+def create_api(_services: AppletServices) -> FastAPI:
     api = FastAPI()
 
     @api.exception_handler(MissingCredentials)
-    async def missing_credentials(request, error):
+    async def missing_credentials(_request, error):
         return Response(json.dumps({"detail": str(error)}), status_code=503, media_type="application/json")
 
     @api.exception_handler(FileNotFoundError)
-    async def missing_file(request, error):
+    async def missing_file(_request, _error):
         return Response(
             json.dumps({"detail": "Object not found. Check the URL or open its parent folder."}),
             status_code=404,
@@ -236,7 +237,7 @@ def create_api(services: AppletServices) -> FastAPI:
         }
 
     @api.exception_handler(PermissionError)
-    async def permission_denied(request, error):
+    async def permission_denied(_request, _error):
         return Response(
             json.dumps({"detail": "Marina does not have permission to read this bucket or object."}),
             status_code=403,
@@ -272,7 +273,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     members = [
                         {"name": item.filename, "size": item.file_size, "compressed_size": item.compress_size}
-                        for item in archive.infolist()[:5000]
+                        for item in archive.infolist()[:MAX_ARCHIVE_MEMBERS]
                     ]
             else:
                 with tarfile.open(fileobj=io.BytesIO(data), mode="r|*") as archive:
@@ -280,7 +281,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         members.append(
                             {"name": item.name, "size": item.size, "type": "folder" if item.isdir() else "file"}
                         )
-                        if len(members) >= 5000:
+                        if len(members) >= MAX_ARCHIVE_MEMBERS:
                             break
             keys = list(members[0]) if members else ["name", "size"]
             result = {
@@ -292,7 +293,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 "total": len(members),
                 "offset": offset,
                 "next_offset": offset + limit if offset + limit < len(members) else None,
-                "truncated": len(members) == 5000,
+                "truncated": len(members) == MAX_ARCHIVE_MEMBERS,
             }
         elif mime is not None and mime in MEDIA_TYPES:
             kind = MEDIA_TYPES[mime]
