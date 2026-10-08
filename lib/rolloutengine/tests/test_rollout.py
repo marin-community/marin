@@ -4,16 +4,31 @@
 """Single-stage execution, private grading, deadlines, and exact token evidence."""
 
 import asyncio
+import errno
 import json
+import os
+import re
+import shutil
 import tarfile
+import tracemalloc
+from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
-from shellbox.machine import Command, DownloadLimitExceeded, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
+from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES, write_download
+from shellbox.machine import (
+    Command,
+    DownloadLimitExceeded,
+    ExitReason,
+    Machine,
+    NetworkPolicy,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -41,6 +56,7 @@ from taskcompendium.submission import AnswerCall, FinalAction, PlainText
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import NumericSpec, StdioSpec, StructuredExactSpec, parse_spec
 
+import rolloutengine.grading as grading
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
@@ -64,6 +80,251 @@ async def local_file_chunks(path):
     with path.open("rb") as file:
         while chunk := file.read(DOWNLOAD_CHUNK_BYTES):
             yield chunk
+
+
+@pytest.fixture
+def local_artifact_factory(tmp_path):
+    class Machine:
+        def __init__(self, root, spec, archive_growth, archive_members):
+            self.root = root
+            self.spec = spec
+            self.archive_growth = archive_growth
+            self.archive_members = archive_members
+            self.closed = False
+            (root / "workspace").mkdir(parents=True)
+            (root / "tmp").mkdir()
+
+        def path(self, value):
+            assert value == "/" or value.split("/")[1] in {"workspace", "tests", "logs", "tmp"}
+            return self.root / value.lstrip("/")
+
+        async def run(self, command):
+            def rewrite(value):
+                for path in re.findall(r"(?<![\w/%*])/[^\s'\";)}]*", value):
+                    self.path(path)
+                return re.sub(r"/(workspace|tests|logs|tmp)(?=/|$)", lambda match: str(self.path(match[0])), value)
+
+            process = await asyncio.create_subprocess_exec(
+                *(rewrite(value) for value in command.argv),
+                cwd=self.path(command.cwd or "/workspace"),
+                env={**os.environ, **self.spec.env, **command.env},
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(command.stdin), timeout=command.timeout)
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            limit = command.output_limit_bytes
+            return Result(
+                process.returncode,
+                stdout[:limit],
+                stderr[:limit],
+                len(stdout) > limit,
+                len(stderr) > limit,
+                ExitReason.EXITED,
+            )
+
+        async def upload(self, source, target):
+            destination = self.path(target)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source, destination, follow_symlinks=False)
+
+        async def download(self, source, target, *, max_bytes=None):
+            origin = self.path(source)
+            if source.startswith("/tmp/taskcompendium-artifact-"):
+                if self.archive_members:
+                    with tarfile.open(origin, "w") as archive:
+                        for member in self.archive_members:
+                            archive.addfile(member)
+                if self.archive_growth:
+                    with origin.open("ab") as archive:
+                        for _ in range(self.archive_growth // DOWNLOAD_CHUNK_BYTES):
+                            archive.write(b"x" * DOWNLOAD_CHUNK_BYTES)
+            if max_bytes is not None:
+                if origin.is_dir():
+                    raise UnsupportedMachineSpec("A download byte limit requires a regular file")
+                async with aclosing(local_file_chunks(origin)) as chunks:
+                    await write_download(chunks, target, max_bytes)
+                return
+            if origin.is_dir():
+                shutil.copytree(origin, target, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(origin, target, follow_symlinks=False)
+
+        async def close(self):
+            self.closed = True
+
+    class Factory:
+        def __init__(self, prepare_artifacts, *, archive_growth=0, archive_members=()):
+            self.machines = []
+            self.prepare_artifacts = prepare_artifacts
+            self.archive_growth = archive_growth
+            self.archive_members = archive_members
+
+        async def create(self, spec):
+            machine = Machine(tmp_path / str(len(self.machines)), spec, self.archive_growth, self.archive_members)
+            self.machines.append(machine)
+            if spec.env.get("ARTIFACT_TASK_MACHINE") == "1":
+                self.prepare_artifacts(machine)
+            return machine
+
+    return Factory
+
+
+@pytest.mark.parametrize(
+    "artifact_case",
+    [
+        "directory",
+        "file",
+        "relative_private",
+        "absolute_private",
+        "in_tree",
+        "hardlink",
+        "directory_root",
+        "file_root",
+        "parent_link",
+        "missing",
+        "kind_mismatch",
+        "excluded_link",
+        "oversized_archive",
+        "oversized_expanded",
+        "grown_archive",
+        "too_many_members",
+        "long_member",
+        "conflicting_member",
+        "directory_file_conflict",
+        "file_directory_conflict",
+        "host_enospc",
+        "host_edquot",
+        "host_eio",
+        "host_emfile",
+    ],
+)
+async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
+    local_artifact_factory, artifact_case, monkeypatch
+):
+    def prepare_artifacts(machine):
+        if artifact_case == "missing":
+            return
+        artifacts = machine.path("/logs/artifacts")
+        artifacts.mkdir(parents=True)
+        answer = artifacts / "answer"
+        if artifact_case in {"directory_root", "parent_link"}:
+            artifacts.rename(artifacts.with_name("real"))
+            artifacts.symlink_to("real", target_is_directory=True)
+        if artifact_case in {"relative_private", "absolute_private"}:
+            answer.symlink_to("../../tests/expected" if artifact_case == "relative_private" else "/tests/expected")
+        elif artifact_case in {"in_tree", "hardlink", "file_root"}:
+            submitted = artifacts / "submitted"
+            submitted.write_bytes(b"secret")
+            if artifact_case == "hardlink":
+                os.link(submitted, answer)
+            else:
+                answer.symlink_to("submitted")
+        else:
+            answer.write_bytes(b"secret")
+        if artifact_case == "excluded_link":
+            (artifacts / "cache").mkdir()
+            (artifacts / "cache/private").symlink_to("../../../tests/expected")
+        if artifact_case == "too_many_members":
+            for index in range(5):
+                (artifacts / str(index)).touch()
+
+    archive_members = []
+    if artifact_case in {"conflicting_member", "file_directory_conflict", "directory_file_conflict"}:
+        first = tarfile.TarInfo("file")
+        if artifact_case == "directory_file_conflict":
+            first.type = tarfile.DIRTYPE
+        archive_members.append(first)
+        second = tarfile.TarInfo("file/child" if artifact_case == "conflicting_member" else "file")
+        if artifact_case == "file_directory_conflict":
+            second.type = tarfile.DIRTYPE
+        archive_members.append(second)
+    elif artifact_case == "long_member":
+        archive_members.append(tarfile.TarInfo("x" * 256))
+    root = local_artifact_factory(
+        prepare_artifacts,
+        archive_growth=32 * 1024**2 if artifact_case == "grown_archive" else 0,
+        archive_members=archive_members,
+    )
+    if artifact_case == "oversized_archive":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024)
+    if artifact_case == "oversized_expanded":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_EXPANDED_BYTES", 1)
+    if artifact_case == "grown_archive":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024**2)
+    if artifact_case == "too_many_members":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_MEMBERS", 3)
+    is_file = artifact_case in {"file", "file_root", "parent_link"}
+    source = "/logs/artifacts/answer" if is_file else "/logs/artifacts"
+    artifact = VerifierArtifact(
+        source=source,
+        target=source,
+        kind=ArtifactKind.FILE if is_file or artifact_case == "kind_mismatch" else ArtifactKind.DIRECTORY,
+        exclude=("cache",) if artifact_case == "excluded_link" else (),
+    )
+    verifier = ShellVerifierSpec(
+        argv=("sh", "-c", "cmp /logs/artifacts/answer /tests/expected"), reward=ExitCodeReward(), artifacts=(artifact,)
+    )
+    task = file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                capabilities=("shell", "filesystem"), environment_variables={"ARTIFACT_TASK_MACHINE": "1"}
+            ),
+            "verifier": VerifierSpec(
+                kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
+                parameters_json=verifier.model_dump_json(),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("expected", b"secret"),)),
+        }
+    )
+    model = ReplayModel([{"role": "assistant", "content": "Done."}])
+    host_errors = {
+        "host_enospc": errno.ENOSPC,
+        "host_edquot": errno.EDQUOT,
+        "host_eio": errno.EIO,
+        "host_emfile": errno.EMFILE,
+    }
+    if artifact_case in host_errors:
+
+        def failed_extract(*args, **kwargs):
+            raise OSError(host_errors[artifact_case], "Host artifact extraction failed")
+
+        monkeypatch.setattr(tarfile.TarFile, "extract", failed_extract)
+        with pytest.raises(RolloutInterrupted) as caught:
+            await engine(model, {"local": root}).run(
+                lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+            )
+        assert isinstance(caught.value.__cause__, OSError)
+        assert caught.value.__cause__.errno == host_errors[artifact_case]
+        assert all(machine.closed for machine in root.machines)
+        return
+    if artifact_case == "grown_archive":
+        tracemalloc.start()
+    try:
+        record = await engine(model, {"local": root}).run(
+            lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+        )
+        if artifact_case == "grown_archive":
+            _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if artifact_case == "grown_archive":
+            tracemalloc.stop()
+    valid = artifact_case in {"directory", "file", "excluded_link"}
+    assert (record.grade.status, record.grade.reward) == (
+        (Outcome.GRADED, 1.0) if valid else (Outcome.SUBMISSION_FAILURE, 0.0)
+    )
+    assert all(machine.closed for machine in root.machines)
+    if artifact_case == "grown_archive":
+        assert peak < 8 * 1024**2
 
 
 @dataclass
@@ -1004,6 +1265,9 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
 async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(tmp_path, download_failed):
     answer = tmp_path / "answer"
     answer.write_bytes(b"12\n")
+    archive_path = tmp_path / "artifact.tar"
+    with tarfile.open(archive_path, "w") as archive:
+        archive.add(answer, arcname="answer")
     factory = RecordingShellSimFactory()
 
     class Machine:
@@ -1012,6 +1276,7 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
 
         async def run(self, command):
             if command.argv[:2] == ("tar", "-cf"):
+                await self.machine.upload(archive_path, command.argv[2])
                 return Result(0, b"", b"", False, False, ExitReason.EXITED)
             if command.argv[:2] == ("rm", "-f") and command.argv[2].startswith("/tmp/taskcompendium-artifact-"):
                 raise OSError("Cannot remove artifact archive")
@@ -1021,9 +1286,6 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
             if source.startswith("/tmp/taskcompendium-artifact-"):
                 if download_failed:
                     raise ConnectionError("Artifact download failed")
-                with tarfile.open(target, "w") as archive:
-                    archive.add(answer, arcname="answer")
-                return
             await self.machine.download(source, target, max_bytes=max_bytes)
 
         async def upload(self, source, target):
@@ -1034,7 +1296,10 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
 
     class Factory:
         async def create(self, spec):
-            return Machine(await factory.create(spec))
+            machine = await factory.create(spec)
+            await machine.run(Command(("mkdir", "-p", "/workspace/project")))
+            await machine.upload(answer, "/workspace/project/answer")
+            return Machine(machine)
 
     verifier = ShellVerifierSpec(
         argv=("sh", "-c", 'test "$(cat /workspace/project/answer)" = 12'),
