@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import signal
 
-from io import StringIO
+from io import BytesIO, StringIO
 from unittest.mock import patch, mock_open
 from types import ModuleType
 from enum import Enum
@@ -280,6 +280,14 @@ def make_function(code: str) -> str:
         return code
 
 
+class _TextStdin(StringIO):
+    """Text stdin patch that also exposes the underlying byte stream as ``buffer``."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.buffer = BytesIO(text.encode())
+
+
 def call_method(method, inputs):
     if isinstance(inputs, list):
         inputs = "\n".join(inputs)
@@ -290,7 +298,7 @@ def call_method(method, inputs):
 
     # @patch('builtins.input', side_effect=inputs.split("\n"))
     @patch("builtins.open", mock_open(read_data=inputs))
-    @patch("sys.stdin", StringIO(inputs))
+    @patch("sys.stdin", _TextStdin(inputs))
     @patch("sys.stdin.readline", lambda *args: next(inputs_line_iterator))
     @patch("sys.stdin.readlines", lambda *args: inputs.split("\n"))
     @patch("sys.stdin.read", lambda *args: inputs)
