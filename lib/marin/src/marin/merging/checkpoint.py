@@ -14,6 +14,8 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 
 from marin.merging.arithmetic import MergeParameters, merge_tensor
+from marin.merging.curvature import ota_merge_tensor
+from marin.merging.learned import differentiable_weight_blend
 
 logger = logging.getLogger(__name__)
 INDEX_NAME = "model.safetensors.index.json"
@@ -45,6 +47,21 @@ class RowMerge:
     coefficients: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class ChunkMerge:
+    coefficients: dict[str, tuple[tuple[float, ...], ...]]
+    block_elements: int
+    calibration_artifact: str
+    calibration_sha256: str
+
+
+@dataclass(frozen=True)
+class CurvatureMerge:
+    second_moments: tuple[CheckpointSource, ...]
+    density: float
+    epsilon: float
+
+
 class CheckpointReader:
     """Keep only the most recently requested shard of one checkpoint in memory."""
 
@@ -74,6 +91,7 @@ def merge_checkpoint(
     preserve_rows: dict[str, tuple[int, ...]],
     tensor_coefficients: dict[str, tuple[float, ...]],
     row_overrides: dict[str, tuple[RowMerge, ...]],
+    calibration: ChunkMerge | CurvatureMerge | None = None,
 ) -> dict[str, Any]:
     """Write an immutable merged checkpoint, publishing its manifest last.
 
@@ -103,6 +121,17 @@ def merge_checkpoint(
             raise ValueError(f"Row overrides overlap protected rows: {name}")
         if any(len(override.coefficients) != len(donors) for override in overrides):
             raise ValueError(f"Each row override needs one coefficient per donor: {name}")
+    moment_readers = []
+    if calibration is not None and (tensor_coefficients or row_overrides):
+        raise ValueError("Calibrated merges define their own tensor coefficients")
+    if isinstance(calibration, ChunkMerge) and not set(calibration.coefficients) <= names:
+        raise ValueError("Chunk coefficients refer to missing tensors")
+    if isinstance(calibration, CurvatureMerge):
+        if len(calibration.second_moments) != len(donors):
+            raise ValueError("Each donor needs one second-moment checkpoint")
+        moment_readers = [CheckpointReader(source) for source in calibration.second_moments]
+        if any(set(reader.weight_map) != names for reader in moment_readers):
+            raise ValueError("Second-moment tensor keys differ from model weights")
     selected_parameters = {}
     for name, coefficients in tensor_coefficients.items():
         if len(coefficients) != len(donors):
@@ -122,6 +151,7 @@ def merge_checkpoint(
         "row_overrides": {
             name: [asdict(override) for override in overrides] for name, overrides in row_overrides.items()
         },
+        "calibration": asdict(calibration) if calibration is not None else None,
         "objects": [],
     }
 
@@ -135,12 +165,31 @@ def merge_checkpoint(
     total_size = 0
     ordered = sorted(names, key=lambda name: (readers[0].weight_map[name], name))
     for index, name in enumerate(ordered, 1):
-        merged = merge_tensor(
-            readers[0].tensor(name),
-            [reader.tensor(name) for reader in readers[1:]],
-            selected_parameters.get(name, parameters),
-            tensor_name=name,
-        )
+        base_tensor = readers[0].tensor(name)
+        donor_tensors = [reader.tensor(name) for reader in readers[1:]]
+        if isinstance(calibration, ChunkMerge):
+            if name in calibration.coefficients:
+                with torch.no_grad():
+                    merged = differentiable_weight_blend(
+                        base_tensor.contiguous(),
+                        tuple(tensor.contiguous() for tensor in donor_tensors),
+                        torch.tensor(calibration.coefficients[name], dtype=torch.float32),
+                        block_elements=calibration.block_elements,
+                    )
+            else:
+                merged = base_tensor.clone()
+        elif isinstance(calibration, CurvatureMerge):
+            merged = ota_merge_tensor(
+                base_tensor,
+                donor_tensors,
+                [reader.tensor(name) for reader in moment_readers],
+                density=calibration.density,
+                epsilon=calibration.epsilon,
+            )
+        else:
+            merged = merge_tensor(
+                base_tensor, donor_tensors, selected_parameters.get(name, parameters), tensor_name=name
+            )
         for override in row_overrides.get(name, ()):
             if merged.ndim == 0 or override.row >= merged.shape[0]:
                 raise ValueError(f"Row override outside tensor shape: {name}[{override.row}]")
@@ -153,11 +202,13 @@ def merge_checkpoint(
         if name in preserve_rows:
             rows = list(preserve_rows[name])
             merged[rows] = readers[0].tensor(name)[rows]
+        if not torch.isfinite(merged).all():
+            raise ValueError(f"Nonfinite merged tensor: {name}")
         shard = f"model-{index:05d}-of-{len(ordered):05d}.safetensors"
         write(shard, safetensors.torch.save({name: merged}, metadata={"format": "pt"}))
         weight_map[name] = shard
         total_size += merged.numel() * merged.element_size()
-        del merged
+        del merged, base_tensor, donor_tensors
         logger.info("Merged %d/%d: %s", index, len(ordered), name)
     for name in METADATA_NAMES:
         path = f"{readers[0].path}/{name}"

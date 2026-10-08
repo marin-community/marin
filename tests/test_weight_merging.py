@@ -8,7 +8,14 @@ import pytest
 import safetensors.torch
 import torch
 from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
-from marin.merging.checkpoint import CheckpointReader, CheckpointSource, RowMerge, merge_checkpoint
+from marin.merging.checkpoint import (
+    CheckpointReader,
+    CheckpointSource,
+    ChunkMerge,
+    CurvatureMerge,
+    RowMerge,
+    merge_checkpoint,
+)
 from marin.merging.curvature import ota_merge_tensor
 from marin.merging.geometry import weight_update_gram
 from marin.merging.learned import differentiable_weight_blend
@@ -238,3 +245,46 @@ def test_curvature_full_density_preserves_updates_without_measured_moment():
         epsilon=1e-6,
     )
     torch.testing.assert_close(result, torch.tensor([14.0]), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("method", ["chunks", "curvature"])
+def test_calibrated_checkpoint_round_trip_matches_materialized_updates(tmp_path, method):
+    sources = []
+    for label, values in (
+        ("anchor", [1.0, 2.0, 3.0, 4.0]),
+        ("donor", [5.0, 6.0, 7.0, 8.0]),
+        ("moments", [1.0, 4.0, 9.0, 16.0]),
+    ):
+        folder = tmp_path / label
+        folder.mkdir()
+        safetensors.torch.save_file(
+            {"weight": torch.tensor(values), "fixed": torch.tensor([9.0])}, folder / "weights.safetensors"
+        )
+        (folder / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"weight": "weights.safetensors", "fixed": "weights.safetensors"}})
+        )
+        sources.append(CheckpointSource(str(folder), label))
+    if method == "chunks":
+        calibration = ChunkMerge({"weight": ((0.25,), (0.75,))}, 1, "trained.json", "fixture")
+        expected = torch.tensor([2.0, 3.0, 6.0, 4.0])
+    else:
+        calibration = CurvatureMerge((sources[2],), 0.5, 1e-6)
+        expected = torch.tensor([1.0, 2.0, 7.0, 4.0])
+    output = tmp_path / "output"
+    merge_checkpoint(
+        sources[0],
+        [sources[1]],
+        str(output),
+        MergeParameters(MergeMethod.TASK_ARITHMETIC, (0.0,), 1.0, 1.0, 42),
+        code_revision="test",
+        preserve_rows={"weight": (3,)},
+        tensor_coefficients={},
+        row_overrides={},
+        calibration=calibration,
+    )
+    reader = CheckpointReader(CheckpointSource(str(output), "output"))
+    torch.testing.assert_close(reader.tensor("weight"), expected, rtol=0, atol=0)
+    torch.testing.assert_close(reader.tensor("fixed"), torch.tensor([9.0]), rtol=0, atol=0)
+    manifest = json.loads((output / "merge-manifest.json").read_text())
+    for entry in manifest["objects"]:
+        assert hashlib.sha256((output / entry["name"]).read_bytes()).hexdigest() == entry["sha256"]
