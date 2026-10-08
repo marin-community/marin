@@ -7,6 +7,7 @@ import ast
 import hashlib
 import json
 import re
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -39,14 +40,17 @@ HARBOR_VERIFIER_PATH = "src/harbor/verifier"
 VERIFYIT_DEPENDENCY_PATH = "skyrl-gym/pyproject.toml"
 VERIFYIT_CLIENTS_PATH = "skyrl-gym/skyrl_gym/envs/verifyit_clients.py"
 INSTRUCTION_VERIFYIT_PATH = "skyrl-gym/skyrl_gym/envs/instruction_verifyit.py"
+SQLITE_VERIFYIT_PATH = "skyrl-gym/skyrl_gym/envs/sqlite_verifyit.py"
+REASONING_SCORING_PATH = "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py"
+LCB_VERIFIER_PATH = "skyrl-gym/skyrl_gym/envs/lcb"
 
 VERIFYIT_SHARED_PATHS = {
-    NEMOTRON_ENV: (
-        VERIFYIT_CLIENTS_PATH,
-        INSTRUCTION_VERIFYIT_PATH,
-    ),
     "ifeval": (INSTRUCTION_VERIFYIT_PATH,),
-    "text_to_sql": ("skyrl-gym/skyrl_gym/envs/sqlite_verifyit.py",),
+    "reasoning_gym": (VERIFYIT_CLIENTS_PATH,),
+    "searchcode": ("skyrl-gym/skyrl_gym/envs/gsm8k/utils.py",),
+    "text_to_sql": (SQLITE_VERIFYIT_PATH,),
+    "text2sql": (SQLITE_VERIFYIT_PATH, "skyrl-gym/skyrl_gym/envs/text_to_sql/scoring.py"),
+    "lcb": ("skyrl-gym/skyrl_gym/envs/nemotron_ultra/sandbox.py",),
 }
 
 VERIFYIT_CAPABLE_ENVS = {
@@ -66,6 +70,16 @@ VERIFYIT_CAPABLE_ENVS = {
 NEMOTRON_SHARED_ADAPTER_AGENTS = {
     VERIFYIT_CLIENTS_PATH: {"mcqa_simple_agent", "reasoning_gym_simple_agent"},
     INSTRUCTION_VERIFYIT_PATH: {"instruction_following_simple_agent"},
+    REASONING_SCORING_PATH: {"reasoning_gym_simple_agent"},
+    LCB_VERIFIER_PATH: {"code_gen_simple_agent"},
+}
+
+NEMOTRON_NATIVE_AGENTS = {
+    "nvarc_inductive_simple_agent",
+    "nvarc_transductive_simple_agent",
+    "rdkit_chemistry_agent",
+    "genrm_simple_agent",
+    "genrm_simple_agent_reasoning_off",
 }
 
 VERIFYIT_PIN_PATTERN = re.compile(r"github\.com/marin-community/marin\.git@([0-9a-f]{40})#subdirectory=lib/verifyit")
@@ -462,6 +476,15 @@ def verifyit_pin(project_text: str) -> str:
     return revisions.pop()
 
 
+def harbor_pin(lock_text: str) -> str:
+    """Read the installed Harbor commit from SkyRL's lockfile."""
+    package = next(package for package in tomllib.loads(lock_text)["package"] if package["name"] == "harbor")
+    url, revision = package["source"]["git"].rsplit("#", 1)
+    if url != f"https://github.com/{HARBOR}.git" or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("Expected a pinned Marin Harbor dependency in SkyRL's lockfile")
+    return revision
+
+
 def verifier_mode(row: dict[str, Any]) -> str:
     """Return the scorer selected for the Atlas verifyit review campaign."""
     environment = row["environment"]
@@ -469,7 +492,7 @@ def verifier_mode(row: dict[str, Any]) -> str:
         agents = nemotron_component_agents(row)
         if SWE_AGENT in agents:
             return "harbor"
-        if agents and "indirect_prompt_injection_simple_agent" not in agents:
+        if agents - NEMOTRON_NATIVE_AGENTS:
             return "verifyit"
         return "legacy"
     if environment in VERIFYIT_CAPABLE_ENVS:
@@ -499,69 +522,37 @@ def shared_verifier_paths(row: dict[str, Any]) -> tuple[str, ...]:
     return tuple(path for path, users in NEMOTRON_SHARED_ADAPTER_AGENTS.items() if agents & users)
 
 
-def shared_verifier_revision(row: dict[str, Any]) -> tuple[str, str]:
-    paths = shared_verifier_paths(row)
-    commits = row["verifyit_adapter_revisions"]
-    revision = hashlib.sha256(
-        json.dumps({path: commits[path]["sha"] for path in paths}, sort_keys=True).encode()
-    ).hexdigest()
-    revised_at = max((commits[path]["date"] for path in paths), default=row["registry_revised_at"])
-    return revision, revised_at
-
-
-def annotate_verifier_dependency(
-    row: dict[str, Any],
-    pin: str,
-    shared_revision: str,
-    shared_revised_at: str,
-    dependency_revised_at: str,
-    harbor_revision: str,
-    harbor_revised_at: str,
-) -> None:
-    """Bind an active verifyit route to both its local code and installed package."""
-    path_revision = row["verifier_revision"]
+def annotate_verifier_dependency(row: dict[str, Any]) -> None:
+    """Bind the route's verifier identity to its installed grader and shared adapters."""
     mode = verifier_mode(row)
     row.update(
         verifier_mode=mode,
-        verifier_mode_basis=(
-            "Atlas review protocol enables verifyit for this route"
-            if mode == "verifyit"
-            else "Source review uses Harbor or no supported verifyit route exists"
-        ),
-        verifier_path_revision=path_revision,
-        verifyit_revision=pin,
-        verifyit_shared_revision=shared_revision,
-        verifyit_shared_revised_at=shared_revised_at,
-        verifyit_dependency_revised_at=dependency_revised_at,
-        harbor_verifier_revision=harbor_revision,
-        harbor_verifier_revised_at=harbor_revised_at,
+        verifier_revision=row["verifier_path_revision"],
+        verifier_revised_at=row["verifier_path_revised_at"],
+        verifier_url=f"https://github.com/{SKYRL}/tree/{row['revision']}/{row['verifier_path']}",
     )
-    if mode == "harbor":
-        components = {
-            "mode": mode,
-            "component": row.get("component_name", ""),
-            "path": path_revision,
-            "framework": harbor_revision,
-        }
-        row["verifier_revision"] = hashlib.sha256(json.dumps(components, sort_keys=True).encode()).hexdigest()
-        row["verifier_revised_at"] = max(row["verifier_revised_at"], harbor_revised_at)
-        row["verifier_url"] = f"https://github.com/{HARBOR}/tree/{harbor_revision}/{HARBOR_VERIFIER_PATH}"
+    if mode == "legacy":
         set_revision_date(row)
         return
-    if mode == "legacy":
-        # Preserve the existing identity for routes whose default scorer is unchanged.
-        return
-    components = {"mode": mode, "route": row["environment"], "path": path_revision, "package": pin}
+    dependencies = row["verifier_dependencies"]
+    components: dict[str, Any] = {"mode": mode, "route": row["environment"], "path": row["verifier_path_revision"]}
     if row["environment"] == NEMOTRON_ENV:
         components["component"] = row.get("component_name", "")
-    if shared_verifier_paths(row):
-        components["shared_adapter"] = shared_revision
+    dates = [row["verifier_revised_at"]]
+    if mode == "harbor":
+        harbor = dependencies["harbor"]
+        components["framework"] = harbor["sha"]
+        dates.append(harbor["date"])
+        row["verifier_url"] = f"https://github.com/{HARBOR}/tree/{harbor['sha']}/{HARBOR_VERIFIER_PATH}"
+    else:
+        components["package"] = dependencies["verifyit"]["sha"]
+        dates.append(dependencies["verifyit"]["date"])
+        paths = shared_verifier_paths(row)
+        if paths:
+            components["shared_adapter"] = {path: dependencies["adapters"][path]["sha"] for path in paths}
+            dates.extend(dependencies["adapters"][path]["date"] for path in paths)
     row["verifier_revision"] = hashlib.sha256(json.dumps(components, sort_keys=True).encode()).hexdigest()
-    row["verifier_revised_at"] = max(
-        row["verifier_revised_at"],
-        dependency_revised_at,
-        *([shared_revised_at] if shared_verifier_paths(row) else []),
-    )
+    row["verifier_revised_at"] = max(dates)
     set_revision_date(row)
 
 
@@ -571,9 +562,6 @@ def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -
     refreshed = []
     for saved in rows:
         row = dict(saved)
-        if row.get("verifier_path_revision"):
-            row["verifier_revision"] = row["verifier_path_revision"]
-            row["verifier_revised_at"] = row["verifier_path_revised_at"]
         info = metadata[row["dataset_id"]]
         row["metadata_error"] = info.get("metadata_error")
         if not row["metadata_error"]:
@@ -592,17 +580,8 @@ def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -
                 count_metadata_error=info.get("count_metadata_error"),
             )
         for component in source_components(row, info):
-            if component.get("verifier_path_revision"):
-                shared_revision, shared_revised_at = shared_verifier_revision(component)
-                annotate_verifier_dependency(
-                    component,
-                    component["verifyit_revision"],
-                    shared_revision,
-                    shared_revised_at,
-                    component["verifyit_dependency_revised_at"],
-                    component["harbor_verifier_revision"],
-                    component["harbor_verifier_revised_at"],
-                )
+            if "verifier_dependencies" in component:
+                annotate_verifier_dependency(component)
             refreshed.append(component)
     return refreshed
 
@@ -611,42 +590,18 @@ def skyrl_snapshot(
     client: httpx.Client, head: dict[str, Any], cached_rows: list[dict[str, Any]] | None = None, force: bool = False
 ) -> Snapshot:
     revision = head["sha"]
-    harbor_commit = get_json(
-        client,
-        f"https://api.github.com/repos/{HARBOR}/commits",
-        path=HARBOR_VERIFIER_PATH,
-        per_page="1",
-    )[0]
     if (
         not force
         and cached_rows
         and all(
             row["revision"] == revision
-            and row.get("verifier_revised_at")
-            and row.get("verifier_mode")
             and row.get("verifier_path_revision")
-            and row.get("verifyit_revision")
-            and row.get("verifyit_shared_revision")
-            and row.get("verifyit_shared_revised_at")
-            and row.get("verifyit_dependency_revised_at")
-            and row.get("harbor_verifier_revision")
-            and row.get("harbor_verifier_revised_at")
             and row.get("verifier_path_revised_at")
-            and "verifyit_adapter_revisions" in row
+            and "verifier_dependencies" in row
             for row in cached_rows
         )
     ):
-        rows = refresh_dataset_metadata(
-            client,
-            [
-                {
-                    **row,
-                    "harbor_verifier_revision": harbor_commit["sha"],
-                    "harbor_verifier_revised_at": harbor_commit["commit"]["committer"]["date"],
-                }
-                for row in cached_rows
-            ],
-        )
+        rows = refresh_dataset_metadata(client, cached_rows)
         return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
     raw = f"https://raw.githubusercontent.com/{SKYRL}/{revision}"
     source_text = get_text(client, f"{raw}/{SOURCE_PATH}")
@@ -659,6 +614,14 @@ def skyrl_snapshot(
     )
     registry_date = commit[0]["commit"]["committer"]["date"]
     pin = verifyit_pin(get_text(client, f"{raw}/{VERIFYIT_DEPENDENCY_PATH}"))
+    installed_harbor = harbor_pin(get_text(client, f"{raw}/uv.lock"))
+    harbor_commit = get_json(
+        client,
+        f"https://api.github.com/repos/{HARBOR}/commits",
+        path=HARBOR_VERIFIER_PATH,
+        sha=installed_harbor,
+        per_page="1",
+    )[0]
     shared_commits = {
         path: get_json(
             client,
@@ -667,7 +630,9 @@ def skyrl_snapshot(
             sha=revision,
             per_page="1",
         )[0]
-        for path in {path for paths in VERIFYIT_SHARED_PATHS.values() for path in paths}
+        for path in set(NEMOTRON_SHARED_ADAPTER_AGENTS) | {
+            path for paths in VERIFYIT_SHARED_PATHS.values() for path in paths
+        }
     }
     dependency_commit = get_json(
         client,
@@ -676,6 +641,14 @@ def skyrl_snapshot(
         sha=revision,
         per_page="1",
     )[0]
+    dependencies = {
+        "verifyit": {"sha": pin, "date": dependency_commit["commit"]["committer"]["date"]},
+        "harbor": {"sha": harbor_commit["sha"], "date": harbor_commit["commit"]["committer"]["date"]},
+        "adapters": {
+            path: {"sha": commit["sha"], "date": commit["commit"]["committer"]["date"]}
+            for path, commit in shared_commits.items()
+        },
+    }
     verifier_commits = {}
     for env in environments:
         module = env["entrypoint"].split(":")[0]
@@ -735,27 +708,15 @@ def skyrl_snapshot(
             row["count_basis"] = "Generated on demand; depends on selected tasks and rows_per_task"
         verifier = verifier_by_env[env]
         row.update({key: verifier[key] for key in ("verifier_path", "verifier_revision", "verifier_revised_at")})
+        row["verifier_path_revision"] = verifier["verifier_revision"]
         row["verifier_path_revised_at"] = verifier["verifier_revised_at"]
-        row["registry_revised_at"] = registry_date
         row["verifier_url"] = f"https://github.com/{SKYRL}/tree/{revision}/{verifier['verifier_path']}"
         row["gym_alias"] = f"gym/{env}"
         row["gym_entrypoint"] = verifier["entrypoint"]
         row["gym_url"] = f"https://github.com/{SKYRL}/blob/{revision}/{GYM_PATH}"
-        row["verifyit_adapter_revisions"] = {
-            path: {"sha": commit["sha"], "date": commit["commit"]["committer"]["date"]}
-            for path, commit in shared_commits.items()
-        }
+        row["verifier_dependencies"] = dependencies
         for component in source_components(row, info):
-            shared_revision, shared_revised_at = shared_verifier_revision(component)
-            annotate_verifier_dependency(
-                component,
-                pin,
-                shared_revision,
-                shared_revised_at,
-                dependency_commit["commit"]["committer"]["date"],
-                harbor_commit["sha"],
-                harbor_commit["commit"]["committer"]["date"],
-            )
+            annotate_verifier_dependency(component)
             rows.append(component)
     return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
 
