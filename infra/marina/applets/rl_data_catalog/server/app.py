@@ -24,11 +24,13 @@ from .catalog import (
     Snapshot,
     annotate_source,
     get_json,
+    hf_snapshot,
     merge_gym_sources,
     skyrl_snapshot,
     tasktrove_snapshot,
 )
 from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
+from .hf_sources import HF_ORIGIN, HF_SOURCES
 from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
@@ -386,6 +388,11 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                 {"origin": origin},
             )
         results.append({"origin": origin, "revision": revision, "changed": snapshot is not None})
+    # Checked-in configuration errors must propagate, unlike recoverable upstream outages.
+    # Saving an empty registration set also retires the last removed source.
+    registered = hf_snapshot(HF_SOURCES)
+    save_snapshot(connection, registered)
+    results.append({"origin": HF_ORIGIN, "revision": registered.revision, "changed": True})
     return {"busy": False, "results": results}
 
 
