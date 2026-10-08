@@ -16,7 +16,7 @@ other.
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,13 +40,14 @@ from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.queue.run import FailedItems, RunSummary, run_queue
 from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import SHELLSIM, MachineHost
-from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext
-from taskforge.triage.program import RubricAssessment
-from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision
+from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext, CheckResult
+from taskforge.triage.program import Repair, RubricAssessment
+from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision, Verdict
 from taskforge.validate.adversary import NO_SHORTCUT_LINE, SUBMIT_TOOL_NAME
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
+from tests.validate.conftest import TemplateTokenizer
 
 PROPOSAL = """---
 id: "IDEA/SLOT"
@@ -176,7 +177,6 @@ MACHINE_PROGRAM = PROGRAM.replace(
 
 CALL = ModelCall(Usage(100, 50, 40, 0), wall_time=0.1, finish_reason=FinishReason.TOOL_CALLS)
 YIELDS = 20
-ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
 FAST = RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1)
 
 
@@ -220,7 +220,7 @@ class FakeRubric:
     in_flight: int = 0
     peak: int = 0
 
-    async def assess(self, p: TaskProposal, structural: object) -> RubricAssessment:
+    async def assess(self, p: TaskProposal, structural: Sequence[CheckResult]) -> RubricAssessment:
         self.assessed.append(p.header.id)
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
@@ -235,27 +235,8 @@ class FakeRubric:
         finally:
             self.in_flight -= 1
 
-    async def repair(self, p: TaskProposal, verdict: object) -> Any:
+    async def repair(self, p: TaskProposal, verdict: Verdict) -> Repair:
         raise AssertionError("the queue tests never repair at triage")
-
-
-def render(messages) -> tuple[int, ...]:
-    ids: list[int] = []
-    for message in messages:
-        ids.append(ROLE_IDS[message["role"]])
-        ids.extend(json.dumps({key: message[key] for key in ("content", "tool_calls") if key in message}).encode())
-    return tuple(ids)
-
-
-@dataclass
-class TemplateTokenizer:
-    """The server's chat template, deterministically."""
-
-    async def prompt_ids(self, messages, options):
-        return (*render(messages), ROLE_IDS["assistant"])
-
-    async def rendered_ids(self, messages, options):
-        return render(messages)
 
 
 @dataclass
