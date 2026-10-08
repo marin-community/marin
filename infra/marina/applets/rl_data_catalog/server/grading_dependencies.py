@@ -17,6 +17,8 @@ import httpx
 from .grading_code import PythonGradingProgram, python_grading_program
 from .grading_routes import skyrl_grading_routes
 
+HARBOR = "marin-community/harbor"
+
 
 @dataclass(frozen=True)
 class GradingRepository:
@@ -237,7 +239,7 @@ def grading_modules(client: httpx.Client, skyrl_revision: str, harbor_revision: 
     source.packages["harbor_config"] = GradingRepository(
         match[1], match[2], "src", "packages/harbor-config/pyproject.toml"
     )
-    source.packages["harbor"] = GradingRepository("marin-community/harbor", harbor_revision, "src", "pyproject.toml")
+    source.packages["harbor"] = GradingRepository(HARBOR, harbor_revision, "src", "pyproject.toml")
     return source
 
 

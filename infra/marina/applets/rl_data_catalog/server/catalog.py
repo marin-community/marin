@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
-from .grading_dependencies import annotate_grading_revision, grading_modules
+from .grading_dependencies import HARBOR, annotate_grading_revision, grading_modules, verifyit_repository
 from .nemotron_counts import NEMOTRON_COUNTS
 from .nemotron_records import SWE_AGENT, record_source
 from .source_annotations import (
@@ -33,7 +33,6 @@ SOURCE_PATH = "infra/rl_data/sources.py"
 GYM_PATH = "skyrl-gym/skyrl_gym/envs/__init__.py"
 MULTI_TURN_ENVS = {"gsm8k_multi_turn", "search", "searchcode", "text2sql"}
 AGENTIC_ENVS = {"search", "searchcode", "text2sql"}
-HARBOR = "marin-community/harbor"
 
 HARBOR_VERIFIER_PATH = "src/harbor/verifier"
 
@@ -69,7 +68,6 @@ NEMOTRON_SHARED_ADAPTER_AGENTS = {
     INSTRUCTION_VERIFYIT_PATH: {"instruction_following_simple_agent"},
 }
 
-VERIFYIT_PIN_PATTERN = re.compile(r"github\.com/marin-community/marin\.git@([0-9a-f]{40})#subdirectory=lib/verifyit")
 
 TASKTROVE_CLASSIFICATION = {
     "environment": "Harbor",
@@ -457,10 +455,7 @@ def source_components(row: dict[str, Any], info: dict[str, Any]) -> list[dict[st
 
 def verifyit_pin(project_text: str) -> str:
     """Read the exact installed verifyit commit from SkyRL Gym's dependency declaration."""
-    revisions = set(VERIFYIT_PIN_PATTERN.findall(project_text))
-    if len(revisions) != 1:
-        raise ValueError("Expected one pinned verifyit commit in SkyRL Gym dependencies")
-    return revisions.pop()
+    return verifyit_repository(project_text).revision
 
 
 def verifier_mode(row: dict[str, Any]) -> str:

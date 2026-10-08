@@ -13,6 +13,7 @@ from .grading_code import PythonModuleSource
 ENVIRONMENT_METHODS = {"__init__", "init", "step", "set_rollout_evidence", "close"}
 NEMOTRON_PREFIX = "skyrl_gym.envs.nemotron_ultra."
 JUDGE_AGENTS = {"abstention_simple_agent", "multichallenge_simple_agent"}
+LCB_EXECUTION_MODULE = "skyrl_gym.envs.lcb.verifyit_execution"
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ def skyrl_grading_routes(
     environment = row["environment"]
     if environment != "nemotron_ultra":
         if environment == "lcb" and mode == "verifyit":
-            roots["skyrl_gym.envs.lcb.verifyit_execution"] = ["_execute"]
+            roots[LCB_EXECUTION_MODULE] = ["_execute"]
             bindings["__verifyit_modes__"] = ["script", "exact"]
         elif environment == "text_to_sql" and mode == "verifyit":
             bindings["__verifyit_modes__"] = ["script"]
@@ -100,7 +101,7 @@ def skyrl_grading_routes(
             selected[NEMOTRON_PREFIX + "lean_verifyit"] = ["_compile"]
             values["__verifyit_modes__"] = ["script"]
         elif agent == "code_gen_simple_agent" and mode == "verifyit":
-            selected["skyrl_gym.envs.lcb.verifyit_execution"] = ["_execute"]
+            selected[LCB_EXECUTION_MODULE] = ["_execute"]
             values["__verifyit_modes__"] = ["script", "exact"]
         elif agent == "calendar_simple_agent" and mode == "verifyit":
             selected[NEMOTRON_PREFIX + "calendar_verifyit"] = ["_check"]
