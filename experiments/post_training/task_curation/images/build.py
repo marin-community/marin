@@ -37,7 +37,7 @@ IDENTITY_CHARS = 16
 LOCK_FILE = "requirements.lock"
 REGULAR_MODE = "100644"
 EXECUTABLE_MODE = "100755"
-FROM_LINE = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
+FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 PINNED_BASE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images.build --recipe {name}"
 

@@ -15,6 +15,7 @@ from experiments.post_training.task_curation.images.build import (
     PLATFORM,
     ImageBuild,
     MissingImageArtifact,
+    base_image,
     build_image,
     built_image,
     identity_digest,
@@ -131,3 +132,11 @@ def test_dockerfile_must_name_one_digest_pinned_base(recipe):
     (recipe.context / "Dockerfile").write_text("FROM python:3.12\n")
     with pytest.raises(ValueError, match="pinned by digest"):
         identity_digest(recipe)
+
+
+def test_python_imports_in_run_continuations_are_not_base_images(recipe):
+    base = "ghcr.io/example/base@sha256:" + "a" * 64
+    (recipe.context / "Dockerfile").write_text(
+        f"FROM {base}\nRUN python -c 'import nltk; \\\n    from sympy.parsing.latex import parse_latex'\n"
+    )
+    assert base_image(recipe.context / "Dockerfile") == base
