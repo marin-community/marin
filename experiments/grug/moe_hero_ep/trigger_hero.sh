@@ -139,8 +139,6 @@ printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator 
 gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
 
-# The memory fraction and XLA flags come from `_apply_hero_ep_runtime_defaults` in train.py. An
-# explicit value here takes precedence and would replace the carry-offload memory budget.
 IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-extra-resources \
   --target-cluster "$TARGET_CLUSTER" \
   --priority system \
