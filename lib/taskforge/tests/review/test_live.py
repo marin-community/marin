@@ -4,7 +4,7 @@
 """Live: a review ``Repair`` drives a real revision through the author and the build.
 
 GLM-5.3 authors and builds a program, review turns a shortcut finding into a ``Repair``, the brief goes
-to ``build.author.author`` as ``Revision.failure``, and the revised program is rebuilt with the repair's
+to ``builder.author.author`` as ``Revision.failure``, and the revised program is rebuilt with the repair's
 ``invalidate``. The revised draft must ship the shortcut control verbatim, and its grader must reject
 that control when RolloutEngine replays it. Takes ``parallel_key`` for the template's research step.
 Artifacts go to ``<evidence_root>/review/live-test/<timestamp>/``, where ``evidence_root`` is the fixture in
@@ -19,11 +19,11 @@ import pytest
 from rolloutengine.engine import ShellboxRolloutEngine
 from taskcompendium.grading_result import Outcome
 
-from taskforge.build.author import BuildProgram, Revision, author
-from taskforge.build.run import TaskDraft, item_id_for, run_build
-from taskforge.build.sdk import BuildFailure, BuildServices
-from taskforge.build.step import StepRole
-from taskforge.build.template import standard
+from taskforge.builder.author import BuildProgram, Revision, author
+from taskforge.builder.run import TaskDraft, item_id_for, run_build
+from taskforge.builder.sdk import BuildFailure, BuildServices
+from taskforge.builder.step import StepRole
+from taskforge.builder.template import standard
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
@@ -133,7 +133,9 @@ async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortc
         services = BuildServices(
             client=client,
             policy=LLMPolicy(),
+            host=MachineHost.LAPTOP,
             factories=factories,
+            images=None,
             ledger=JsonlLedger(run_dir / "ledger"),
             web_tools=web_tools(http, parallel_key.value),
         )
@@ -162,13 +164,7 @@ async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortc
     assert SHORTCUT in repaired.controls
 
     turns = control_turns(SHORTCUT)
-    engine = ShellboxRolloutEngine(
-        scripted_model(turns),
-        factories,
-        max_turns=len(turns),
-        command_timeout=60,
-        cleanup_timeout=60,
-        convention=repaired.convention,
-    )
-    rollout = await engine.run(repaired.task, execution=repaired.execution)
+    engine = ShellboxRolloutEngine(scripted_model(turns), factories, convention=repaired.convention)
+    session = repaired.lowered.session.model_copy(update={"max_turns": len(turns), "command_timeout": 60})
+    rollout = await engine.run(repaired.lowered.model_copy(update={"session": session}))
     assert SHORTCUT.expect.met_by(rollout.grade), rollout.grade

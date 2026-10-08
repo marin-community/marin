@@ -6,7 +6,7 @@ from collections import Counter
 import pytest
 from taskcompendium.grading_result import Outcome
 
-from taskforge.build.step import StepRole
+from taskforge.builder.step import StepRole
 from taskforge.review.decision import (
     Accept,
     BandOutcome,
