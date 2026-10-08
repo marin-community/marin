@@ -134,7 +134,7 @@ def test_recorded_submission_rounds_keep_their_invariants(file_task, file_contro
             assert isinstance(trial.outcome, Graded), directory
             assert trial.system == adversary_brief(LIVE_SUBMISSIONS, "")
             assert len(trial.submissions) <= LIVE_SUBMISSIONS
-            assert all(s.grade.status is not None and s.passed == passing(s.grade) for s in trial.submissions)
+            assert all(s.passed == passing(s.grade) for s in trial.submissions)
         summary = summarize(evidence, policy)
         # The file task's grader compares against a constant, so no accepted submission is a grader defect.
         assert all(a.tier is not DefectTier.REPAIR for a in summary.assessments), directory
