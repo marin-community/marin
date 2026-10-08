@@ -60,11 +60,13 @@ cannot convert.
      `OracleCommand`, which must score 1 (`None` records a skipped golden);
    - `negative(task)`, a known-wrong submission, which must score 0.
 
-   An `OracleCommand` runs in a fresh machine of the grader image with the
-   task's worker and oracle resources installed; its output files, or the
-   contents of `answer_file`, become the submission. Sandbox graders get their
-   machines from the campaign's `GradingMachines`, always with network access
-   denied. Without controls the stage is skipped and sandbox graders stay
+   An `OracleCommand` runs with the task's worker and oracle resources
+   installed in a fresh machine of the task's agent image, whose tools and
+   directories it expects, or of the grader image when the task has no agent
+   image. Its output files, or the contents of `answer_file`, become the
+   submission, which the grader then grades in its own image. Sandbox graders
+   get their machines from the campaign's `GradingMachines`, always with network
+   access denied. Without controls the stage is skipped and sandbox graders stay
    unverified.
 7. **Admit and export.** Each row gets an `admission`:
 

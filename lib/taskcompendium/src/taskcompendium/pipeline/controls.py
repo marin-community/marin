@@ -5,6 +5,7 @@
 
 import asyncio
 import shlex
+from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol
 
@@ -16,6 +17,7 @@ from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ConversationTrace,
+    EnvironmentRequirements,
     GradingAttempt,
     NoGrader,
     SessionGrader,
@@ -43,7 +45,7 @@ from taskcompendium.pipeline.verification import answer_event, control_result
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "1"
+CONTROLS_REVISION = "2"
 WRONG_ANSWER = "__incorrect_answer__"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
@@ -133,7 +135,7 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
                 )
             ]
         )
-    machine = None
+    sandbox = None
     if not grades_in_process(grader):
         environment = grader.environment
         assert environment is not None
@@ -141,19 +143,43 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
             raise ValueError("Sandbox controls require a grader image")
         if machines is None:
             raise ValueError("Sandbox controls require grading machines")
-        machine = machines.machine(environment.docker_image, controls.memory_mb)
-        require_compatible_backend(environment, machine[0].backend)
-    checks = [await _control(task, "empty", _empty_submission(task), 0.0, machine)]
+        sandbox = _Sandbox(machines, controls.memory_mb, _image_machine(machines, environment, controls.memory_mb))
+    checks = [await _control(task, "empty", _empty_submission(task), 0.0, sandbox)]
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is None:
         checks.append(
             CheckResult(check="golden", status=CheckStatus.SKIPPED, detail="No known-correct submission for this task")
         )
     else:
-        checks.append(await _control(task, "golden", golden, 1.0, machine))
+        checks.append(await _control(task, "golden", golden, 1.0, sandbox))
     if controls.negative is not None:
-        checks.append(await _control(task, "negative", controls.negative(task), 0.0, machine))
+        checks.append(await _control(task, "negative", controls.negative(task), 0.0, sandbox))
     return VerificationReport(checks)
+
+
+def _image_machine(
+    machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
+) -> tuple[MachineFactory, MachineSpec]:
+    """A machine of ``environment``'s image, on a backend the environment declares compatible."""
+    assert environment.docker_image is not None
+    factory, spec = machines.machine(environment.docker_image, memory_mb)
+    require_compatible_backend(environment, factory.backend)
+    return factory, spec
+
+
+@dataclass(frozen=True)
+class _Sandbox:
+    """Where a sandbox-graded task's controls run."""
+
+    machines: GradingMachines
+    memory_mb: int
+    grader: tuple[MachineFactory, MachineSpec]
+
+    def oracle(self, task: TaskSpec) -> tuple[MachineFactory, MachineSpec]:
+        """The agent's image, whose tools and directories an oracle expects; the grader's when there is none."""
+        if task.environment_requirements.docker_image is None:
+            return self.grader
+        return _image_machine(self.machines, task.environment_requirements, self.memory_mb)
 
 
 async def _control(
@@ -161,13 +187,14 @@ async def _control(
     name: str,
     submission: ControlSubmission,
     expected: float,
-    machine: tuple[MachineFactory, MachineSpec] | None,
+    sandbox: _Sandbox | None,
 ) -> CheckResult:
     if isinstance(submission, OracleCommand):
-        if machine is None:
+        if sandbox is None:
             raise ValueError("An oracle command requires a sandbox grader")
+        oracle_machine = sandbox.oracle(task)
         try:
-            attempt = await _oracle_attempt(task, submission, *machine)
+            attempt = await _oracle_attempt(task, submission, *oracle_machine)
         except OracleFailed as error:
             return CheckResult(check=name, status=CheckStatus.FAIL, detail=str(error))
         except (RuntimeError, OSError) as error:
@@ -178,14 +205,16 @@ async def _control(
         attempt = GradingAttempt(
             ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), dict(submission.files)
         )
-    grade: GradeResult = grade_task(task, attempt) if machine is None else await sandbox_grade(task, attempt, *machine)
+    grade: GradeResult = (
+        grade_task(task, attempt) if sandbox is None else await sandbox_grade(task, attempt, *sandbox.grader)
+    )
     return control_result(grade, name, expected)
 
 
 async def _oracle_attempt(
     task: TaskSpec, command: OracleCommand, factory: MachineFactory, spec: MachineSpec
 ) -> GradingAttempt:
-    """Run the oracle in a fresh grader machine with the worker and oracle files mounted."""
+    """Run the oracle in a fresh machine from ``factory`` with the worker and oracle files mounted."""
     workspace = grader_workspace(task.grader)
     machine = await factory.create(spec)
     try:

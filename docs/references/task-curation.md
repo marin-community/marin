@@ -104,10 +104,13 @@ comparators or rewrite tests to accept a reference.
 Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades an empty submission (must score 0), `golden(task)` (must score 1)
 and `negative(task)` (must score 0). A golden is a `Reply`, `WorkspaceFiles`, or
-an `OracleCommand` run in a fresh machine of the grader image with the task's
-oracle files, such as a TaskTrove `solution/solve.sh`. A task without a known
-answer returns `None`, which records a skipped golden. In-process numeric, MCQ,
-exact and action graders are also checked per task during preparation.
+an `OracleCommand`, such as a TaskTrove `solution/solve.sh`, run with the task's
+worker and oracle files in a fresh machine of the task's agent image, whose tools
+and directories the oracle expects. A task without an agent image, such as a
+conversation task, runs its oracle in the grader image. The oracle's output is
+then graded like any other submission. A task without a known answer returns
+`None`, which records a skipped golden. In-process numeric, MCQ, exact and
+action graders are also checked per task during preparation.
 
 ## Source procedure
 

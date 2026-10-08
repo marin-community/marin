@@ -95,6 +95,8 @@ QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
 control process as root and uses `su` for other execution users. Numeric UIDs
 require `getent` and a matching guest account.
 An empty Docker `MachineSpec.workdir` retains the image's working directory.
+Docker, gVisor and Iris create a nonempty `workdir` when the machine starts, so
+commands can run there even when the image lacks it.
 
 To prepare a registry image, use a standard image reference without `https://`:
 

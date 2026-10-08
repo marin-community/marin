@@ -101,6 +101,7 @@ class WorkspaceFiles:
 class OracleCommand:
     """A shell command run with the task's worker and oracle files; its output is the submission.
 
+    It runs in a machine of the task's agent image, or of the grader image when the task has none.
     File-answer tasks submit their captured output files. Conversation-answer tasks submit the
     contents of ``answer_file``, resolved in the grader workspace, as the final assistant message.
     """

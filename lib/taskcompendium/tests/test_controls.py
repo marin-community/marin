@@ -4,8 +4,11 @@
 """Control submissions check a grader through the grading path that rollouts use."""
 
 import json
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
+from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result
 from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
@@ -15,16 +18,61 @@ from taskcompendium.convert.answers import (
     mcq_task,
     numeric_answer_task,
 )
-from taskcompendium.models import AnswerType, NoGrader, ResourceGroups, SessionGrader, Source, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    NoGrader,
+    ResourceGroups,
+    SessionGrader,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply, wrong_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, WorkspaceFiles
 from taskcompendium.runtime.resources import inline_resource
 
-from .pipeline_stages import FixtureGradingMachines, UnavailableImages, script_graded
+from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
 
 PASS, FAIL, SKIPPED = CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.SKIPPED
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})
 REFERENCE_CONTROLS = Controls(golden=reference_reply, negative=wrong_reply)
+AGENT_IMAGE = "agent@sha256:" + "a" * 64
+
+
+@dataclass(eq=False)
+class ImageMachine:
+    """A ShellSim machine standing in for ``image``; it records the paths uploaded to it."""
+
+    machine: Machine
+    image: str
+    uploads: list[str] = field(default_factory=list)
+
+    async def run(self, command: Command) -> Result:
+        return await self.machine.run(command)
+
+    async def upload(self, source: Path, target: str) -> None:
+        self.uploads.append(target)
+        await self.machine.upload(source, target)
+
+    async def download(self, source: str, target: Path) -> None:
+        await self.machine.download(source, target)
+
+    async def close(self) -> None:
+        await self.machine.close()
+
+
+@dataclass
+class RecordingImages:
+    """Fresh ShellSim machines, each recording the image it stands in for."""
+
+    backend = Backend.DOCKER
+    created: list[ImageMachine] = field(default_factory=list)
+
+    async def create(self, spec: MachineSpec) -> ImageMachine:
+        assert isinstance(spec.source, DockerImage)
+        machine = ImageMachine(await ShellSimImages().create(spec), spec.source.reference)
+        self.created.append(machine)
+        return machine
 
 
 def checks(task: TaskSpec, controls: Controls, machines: FixtureGradingMachines | None = None) -> dict[str, CheckStatus]:
@@ -157,3 +205,21 @@ def test_unavailable_grading_machines_are_infrastructure_errors(golden):
         "golden": CheckStatus.INFRA_ERROR,
         "negative": CheckStatus.INFRA_ERROR,
     }
+
+
+@pytest.mark.parametrize(
+    "agent_image, oracle_image",
+    [(AGENT_IMAGE, AGENT_IMAGE), (None, GRADER_IMAGE)],
+    ids=["agent_image", "no_agent_image"],
+)
+def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_image, oracle_image):
+    task = file_task()
+    if agent_image is not None:
+        requirements = EnvironmentRequirements(docker_image=agent_image, compatible_backends=(Backend.DOCKER,))
+        task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
+    images = RecordingImages()
+    controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"), negative=wrong_file)
+    assert checks(task, controls, FixtureGradingMachines(images)) == {"empty": PASS, "golden": PASS, "negative": PASS}
+    oracles = [machine for machine in images.created if "/solution/solve.sh" in machine.uploads]
+    assert [machine.image for machine in oracles] == [oracle_image]
+    assert {machine.image for machine in images.created if machine not in oracles} == {GRADER_IMAGE}
