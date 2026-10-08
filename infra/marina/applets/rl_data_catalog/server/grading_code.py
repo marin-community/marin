@@ -70,6 +70,14 @@ class GradingBranches(ast.NodeTransformer):
             return set(values) if isinstance(node, ast.Set) else values
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             return not self.value(node.operand)
+        if isinstance(node, ast.BoolOp):
+            for operand in node.values:
+                value = self.value(operand)
+                if isinstance(node.op, ast.And) and not value:
+                    return value
+                if isinstance(node.op, ast.Or) and value:
+                    return value
+            return value
         if isinstance(node, ast.Compare) and len(node.ops) == 1:
             left, right = self.value(node.left), self.value(node.comparators[0])
             operation = node.ops[0]

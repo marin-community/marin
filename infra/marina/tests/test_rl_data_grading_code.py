@@ -83,6 +83,32 @@ def test_grading_identity_keeps_unknown_route_branches_in_scope() -> None:
     assert set(original.imports) == {("shared.math", "compare"), ("shared.code", "execute")}
 
 
+def test_known_mode_short_circuits_unrelated_predicate_but_retains_unknown_first_operand() -> None:
+    source = (
+        "from shared.image import predicate\n"
+        "def score(candidate):\n"
+        " if self.agent == 'image' and predicate(candidate):\n  return 1\n"
+        " return 0\n"
+    )
+    original = python_grading_code(source, ["score"], {"self.agent": "math"})
+    changed = source.replace("from shared.image", "from shared.other_image")
+    assert python_grading_code(changed, ["score"], {"self.agent": "math"}).digest == original.digest
+    unknown_first = source.replace(
+        "self.agent == 'image' and predicate(candidate)", "predicate(candidate) and self.agent == 'image'"
+    )
+    before = python_grading_code(unknown_first, ["score"], {"self.agent": "math"})
+    after = python_grading_code(
+        unknown_first.replace("from shared.image", "from shared.other_image"), ["score"], {"self.agent": "math"}
+    )
+    assert before.digest != after.digest
+    nested = source.replace("self.agent == 'image'", "(self.agent or 'image') == 'image'")
+    before = python_grading_code(nested, ["score"], {"self.agent": ""})
+    after = python_grading_code(
+        nested.replace("from shared.image", "from shared.other_image"), ["score"], {"self.agent": ""}
+    )
+    assert before.digest != after.digest
+
+
 def test_component_identity_uses_only_reachable_methods_and_state() -> None:
     source = """
 class Env:
@@ -134,6 +160,55 @@ class Modules:
         if module not in self.modules:
             raise ModuleNotFoundError(module)
         return self.modules[module]
+
+
+def test_genrm_fingerprint_tracks_cohort_rewards_and_subprocess_entrypoint() -> None:
+    modules = {
+        "skyrl_gym.envs.nemotron_ultra.env": (
+            "class Env:\n def __init__(self):\n  pass\n def step(self,x):\n  return 3.0\n"
+        ),
+        "skyrl_gym.envs.base_text_env": (
+            "class BaseTextEnv:\n def init(self,x):\n  return x\n"
+            " def close(self):\n  pass\n def set_rollout_evidence(self,x):\n  pass\n"
+        ),
+        "skyrl_train.trajectory_runners.skyrl_gym_contracts": (
+            "def verification_from_env_step(x):\n return x\ndef fold_verification_results(x):\n return x\n"
+        ),
+        "skyrl_train.trajectory_runners.skyrl_gym": (
+            "from skyrl_gym.envs.nemotron_ultra.genrm import grade_genrm_group\n"
+            "class SkyRLGymTrajectoryRunner:\n"
+            " def _apply_genrm_cohort_rewards(self,x):\n  return grade_genrm_group(x)\n"
+            " def unrelated_metrics(self):\n  return 1\n"
+        ),
+        "skyrl_gym.envs.nemotron_ultra.genrm": (
+            "def grade_genrm_group(x):\n return x + 1\ndef response_object(x):\n return x\n"
+        ),
+        "skyrl_gym.envs.nemotron_ultra.genrm_verifyit": "def _main():\n return 0\n",
+        "verifyit.spec": 'from enum import StrEnum\nclass Mode(StrEnum):\n SCRIPT="script"\n',
+    }
+    row = {
+        "environment": "nemotron_ultra",
+        "gym_entrypoint": "skyrl_gym.envs.nemotron_ultra.env:Env",
+        "verifier_mode": "verifyit",
+    }
+    source = Modules(modules)
+    route = skyrl_grading_routes(row, source, ("genrm_simple_agent",))[0]
+    packages = ("skyrl_gym", "skyrl_train", "verifyit")
+    original = python_grading_program(source, route.roots, packages, route.bindings)
+    changed = {
+        **modules,
+        "skyrl_gym.envs.nemotron_ultra.genrm": modules["skyrl_gym.envs.nemotron_ultra.genrm"].replace("x + 1", "x + 2"),
+    }
+    assert python_grading_program(Modules(changed), route.roots, packages, route.bindings).digest != original.digest
+    changed = {**modules, "skyrl_gym.envs.nemotron_ultra.genrm_verifyit": "def _main():\n return 1\n"}
+    assert python_grading_program(Modules(changed), route.roots, packages, route.bindings).digest != original.digest
+    unrelated = {
+        **modules,
+        "skyrl_train.trajectory_runners.skyrl_gym": (
+            modules["skyrl_train.trajectory_runners.skyrl_gym"].replace("return 1", "return 2")
+        ),
+    }
+    assert python_grading_program(Modules(unrelated), route.roots, packages, route.bindings).digest == original.digest
 
 
 def test_mcq_source_ignores_unrelated_verifier_modes() -> None:

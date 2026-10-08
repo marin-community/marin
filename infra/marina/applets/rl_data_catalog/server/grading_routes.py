@@ -96,7 +96,25 @@ def skyrl_grading_routes(
         selected = {module: list(names) for module, names in roots.items()}
         values = {**bindings, "self.agent": agent}
         resources = ()
-        if agent == "mcqa_simple_agent":
+        if agent in {"genrm_simple_agent", "genrm_simple_agent_reasoning_off"}:
+            selected["skyrl_train.trajectory_runners.skyrl_gym"] = [
+                "SkyRLGymTrajectoryRunner._apply_genrm_cohort_rewards"
+            ]
+            selected[NEMOTRON_PREFIX + "genrm"] = ["grade_genrm_group", "response_object"]
+            if mode == GradingMode.VERIFYIT:
+                selected[NEMOTRON_PREFIX + "genrm_verifyit"] = ["_main"]
+                values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT]
+                values[DEFINITION_BINDINGS] = {
+                    "verifyit.spec:parse_spec": {"table.get('mode')": "script"},
+                    "verifyit.spec:spec_from_table": {"table['mode']": "script"},
+                    "verifyit.spec:_coerce": {
+                        "annotation == tuple[FunctionCall, ...]": False,
+                        "annotation == tuple[Constraint, ...]": False,
+                        "annotation == float | None": False,
+                        "annotation is int and type(value) is not int": False,
+                    },
+                }
+        elif agent == "mcqa_simple_agent":
             values[VERIFYIT_MODES_BINDING] = [VerifyitMode.MCQ]
         elif agent in {"ns_tools_simple_agent", "math_with_judge_simple_agent"} and mode == GradingMode.VERIFYIT:
             selected[NEMOTRON_PREFIX + "math_judge_verifyit"] = ["_evaluate"]
