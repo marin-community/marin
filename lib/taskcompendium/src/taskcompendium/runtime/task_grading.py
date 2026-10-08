@@ -10,7 +10,6 @@ from tempfile import TemporaryDirectory
 
 from rigging.filesystem.path_validation import validate_relative_file_path
 from shellbox.backends.docker.machine import DockerMachineFactory
-from verifyit.candidate import supports_candidate_mode
 from verifyit.grade import InvalidTask
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import (
@@ -35,6 +34,7 @@ from taskcompendium.grading_contract import (
     TextSubmission,
     decode_json_value,
     resolve_verifier,
+    supports_candidate_mode,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (

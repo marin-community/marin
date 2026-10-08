@@ -8,6 +8,7 @@ import os
 import shutil
 import socket
 import sys
+import tarfile
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -292,8 +293,6 @@ def test_a_shared_root_keeps_its_files_and_loses_only_the_machine_uploads(tmp_pa
 
 def test_an_archive_extracts_at_the_filesystem_root_into_an_owned_root(tmp_path, roots, factory):
     # The grading runtime unpacks its inputs with ``tar -C /``; tar opens "/" to extract relative members.
-    import tarfile
-
     archive = tmp_path / "inputs.tar"
     with tarfile.open(archive, "w") as tar:
         payload = tmp_path / "payload"
