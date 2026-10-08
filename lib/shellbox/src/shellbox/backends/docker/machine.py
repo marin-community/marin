@@ -9,6 +9,8 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
+from rigging.timing import ExponentialBackoff
+
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
 from shellbox.machine import (
     Backend,
@@ -33,7 +35,23 @@ INTERRUPT_TIMEOUT = 10
 OUTPUT_READ_CHUNK_BYTES = 64 * 1024
 KILL_PROCESS_GROUP_COMMAND = 'kill -KILL "-$1"'
 PROCESS_GROUP_ABSENT_EXIT_CODE = 3
-PROBE_PROCESS_GROUP_COMMAND = f'kill -0 "-$1" || exit {PROCESS_GROUP_ABSENT_EXIT_CODE}'
+PROBE_PROCESS_GROUP_COMMAND = f"""
+group=$1
+[ -r /proc/1/stat ] || exit 1
+for path in /proc/[0-9]*/stat; do
+    record=
+    if ! {{ while IFS= read -r line; do record=$record$line; done; }} < "$path"; then
+        [ ! -e "$path" ] || exit 1
+        continue
+    fi
+    [ "$record" ] || continue
+    record=${{record##*) }}
+    set -- $record
+    [ "$#" -ge 3 ] || exit 1
+    [ "$3" != "$group" ] || [ "$1" = Z ] || exit 0
+done
+exit {PROCESS_GROUP_ABSENT_EXIT_CODE}
+"""
 
 
 @dataclass(frozen=True)
@@ -185,25 +203,26 @@ class DockerMachine:
         if user is not None:
             args.extend(("--user", user))
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
-            result = await docker(
-                *args, self.name, "sh", "-c", KILL_PROCESS_GROUP_COMMAND, "stop-command", str(process_group)
-            )
-            if result.exit_code == 0:
-                return
-            # Signal 0 as root distinguishes an absent group from a user permission failure.
-            probe = await docker(
-                "exec",
-                "--user",
-                "0",
-                self.name,
-                "sh",
-                "-c",
-                PROBE_PROCESS_GROUP_COMMAND,
-                "probe-command",
-                str(process_group),
-            )
-            if probe.exit_code != PROCESS_GROUP_ABSENT_EXIT_CODE:
-                raise RuntimeError(result.stderr.decode(errors="replace"))
+            await docker(*args, self.name, "sh", "-c", KILL_PROCESS_GROUP_COMMAND, "stop-command", str(process_group))
+            # A group signal can succeed while members with different UIDs remain alive.
+            backoff = ExponentialBackoff(initial=0.01, maximum=0.1)
+            while True:
+                probe = await docker(
+                    "exec",
+                    "--user",
+                    "0",
+                    self.name,
+                    "/bin/sh",
+                    "-c",
+                    PROBE_PROCESS_GROUP_COMMAND,
+                    "probe-command",
+                    str(process_group),
+                )
+                if probe.exit_code == PROCESS_GROUP_ABSENT_EXIT_CODE:
+                    return
+                if probe.exit_code != 0:
+                    raise RuntimeError(probe.stderr.decode(errors="replace"))
+                await asyncio.sleep(backoff.next_interval())
 
     async def upload(self, source: Path, target: str) -> None:
         parent = str(PurePosixPath(target).parent)

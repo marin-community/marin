@@ -55,6 +55,7 @@ secrets must never be used for actor jobs; ordinary factories inject none.
 Docker stops the command's process group on a timeout or caller cancellation.
 A successful stop preserves the machine. A failed stop raises an infrastructure error and closes the machine.
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
+Before machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
 Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.

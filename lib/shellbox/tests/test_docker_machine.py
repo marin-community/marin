@@ -334,7 +334,8 @@ def test_interrupted_docker_start_without_a_process_group_disposes_the_container
 
 
 @pytest.mark.parametrize("probe", ["live", "provider_error", "timeout"])
-def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypatch, probe):
+@pytest.mark.parametrize("stop_exit", [0, 1])
+def test_docker_stop_disposes_a_live_or_unverified_process_group(monkeypatch, probe, stop_exit):
     containers = set()
 
     async def provider(*args, **kwargs):
@@ -344,7 +345,7 @@ def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypa
             kwargs["process_group"].set_result(42)
             raise TimeoutError("Docker exec command deadline expired")
         elif "stop-command" in args:
-            return DockerCommandResult(1, b"", b"Cannot stop the command group")
+            return DockerCommandResult(stop_exit, b"", b"Cannot stop the command group")
         elif "probe-command" in args:
             if probe == "timeout":
                 raise TimeoutError("Provider probe timed out")
@@ -354,6 +355,7 @@ def test_docker_failed_stop_disposes_a_live_or_unverified_process_group(monkeypa
         return DockerCommandResult(0, b"", b"")
 
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", provider)
+    monkeypatch.setattr("shellbox.backends.docker.machine.INTERRUPT_TIMEOUT", 0.05)
 
     async def scenario():
         machine = await DockerMachineFactory().create(MachineSpec(DockerImage("fixture")))
