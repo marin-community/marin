@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run trusted commands as subprocesses on the host, without a container."""
+"""Run trusted commands on the host in bubblewrap sandboxes, without a container image.
+
+Each machine's commands see the host's system directories read-only on top of a private root
+directory, which holds every other path they write, from ``/app`` and ``/tmp`` to ``HOME``.
+"""
 
 import asyncio
 import contextlib
-import dataclasses
-import fcntl
 import json
 import logging
 import math
@@ -15,11 +17,13 @@ import pwd
 import resource
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from bubblewrap_bin import bwrap_path
 
 from shellbox.backends.local import launch
 from shellbox.machine import (
@@ -35,11 +39,7 @@ from shellbox.machine import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOCK_PATH = Path("/tmp/shellbox-local-machine.lock")
-SCRATCH_ROOT = PurePosixPath("/tmp")
-"""Uploads may also target this directory; the machine removes them on close."""
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-LOCK_POLL_INTERVAL = 0.1
 READ_CHUNK_BYTES = 64 * 1024
 # Resolve the program through sh, as the container backends do: a missing or unexecutable program
 # or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
@@ -50,52 +50,32 @@ NPROC_HEADROOM = 256
 FILE_SIZE_LIMIT = 1 << 30
 CPU_GRACE = 5
 """CPU seconds a command may use beyond the most its timeout allows on the CPUs it may run on."""
-# Commands may read and execute these, and the venvs and interpreters of the factory's bin_dirs, but not write them.
-SYSTEM_READ_ROOTS = (
+# Host directories that commands read and execute but cannot write.
+SYSTEM_DIRECTORIES = (
     "/bin",
-    "/dev",
     "/etc",
     "/lib",
     "/lib32",
     "/lib64",
     "/libx32",
     "/opt",
-    "/proc",
     "/run/systemd/resolve",  # The target of /etc/resolv.conf on hosts that run systemd-resolved.
     "/sbin",
     "/sys",
     "/usr",
 )
-WRITABLE_DEVICES = ("/dev/null", "/dev/zero", "/dev/full")
 SHARED_MEMORY = "/dev/shm"
 """Python's multiprocessing creates its semaphores here."""
-LANDLOCK_READ = launch.LANDLOCK_EXECUTE | launch.LANDLOCK_READ_FILE | launch.LANDLOCK_READ_DIR
-LANDLOCK_DEVICE_WRITE = launch.LANDLOCK_WRITE_FILE | launch.LANDLOCK_TRUNCATE
+SCRATCH = PurePosixPath("/tmp")
+HOME = PurePosixPath("/home/shellbox")
+ROOT_MODE = 0o755
+"""Lets a command that runs as another user traverse the machine's root directory."""
+STICKY_WORLD_WRITABLE = 0o1777
+PROBE_TIMEOUT = 30
 
 
-@dataclass(frozen=True)
-class Lockdown:
-    """The confinement this host's kernel lets the local backend apply to commands, beyond resource limits."""
-
-    no_new_privs: bool
-    """Setuid programs and file capabilities cannot raise a command's privileges."""
-    filesystem: bool
-    """Landlock limits writes to the owned roots, ``HOME``, ``/tmp`` and ``/dev/shm``, and reads to system and
-    interpreter directories. It also stops commands from reading or tracing processes outside the command."""
-    tcp: bool
-    """Landlock refuses TCP bind and connect under ``NetworkPolicy.DENY``."""
-    scopes: bool
-    """Landlock stops commands from signalling processes outside the command or reaching their abstract sockets."""
-
-
-@dataclass(frozen=True)
-class LandlockRuleset:
-    """The keyword arguments of the launcher's ``restrict``."""
-
-    handled_fs: int
-    handled_net: int
-    scoped: int
-    rules: tuple[tuple[str, int], ...]
+class SandboxUnavailable(RuntimeError):
+    """No bwrap executable can build a command sandbox on this host."""
 
 
 def _absolute_path(path: str) -> PurePosixPath:
@@ -104,16 +84,8 @@ def _absolute_path(path: str) -> PurePosixPath:
     return PurePosixPath(os.path.normpath(path))
 
 
-def _within(path: PurePosixPath, roots: Iterable[PurePosixPath]) -> bool:
+def _within(path: PurePosixPath, roots: Iterable[str]) -> bool:
     return any(path.is_relative_to(root) for root in roots)
-
-
-def _remove(paths: Iterable[Path]) -> None:
-    for path in paths:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
 
 
 def _copy(source: Path, target: Path) -> None:
@@ -123,38 +95,6 @@ def _copy(source: Path, target: Path) -> None:
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
-
-
-def _first_new_path(path: Path) -> Path:
-    """The highest of ``path`` and its ancestors that does not exist yet; removing it undoes a copy to ``path``."""
-    while not path.parent.exists():
-        path = path.parent
-    return path
-
-
-def _shared_entries(shared: Iterable[PurePosixPath]) -> dict[PurePosixPath, frozenset[str]]:
-    """The entries of each shared root before the machine runs; anything added beside them is the machine's."""
-    return {root: frozenset(os.listdir(root)) for root in shared}
-
-
-def _remove_added_entries(before: dict[PurePosixPath, frozenset[str]]) -> None:
-    for root, entries in before.items():
-        _remove(Path(root) / name for name in os.listdir(root) if name not in entries)
-
-
-def _reset_roots(roots: Iterable[PurePosixPath], shared: Iterable[PurePosixPath], workdir: PurePosixPath | None) -> None:
-    _remove(map(Path, roots))
-    for root in roots:
-        Path(root).mkdir(parents=True)
-    for root in shared:
-        Path(root).mkdir(parents=True, exist_ok=True)
-    if workdir is not None:
-        Path(workdir).mkdir(parents=True, exist_ok=True)
-
-
-def _landlock_fs_rights(abi: int) -> int:
-    """Every filesystem right Landlock ABI ``abi`` handles: ABI 1 has 13; 2 adds REFER, 3 TRUNCATE, 5 IOCTL_DEV."""
-    return (1 << {1: 13, 2: 14, 3: 15, 4: 15}.get(abi, 16)) - 1
 
 
 def _interpreter_roots(bin_dirs: Iterable[Path]) -> tuple[str, ...]:
@@ -169,22 +109,79 @@ def _interpreter_roots(bin_dirs: Iterable[Path]) -> tuple[str, ...]:
     return tuple(roots)
 
 
-def _landlock_ruleset(
-    abi: int, *, readable: Iterable[str], writable: Iterable[str], network: NetworkPolicy
-) -> LandlockRuleset:
-    fs_rights = _landlock_fs_rights(abi)
-    return LandlockRuleset(
-        handled_fs=fs_rights,
-        handled_net=launch.LANDLOCK_NET_TCP if abi >= 4 and network == NetworkPolicy.DENY else 0,
-        scoped=launch.LANDLOCK_SCOPES if abi >= 6 else 0,
-        rules=(
-            # Listing any directory is allowed so tools such as tar can open "/" as their extraction root;
-            # reading a file still needs a readable or writable root above it.
-            ("/", launch.LANDLOCK_READ_DIR),
-            *((path, LANDLOCK_READ) for path in readable),
-            *((path, LANDLOCK_DEVICE_WRITE & fs_rights) for path in WRITABLE_DEVICES),
-            *((path, fs_rights) for path in writable),
-        ),
+def _sandbox_argv(
+    bwrap: Path,
+    *,
+    root: Path,
+    read_only: Iterable[str],
+    network: NetworkPolicy,
+    account: pwd.struct_passwd | None,
+) -> list[str]:
+    """The bwrap invocation that runs a program over ``root`` with ``read_only`` and the system directories.
+
+    Run by root, bwrap creates its namespaces with the caller's CAP_SYS_ADMIN and no user namespace, so it
+    can mount a fresh ``/proc`` inside a container, and ``--cap-drop ALL`` leaves the command without
+    capabilities. Run by another user, bwrap creates a user namespace to hold its namespaces.
+    """
+    argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
+    if network == NetworkPolicy.DENY:
+        argv.append("--unshare-net")
+    argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL"]
+    if account is not None:
+        # setpriv uses these to switch to the account, and the switch clears them with every other capability.
+        argv += ["--cap-add", "CAP_SETUID", "--cap-add", "CAP_SETGID"]
+    argv += ["--bind", str(root), "/"]
+    for path in SYSTEM_DIRECTORIES:
+        if os.path.islink(path):
+            # Merged-/usr hosts link /bin and /lib into /usr; the link keeps paths such as the ELF loader valid.
+            argv += ["--symlink", os.readlink(path), path]
+        else:
+            argv += ["--ro-bind-try", path, path]
+    argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
+    for path in read_only:
+        argv += ["--ro-bind-try", path, path]
+    if account is not None:
+        argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
+    return argv
+
+
+def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
+    """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``.
+
+    Ubuntu's AppArmor policy grants unprivileged user namespaces only to ``/usr/bin/bwrap``, so a non-root
+    process on Ubuntu needs the system binary; elsewhere the bundled one works wherever bwrap can.
+    """
+    if bwrap is not None:
+        return (bwrap,)
+    system = shutil.which("bwrap")
+    return (bwrap_path(), *(() if system is None else (Path(system),)))
+
+
+def _sandbox_error(bwrap: Path) -> str | None:
+    """Why ``bwrap`` cannot build a command sandbox here, or None when it can."""
+    with tempfile.TemporaryDirectory(prefix="shellbox-bwrap-probe-") as root:
+        Path(root).chmod(ROOT_MODE)
+        argv = _sandbox_argv(bwrap, root=Path(root), read_only=(), network=NetworkPolicy.DENY, account=None)
+        try:
+            probe = subprocess.run(
+                [*argv, "/bin/sh", "-c", "exit 0"], capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False
+            )
+        except OSError as error:
+            return str(error)
+    return None if probe.returncode == 0 else probe.stderr.strip() or f"exit status {probe.returncode}"
+
+
+def _working_bwrap(candidates: Iterable[Path]) -> Path:
+    errors = []
+    for candidate in candidates:
+        error = _sandbox_error(candidate)
+        if error is None:
+            return candidate
+        errors.append(f"{candidate}: {error}")
+    raise SandboxUnavailable(
+        "No bwrap can sandbox commands on this host. A root process needs CAP_SYS_ADMIN, CAP_NET_ADMIN, no "
+        "AppArmor confinement and a seccomp filter that allows pivot_root; another user needs unprivileged "
+        "user namespaces. " + "; ".join(errors)
     )
 
 
@@ -197,7 +194,7 @@ def _resource_limits(timeout: float | None) -> list[tuple[int, int]]:
     ]
     if timeout is not None:
         # A process's CPU time accrues on every CPU it runs on, so only a process that escapes the timeout's
-        # kill, for example by leaving the process group, can reach this limit.
+        # kill can reach this limit.
         limits.append((resource.RLIMIT_CPU, math.ceil(timeout * len(os.sched_getaffinity(0))) + CPU_GRACE))
     return limits
 
@@ -216,25 +213,6 @@ def _command_account(user: str | None) -> pwd.struct_passwd | None:
     if uid != 0:
         raise UnsupportedMachineSpec(f"The local backend runs as uid {uid}; only root can run a command as {user}")
     return account
-
-
-async def _exclusive_lock(path: Path) -> int:
-    """Open ``path`` and hold an exclusive ``flock`` on it.
-
-    Each call opens its own descriptor, and flock excludes other descriptors in the same process
-    as well as other processes. Polling keeps a waiting caller cancellable on any event loop.
-    """
-    descriptor = os.open(path, os.O_RDONLY | os.O_CREAT, 0o644)
-    try:
-        while True:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return descriptor
-            except BlockingIOError:
-                await asyncio.sleep(LOCK_POLL_INTERVAL)
-    except BaseException:
-        os.close(descriptor)
-        raise
 
 
 async def _send_input(stdin: asyncio.StreamWriter, data: bytes) -> None:
@@ -257,37 +235,48 @@ async def _bounded_output(stream: asyncio.StreamReader, limit: int) -> tuple[byt
     return bytes(kept), truncated
 
 
+def _prepare_root(root: Path, workdir: PurePosixPath) -> None:
+    root.chmod(ROOT_MODE)
+    # Any user may write /tmp and HOME, as in a container image.
+    for directory in (SCRATCH, HOME):
+        path = root / directory.relative_to("/")
+        path.mkdir(parents=True)
+        path.chmod(STICKY_WORLD_WRITABLE)
+    (root / workdir.relative_to("/")).mkdir(parents=True, exist_ok=True)
+
+
 class LocalMachine:
-    """Host subprocesses that own the factory's roots until ``close``."""
+    """Commands in bubblewrap sandboxes over ``root``, a host directory that only this machine uses.
+
+    Each command gets new PID, IPC and UTS namespaces, and a network namespace with only loopback under
+    ``NetworkPolicy.DENY``. Files persist in ``root`` between commands; processes end with their command.
+    """
 
     def __init__(
         self,
         spec: MachineSpec,
         *,
-        owned_roots: tuple[PurePosixPath, ...],
-        shared_roots: tuple[PurePosixPath, ...],
+        bwrap: Path,
+        root: Path,
+        read_only: tuple[str, ...],
         environment: dict[str, str],
-        home: Path,
-        lock: int,
-        no_new_privs: bool,
-        landlock: LandlockRuleset | None,
-        shared_entries: dict[PurePosixPath, frozenset[str]],
     ):
         self.spec = spec
-        self.owned_roots = owned_roots
-        self.shared_roots = shared_roots
-        self._shared_entries = shared_entries
-        self.environment = environment
-        self.home = home
-        self._lock = lock
-        self._no_new_privs = no_new_privs
-        self._landlock = landlock
-        self._scratch: list[Path] = []
+        self.root = root
+        self.read_only = read_only
+        self._bwrap = bwrap
+        self._environment = environment
         self._closed = False
 
     def _check_open(self) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
+
+    def _host_path(self, path: PurePosixPath) -> Path:
+        """Where the host keeps the file that commands see at ``path``."""
+        if _within(path, (*SYSTEM_DIRECTORIES, *self.read_only)):
+            return Path(path)
+        return self.root / path.relative_to("/")
 
     async def run(self, command: Command) -> Result:
         self._check_open()
@@ -295,29 +284,28 @@ class LocalMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        account = _command_account(command.user)
-        launch_config = {
-            "rlimits": _resource_limits(command.timeout),
-            "no_new_privs": self._no_new_privs,
-            "landlock": None if self._landlock is None else dataclasses.asdict(self._landlock),
-            # The launcher switches users after confining itself, so the command's user needs no access to
-            # this process's interpreter, which may lie in a private home directory.
-            "account": None if account is None else (account.pw_uid, account.pw_gid),
-        }
+        sandbox = _sandbox_argv(
+            self._bwrap,
+            root=self.root,
+            read_only=self.read_only,
+            network=self.spec.network,
+            account=_command_account(command.user),
+        )
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-I",
             "-S",
             "-c",
             LAUNCH_SOURCE,
-            json.dumps(launch_config),
+            json.dumps(_resource_limits(command.timeout)),
+            *sandbox,
             "/bin/sh",
             "-c",
             RUN_SCRIPT,
             "shellbox-local",
             command.cwd or self.spec.workdir or "/",
             *command.argv,
-            env={**self.environment, **self.spec.env, **command.env},
+            env={**self._environment, **self.spec.env, **command.env},
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -334,6 +322,7 @@ class LocalMachine:
                 )
                 returncode = await process.wait()
         except BaseException as interruption:
+            # Killing bwrap ends the sandbox: --die-with-parent kills its PID namespace and every process in it.
             with contextlib.suppress(ProcessLookupError):  # The whole group may have exited already.
                 os.killpg(process.pid, signal.SIGKILL)
             # A reader that stopped with a full buffer pauses its pipe, and wait() needs both pipes at EOF.
@@ -350,18 +339,13 @@ class LocalMachine:
     async def upload(self, source: Path, target: str) -> None:
         self._check_open()
         path = _absolute_path(target)
-        if not _within(path, self.owned_roots):
-            if path in (*self.shared_roots, SCRATCH_ROOT) or not _within(path, (*self.shared_roots, SCRATCH_ROOT)):
-                raise UnsupportedMachineSpec(
-                    f"The local backend uploads only into its owned or shared roots or {SCRATCH_ROOT}, not {target}"
-                )
-            # Shared roots and scratch outlive the machine, so only what this upload adds is removed at close.
-            self._scratch.append(_first_new_path(Path(path)))
-        await asyncio.to_thread(_copy, source, Path(path))
+        if _within(path, (*SYSTEM_DIRECTORIES, *self.read_only)):
+            raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host directory")
+        await asyncio.to_thread(_copy, source, self._host_path(path))
 
     async def download(self, source: str, target: Path) -> None:
         self._check_open()
-        path = Path(source)
+        path = self._host_path(_absolute_path(source))
         if not path.exists():
             raise RuntimeError(f"No such file or directory: {source}")
         await asyncio.to_thread(_copy, path, target)
@@ -370,116 +354,51 @@ class LocalMachine:
         if self._closed:
             return
         self._closed = True
-        try:
-            await asyncio.to_thread(_remove, [*map(Path, self.owned_roots), *self._scratch, self.home])
-            await asyncio.to_thread(_remove_added_entries, self._shared_entries)
-        finally:
-            os.close(self._lock)
+        await asyncio.to_thread(shutil.rmtree, self.root)
 
 
 class LocalMachineFactory:
-    """Run commands as subprocesses of this host process, one machine per host at a time.
+    """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
-    Use this backend only for trusted commands: they share the host's kernel, processes, and
-    network. Each command runs under resource limits and whatever confinement ``lockdown``
-    reports this host's kernel allows; a command may escape where the kernel does not.
-    ``memory_mb`` is ignored. Each machine owns ``owned_roots``: ``create`` empties them and
-    ``close`` removes them with the machine's uploads, so no owned root may hold this process's
-    interpreter or working directory. ``shared_roots`` are directories commands may also write and
-    uploads may target, such as a workspace the host process itself runs from; ``create`` makes them
-    without emptying them and ``close`` removes only the machine's uploads there, so files a command
-    entries a machine adds at the top of a shared root, by upload or by command, are removed at ``close``; files that
-    existed before it stay, even when a command rewrote them. An exclusive ``flock`` on ``lock_path``
-    lets only one machine exist at a time, across processes that share the path. Commands
-    never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
-    a private ``HOME``, ``LANG``, the host's ``PYTHONHASHSEED`` if set, and the spec's and
-    command's variables.
+    A machine's commands see the host's system directories (``/usr``, ``/etc``, ``/opt`` and the like)
+    and the venvs and interpreters of ``bin_dirs`` read-only. Every other path, including ``/tmp`` and
+    ``HOME``, lies in a root directory of the machine's own that starts empty and is removed by
+    ``close``; no other host file is visible. Commands never inherit the host's environment: they get
+    ``bin_dirs`` ahead of a standard ``PATH``, ``HOME``, ``LANG``, the host's ``PYTHONHASHSEED`` if set,
+    and the spec's and command's variables. ``memory_mb`` is ignored.
+
+    ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
+    and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
+    when none can.
     """
 
     backend: Backend = Backend.LOCAL
 
-    def __init__(
-        self,
-        owned_roots: tuple[str, ...],
-        *,
-        shared_roots: tuple[str, ...] = (),
-        bin_dirs: tuple[Path, ...] = (),
-        lock_path: Path = DEFAULT_LOCK_PATH,
-    ):
-        roots = tuple(_absolute_path(root) for root in owned_roots)
-        shared = tuple(_absolute_path(root) for root in shared_roots)
-        if PurePosixPath("/") in (*roots, *shared):
-            raise ValueError("The filesystem root cannot be an owned or shared root")
-        if any(_within(root, roots) or any(_within(owned, (root,)) for owned in roots) for root in shared):
-            raise ValueError("A shared root cannot overlap an owned root")
-        # create() deletes the owned roots, so a root holding this process's interpreter or working directory,
-        # as /app holds an Iris task's bundle and venv, would delete the running worker.
-        for path in (os.getcwd(), sys.prefix, sys.executable):
-            if _within(_absolute_path(path), roots):
-                raise ValueError(f"An owned root holds {path}, which this process runs from")
-        self.owned_roots = roots
-        self.shared_roots = shared
+    def __init__(self, *, bin_dirs: tuple[Path, ...] = (), bwrap: Path | None = None):
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
-        self.lock_path = lock_path
-        no_new_privs = launch.no_new_privs_available()
-        # Landlock needs no_new_privs to confine an unprivileged process.
-        self._landlock_abi = launch.landlock_abi() if no_new_privs else 0
-        self.lockdown = Lockdown(
-            no_new_privs=no_new_privs,
-            filesystem=self._landlock_abi >= 1,
-            tcp=self._landlock_abi >= 4,
-            scopes=self._landlock_abi >= 6,
-        )
-        logger.info("Local backend lockdown on this host: %s", self.lockdown)
+        self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
+        self._read_only = _interpreter_roots(self.bin_dirs)
+        logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
         if not isinstance(spec.source, HostImage):
             raise UnsupportedMachineSpec(f"The local backend requires HostImage, not {type(spec.source).__name__}")
         if spec.cpus is not None or spec.storage_mb is not None or spec.gpus:
             raise UnsupportedMachineSpec("The local backend does not provide CPU, storage, or GPU allocations")
-        # Commands run in / without a workdir; / always exists, so it needs no owned root.
-        workdir = _absolute_path(spec.workdir) if spec.workdir not in ("", "/") else None
-        if workdir is not None and not _within(workdir, (*self.owned_roots, *self.shared_roots)):
-            raise UnsupportedMachineSpec(
-                f"The local backend's workdir {spec.workdir} must lie in an owned or shared root"
-            )
-        lock = await _exclusive_lock(self.lock_path)
+        workdir = _absolute_path(spec.workdir or "/")
+        if _within(workdir, (*SYSTEM_DIRECTORIES, *self._read_only)):
+            raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host directory")
+        root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="shellbox-local-"))
         try:
-            await asyncio.to_thread(_reset_roots, self.owned_roots, self.shared_roots, workdir)
-            shared_entries = await asyncio.to_thread(_shared_entries, self.shared_roots)
-            home = Path(tempfile.mkdtemp(prefix="shellbox-local-home-"))
+            await asyncio.to_thread(_prepare_root, root, workdir)
         except BaseException:
-            os.close(lock)
+            shutil.rmtree(root)
             raise
         environment = {
             "PATH": os.pathsep.join([*map(str, self.bin_dirs), DEFAULT_PATH]),
-            "HOME": str(home),
+            "HOME": str(HOME),
             "LANG": "C.UTF-8",
         }
         if "PYTHONHASHSEED" in os.environ:
             environment["PYTHONHASHSEED"] = os.environ["PYTHONHASHSEED"]
-        landlock = None
-        if self.lockdown.filesystem:
-            landlock = _landlock_ruleset(
-                self._landlock_abi,
-                readable=(*SYSTEM_READ_ROOTS, *_interpreter_roots(self.bin_dirs)),
-                writable=(
-                    *map(str, self.owned_roots),
-                    *map(str, self.shared_roots),
-                    str(home),
-                    str(SCRATCH_ROOT),
-                    SHARED_MEMORY,
-                ),
-                network=spec.network,
-            )
-        return LocalMachine(
-            spec,
-            owned_roots=self.owned_roots,
-            shared_roots=self.shared_roots,
-            environment=environment,
-            home=home,
-            lock=lock,
-            no_new_privs=self.lockdown.no_new_privs,
-            landlock=landlock,
-            shared_entries=shared_entries,
-        )
+        return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=self._read_only, environment=environment)
