@@ -16,6 +16,7 @@ import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
 from .nemotron_counts import NEMOTRON_COUNTS
+from .nemotron_records import SWE_AGENT
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -64,15 +65,14 @@ VERIFYIT_NEMOTRON_COMPONENTS = {
     group["dataset"]
     for blend in NEMOTRON_COUNTS["blends"].values()
     for group in blend["groups"]
-    if not set(group["agents"])
-    & {"indirect_prompt_injection_simple_agent", "swe_pivot_single_step_tool_use_with_argument_comparison_agent"}
+    if not set(group["agents"]) & {"indirect_prompt_injection_simple_agent", SWE_AGENT}
 }
 
 HARBOR_NEMOTRON_COMPONENTS = {
     group["dataset"]
     for blend in NEMOTRON_COUNTS["blends"].values()
     for group in blend["groups"]
-    if "swe_pivot_single_step_tool_use_with_argument_comparison_agent" in group["agents"]
+    if SWE_AGENT in group["agents"]
 }
 
 VERIFYIT_PIN_PATTERN = re.compile(r"github\.com/marin-community/marin\.git@([0-9a-f]{40})#subdirectory=lib/verifyit")
