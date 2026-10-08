@@ -13,8 +13,7 @@ Only errors the program cannot have caused are infrastructure:
 
 * ``NO_FACTORY``: the build needs a machine kind this host has no factory for (a laptop without
   Docker). It is deterministic on the host (``HOST_REJECTIONS``): no retry here changes it, so the
-  loop rejects the item as ``HOST`` instead of retrying the build, as review does for a trial the
-  host cannot run.
+  loop abandons the item at once without retrying the build.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
   schedule the sandbox). The deadline a program sets with ``environment.startup_timeout`` is
   enforced outside the factory and stays the program's.
@@ -61,7 +60,7 @@ class InfrastructureCause(StrEnum):
 
 
 HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY})
-"""Causes that hold for as long as the host is unchanged: the item is rejected, not retried."""
+"""Causes that hold for as long as the host is unchanged: the item is abandoned at once, not retried."""
 
 
 class BuildInfrastructureFailure(Exception):
