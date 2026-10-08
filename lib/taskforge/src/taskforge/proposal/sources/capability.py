@@ -26,7 +26,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
-from taskforge.canonical import digest, pretty_json
+from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import Completion, GlmClient, complete_prefilled
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, StructuredTool, complete_structured
@@ -52,7 +52,7 @@ class CapabilityIdea:
     """One catalog capability with the learning-progression edges that point at it.
 
     ``capability`` and ``prerequisite_edges`` are source records shown to the model verbatim, so they
-    stay as the catalog's JSON objects. ``capability_hash`` is the ``taskforge.canonical.digest``
+    stay as the catalog's JSON objects. ``capability_hash`` is the ``taskforge.content_hash.digest``
     of the capability record.
     """
 
