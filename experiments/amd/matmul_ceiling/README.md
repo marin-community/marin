@@ -25,7 +25,7 @@ cluster-sync
 cluster "cd agents/<name> && bash experiments/amd/matmul_ceiling/setup_envs.sh"
 ```
 
-Submit from the synced checkout root, and pin both jobs to one node with `-w <node>`: separate jobs otherwise land on different nodes. On the 28 bf16 shapes MAMF-finder shortlisted on MI350X ([`mamf_mi350x_bf16_shapes.txt`](./mamf_mi350x_bf16_shapes.txt)), JAX ran a median of 3% faster on k007-002 than on k007-004, ranging from 8% slower to 5% faster per shape (jobs 453412 and 453338). Both scripts use `--no-requeue`, because this cluster requeues failed batch jobs by default and a job that wedges a GPU would otherwise move on to the next node:
+Submit from the synced checkout root, and pin both jobs to one node with `-w <node>`: separate jobs otherwise land on different nodes. On the 28 bf16 shapes MAMF-finder shortlisted on MI350X ([`mamf_mi350x_bf16_shapes.txt`](./mamf_mi350x_bf16_shapes.txt)), JAX ran a median of 3% faster on k007-002 than on k007-004, and faster on 26 of the 28 shapes (jobs 453412 and 453338). The two slower shapes may reflect XLA's autotuner picking a different kernel rather than the node; those runs did not record kernel names. Both scripts use `--no-requeue`, because this cluster requeues failed batch jobs by default and a job that wedges a GPU would otherwise move on to the next node:
 
 ```bash
 sha=$(git rev-parse HEAD)
