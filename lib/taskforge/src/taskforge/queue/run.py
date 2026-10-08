@@ -51,11 +51,11 @@ from taskforge.loop.events import (
 )
 from taskforge.loop.policy import LoopPolicy
 from taskforge.loop.program import (
-    DIGEST_CHARS,
     ITEMS_DIR,
     LEDGER_DIR,
     ROUNDS_DIR,
     LoopServices,
+    evidence_dir,
     idea_item_id,
     run_idea,
     run_item,
@@ -200,7 +200,7 @@ def final_round(root: Path, item_id: str, entries: Sequence[LedgerEntry]) -> Dec
         return None
     last = decided[-1]
     assert last.input_hash is not None
-    evidence = root / ITEMS_DIR / item_id / ROUNDS_DIR / str(last.round) / f"evidence-{last.input_hash[:DIGEST_CHARS]}"
+    evidence = evidence_dir(root / ITEMS_DIR / item_id, last.round, last.input_hash)
     match load_decision(evidence / DECISION_FILE):
         case Accept(summary=summary, band=band):
             return DecidedRound(last.round, summary, band)
