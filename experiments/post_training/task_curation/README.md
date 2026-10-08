@@ -70,7 +70,9 @@ RlDataPipeline(
   `unreviewed`.
 - **Controls.** `Controls(golden)` grades one submission per sampled task: the
   known-correct `golden(task)`, which must score 1, or an empty submission,
-  which must score 0, when the task has no golden. Without controls,
+  which must score 0, when the task has no golden. Sandbox graders grade the
+  empty submission in their own image, so it also shows the grader runs.
+  Without controls,
   verification is skipped and sandbox-graded rows stay out of `final/`. Rows
   graded by an LLM judge are never sampled and reach `final/` without controls.
 

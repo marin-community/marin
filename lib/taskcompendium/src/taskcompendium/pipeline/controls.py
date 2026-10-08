@@ -42,10 +42,11 @@ from taskcompendium.pipeline.models import (
     WorkspaceFiles,
 )
 from taskcompendium.pipeline.verification import answer_event, control_result
+from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "3"
+CONTROLS_REVISION = "4"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -113,6 +114,7 @@ def run_controls(task: TaskSpec, *, controls: Controls, machines: GradingMachine
 
 
 def _empty_submission(task: TaskSpec) -> ControlSubmission:
+    """The empty submission for an in-process grader, which scores it without a machine."""
     if task.answer_type in CONVERSATION_ANSWERS:
         return Reply(TextMessage(role="assistant", content=""))
     return WorkspaceFiles({})
@@ -138,9 +140,13 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
             raise ValueError("Sandbox controls require grading machines")
         sandbox = _Sandbox(machines, controls.memory_mb, _image_machine(machines, environment, controls.memory_mb))
     golden = controls.golden(task) if controls.golden is not None else None
-    if golden is None:
-        return VerificationReport([await _control(task, "empty", _empty_submission(task), 0.0, sandbox)])
-    return VerificationReport([await _control(task, "golden", golden, 1.0, sandbox)])
+    if golden is not None:
+        check = await _control(task, "golden", golden, 1.0, sandbox)
+    elif sandbox is not None:
+        check = await _empty_sandbox_control(task, sandbox)
+    else:
+        check = await _control(task, "empty", _empty_submission(task), 0.0, None)
+    return VerificationReport([check])
 
 
 def _image_machine(
@@ -195,6 +201,15 @@ async def _control(
         grade_task(task, attempt) if sandbox is None else await sandbox_grade(task, attempt, *sandbox.grader)
     )
     return control_result(grade, name, expected)
+
+
+async def _empty_sandbox_control(task: TaskSpec, sandbox: _Sandbox) -> CheckResult:
+    """Run the grader on an empty answer in a fresh grader machine; it must run cleanly and score 0."""
+    try:
+        grade = await grade_empty_in_sandbox(task, *sandbox.grader)
+    except (RuntimeError, OSError) as error:
+        return CheckResult(check="empty", status=CheckStatus.INFRA_ERROR, detail=str(error))
+    return control_result(grade, "empty", 0.0)
 
 
 async def _oracle_attempt(

@@ -104,8 +104,14 @@ comparators or rewrite tests to accept a reference.
 Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
 when the declaration has no `golden` or it returns `None` because the task has no
-known answer, an empty submission, which must score 0. A golden is a `Reply`,
-`WorkspaceFiles`, or an `OracleCommand`, such as a TaskTrove `solution/solve.sh`,
+known answer, an empty submission, which must score 0. A grader that runs in a
+machine grades the empty submission in a fresh machine of its image, staged as for
+a rollout whose agent replied with empty text and wrote nothing: an empty answer
+file where the grader reads one, a conversation ending in the empty reply, and an
+empty workspace. The control passes when the grader runs and scores 0; a grader
+that crashes or writes no reward is an infrastructure error. An in-process grader
+scores the empty reply directly. A golden is a `Reply`, `WorkspaceFiles`, or an
+`OracleCommand`, such as a TaskTrove `solution/solve.sh`,
 run with the task's worker and oracle files in a fresh machine of the task's agent
 image, whose tools and directories the oracle expects. A task without an agent
 image, such as a conversation task, runs its oracle in the grader image. The

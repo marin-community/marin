@@ -29,6 +29,7 @@ from taskcompendium.models import (
     ActionSubmission,
     AnswerType,
     ArtifactKind,
+    ConversationTrace,
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
@@ -41,6 +42,7 @@ from taskcompendium.models import (
     SubmissionFailure,
     TaskResource,
     TaskSpec,
+    TextMessage,
     TextSubmission,
     VerifierArtifact,
     VerifierCommand,
@@ -364,19 +366,29 @@ class _SandboxGrading:
     artifacts: tuple[VerifierArtifact, ...]
 
 
-def _sandbox_grading(task: TaskSpec, timeout: float | None) -> _SandboxGrading:
+def _sandbox_grading(
+    task: TaskSpec, machine_spec: MachineSpec, task_machine: Machine | None, timeout: float | None
+) -> _SandboxGrading:
+    """The task's sandbox grader, checked against the grading machine and the task machine it collects from."""
     grader = task.grader
     if isinstance(grader, VerifyitGrader) and grader.environment is not None:
         limit = GRADING_TIMEOUT if timeout is None else timeout
-        return _SandboxGrading(
+        grading = _SandboxGrading(
             grader, verifyit_spec(grader), grader.environment, grader_workspace(grader), limit, (), ()
         )
-    if isinstance(grader, ScriptGrader):
+    elif isinstance(grader, ScriptGrader):
         limit = grader.timeout if timeout is None else min(timeout, grader.timeout)
-        return _SandboxGrading(grader, None, grader.environment, grader.cwd, limit, grader.collect, grader.artifacts)
-    raise TypeError(
-        f"Sandbox grading requires a verifyit grader with an environment or a script grader, not {grader.kind}"
-    )
+        grading = _SandboxGrading(grader, None, grader.environment, grader.cwd, limit, grader.collect, grader.artifacts)
+    else:
+        raise TypeError(
+            f"Sandbox grading requires a verifyit grader with an environment or a script grader, not {grader.kind}"
+        )
+    if (grading.collect or grading.artifacts) and task_machine is None:
+        raise ValueError("Collecting grader inputs requires the task machine")
+    assert grading.environment.docker_image is not None
+    require_image(machine_spec, grading.environment.docker_image)
+    validate_output_directories(task.output_directories, grading.workspace)
+    return grading
 
 
 def _grading_files(
@@ -414,13 +426,7 @@ async def grade_in_sandbox(
     the grader's workspace and the environment's variables added. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
     """
-    grading = _sandbox_grading(task, timeout)
-    if (grading.collect or grading.artifacts) and task_machine is None:
-        raise ValueError("Collecting grader inputs requires the task machine")
-    assert grading.environment.docker_image is not None
-    require_image(machine_spec, grading.environment.docker_image)
-    validate_output_directories(task.output_directories, grading.workspace)
-
+    grading = _sandbox_grading(task, machine_spec, task_machine, timeout)
     answer_file = None if grading.spec is None else verifyit_answer_file(grading.spec)
     submissions = _captured_files(task, attempt, (*task.output_paths, *([answer_file] if answer_file else [])))
     try:
@@ -439,8 +445,42 @@ async def grade_in_sandbox(
         and not (task.answer_type == AnswerType.STATE and attempt.state is not None)
     ):
         return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
-    files = _grading_files(task, attempt, grading, submissions)
+    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, task_machine)
 
+
+async def grade_empty_in_sandbox(
+    task: TaskSpec, factory: MachineFactory, machine_spec: MachineSpec, *, timeout: float | None = None
+) -> GradeResult:
+    """Grade an agent that submitted nothing, staged in a fresh machine as ``grade_in_sandbox`` stages a rollout.
+
+    The grader receives the task's resources, its conversation ending in an empty assistant reply,
+    an empty file where it reads an answer file, and no workspace files. ``grade_in_sandbox`` rejects
+    an empty reply or an empty verifyit workspace before a machine starts; this runs the grader on
+    them, so its result shows whether the grader runs and what it awards an empty answer. Graders
+    that collect inputs from the task machine are unsupported. Machine failures propagate.
+    """
+    grading = _sandbox_grading(task, machine_spec, None, timeout)
+    if isinstance(grading.grader, ScriptGrader):
+        answer_file = grading.grader.answer_path
+    else:
+        assert grading.spec is not None
+        answer_file = verifyit_answer_file(grading.spec)
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
+    submissions = [] if answer_file is None else [_StagedFile(answer_file, b"")]
+    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None)
+
+
+async def _grade_staged(
+    task: TaskSpec,
+    attempt: GradingAttempt,
+    grading: _SandboxGrading,
+    submissions: list[_StagedFile],
+    factory: MachineFactory,
+    machine_spec: MachineSpec,
+    task_machine: Machine | None,
+) -> GradeResult:
+    """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
+    files = _grading_files(task, attempt, grading, submissions)
     try:
         for command in grading.collect:
             assert task_machine is not None

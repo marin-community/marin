@@ -242,7 +242,16 @@ def test_task_without_an_oracle_grades_an_empty_submission(executable_task):
     machines = ControlMachines()
     report = run_controls(without_oracle(executable_task), controls=CONTROLS, machines=machines)
     assert checks(report) == {"empty": CheckStatus.PASS}
-    assert all(machine.closed for machine in machines.factory.machines)
+    assert machines.factory.machines and all(machine.closed for machine in machines.factory.machines)
+
+
+@pytest.mark.parametrize(
+    "verdict_status, expected", [("invalid_task", CheckStatus.FAIL), ("infra_error", CheckStatus.INFRA_ERROR)]
+)
+def test_ungraded_zero_reward_cannot_pass_the_empty_control(executable_task, verdict_status, expected):
+    machines = ControlMachines(GradingMachines(verdict_status=verdict_status))
+    report = run_controls(without_oracle(executable_task), controls=CONTROLS, machines=machines)
+    assert checks(report) == {"empty": expected}
 
 
 @pytest.mark.parametrize("program, reward", [(b"print(7)\n", 1.0), (b"print(0)\n", 0.0)])

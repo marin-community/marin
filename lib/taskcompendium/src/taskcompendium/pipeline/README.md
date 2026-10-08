@@ -58,7 +58,10 @@ cannot convert.
    - `golden(task)`, a known-correct `Reply`, `WorkspaceFiles` or
      `OracleCommand`, which must score 1;
    - otherwise, when the declaration has no `golden` or it returns `None`, an
-     empty submission, which must score 0.
+     empty submission, which must score 0. A sandbox grader runs on it in a
+     fresh machine of its image, with an empty answer file where it reads one,
+     a conversation ending in an empty reply, and an empty workspace, so the
+     control also shows that the grader runs.
 
    An `OracleCommand` runs with the task's worker and oracle resources
    installed in a fresh machine of the task's agent image, whose tools and

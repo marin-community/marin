@@ -174,6 +174,19 @@ def test_oracle_without_a_correct_submission_fails_the_golden_control(task, orac
     assert checks(task, Controls(golden=lambda _: oracle), FixtureGradingMachines()) == {"golden": FAIL}
 
 
+@pytest.mark.parametrize(
+    "script, status",
+    [(b'test "$(cat answer.txt)" = 7\n', PASS), (b"test -f answer.txt && test ! -s answer.txt\n", FAIL)],
+    ids=["grader_rejects_empty_answer", "grader_accepts_only_empty_answer"],
+)
+def test_empty_control_runs_the_script_grader_on_an_empty_answer_file(script, status):
+    # The second grader passes only an empty /app/answer.txt, so its failure shows the grader ran on one.
+    images = RecordingImages()
+    task = script_graded(answer_task(), script)
+    assert checks(task, Controls(), FixtureGradingMachines(images)) == {"empty": status}
+    assert [machine.image for machine in images.created] == [GRADER_IMAGE]
+
+
 def test_grader_that_accepts_any_submission_fails_the_empty_control():
     task = script_graded(file_task(), b"true\n", answer_path=None)
     assert checks(task, Controls(), FixtureGradingMachines()) == {"empty": FAIL}

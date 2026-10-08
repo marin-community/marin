@@ -119,8 +119,8 @@ class Controls:
 
     ``golden(task)`` is a known-correct submission, which must score one. When ``golden`` is
     absent or returns ``None`` because the source supplies no known-correct answer, the task is
-    graded on an empty submission instead, which must score zero. ``memory_mb`` sizes each fresh
-    grading machine.
+    graded on an empty submission instead, which must score zero; a sandbox grader grades it in a
+    fresh grading machine. ``memory_mb`` sizes each fresh grading machine.
     """
 
     golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
