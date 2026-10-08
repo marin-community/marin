@@ -9,7 +9,7 @@ package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 # Select the published wheel instead of the Git dependency's enclosing workspace.
-override-dependencies = ["marin-rigging[secrets,prometheus]==0.2.144.dev37540375919"]
+override-dependencies = ["marin-rigging[secrets,prometheus]>=0.2.144.dev37540375919"]
 
 [tool.uv.sources]
 marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "a0fb65558994b8430c84a9876bd875f800300d65" }

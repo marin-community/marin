@@ -16,7 +16,7 @@ required-markers = [
 prerelease-mode = "allow"
 
 [manifest]
-overrides = [{ name = "marin-rigging", extras = ["secrets", "prometheus"], specifier = "==0.2.144.dev37540375919" }]
+overrides = [{ name = "marin-rigging", extras = ["secrets", "prometheus"], specifier = ">=0.2.144.dev37540375919" }]
 
 [[package]]
 name = "absl-py"
