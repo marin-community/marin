@@ -97,18 +97,6 @@ def _copy(source: Path, target: Path) -> None:
     shutil.copy2(source, target)
 
 
-def _interpreter_roots(bin_dirs: Iterable[Path]) -> tuple[str, ...]:
-    """Directories to read for the programs in ``bin_dirs``: each venv and the Python it links to, or the directory."""
-    roots: list[str] = []
-    for directory in bin_dirs:
-        venv = directory.parent
-        if (venv / "pyvenv.cfg").exists():
-            roots += [str(venv), str(Path(os.path.realpath(directory / "python3")).parent.parent)]
-        else:
-            roots.append(str(directory))
-    return tuple(roots)
-
-
 def _sandbox_argv(
     bwrap: Path,
     *,
@@ -137,7 +125,7 @@ def _sandbox_argv(
             argv += ["--ro-bind-try", path, path]
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
     for path in read_only:
-        argv += ["--ro-bind-try", path, path]
+        argv += ["--ro-bind", path, path]
     if account is not None:
         argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
     return argv
@@ -361,12 +349,16 @@ class LocalMachineFactory:
     """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
     A machine's commands see the host's system directories (``/usr``, ``/etc``, ``/opt`` and the like)
-    and the venvs and interpreters of ``bin_dirs`` read-only. Every other path, including ``/tmp`` and
-    ``HOME``, lies in a root directory of the machine's own that starts empty and is removed by
-    ``close``; no other host file is visible. Commands never inherit the host's environment: they get
-    ``bin_dirs`` ahead of a standard ``PATH``, ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has
-    a ``hash_seed``, and the spec's and command's variables. A spec with ``memory_mb`` is rejected, since
-    the backend enforces no memory limit.
+    and each directory in ``read_only`` at its own path, read-only. Every other path, including ``/tmp``
+    and ``HOME``, lies in a root directory of the machine's own that starts empty and is removed by
+    ``close``; no other host file is visible. The caller keeps each ``read_only`` directory self-contained:
+    a symlink that leads out of the mounted directories does not resolve in the sandbox.
+    ``build_python_environment`` builds such a directory for a Python interpreter and its packages.
+
+    Commands never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
+    ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has a ``hash_seed``, and the spec's and
+    command's variables. ``bin_dirs`` only sets ``PATH``; a directory outside the mounted ones is not
+    visible to commands. A spec with ``memory_mb`` is rejected, since the backend enforces no memory limit.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
@@ -375,11 +367,22 @@ class LocalMachineFactory:
 
     backend: Backend = Backend.LOCAL
 
-    def __init__(self, *, bin_dirs: tuple[Path, ...] = (), bwrap: Path | None = None, hash_seed: str | None = None):
+    def __init__(
+        self,
+        *,
+        read_only: tuple[Path, ...] = (),
+        bin_dirs: tuple[Path, ...] = (),
+        bwrap: Path | None = None,
+        hash_seed: str | None = None,
+    ):
+        self.read_only = tuple(directory.absolute() for directory in read_only)
+        missing = [str(directory) for directory in self.read_only if not directory.is_dir()]
+        if missing:
+            raise ValueError(f"Read-only directories do not exist: {', '.join(missing)}")
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
         self.hash_seed = hash_seed
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
-        self._read_only = _interpreter_roots(self.bin_dirs)
+        self._read_only = tuple(map(str, self.read_only))
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:

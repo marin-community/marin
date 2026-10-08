@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Laion all-puzzles: a baked gold string compared to ``/app/answer.txt`` after normalization.
+"""Laion all-puzzles: a gold string compared to ``/app/answer.txt`` after normalization.
+
+Alphabetical-sorting gold and its oracle are recomputed from the prompt's word list and direction
+because some source tasks store ascending answers for descending instructions.
 
 ``tests/compare_answer.py`` reads ``tests/gold.json`` (``{"gold": ..., "answer_type": ...,
 "ptype": ...}``), normalizes the agent's answer per ``answer_type``, and compares. Four
@@ -34,6 +37,11 @@ GOLD_FILE = "tests/gold.json"
 _STRING_ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list"})
 _NUMERIC_ANSWER_TYPES = frozenset({"number", "coords"})
 _OLD_GRADER_INSTALL = re.compile(r"pip install .*\bpytest\b")
+_SORTING_PROMPT = re.compile(
+    r"^Now, sort these words in (ascending|descending) order \(using ASCII/Unicode ordering\) "
+    r"and return them as a comma-separated list: ([^\n]+)$",
+    re.MULTILINE,
+)
 
 
 def _exact_spec(answer_type: str, gold: str) -> ExactSpec | None:
@@ -55,6 +63,17 @@ def convert_all_puzzles(task: TaskFiles) -> ConvertedTask | Rejected:
     answer_type = str(data.get("answer_type", ""))
     gold = str(data.get("gold", "")).strip()
     ptype = str(data.get("ptype", "")).strip().lower().replace("_", "-") or "unknown"
+    instruction = task.text(INSTRUCTION)
+    sorting = answer_type == "ordered_list" and ptype == "alphabetical-sorting"
+    if sorting:
+        match = _SORTING_PROMPT.search(instruction)
+        if match is None:
+            raise ValueError("alphabetical-sorting task has no recognized word-list and direction clause")
+        direction, word_list = match.groups()
+        words = [word.strip() for word in word_list.split(",")]
+        if not all(words):
+            raise ValueError("alphabetical-sorting task contains an empty word")
+        gold = ", ".join(sorted(words, reverse=direction == "descending"))
 
     if answer_type in _STRING_ANSWER_TYPES:
         spec = _exact_spec(answer_type, gold)
@@ -66,11 +85,15 @@ def convert_all_puzzles(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.NULL_GRADER, f"empty gold for answer_type {answer_type!r}")
 
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
+        instruction=instruction,
         spec=spec,
         dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), _OLD_GRADER_INSTALL),
         tags=("puzzle", "laion", ptype),
-        solution_files=task.under(SOLUTION_DIR) or answer_solution(spec),
+        solution_files=(
+            answer_solution(ExactSpec(expected=(gold,)))
+            if sorting
+            else task.under(SOLUTION_DIR) or answer_solution(spec)
+        ),
         metadata={"ptype": ptype, "answer_type": answer_type},
     )
 
