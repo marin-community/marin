@@ -880,11 +880,8 @@ class GrugModelConfig:
     latent_orthogonal_init: bool = False
     router_history: bool = False
     expert_router_orthogonal: str = "off"
-    """``full``: each routed expert ignores its own router direction: expert e's ``w_up`` (and ``w_gate``) are
-    projected off ``u_e = normalize(r_e @ W_down)``, the latent image of its router column
-    (``_orthogonalize_expert_reads``, ``u_e`` stop-gradient). ``learned``: remove only a learned fraction
-    ``alpha_e`` of it (``expert_router_alpha``, zero-init,
-    so it starts as the plain model). ``off``: neither. Needs the LatentMoE projection and a full-rank linear router."""
+    """``full`` / ``learned``: project each expert's reads off its own router direction
+    (``_orthogonalize_expert_reads``); ``off``: neither."""
     router_mlp_hidden: int = 0
     """A tiny MLP router added to the linear one: ``logits += silu(x @ W_a) @ W_b`` with this many hidden neurons
     (``W_b`` zero-init, so it starts as the linear router). 0: off."""
@@ -1018,6 +1015,8 @@ class GrugModelConfig:
     mla_dcmha_rank: int = 2
     mla_dcmha_hidden: int = 64
     mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
+    mla_shared_kv: bool = False
+    """MLA keys and values are one 128-dim head each (MQA), broadcast to every query head."""
     mla_dcmha_paper: bool = False
     """The released DCMHA network and init (``sparse_attention.DcmhaPaper``), not the tanh-bounded one."""
     mla_dcmha_static: str = "none"
@@ -1027,6 +1026,7 @@ class GrugModelConfig:
     mla_gauss_sigma_init: float = 0.5
     mla_gauss_reach: int = 16
     mla_gauss_tied: bool = False
+    mla_gauss_components: int = 1
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
@@ -1229,10 +1229,7 @@ class GrugModelConfig:
     """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
     of one RMS over all channels."""
     attn_res_key_rank: int | None = None
-    """Low-Rank AttnRes (LR-AttnRes, arXiv 2607.09694): every source's routing key is the parameter-free
-    RMS norm of its last ``r`` channels, ``rms_norm(source[..., -r:])``, and every pseudo-query (per-layer,
-    V-gate, loop and final) is ``r``-wide; the mix still sums the full-width sources. The paper's sliced
-    variant (its learned-projection keys cost ~10x the routing FLOPs for the same loss). None: full-width."""
+    """LR-AttnRes (arXiv 2607.09694): routing keys are ``rms_norm(source[..., -r:])``, queries ``r``-wide."""
     embed_norm_mode: str = "rms"
     """Token-embedding norm before it enters the stack (AttnRes mixes it raw against the layer outputs):
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
@@ -1574,10 +1571,7 @@ class GrugModelConfig:
     latent_mix_renorm: bool = False
     latent_mix_kv_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
     kv_shared_latent_dim: int = 0
-    """With the MLA KV-latent mixture: an always-on shared down-projection of this width. ``latent_mix_kv_mode=sum``
-    adds it to the routed experts' weighted sum before the one RMSNorm (a shared expert; must equal
-    ``mla_kv_latent_dim``, so the latent stays that wide); ``concat`` puts it, with its own RMSNorm, in front of
-    the mixture part, so ``w_uk`` / ``w_uv`` read ``kv_shared_latent_dim + mla_kv_latent_dim``."""
+    """With the MLA KV-latent mixture: an always-on shared down-projection of this width (summed or concatenated)."""
     latent_mix_moe_in_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
     """``moe_in`` mixture: ``concat`` gates blocks of the latent; ``sum`` makes ``W_down`` a token-conditioned mixture
     of ``latent_mix_experts`` full-width basis projections, ``latent = norm(sum_j a_j(x) x W_j)``."""
@@ -2413,7 +2407,7 @@ class CausalSelfAttention(eqx.Module):
             group = cfg.mla_grouped_diff
             k_qn, k_ukn = random.split(random.fold_in(key, 2))
             # GDLA: one value head per group and only the signal heads reach the output.
-            n_v = cfg.mla_gdla_noise_heads or n
+            n_v = 1 if cfg.mla_shared_kv else (cfg.mla_gdla_noise_heads or n)
             n_out = n - cfg.mla_gdla_noise_heads
             if cfg.mla_gdla_noise_heads:
                 attn_gate = (
@@ -2431,7 +2425,7 @@ class CausalSelfAttention(eqx.Module):
                 attn_gate=attn_gate,
                 attn_gate_up=attn_gate_up,
                 sconv_k=(
-                    ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl)
+                    ShortConv.init((1 if cfg.mla_shared_kv else n) * h, cfg.sconv_kernel, cfg.sconv_impl)
                     if cfg.sconv and "k" in cfg.sconv_sites
                     else None
                 ),
@@ -2471,7 +2465,7 @@ class CausalSelfAttention(eqx.Module):
                     if kv_mix
                     else None
                 ),
-                w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
+                w_uk=reshard(_init_weight(k_uk, (kvl, (1 if cfg.mla_shared_kv else n) * h), std), P(None, "model")),
                 match_up=(
                     reshard(_init_weight(random.fold_in(k_uk, 7), (kvl, match_dim), std), P(None, None))
                     if match_dim
@@ -2775,6 +2769,9 @@ class CausalSelfAttention(eqx.Module):
             lam = self.ve_lambda.astype(x.dtype)
             ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
+        if self.cfg.mla_shared_kv:  # one K / V head for every query head
+            spec = _partition_spec_of(q)
+            k, v = (reshard(jnp.broadcast_to(t, (*t.shape[:2], q.shape[2], t.shape[3])), spec) for t in (k, v))
         return q, k, v, second_qk, match
 
     def _gqa_qkv(
@@ -3164,9 +3161,13 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     gauss = getattr(layer.attn, "gauss", None)
     if gauss is not None:  # per-head shift and width of the value kernel
         sigma = jax.nn.softplus(gauss.rho.astype(jnp.float32)) + 0.05
-        for h in range(gauss.mu.shape[0]):
-            stats[f"attn_res_knob_gauss_mu_L{i}_H{h}"] = jax.lax.stop_gradient(gauss.mu[h]).astype(jnp.float32)
-            stats[f"attn_res_knob_gauss_sigma_L{i}_H{h}"] = jax.lax.stop_gradient(sigma[h])
+        weight = jax.nn.softmax(gauss.mix.astype(jnp.float32), axis=-1)
+        for (h, c), _ in np.ndenumerate(np.zeros(gauss.mu.shape)):
+            tag = f"L{i}_H{h}" + (f"_C{c}" if gauss.mu.shape[1] > 1 else "")
+            stats[f"attn_res_knob_gauss_mu_{tag}"] = jax.lax.stop_gradient(gauss.mu[h, c]).astype(jnp.float32)
+            stats[f"attn_res_knob_gauss_sigma_{tag}"] = jax.lax.stop_gradient(sigma[h, c])
+            if gauss.mu.shape[1] > 1:
+                stats[f"attn_res_knob_gauss_weight_{tag}"] = jax.lax.stop_gradient(weight[h, c])
     router_tok_b = getattr(layer.mlp, "router_tok_b", None)
     if router_tok_b is not None:
         stats[f"attn_res_knob_router_tok_b_norm_L{i}"] = jnp.linalg.norm(

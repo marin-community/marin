@@ -67,11 +67,13 @@ class Compose(NamedTuple):
 
 
 class Gauss(eqx.Module):
-    """Per-head Gaussian value kernel: shift ``mu`` (tokens, positive = later) and width ``softplus(rho) + 0.05``;
-    ``qscale``: the tied query's per-head scale (``mla_gauss_tied``). Trained with Adam (``.gauss.``)."""
+    """Per-head value kernel, a mixture of ``C`` Gaussians: shifts ``mu`` ``[H, C]`` (tokens, positive = later),
+    widths ``softplus(rho) + 0.05`` and weights ``softmax(mix)``; ``qscale``: the tied query's per-head scale
+    (``mla_gauss_tied``). Trained in the ``dcmha`` group (``.gauss.``)."""
 
     mu: jax.Array
     rho: jax.Array
+    mix: jax.Array
     qscale: jax.Array | None
 
 
@@ -87,9 +89,11 @@ class GaussValues(NamedTuple):
 def gauss_values(g: Gauss, v: jax.Array, segment_ids: jax.Array, reach: int) -> GaussValues:
     """Smooth each head's values along the sequence: ``smooth_j = sum_o G(o) v_{j+o}`` within the document."""
     offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
-    sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05
-    centred = offsets[None, :] - g.mu.astype(jnp.float32)[:, None]
-    kernel = jax.nn.softmax(-jnp.square(centred) / (2 * sigma[:, None] ** 2), axis=-1)
+    sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05  # [H, C]
+    centred = offsets[None, None, :] - g.mu.astype(jnp.float32)[..., None]
+    components = jax.nn.softmax(-jnp.square(centred) / (2 * sigma[..., None] ** 2), axis=-1)  # [H, C, 2K + 1]
+    weights = jax.nn.softmax(g.mix.astype(jnp.float32), axis=-1)  # [H, C]
+    kernel = jnp.einsum("hc,hco->ho", weights, components)
     vf = v.astype(jnp.float32)
     ones = jnp.ones(v.shape[:3], jnp.float32)
     smooth = jnp.zeros_like(vf)
@@ -650,12 +654,15 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
 
 
 def _gauss_init(cfg, heads: int) -> Gauss:
-    mu = jnp.asarray(cfg.mla_gauss_mu_init if cfg.mla_gauss_mu_init else (0.0,) * heads, jnp.float32)
-    if mu.shape != (heads,):
-        raise ValueError(f"mla_gauss_mu_init needs one entry per head ({heads}), got {cfg.mla_gauss_mu_init}")
-    rho = jnp.full((heads,), math.log(math.expm1(cfg.mla_gauss_sigma_init - 0.05)), jnp.float32)
+    c = cfg.mla_gauss_components
+    mu = jnp.asarray(cfg.mla_gauss_mu_init if cfg.mla_gauss_mu_init else (0.0,) * (heads * c), jnp.float32)
+    if mu.shape != (heads * c,):
+        raise ValueError(
+            f"mla_gauss_mu_init needs heads x components ({heads * c}) entries, got {cfg.mla_gauss_mu_init}"
+        )
+    rho = jnp.full((heads, c), math.log(math.expm1(cfg.mla_gauss_sigma_init - 0.05)), jnp.float32)
     qscale = jnp.full((heads,), cfg.qk_mult, jnp.float32) if cfg.mla_gauss_tied else None
-    return Gauss(mu=mu, rho=rho, qscale=qscale)
+    return Gauss(mu=mu.reshape(heads, c), rho=rho, mix=jnp.zeros((heads, c), jnp.float32), qscale=qscale)
 
 
 def _dcmha_paper_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int, static: str) -> DcmhaPaper:
