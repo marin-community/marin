@@ -32,6 +32,7 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, RUN_COMMAND, START_COMMAND, STOP_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
@@ -122,7 +123,19 @@ class DaytonaMachine:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
-        argv = command.argv
+        pidfile = f"{prefix}-pid"
+        argv = (
+            "sh",
+            "-c",
+            START_COMMAND,
+            "shellbox-start",
+            "sh",
+            "-c",
+            RUN_COMMAND,
+            "shellbox-command",
+            pidfile,
+            *command.argv,
+        )
         if command.user not in (None, "root", "0"):
             user = command.user
             # su accepts names. Resolve a numeric UID in the guest's account database.
@@ -131,7 +144,7 @@ class DaytonaMachine:
                 if account.exit_code or not account.result.strip():
                     raise ValueError(f"Execution user {user} has no guest account")
                 user = account.result.split(":", 1)[0]
-            argv = ("su", "-s", "/bin/sh", "-m", user, "-c", shlex.join(command.argv))
+            argv = ("su", "-s", "/bin/sh", "-m", user, "-c", shlex.join(argv))
         script = (
             f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
@@ -158,7 +171,16 @@ class DaytonaMachine:
                 ExitReason.EXITED,
             )
         except TimeoutError:
-            await self.close()
+            try:
+                async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                    stopped = await self.sandbox.process.exec(
+                        shlex.join(("sh", "-c", STOP_COMMAND, "stop-command", pidfile))
+                    )
+                    if stopped.exit_code:
+                        raise RuntimeError(stopped.result)
+            except Exception as error:
+                await self.close()
+                raise RuntimeError("Cannot stop the Daytona command process group") from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError:
             await self.close()
@@ -166,7 +188,8 @@ class DaytonaMachine:
         finally:
             if not self._closed:
                 await self.sandbox.process.exec(
-                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
+                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)} "
+                    f"{shlex.quote(pidfile)}"
                 )
 
     async def upload(self, source: Path, target: str) -> None:
@@ -282,6 +305,9 @@ class DaytonaMachineFactory:
                     timeout=timeout,
                 )
             lifetime.push_async_callback(client.delete, sandbox)
+            prepared = await sandbox.process.exec("command -v setsid", timeout=INTERRUPT_TIMEOUT)
+            if prepared.exit_code:
+                raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
             machine = DaytonaMachine(sandbox, spec, lifetime)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/"))

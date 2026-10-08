@@ -52,6 +52,11 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
+Daytona task images require `setsid` for command timeout recovery.
+A command timeout stops its process group and preserves the sandbox for later commands.
+If the stop command fails or times out, the adapter raises an infrastructure error and closes the sandbox.
+Caller cancellation also closes the sandbox.
+
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
 Each machine owns and closes its client. The factory creates sandboxes from shared

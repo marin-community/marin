@@ -5,6 +5,8 @@
 
 import asyncio
 import os
+import shutil
+import signal
 import stat
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -19,7 +21,7 @@ from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import Command, ExitReason, MachineSpec, UnsupportedMachineSpec
 
 
 class LocalFiles:
@@ -33,6 +35,9 @@ class LocalFiles:
 
 
 class LocalProcess:
+    def __init__(self):
+        self.processes = []
+
     async def exec(self, command: str, cwd: str | None = None, env: dict[str, str] | None = None, timeout=None):
         process = await asyncio.create_subprocess_shell(
             command,
@@ -40,9 +45,20 @@ class LocalProcess:
             env={**os.environ, **(env or {})},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
+        self.processes.append(process)
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
         return SimpleNamespace(exit_code=process.returncode, result=stdout.decode(errors="replace"))
+
+    async def close(self):
+        for process in self.processes:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            await process.wait()
 
 
 class LocalSnapshots:
@@ -78,6 +94,7 @@ class LocalDaytona:
 
     async def delete(self, sandbox):
         assert sandbox is self.sandbox
+        await sandbox.process.close()
         self.deleted = True
 
     async def __aenter__(self):
@@ -139,6 +156,69 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
             await machine.close()
         assert client.deleted
         assert client.closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
+def test_daytona_command_timeout_stops_descendants_and_preserves_next_command(tmp_path):
+    async def scenario():
+        client = LocalDaytona()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            await machine.run(Command(("sh", "-c", "echo 12 > answer")))
+            result = await machine.run(Command(("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"), timeout=0.5))
+            assert result.reason is ExitReason.TIMED_OUT
+            child = int((tmp_path / "child.pid").read_text())
+            stopped = await machine.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
+                        'test "$state" = Z; fi',
+                        "child-state",
+                        str(child),
+                    )
+                )
+            )
+            assert stopped.exit_code == 0
+            graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
+            assert (graded.exit_code, graded.stdout) == (0, b"1.0")
+            assert not client.deleted and not client.closed
+        finally:
+            await machine.close()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout"])
+def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, interrupt_failure):
+    class FailedStop(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "candidate-block" in command:
+                raise TimeoutError("Command deadline expired")
+            if "stop-command" in command:
+                if interrupt_failure == "timeout":
+                    raise TimeoutError("Provider interruption timed out")
+                return SimpleNamespace(exit_code=1, result="Cannot stop the process group")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = FailedStop()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        with pytest.raises(RuntimeError) as failure:
+            await machine.run(Command(("candidate-block",), timeout=0.01))
+        assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+        assert client.deleted and client.closed
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
 
     asyncio.run(scenario())
 
