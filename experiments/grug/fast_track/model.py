@@ -1010,6 +1010,7 @@ class GrugModelConfig:
     """Full DCMHA (``sparse_attention.Dcmha``) on the MLA layers; needs ``mla_sparse_window`` (the emulation)."""
     mla_dcmha_rank: int = 2
     mla_dcmha_hidden: int = 64
+    mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
     mla_sparse_tail: bool = True
     """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""

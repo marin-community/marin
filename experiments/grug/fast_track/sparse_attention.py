@@ -66,6 +66,14 @@ class Compose(NamedTuple):
     offset_mask: jax.Array  # [H, D] channels whose key is the previous token's
 
 
+class DcmhaMode(NamedTuple):
+    """Which DCMHA parts run (static)."""
+
+    pre: bool = True
+    post: bool = True
+    dynamic: bool = True
+
+
 class DcmhaWeights(NamedTuple):
     """DCMHA's per-token composition weights (``dcmha_weights``), one set per side (query ``q``, key ``k``):
     ``[B, S, 2 (pre/post), H, R]`` low-rank factors ``f1`` / ``f2`` and ``[B, S, 2, H]`` gates; plus the static
@@ -80,7 +88,7 @@ class DcmhaWeights(NamedTuple):
     kg: jax.Array
 
 
-def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: int) -> jax.Array:
+def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: int, dynamic: bool) -> jax.Array:
     """DCMHA ``Compose`` (arXiv 2405.08553 eq. 4) of one chunk's ``[B, H, C, S]`` scores or probabilities:
     ``a'_h = sum_g a_g (W_gh + sum_r q1_gr q2_hr + sum_r k1_gr k2_hr) + a_h (tanh qg_h + tanh kg_h)`` with the
     query-wise terms from query ``i`` and the key-wise terms from key ``j``."""
@@ -88,6 +96,8 @@ def _dcmha_compose(a: jax.Array, dw: DcmhaWeights, stage: int, c0: int, chunk: i
     q1, q2, qg = take(dw.q1), take(dw.q2), take(dw.qg)  # [B, C, H, R], [B, C, H]
     k1, k2, kg = (x[:, :, stage].astype(jnp.float32) for x in (dw.k1, dw.k2, dw.kg))  # [B, S, H, R], [B, S, H]
     out = jnp.einsum("bgqk,gh->bhqk", a, dw.static[stage].astype(jnp.float32))
+    if not dynamic:
+        return out
     out = out + jnp.einsum("bgqk,bqgr,bqhr->bhqk", a, q1, q2)
     out = out + jnp.einsum("bgqk,bkgr,bkhr->bhqk", a, k1, k2)
     gate = jnp.tanh(qg).transpose(0, 2, 1)[..., None] + jnp.tanh(kg).transpose(0, 2, 1)[:, :, None, :]
@@ -146,6 +156,7 @@ def _sparse_math(
     *,
     spec: "IndexSpec",
     tap_offsets: tuple[int, ...],
+    dcmha_mode: "DcmhaMode",
     window: int,
     topk: int,
     dsa_topk: int,
@@ -267,12 +278,12 @@ def _sparse_math(
             allowed = chosen | sink
         else:
             logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
-        if dcmha is not None:
-            logits = _dcmha_compose(logits, dcmha, 0, c0, chunk)
+        if dcmha is not None and dcmha_mode.pre:
+            logits = _dcmha_compose(logits, dcmha, 0, c0, chunk, dcmha_mode.dynamic)
         dense = logits
         logits = jnp.where(allowed, logits, -1e9)
-        if dcmha is not None:
-            weights = _dcmha_compose(jax.nn.softmax(logits, axis=-1), dcmha, 1, c0, chunk)
+        if dcmha is not None and dcmha_mode.post:
+            weights = _dcmha_compose(jax.nn.softmax(logits, axis=-1), dcmha, 1, c0, chunk, dcmha_mode.dynamic)
             out = jnp.einsum("bhqk,bkhd->bqhd", weights, v.astype(jnp.float32)).astype(v.dtype)
         elif compress:
             joint = jax.nn.softmax(jnp.concatenate([logits, c_logits], axis=-1), axis=-1)
@@ -331,6 +342,7 @@ def sparse_index_attention(
     dsa_topk: int = 0,
     spec: IndexSpec = IndexSpec(),
     tap_offsets: tuple[int, ...] = (),
+    dcmha_mode: DcmhaMode = DcmhaMode(),
     select_match: bool = False,
     block: int = 32,
     compress: bool = False,
@@ -346,6 +358,7 @@ def sparse_index_attention(
         dsa_topk=dsa_topk,
         spec=spec,
         tap_offsets=tap_offsets,
+        dcmha_mode=dcmha_mode,
         select_match=select_match,
         block=block,
         compress=compress,
@@ -414,6 +427,11 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         window=cfg.mla_sparse_window,
         spec=spec,
         tap_offsets=cfg.mla_sparse_taps,
+        dcmha_mode=DcmhaMode(
+            pre="pre" in cfg.mla_dcmha_parts,
+            post="post" in cfg.mla_dcmha_parts,
+            dynamic="dynamic" in cfg.mla_dcmha_parts,
+        ),
         topk=0 if dsa_first else cfg.mla_sparse_topk,
         dsa_topk=cfg.mla_sparse_topk if dsa_first else cfg.mla_sparse_dsa_topk,
         select_match=cfg.mla_sparse_select_match,
