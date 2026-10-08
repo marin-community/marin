@@ -61,6 +61,16 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
+async def _run_setup_commands(machine: Machine, commands: tuple[str, ...], timeout: float | None, label: str) -> None:
+    """Run trusted shell commands in order as root; raise on the first timeout or failure."""
+    for command in commands:
+        result = await machine.run(Command(("sh", "-c", command), timeout=timeout, user="0"))
+        if result.reason == ExitReason.TIMED_OUT:
+            raise TimeoutError(f"{label} command timed out")
+        if result.exit_code != 0:
+            raise RuntimeError(f"{label} command failed: {result.reason}, exit={result.exit_code}")
+
+
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
@@ -139,12 +149,7 @@ async def _prepare_machine(
             runtime, _machine_spec(requirements, runtime), factories, cleanup, owned, requirements
         )
         await _install_resources(machine, resources)
-        for command in requirements.setup_commands:
-            result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
-            if result.reason == ExitReason.TIMED_OUT:
-                raise TimeoutError("Environment setup command timed out")
-            if result.exit_code != 0:
-                raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
+        await _run_setup_commands(machine, requirements.setup_commands, runtime.startup_timeout, "Environment setup")
     return machine
 
 

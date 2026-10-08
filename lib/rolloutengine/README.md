@@ -13,6 +13,8 @@ The engine owns model calls, conversation and token accumulation, deadlines, and
 
 `ShellboxRolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
+`ShellboxRolloutEngine.grade_state(lowered, state)` grades a supplied final transcript and workspace
+with the same machine setup and grader, without model calls.
 The supported scope is single-stage tasks with prebuilt, digest-pinned images, local package-lock environments, or the built-in ShellSim filesystem.
 After the turn loop, the default session grades an in-process `VerifyitGrader` on the host.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.

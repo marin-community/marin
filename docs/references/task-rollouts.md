@@ -206,6 +206,39 @@ Shellbox's generic image-builder API remains available outside this task path.
 SWE tasks require prebuilt images and initialize `refs/taskcompendium/base` before inference.
 Patch collection compares the final index with that revision, including agent commits and new files.
 
+## Supplied-state grading
+
+`ShellboxRolloutEngine.grade_state(lowered, state)` grades a known final state without model calls.
+Task authors use it to check a grader against reference and wrong solutions before admitting a task.
+`SuppliedState` holds the graded conversation (`messages`), resources to install (`resources`), and
+shell commands to run (`commands`).
+
+The engine validates the lowered task and prepares the task machine as `run` does: task resources,
+then setup commands. It then installs `state.resources` relative to the machine root, so
+`workspace/answer` lands at `/workspace/answer` and can replace a file from setup. Next it runs
+`state.commands` in order as root with the session `command_timeout`. Grading uses the rollout's
+grading path, including `collect` commands, artifacts, and the separate verifier machine.
+The engine does not prepend the task messages. The conversation holds the prompt and ends with an
+assistant message; when the grader reads an extracted answer, that message is the submission in the
+task's `answer_format`.
+
+Only the Shellbox task session supports supplied-state grading. Resources or commands for a task
+without a task machine raise `ValueError` before startup. Supplied resources with `mtime_ns` on the
+built-in filesystem raise `NotImplementedError` before startup, as task resources do during lowering.
+
+Failures raise `RolloutInterrupted` with an empty rollout record and the operations of `run`:
+`start`, `prepare`, `grade`, and `attempt`. A failed or timed-out supplied resource or command uses
+the `state` operation. The attempt, verifier, and cleanup deadlines and the cleanup diagnostics
+match `run`.
+
+```python
+messages = ({"role": "user", "content": "Write 12 to /workspace/answer."}, {"role": "assistant", "content": "Done."})
+grade = await engine.grade_state(
+    lowered, SuppliedState(messages, resources=(inline_resource("workspace/answer", b"12"),))
+)
+assert (grade.status, grade.reward) == (Outcome.GRADED, 1.0)
+```
+
 ## Exact-token contract
 
 The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and exact served token IDs.

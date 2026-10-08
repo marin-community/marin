@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
+from taskcompendium.models import TaskResource
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
@@ -89,8 +90,27 @@ class RolloutOperation(StrEnum):
     PREPARE = "prepare"
     MODEL = "model"
     ADVANCE = "advance"
+    STATE = "state"
     GRADE = "grade"
     CLEANUP = "cleanup"
+
+
+@dataclass(frozen=True)
+class SuppliedState:
+    """A final task state that ``ShellboxRolloutEngine.grade_state`` grades without model inference.
+
+    Attributes:
+        messages: The exact conversation the grader receives: the prompt, then turns ending with
+            an assistant message, which is the submission when the grader reads one.
+        resources: Files installed relative to the machine root after task resources and setup
+            commands, so ``workspace/answer`` lands at ``/workspace/answer``.
+        commands: Shell commands run in order as root after the resources, for state that is
+            not a file.
+    """
+
+    messages: tuple[dict[str, Any], ...]
+    resources: tuple[TaskResource, ...] = ()
+    commands: tuple[str, ...] = ()
 
 
 class RolloutInterrupted(RuntimeError):

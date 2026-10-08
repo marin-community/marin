@@ -4,9 +4,10 @@
 """Rollout iteration, cancellation, and model execution."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
+from functools import partial
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -26,11 +27,12 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     RolloutStep,
+    SuppliedState,
     TaskSession,
     Transition,
 )
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
-from rolloutengine.machines import _prepare_machine
+from rolloutengine.machines import _install_resources, _prepare_machine, _run_setup_commands
 from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.task_session import _ShellboxTaskSession
 
@@ -65,6 +67,44 @@ class ShellboxRolloutEngine:
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
+        return await self._attempt(lowered, partial(self._run_task, lowered))
+
+    async def grade_state(self, lowered: LoweredTaskSpec, state: SuppliedState) -> GradeResult:
+        """Grade a supplied final state with the task's grader, without model inference.
+
+        The engine prepares the task machine as `run` does, installs `state.resources`, runs
+        `state.commands`, then grades `state.messages` through the rollout's grading path,
+        including a separate verifier machine. The attempt, verifier, and cleanup deadlines and
+        the cleanup diagnostics match `run`.
+
+        Raises:
+            ValueError: The task needs a registered task session, or a task without a task
+                machine receives resources or commands.
+            NotImplementedError: A supplied resource has a timestamp the built-in filesystem
+                cannot preserve.
+            RolloutInterrupted: Execution failed, as in `run`, with an empty rollout record. The
+                `state` operation means a supplied resource or command failed.
+        """
+        validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
+        if lowered.session.task_session != SHELLBOX_SESSION:
+            raise ValueError("Supplied-state grading requires the Shellbox task session")
+        if lowered.runtime.task_machine is None and (state.resources or state.commands):
+            raise ValueError("A task without a task machine cannot receive state resources or commands")
+        if lowered.task.environment_requirements.docker_image is None and any(
+            resource.mtime_ns is not None for resource in state.resources
+        ):
+            raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
+        record = await self._attempt(
+            lowered, lambda resources, cleanup, _attempt: self._grade_state(lowered, state, resources, cleanup)
+        )
+        return record.grade
+
+    async def _attempt(
+        self,
+        lowered: LoweredTaskSpec,
+        body: Callable[[AsyncExitStack, _Cleanup, asyncio.Timeout], Coroutine[None, None, RolloutData]],
+    ) -> RolloutData:
+        """Run `body` under the attempt deadline, release its resources, and report cleanup errors."""
         deadline = asyncio.timeout(lowered.session.attempt_timeout)
         cleanup = _Cleanup(lowered.session.cleanup_timeout)
         operation = None
@@ -72,7 +112,7 @@ class ShellboxRolloutEngine:
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    record = await self._run_task(lowered, resources, cleanup, deadline)
+                    record = await body(resources, cleanup, deadline)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
@@ -97,12 +137,12 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(record, operation) from cause
         return record
 
-    async def _run_task(
-        self, lowered: LoweredTaskSpec, resources: AsyncExitStack, cleanup: _Cleanup, attempt: asyncio.Timeout
-    ) -> RolloutData:
+    async def _start_machine(
+        self, lowered: LoweredTaskSpec, resources: AsyncExitStack, cleanup: _Cleanup
+    ) -> Machine | None:
         task = lowered.task
         try:
-            machine = await _prepare_machine(
+            return await _prepare_machine(
                 task.environment_requirements,
                 lowered.runtime.task_machine,
                 task.resources.all + task.resources.worker,
@@ -112,6 +152,41 @@ class ShellboxRolloutEngine:
             )
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+
+    async def _grade_state(
+        self, lowered: LoweredTaskSpec, state: SuppliedState, resources: AsyncExitStack, cleanup: _Cleanup
+    ) -> RolloutData:
+        empty = _empty_rollout(lowered.task)
+        machine = await self._start_machine(lowered, resources, cleanup)
+        session = _ShellboxTaskSession(lowered, machine, self.factories, cleanup, resources)
+        resources.push_async_callback(cleanup.run, "session_close", session.close)
+        try:
+            await session.prepare()
+        except Exception as error:
+            raise RolloutInterrupted(empty, RolloutOperation.PREPARE) from error
+        if machine is not None:
+            try:
+                await _install_resources(machine, state.resources)
+                await _run_setup_commands(machine, state.commands, lowered.session.command_timeout, "Supplied state")
+            except Exception as error:
+                raise RolloutInterrupted(empty, RolloutOperation.STATE) from error
+        try:
+            async with asyncio.timeout(lowered.session.verifier_timeout):
+                grade = await session.grade(state.messages)
+        except TimeoutError as error:
+            timed_out = GradeResult(
+                Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
+            )
+            raise RolloutInterrupted(replace(empty, grade=timed_out), RolloutOperation.GRADE) from error
+        except Exception as error:
+            raise RolloutInterrupted(empty, RolloutOperation.GRADE) from error
+        return replace(empty, messages=state.messages, grade=grade)
+
+    async def _run_task(
+        self, lowered: LoweredTaskSpec, resources: AsyncExitStack, cleanup: _Cleanup, attempt: asyncio.Timeout
+    ) -> RolloutData:
+        task = lowered.task
+        machine = await self._start_machine(lowered, resources, cleanup)
         try:
             if lowered.session.task_session == SHELLBOX_SESSION:
                 session = _ShellboxTaskSession(lowered, machine, self.factories, cleanup, resources)
