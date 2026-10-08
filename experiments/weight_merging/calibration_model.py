@@ -43,8 +43,8 @@ class FrozenGrugBank:
     """
 
     def __init__(self, sources: list[CheckpointSource], config: dict, devices: tuple[torch.device, ...]):
-        if len(sources) != 3 or not devices:
-            raise ValueError("Provide Step92, Step12, Step20 and at least one device")
+        if not sources or not devices:
+            raise ValueError("Provide checkpoint sources and at least one device")
         grug = import_module("skyrl_train.models.grug_moe")
         model_config = grug.GrugMoeConfig(**config)
         model_config._attn_implementation = "eager"
@@ -87,6 +87,11 @@ class FrozenGrugBank:
         if name.startswith(("model.embed_tokens", "model.embed_norm", "model.embed_gated_norm")):
             return self.devices[0]
         return self.devices[-1]
+
+    def enable_grouped_experts(self) -> None:
+        grug = import_module("skyrl_train.models.grug_moe")
+        changed = grug.enable_grug_grouped_mm(self.model)
+        assert changed == self.layer_count
 
     def frozen_weights(self, source: int) -> dict[str, torch.Tensor]:
         return {name: tensor.to(self.device_for(name)) for name, tensor in self.states[source].items()}

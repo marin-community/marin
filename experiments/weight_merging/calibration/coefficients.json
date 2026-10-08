@@ -1,0 +1,167 @@
+{
+  "sources": [
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92_fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab-c869d77c2f029573",
+      "revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+      "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04_fd07ef0f2b78a83099a0042e59c00de986e7b647-7774bde0c20b769f",
+      "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
+    }
+  ],
+  "data": "experiments/weight_merging/calibration/examples.jsonl",
+  "data_sha256": "7c7f3acf2f4a0ebd48a64987f0890f1cfc177aa24546c54168ef6af6a469924c",
+  "gpus": 8,
+  "threads": 16,
+  "max_length": 2048,
+  "max_positions": 64,
+  "block_elements": 1048576,
+  "mode": "coefficients",
+  "experiments": [
+    {
+      "seed": 42,
+      "initial": {
+        "shared": [
+          1.0,
+          0.0
+        ],
+        "attention": [
+          0.0,
+          0.1
+        ],
+        "router": [
+          0.0,
+          0.1
+        ],
+        "routed": [
+          0.0,
+          0.1
+        ]
+      },
+      "warmup_steps": 24,
+      "train_steps": 96,
+      "chunk_budget": 416,
+      "learning_rate": 0.02,
+      "domain_weights": {
+        "numeric": 1.0,
+        "tools": 1.0,
+        "retention": 0.25
+      },
+      "hidden_weight": 0.1,
+      "logit_weight": 1.0,
+      "regularization": 0.01,
+      "gradient_clip": 1.0,
+      "name": "expertpp-balanced"
+    },
+    {
+      "seed": 42,
+      "initial": {
+        "shared": [
+          1.0,
+          0.0
+        ],
+        "attention": [
+          0.0,
+          0.1
+        ],
+        "router": [
+          0.0,
+          0.1
+        ],
+        "routed": [
+          0.0,
+          0.1
+        ]
+      },
+      "warmup_steps": 24,
+      "train_steps": 96,
+      "chunk_budget": 416,
+      "learning_rate": 0.02,
+      "domain_weights": {
+        "numeric": 1.0,
+        "tools": 2.0,
+        "retention": 0.25
+      },
+      "hidden_weight": 0.1,
+      "logit_weight": 1.0,
+      "regularization": 0.01,
+      "gradient_clip": 1.0,
+      "name": "expertpp-tools"
+    },
+    {
+      "seed": 42,
+      "initial": {
+        "shared": [
+          1.0,
+          0.0
+        ],
+        "attention": [
+          0.0,
+          0.1
+        ],
+        "router": [
+          0.0,
+          0.1
+        ],
+        "routed": [
+          0.0,
+          0.1
+        ]
+      },
+      "warmup_steps": 24,
+      "train_steps": 96,
+      "chunk_budget": 416,
+      "learning_rate": 0.02,
+      "domain_weights": {
+        "numeric": 1.0,
+        "tools": 1.0,
+        "retention": 0.25
+      },
+      "hidden_weight": 1.0,
+      "logit_weight": 1.0,
+      "regularization": 0.01,
+      "gradient_clip": 1.0,
+      "name": "expertpp-hidden"
+    },
+    {
+      "seed": 42,
+      "initial": {
+        "shared": [
+          1.0,
+          0.0
+        ],
+        "attention": [
+          0.0,
+          0.1
+        ],
+        "router": [
+          0.0,
+          0.1
+        ],
+        "routed": [
+          0.0,
+          0.1
+        ]
+      },
+      "warmup_steps": 24,
+      "train_steps": 96,
+      "chunk_budget": 832,
+      "learning_rate": 0.02,
+      "domain_weights": {
+        "numeric": 1.0,
+        "tools": 1.0,
+        "retention": 0.25
+      },
+      "hidden_weight": 0.1,
+      "logit_weight": 1.0,
+      "regularization": 0.001,
+      "gradient_clip": 1.0,
+      "name": "expertpp-fine"
+    }
+  ],
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/calibration/expertpp-v1"
+}

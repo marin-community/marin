@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04_fd07ef0f2b78a83099a0042e59c00de986e7b647-7774bde0c20b769f",
+      "revision": "fd07ef0f2b78a83099a0042e59c00de986e7b647"
+    }
+  ],
+  "data": "experiments/weight_merging/calibration/examples.jsonl",
+  "data_sha256": "7c7f3acf2f4a0ebd48a64987f0890f1cfc177aa24546c54168ef6af6a469924c",
+  "gpus": 8,
+  "threads": 16,
+  "max_length": 2048,
+  "max_positions": 64,
+  "block_elements": 1048576,
+  "mode": "moments",
+  "domain": "tools",
+  "output": "s3://marin-us-east-02a/marin/experiments/weight-merging-20261007/calibration/moments-step20-v1"
+}

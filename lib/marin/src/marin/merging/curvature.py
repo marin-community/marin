@@ -12,7 +12,7 @@ def fisher_graft_mask(delta: torch.Tensor, second_moment: torch.Tensor, density:
     """Select the highest curvature-weighted edit saliencies within one tensor.
 
     Tensor-local selection is an explicit adaptation of global FFG selection.
-    Zero-saliency coordinates are never selected, including at full density.
+    Full density preserves all updates, including coordinates with zero moment.
     """
     if not 0 < density <= 1:
         raise ValueError("Density must be in (0, 1]")
@@ -24,12 +24,12 @@ def fisher_graft_mask(delta: torch.Tensor, second_moment: torch.Tensor, density:
     if not torch.isfinite(saliency).all():
         raise ValueError("Nonfinite graft saliency")
     if density == 1:
-        return saliency > 0
+        return torch.ones_like(saliency, dtype=torch.bool)
     count = max(1, math.ceil(saliency.numel() * density))
     indices = torch.topk(saliency.flatten(), count, sorted=False).indices
     mask = torch.zeros(saliency.numel(), device=saliency.device, dtype=torch.bool)
     mask[indices] = True
-    return mask.reshape(saliency.shape) & (saliency > 0)
+    return mask.reshape(saliency.shape)
 
 
 def ota_merge_tensor(

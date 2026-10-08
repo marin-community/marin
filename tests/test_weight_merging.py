@@ -227,3 +227,14 @@ def test_learned_blend_uneven_chunks_use_every_coefficient():
     result.sum().backward()
     torch.testing.assert_close(result, torch.tensor([1.0, 4.0, 9.0, 12.0]), rtol=0, atol=0)
     torch.testing.assert_close(coefficients.grad, torch.tensor([[1.0], [2.0], [7.0]]), rtol=0, atol=0)
+
+
+def test_curvature_full_density_preserves_updates_without_measured_moment():
+    result = ota_merge_tensor(
+        torch.tensor([10.0]),
+        [torch.tensor([12.0]), torch.tensor([16.0])],
+        [torch.zeros(1), torch.zeros(1)],
+        density=1.0,
+        epsilon=1e-6,
+    )
+    torch.testing.assert_close(result, torch.tensor([14.0]), rtol=0, atol=0)
