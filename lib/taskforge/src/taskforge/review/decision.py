@@ -22,7 +22,8 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from taskforge.canonical import pretty_json, write_atomic
+from taskforge.atomic_file import write_atomic
+from taskforge.content_hash import pretty_json
 from taskforge.validate.calibration import CalibrationSummary, Finding, FindingKind
 from taskforge.validate.outcome import Cause
 
