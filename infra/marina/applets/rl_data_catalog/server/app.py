@@ -215,10 +215,12 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     current_data = row.get("dataset_revision") or row.get("revision")
     grading_revision = row.get("grading_revision")
     binding_valid = grading_binding_valid(record, row)
+    grading_enrolled = record.get("grading_enrolled", bool(grading_revision))
+    row["grading_tracking"] = "source-specific" if grading_enrolled else "legacy"
     row["review_grading_revision"] = grading_revision if binding_valid else None
     verifier_changed = (
         not binding_valid
-        if grading_revision
+        if grading_enrolled
         else row["review_verifier_revision"] is not None
         and row["review_verifier_revision"] != row.get("verifier_revision")
     )
@@ -438,6 +440,42 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
     return {"busy": False, "results": results}
 
 
+def reviewed_sources(connection: Connection) -> list[dict[str, Any]]:
+    """Read active sources with their review and grading applicability evidence."""
+    return [
+        source_with_review(dict(row))
+        for row in connection.execute(
+            text(
+                """
+                SELECT s.*, a.content AS difficulty_report,
+                EXISTS (SELECT 1 FROM catalog_grading_reviews h
+                    WHERE h.source_id = s.id) AS grading_enrolled,
+                to_jsonb(g) AS grading_binding,
+                CASE WHEN p.path IS NOT NULL THEN jsonb_build_object(
+                    'content', p.content, 'sha256', p.sha256
+                ) END AS grading_proof, COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'issue_url', i.issue_url, 'review_id', i.review_id,
+                        'status', i.status, 'created_at', i.created_at
+                    ) ORDER BY i.created_at)
+                    FROM catalog_verifier_issues i
+                    WHERE i.source_id = s.id AND i.status = 'open'
+                ), '[]'::jsonb) AS verifier_issues
+                FROM catalog_sources s LEFT JOIN review_artifacts a
+                ON a.review_id = s.review_id AND a.path = 'difficulty.json'
+                LEFT JOIN catalog_grading_reviews g ON g.source_id = s.id
+                AND g.review_id = s.review_id
+                AND g.source_revision = s.review_source_revision
+                AND g.grading_revision = s.payload->>'grading_revision'
+                LEFT JOIN review_artifacts p ON p.review_id = g.review_id
+                AND p.path = g.evidence_path
+                WHERE s.active ORDER BY s.origin, s.id
+            """
+            )
+        ).mappings()
+    ]
+
+
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
@@ -445,36 +483,7 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
-            rows = [
-                source_with_review(dict(row))
-                for row in connection.execute(
-                    text(
-                        """
-                        SELECT s.*, a.content AS difficulty_report,
-                        to_jsonb(g) AS grading_binding,
-                        CASE WHEN p.path IS NOT NULL THEN jsonb_build_object(
-                            'content', p.content, 'sha256', p.sha256
-                        ) END AS grading_proof, COALESCE((
-                            SELECT jsonb_agg(jsonb_build_object(
-                                'issue_url', i.issue_url, 'review_id', i.review_id,
-                                'status', i.status, 'created_at', i.created_at
-                            ) ORDER BY i.created_at)
-                            FROM catalog_verifier_issues i
-                            WHERE i.source_id = s.id AND i.status = 'open'
-                        ), '[]'::jsonb) AS verifier_issues
-                        FROM catalog_sources s LEFT JOIN review_artifacts a
-                        ON a.review_id = s.review_id AND a.path = 'difficulty.json'
-                        LEFT JOIN catalog_grading_reviews g ON g.source_id = s.id
-                        AND g.review_id = s.review_id
-                        AND g.source_revision = s.review_source_revision
-                        AND g.grading_revision = s.payload->>'grading_revision'
-                        LEFT JOIN review_artifacts p ON p.review_id = g.review_id
-                        AND p.path = g.evidence_path
-                        WHERE s.active ORDER BY s.origin, s.id
-                    """
-                    )
-                ).mappings()
-            ]
+            rows = reviewed_sources(connection)
             refreshes = [
                 dict(row)
                 for row in connection.execute(text("SELECT * FROM catalog_refreshes ORDER BY origin")).mappings()

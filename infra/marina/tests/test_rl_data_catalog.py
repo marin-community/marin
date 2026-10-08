@@ -22,6 +22,7 @@ from infra.marina.applets.rl_data_catalog.server.app import (
     difficulty_summary,
     migrate,
     refresh_catalog,
+    reviewed_sources,
     save_snapshot,
     source_with_review,
 )
@@ -348,6 +349,61 @@ def test_grading_equivalence_preserves_ratings_only_for_matching_immutable_evide
     assert row["difficulty"] == ("32/32" if change is None else None)
     assert row["review_verifier_revision"] == "old-package"
     assert row["review_id"] == "review1"
+
+
+def test_grading_migration_preserves_legacy_reviews_then_tracks_only_selected_grader(catalog_connection: Connection):
+    connection = catalog_connection
+    payload = {
+        "id": "MarinSkyRL:math",
+        "dataset_revision": "data1",
+        "verifier_revision": "raw1",
+        "grading_revision": "grader1",
+    }
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo1", "2026-10-08", [payload]))
+    connection.execute(
+        text(
+            "UPDATE catalog_sources SET quality='good',difficulty='32/32',review_id='review1',"
+            "review_source_revision='data1',review_verifier_revision='raw1'"
+        )
+    )
+    pending = reviewed_sources(connection)[0]
+    assert pending["quality"] == "good" and pending["grading_tracking"] == "legacy"
+    claim = {
+        "schema_version": 1,
+        "equivalent": True,
+        "source_id": payload["id"],
+        "review_id": "review1",
+        "source_revision": "data1",
+        "captured_verifier_revision": "raw1",
+        "grading_revision": "grader1",
+    }
+    content = json.dumps(claim)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    connection.execute(
+        text("INSERT INTO review_artifacts VALUES ('review1','proof.json',:content,:sha)"),
+        {"content": content, "sha": digest},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO catalog_grading_reviews VALUES "
+            "(:source,'review1','data1','raw1','grader1','proof.json',:sha)"
+        ),
+        {"source": payload["id"], "sha": digest},
+    )
+    payload["verifier_revision"] = "unrelated-package-change"
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo2", "2026-10-08", [payload]))
+    enrolled = reviewed_sources(connection)[0]
+    assert enrolled["quality"] == "good" and enrolled["grading_tracking"] == "source-specific"
+    payload["verifier_revision"] = "raw1"
+    payload["grading_revision"] = "grader2"
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo3", "2026-10-08", [payload]))
+    changed = reviewed_sources(connection)[0]
+    assert changed["review_stale"] and changed["quality"] is None
+    del payload["grading_revision"]
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo4", "2026-10-08", [payload]))
+    missing = reviewed_sources(connection)[0]
+    assert missing["review_stale"] and missing["quality"] is None
+    assert missing["review_id"] == "review1"
 
 
 @pytest.mark.parametrize("quality,revision", [("good", "data1"), ("some_issues", "data1"), ("good", "data2")])

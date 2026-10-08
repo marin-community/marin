@@ -230,9 +230,19 @@ these records into the review. The runner checks the
 environment again after execution. Publication requires the captured grading
 identity to match the current source. `experiments/rl_data_reviews/publish_review.py`
 archives the certificate as `publication/grading-applicability.json` and inserts
-its binding. Historical reuse requires separately archived evidence of equivalent
+its binding into `catalog_grading_reviews`, enrolling the source in source-specific
+tracking. Applying a historical quality rating to the current source requires
+separately archived evidence of equivalent
 selected code, prompt files, dependencies and source input contracts; it never
-rewrites the original review's executed revision.
+rewrites the original review's recorded execution-code or data revisions.
+Migration proceeds per source. Until its first grading binding is archived,
+`grading_tracking: legacy` keeps the existing data and verifier revision checks.
+After enrollment, `grading_tracking: source-specific` requires a matching grading
+proof for the source's displayed review. A changed or missing grading identity then makes
+the review stale even if its older repository-based verifier revision matches.
+Enrollment persists across replacement reviews. The migration audit must account
+for all active reviewed MarinSkyRL sources; superseded, unpublished and removed sources stay
+historical and do not require enrollment.
 Nemotron component identities and exact counts survive repository metadata changes
 when the selected blend file still matches the complete-file audit's SHA-256.
 The audit is bundled in `server/nemotron_counts.py` under the applet directory.
