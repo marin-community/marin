@@ -183,3 +183,8 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
+
+For Harbor runs using Daytona, also read the
+[Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md)
+before submission. It covers the dedicated RL credential, snapshot quota and
+authorized stale-resource reclamation, sandbox cleanup, and trial diagnostics.
