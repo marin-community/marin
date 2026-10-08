@@ -6,9 +6,9 @@
 ``/tests/config.json`` holds ``{"mode", "contract"}``: the NVARC record (``expected_output``, and
 ``test_input`` for inductive tasks). The submission is ``/app/solution.py`` when present, else
 ``/app/answer.txt``: a reply, or a file the agent wrote. A transductive submission is parsed as a
-grid. An inductive submission's ``transform`` runs on the test input in a fresh interpreter under uid
-65534 in the temporary directory; the script first makes the config readable by root alone, so the
-program cannot read the expected output.
+grid. An inductive submission's ``transform`` runs on the test input in a fresh interpreter in the
+temporary directory; the script deletes the config first, so the program cannot read the expected
+output. The grader itself runs in a sandbox, so the program needs no account of its own.
 """
 
 import json
@@ -22,7 +22,6 @@ from skyrl_gym.envs.nemotron_ultra.nvarc import grade_inductive_arc, grade_trans
 
 CONFIG = Path("/tests/config.json")
 SUBMISSIONS = (Path("/app/solution.py"), Path("/app/answer.txt"))
-UNPRIVILEGED_USER = 65534
 
 
 def submission() -> str:
@@ -38,9 +37,8 @@ def main() -> None:
     if mode == "transductive":
         reward, detail = grade_transductive_arc(submission(), record)
     elif mode == "inductive":
-        CONFIG.chmod(0o600)
-        sandbox = LocalSandbox(user=UNPRIVILEGED_USER)
-        reward, detail = grade_inductive_arc(submission(), record, sandbox=sandbox)
+        CONFIG.unlink()
+        reward, detail = grade_inductive_arc(submission(), record, sandbox=LocalSandbox())
     else:
         raise ValueError(f"Unknown ARC mode: {mode}")
     print(json.dumps(detail, default=str), file=sys.stderr)
