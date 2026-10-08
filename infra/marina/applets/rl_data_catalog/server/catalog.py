@@ -4,6 +4,8 @@
 """Read public source catalogs without executing upstream code or downloading tasks."""
 
 import ast
+import hashlib
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -13,6 +15,7 @@ from typing import Any
 import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
+from .registered_sources import REGISTERED_ORIGIN, RegisteredSource, ReleaseHost
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -40,7 +43,7 @@ TASKTROVE_CLASSIFICATION = {
 class Snapshot:
     origin: str
     revision: str
-    revised_at: str
+    revised_at: str | None
     rows: list[dict[str, Any]]
 
 
@@ -331,6 +334,8 @@ def set_count_metadata(
 
 def annotate_source(row: dict[str, Any]) -> None:
     """Apply audited classifications and canonical names without changing source IDs."""
+    if row["origin"] == REGISTERED_ORIGIN:
+        return
     if row["origin"] == TASKTROVE_ORIGIN:
         row["display_name"] = row["name"].replace("__", "/", 1)
         row.update(
@@ -565,3 +570,69 @@ def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapsh
     if sum(row["task_count"] for row in rows) != manifest["clean_tasks"]:
         raise ValueError("Task Trove source counts disagree with release total")
     return Snapshot(TASKTROVE_ORIGIN, info["sha"], info["lastModified"], rows)
+
+
+def registered_snapshot(sources: tuple[RegisteredSource, ...]) -> Snapshot:
+    """Project pinned releases into Atlas without contacting their storage hosts."""
+    sources = tuple(sorted(sources, key=lambda source: source.name))
+    if len({source.name for source in sources}) != len(sources):
+        raise ValueError("Registered releases contain duplicate source names")
+    rows = []
+    for source in sources:
+        release = source.release
+        pin_pattern = r"sha256:[0-9a-f]{64}" if release.host == ReleaseHost.HARBOR_HUB else r"[0-9a-f]{40}"
+        if not re.fullmatch(pin_pattern, release.revision):
+            raise ValueError(f"{source.name}: pin an immutable {release.host} release revision")
+        if not source.counts or len(dict(source.counts)) != len(source.counts):
+            raise ValueError(f"{source.name}: provide distinct counted populations")
+        if any(count < 0 for _, count in source.counts):
+            raise ValueError(f"{source.name}: task counts must be nonnegative")
+        contract = {
+            "release": asdict(release),
+            "counts": sorted(source.counts),
+            "execution": asdict(source.execution),
+            "verifier_revision": source.verifier_revision,
+        }
+        row = source_row(REGISTERED_ORIGIN, source.name, release.revision, source.revised_at)
+        row.update(
+            display_name=release.repository,
+            canonical_source=release.repository,
+            canonical_url=source.url,
+            url=source.url,
+            provenance_url=source.count_url,
+            release_host=release.host,
+            release_reference=f"{release.repository}@{release.revision}",
+            dataset_id=release.repository,
+            dataset_revision=release.revision,
+            dataset_revised_at=source.revised_at,
+            dataset_version=source.version,
+            registration_revision=hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest(),
+            task_count=sum(count for _, count in source.counts),
+            split=", ".join(name for name, _ in source.counts),
+            split_counts=dict(source.counts),
+            count_basis=source.count_basis,
+            count_precision="exact",
+            count_url=source.count_url,
+            **asdict(source.execution),
+            classification_basis=source.classification_basis,
+            verification=source.execution.scoring,
+            verifier_revision=source.verifier_revision,
+            verifier_revised_at=source.revised_at,
+            verifier_url=source.verifier_url,
+            revision_basis="Checked-in release pin; updates require a PR",
+            family=source.family,
+            family_basis="Checked-in registration with linked source evidence",
+            family_url=source.family_url,
+            is_benchmark=source.is_benchmark,
+            benchmark_basis=source.benchmark_basis,
+            license=source.license,
+            notes=source.notes,
+            usage_url=source.usage_url,
+            validation_url=source.validation_url,
+            upstream_url=source.upstream_url,
+            license_url=source.license_url,
+            paper_url=source.paper_url,
+        )
+        rows.append(row)
+    revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+    return Snapshot(REGISTERED_ORIGIN, revision, max((source.revised_at for source in sources), default=None), rows)

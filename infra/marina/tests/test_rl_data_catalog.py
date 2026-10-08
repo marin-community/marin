@@ -7,6 +7,7 @@ import json
 import logging
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -17,7 +18,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 
 from infra.marina.applets.rl_data_catalog.audit_nemotron import audit_blend
-from infra.marina.applets.rl_data_catalog.server import composition, hf_auth
+from infra.marina.applets.rl_data_catalog.server import app, composition, hf_auth
 from infra.marina.applets.rl_data_catalog.server.app import (
     difficulty_summary,
     migrate,
@@ -29,6 +30,7 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
     Snapshot,
     count_metadata,
     dataset_metadata,
+    registered_snapshot,
     registry_sources,
     skyrl_snapshot,
     source_row,
@@ -37,6 +39,13 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
+from infra.marina.applets.rl_data_catalog.server.registered_sources import (
+    REGISTERED_ORIGIN,
+    ExecutionContract,
+    RegisteredSource,
+    ReleaseHost,
+    ReleaseReference,
+)
 
 
 @pytest.fixture
@@ -157,6 +166,132 @@ def test_snapshot_replacement_retires_removed_rows_without_affecting_other_origi
     active = set(connection.execute(text("SELECT id FROM catalog_sources WHERE active")).scalars())
     assert active == {"sky:keep", "sky:new", "trove:old"}
     assert connection.execute(text("SELECT COUNT(*) FROM catalog_sources")).scalar_one() == 4
+
+
+@pytest.fixture
+def registered_source() -> RegisteredSource:
+    return RegisteredSource(
+        name="coordinates",
+        release=ReleaseReference(ReleaseHost.HUGGING_FACE, "example/coordinates", "a" * 40),
+        version="1.0",
+        revised_at="2026-10-01",
+        url="https://huggingface.co/datasets/example/coordinates",
+        counts=(("train", 7), ("test", 3)),
+        count_basis="Complete release membership",
+        count_url="https://example.org/counts.json",
+        execution=ExecutionContract("Harbor", "RLVR", "Single-turn", "Disabled", "NoToolsAgent", "Exact match"),
+        classification_basis="Answer the displayed coordinates without tools",
+        verifier_revision="a" * 40,
+        verifier_url="https://example.org/verifier",
+        family="coordinates",
+        family_url="https://example.org/card",
+        is_benchmark=False,
+        benchmark_basis="Training population",
+        license="Apache-2.0",
+        notes="Publisher evidence; unreviewed",
+    )
+
+
+def test_registered_refresh_preserves_protocols_and_retires_sources(
+    catalog_connection: Connection, registered_source: RegisteredSource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminal = replace(
+        registered_source,
+        name="terminal",
+        release=ReleaseReference(ReleaseHost.HARBOR_HUB, "example/terminal", "sha256:" + "b" * 64),
+        counts=(("all", 9),),
+        execution=ExecutionContract("Harbor", "Agentic", "Multi-turn", "Allowed", "Terminus-2", "Component mean"),
+    )
+    monkeypatch.setattr(app, "REGISTERED_SOURCES", (registered_source, terminal))
+    with httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(503))) as client:
+        first = refresh_catalog(catalog_connection, client, False)
+        migrate(catalog_connection)
+        payloads = {
+            row["name"]: row
+            for row in catalog_connection.execute(text("SELECT payload FROM catalog_sources WHERE active")).scalars()
+        }
+        assert (payloads["coordinates"]["type"], payloads["coordinates"]["tools"]) == ("RLVR", "Disabled")
+        assert (payloads["terminal"]["type"], payloads["terminal"]["turns"]) == ("Agentic", "Multi-turn")
+        assert (payloads["coordinates"]["task_count"], payloads["terminal"]["task_count"]) == (10, 9)
+        assert all(row["quality"] is None and row["difficulty"] is None for row in payloads.values())
+        assert first["results"][-1]["changed"]
+        # Reordering declarations leaves the snapshot unchanged.
+        monkeypatch.setattr(app, "REGISTERED_SOURCES", (terminal, registered_source))
+        assert not refresh_catalog(catalog_connection, client, False)["results"][-1]["changed"]
+        catalog_connection.execute(text("UPDATE catalog_sources SET review_id = 'historical'"))
+        monkeypatch.setattr(app, "REGISTERED_SOURCES", ())
+        assert refresh_catalog(catalog_connection, client, False)["results"][-1]["changed"]
+    assert catalog_connection.execute(text("SELECT COUNT(*) FROM catalog_sources WHERE active")).scalar_one() == 0
+    assert (
+        catalog_connection.execute(
+            text("SELECT COUNT(*) FROM catalog_sources WHERE review_id = 'historical'")
+        ).scalar_one()
+        == 2
+    )
+    assert catalog_connection.execute(
+        text("SELECT row_count, revised_at FROM catalog_refreshes WHERE origin = :origin"),
+        {"origin": REGISTERED_ORIGIN},
+    ).one() == (0, None)
+
+
+@pytest.mark.parametrize("change", ["release", "population", "execution", "verifier", "notes"])
+def test_registered_review_applicability_tracks_population_and_execution(
+    catalog_connection: Connection, registered_source: RegisteredSource, change: str
+) -> None:
+    first = registered_snapshot((registered_source,))
+    save_snapshot(catalog_connection, first)
+    row = first.rows[0]
+    catalog_connection.execute(
+        text(
+            """UPDATE catalog_sources SET quality = 'good', difficulty = '1/3', review_id = 'historical',
+        review_source_revision = :data, review_verifier_revision = :verifier,
+        review_registration_revision = :registration WHERE id = :id"""
+        ),
+        {
+            "data": row["dataset_revision"],
+            "verifier": row["verifier_revision"],
+            "registration": row["registration_revision"],
+            "id": row["id"],
+        },
+    )
+    changed = {
+        "release": replace(registered_source, release=replace(registered_source.release, revision="c" * 40)),
+        "population": replace(registered_source, counts=(("train", 7),)),
+        "execution": replace(registered_source, execution=replace(registered_source.execution, tools="Allowed")),
+        "verifier": replace(registered_source, verifier_revision="updated-verifier"),
+        "notes": replace(registered_source, notes="Additional publisher evidence"),
+    }[change]
+    updated = registered_snapshot((changed,))
+    assert updated.revision != first.revision
+    save_snapshot(catalog_connection, updated)
+    record = dict(catalog_connection.execute(text("SELECT * FROM catalog_sources")).mappings().one())
+    published = source_with_review(record | {"verifier_issues": []})
+    assert published["review_id"] == "historical"
+    assert published["review_stale"] == (change != "notes")
+    assert published["quality"] == ("good" if change == "notes" else None)
+    assert record["quality"] == "good" and record["difficulty"] == "1/3"
+
+
+@pytest.mark.parametrize("invalid", ["moving_pin", "duplicate_name"])
+def test_invalid_registration_refresh_preserves_saved_catalog(
+    catalog_connection: Connection, registered_source: RegisteredSource, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    first = registered_snapshot((registered_source,))
+    save_snapshot(catalog_connection, first)
+    sources = (
+        (replace(registered_source, release=replace(registered_source.release, revision="main")),)
+        if invalid == "moving_pin"
+        else (registered_source, registered_source)
+    )
+    monkeypatch.setattr(app, "REGISTERED_SOURCES", sources)
+    with httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(503))) as client:
+        with pytest.raises(ValueError):
+            refresh_catalog(catalog_connection, client, False)
+    assert (
+        catalog_connection.execute(text("SELECT payload FROM catalog_sources WHERE active")).scalar_one()
+        == first.rows[0]
+    )
+    assert catalog_connection.execute(text("SELECT revision FROM catalog_refreshes")).scalar_one() == first.revision
 
 
 @pytest.mark.parametrize("changed_field", [None, "dataset_revision", "verifier_revision"])

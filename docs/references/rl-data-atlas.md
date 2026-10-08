@@ -1,9 +1,9 @@
 # RL Data Atlas
 
 [Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
+to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources, the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest, and checked-in release registrations without signing in.
 Task Trove packages converted datasets as tasks for the Harbor execution
-environment. The two catalogs are independent and can share original datasets.
+environment. The catalogs are independent and can share original datasets.
 Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
 
 Search and filter the table, including its Environment column, click column
@@ -92,7 +92,7 @@ uv run python -m infra.marina.applets.rl_data_catalog.audit_nemotron \
 ```
 
 The top line shows one data-source count, the filtered task tally, and upstream
-status. The source count counts displayed source/component rows across both
+status. The source count counts displayed source/component rows across all
 catalogs, excluding deprecated/excluded rows; an expanded parent contributes
 one count for each component and has no separate aggregate entry. It stays global when search
 filters change. Gym aliases such as `gym/aime` remain searchable, and source details
@@ -256,6 +256,8 @@ Python definitions used by the difficulty task loader, worker launcher, and
 MarinSkyRL code identity check, including their referenced definitions and imports.
 The original and executed script's whole-file hashes remain recorded.
 
+## Create and publish a review
+
 The review tooling, example configuration, and JSON schema are checked in under
 `experiments/rl_data_reviews/`. Copy `review-config.example.json` to a local file,
 then set the model endpoint and the solver checkpoint commit in `model.revision`, native checkout and
@@ -274,7 +276,7 @@ uv run experiments/rl_data_reviews/publish_review.py \
 ```
 
 Set `source.source_id` to the Atlas population named by `--atlas-id` and
-`source.revision` to that dataset's HF commit. `source.tasks_path` points to the
+`source.revision` to that dataset's immutable release revision. `source.tasks_path` points to the
 local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
 MarinSkyRL's `prompt`, `env_class`, and verifier arguments; use `harbor_directory`
 for native Harbor task directories. `task_manifest` accepts JSON or JSONL records
@@ -332,3 +334,91 @@ POST to `api/refresh?force=true`. To verify runtime access, send a Marina-authen
 POST to `api/refresh?force=true&hf_auth=runtime` without a caller-supplied HF token;
 the response reports `hf_authentication: runtime_secret`. The token is used only for HF requests and is
 never stored in the applet tables or sent to the frontend. Normal page loads reuse Task Trove snapshots when its release head is unchanged.
+
+## Register a pinned release
+
+Add a `RegisteredSource` to
+`infra/marina/applets/rl_data_catalog/server/registered_sources.py`. These entries
+appear under **Registered releases** and require no training registration. The
+storage host is separate from the execution environment and interaction type.
+Set `release` with `ReleaseReference(host, repository, revision)` and `execution`
+with `ExecutionContract(environment, type, turns, tools, agent, scoring)`. Set
+`verifier_revision` to the bundled release pin or a separately pinned verifier.
+HF and Git references require a full commit SHA; Harbor Hub references require
+a `sha256:` release digest. Register native release identities without copying
+tasks into another repository.
+
+Choose a stable `name` for the source population. Its Atlas ID is
+`Registered releases:<name>`. Record the selected populations and their counts
+in `counts`; use `all` for a release without named splits. Counts must cover the
+complete selected population, including all membership API pages. Link the count
+evidence, verifier, license scope, and execution instructions. Declare the tool
+policy, agent requirement, and scoring contract explicitly. The registration
+describes these requirements; evaluation adapters must enforce them.
+
+Submit registrations and release updates through a Marin PR. After deployment,
+refresh reads the bundled metadata without downloading tasks or following
+moving upstream tags. Unchanged registrations retain their saved snapshot.
+Removing an entry retires its row and preserves historical reviews.
+
+The source's `registration_revision` fingerprints the release reference, counted
+populations, execution contract, and verifier revision. Changes to these fields
+make prior ratings stale; edits to notes and evidence links preserve applicability.
+Before starting a review, copy this value from `api/sources` or the details panel
+into `source.registration_revision` in the configuration described in the
+[review workflow](#create-and-publish-a-review). Keep
+`source.revision` equal to the native dataset commit or package digest. The
+publisher checks both identities and archives the run configuration. A missing
+or mismatched registration revision cannot publish a current assessment.
+
+Registration establishes no quality or difficulty rating. Publish assessments
+separately against the deployed registration. The shared Atlas intake accepts
+Git, Hugging Face, and Harbor Hub references; it does not change the Harbor fork's
+Git/local-path registry schema or add task download and training adapters.
+
+### PDBThink coordinate tasks
+
+`Registered releases:pdbthink-coordinate-tasks` pins
+[PDBThink Coordinate Tasks v1.3.0](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/tree/3734406cb97b1702844319f9a5d860cbbf8fe660):
+100,000 tasks across 19 families, with 91,154 train, 4,411 validation, and 4,435
+test tasks. The population excludes the frozen PDBThink benchmark's source
+entries, exact protein sequences, and associated RCSB 30% clusters, as described
+in the [release manifest](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/manifest.json). Publisher validation
+is linked; Atlas quality and difficulty remain unreviewed.
+
+PDBThink requires one tool-free response using `CoordinateNoToolsAgent`. Supply
+only `prompt.json` to the solver; gold, provenance, tests, and oracle solutions
+are evaluator-only. Follow the pinned release's
+[execution instructions and native-token budget manifest](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/USAGE.md).
+Atlas's default Terminus-2 runner permits tools and requires a separate adapter
+before evaluating this population. The
+[GLM teacher traces v1.0.0](https://huggingface.co/datasets/open-athena/pdbthink-glm53-teacher-traces/tree/v1.0.0)
+retain their task v1.2.0 prompts and scores and do not establish difficulty for the registered
+v1.3.0 release.
+
+### Skill2Env
+
+`Registered releases:skill2env` pins the official
+[Skill2Env Harbor Hub release](https://hub.harborframework.com/datasets/skill2env/skill2env)
+at digest `sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c`.
+It contains 7,496 tasks; Harbor revision 2, version `1.0.1`, and the tags `latest`
+and `v1.0` refer to that release. Project-owned code is Apache-2.0; third-party
+skills and assets retain their own terms.
+
+These tasks use multi-turn terminal interaction. Preserve their resource limits
+and network restrictions. The Atlas scoring contract retains the executable
+grader's component rewards, reports their arithmetic mean, and requires every
+component to reach one within `1e-9` tolerance for a full pass. The paper's
+additional LLM rubric reward is separate from those scores and Atlas's quality
+audit. The component-reward adapter and offline Terminus tooling in
+[PR #9632](https://github.com/marin-community/marin/pull/9632) remain separate
+runner work.
+
+[Issue #9630](https://github.com/marin-community/marin/issues/9630) records a
+three-task assessment and a confirmed grader defect supporting a prepared
+"Some issues" rating. Two attempts exhausted a 50-turn budget. Those results do
+not establish corpus-wide difficulty, and the rating is not published by this
+registration. Atlas's "Good"-only eligibility rule excludes a source rated
+"Some issues" from the standard difficulty comparison. The registration starts
+unreviewed; publishing the prepared assessment requires binding its evidence to
+the deployed source ID and registration contract.

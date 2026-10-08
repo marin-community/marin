@@ -25,10 +25,12 @@ from .catalog import (
     annotate_source,
     get_json,
     merge_gym_sources,
+    registered_snapshot,
     skyrl_snapshot,
     tasktrove_snapshot,
 )
 from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
+from .registered_sources import REGISTERED_ORIGIN, REGISTERED_SOURCES
 from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
@@ -191,6 +193,10 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
                 row["review_verifier_revision"] is not None
                 and row["review_verifier_revision"] != row.get("verifier_revision")
             )
+            or (
+                row.get("registration_revision") is not None
+                and record.get("review_registration_revision") != row["registration_revision"]
+            )
         )
     )
     row["review_applicability"] = (
@@ -234,6 +240,7 @@ def migrate(connection: Connection) -> None:
         "review_id TEXT",
         "review_source_revision TEXT",
         "review_verifier_revision TEXT",
+        "review_registration_revision TEXT",
     ):
         connection.execute(text(f"ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS {definition}"))
     connection.execute(
@@ -324,12 +331,26 @@ def save_snapshot(connection: Connection, snapshot: Snapshot) -> None:
     )
 
 
+def refresh_result(connection: Connection, origin: str, revision: str, snapshot: Snapshot | None) -> dict[str, Any]:
+    """Save changed sources or record a successful check of an unchanged catalog."""
+    if snapshot is not None:
+        save_snapshot(connection, snapshot)
+    else:
+        connection.execute(
+            text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
+            {"origin": origin},
+        )
+    return {"origin": origin, "revision": revision, "changed": snapshot is not None}
+
+
 def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -> dict[str, Any]:
     lock = connection.execute(
         text("SELECT pg_try_advisory_xact_lock(hashtext(current_schema() || '/catalog-refresh'))")
     ).scalar_one()
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
+    # Invalid bundled registrations must fail before any refresh writes.
+    registered = registered_snapshot(REGISTERED_SOURCES)
     results = []
     for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
         previous = connection.execute(
@@ -378,14 +399,13 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
             )
             results.append({"origin": origin, "error": message})
             continue
-        if snapshot is not None:
-            save_snapshot(connection, snapshot)
-        else:
-            connection.execute(
-                text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
-                {"origin": origin},
-            )
-        results.append({"origin": origin, "revision": revision, "changed": snapshot is not None})
+        results.append(refresh_result(connection, origin, revision, snapshot))
+    previous = connection.execute(
+        text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": REGISTERED_ORIGIN}
+    ).scalar_one_or_none()
+    # An empty snapshot also retires the final removed source while retaining reviews.
+    snapshot = registered if force or registered.revision != previous else None
+    results.append(refresh_result(connection, REGISTERED_ORIGIN, registered.revision, snapshot))
     return {"busy": False, "results": results}
 
 
