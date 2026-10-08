@@ -236,8 +236,9 @@ or on a package the order does not name.
   `EngineConfig`, the width and `restore_from`. Local paths (a laptop root, `image_cache`, a token
   or key file) are absolute; the config reader expands no `~` and resolves nothing against the
   working directory. `inputs` is an `InputsFactory`: a function of the
-  run's `GlmClient` and run root that returns `RunInputs(ideas, source, describe_idea, checks, rubric,
-  check_context)`. `scripts/run_queue.py` runs it from a config file.
+  run's `GlmClient` and run root that returns `RunInputs(ideas, source, describe_idea,
+  adversary_context, checks, rubric, check_context)`; `adversary_context` is the consumer's section of
+  each item's adversary brief (`""` for none). `scripts/run_queue.py` runs it from a config file.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 

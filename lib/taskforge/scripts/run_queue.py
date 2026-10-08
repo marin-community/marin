@@ -5,8 +5,10 @@
 
 ``CONFIG`` is a ``queue.config.RunConfig`` file (``docs/policy.example.json`` is the committed
 example). ``--inputs MODULE:FUNCTION`` names a ``queue.job.InputsFactory``: a function of the run's
-``GlmClient`` and run root that returns the run's ideas, proposal source and triage checks. The run
-writes ``summary.json`` into the run root and exits non-zero when any item ended ``FAILED``.
+``GlmClient`` and run root that returns the run's ideas, proposal source, idea record, adversary context
+and triage checks (``queue.job.RunInputs``); the band rules and the adversary submission budget and
+repair threshold are policy fields of ``CONFIG``. The run writes ``summary.json`` into the run root and
+exits non-zero when any item ended ``FAILED``.
 
 Laptop, through the GLM port-forward on the interactive pool (``"glm": {"kind": "laptop", ...,
 "pool": "high"}``, ``"host": "laptop"``; ``root``, ``image_cache`` and ``token_file`` absolute paths)::

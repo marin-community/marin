@@ -45,6 +45,7 @@ from taskforge.queue.run import FailedItems, RunSummary, run_queue
 from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
 from taskforge.triage.checks import Check, CheckContext
 from taskforge.triage.program import RubricProgram
+from taskforge.validate.adversary import AdversaryContext
 from taskforge.validate.controls import ServerTokenizer
 
 GLM_TOKEN_KEY = "GLM_API_TOKEN"
@@ -176,7 +177,8 @@ def restore(source: str, root: Path) -> None:
 @dataclass(frozen=True)
 class RunInputs[IdeaT]:
     """What a run takes beyond its config: its ideas, the source that proposes from them, each idea's
-    record (``LoopServices.describe_idea``), and triage's checks.
+    record (``LoopServices.describe_idea``), the consumer's section of each item's adversary brief
+    (``LoopServices.adversary_context``; ``""`` for none), and triage's checks.
 
     The capability layer supplies these for the capability catalog.
     """
@@ -184,6 +186,7 @@ class RunInputs[IdeaT]:
     ideas: Mapping[str, IdeaT]
     source: ProposalSource[IdeaT]
     describe_idea: Callable[[IdeaT], Mapping[str, object]]
+    adversary_context: AdversaryContext
     checks: tuple[Check, ...]
     rubric: RubricProgram
     check_context: CheckContext
@@ -216,7 +219,8 @@ async def loop_services[IdeaT](
     """The run's ``LoopServices`` and ideas: one GLM client, the host's factories, ``width`` slots.
 
     Builders sample at ``BUILD_POLICY``; the solver, adversaries and the control tokenizer at the
-    validation policy's sampling.
+    validation policy's sampling. ``rollout_models`` builds the solver's models; adversaries run as agent
+    loops on the run's client.
     """
     factories = machine_factories(config.host, controller_url(config.host), config.image_cache)
     sampling = config.policy.validation.sampling
@@ -231,6 +235,7 @@ async def loop_services[IdeaT](
             client=client,
             source=run_inputs.source,
             describe_idea=run_inputs.describe_idea,
+            adversary_context=run_inputs.adversary_context,
             checks=run_inputs.checks,
             rubric=run_inputs.rubric,
             check_context=run_inputs.check_context,
