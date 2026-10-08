@@ -356,7 +356,9 @@ function startDashboard() {
       const head = element('div');
       head.className = 'card-heading';
       const name = element('div');
-      name.append(element('h3', item.plan.pipeline_name || item.status.execution_id), element('p', `${item.status.current_stage || 'No active stage'} · ${item.status.completed_shards}/${item.status.total_shards} current-stage shards`));
+      name.append(element('h3', item.status.execution_id));
+      if (item.plan.pipeline_name) name.append(element('p', item.plan.pipeline_name));
+      name.append(element('p', `${item.status.current_stage || 'No active stage'} · ${item.status.completed_shards}/${item.status.total_shards} current-stage shards`));
       name.lastChild.className = 'muted';
       head.append(name, badge(item.status.phase));
       card.append(head, pipelineBar(item.plan, item.status));
