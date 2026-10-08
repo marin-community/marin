@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from taskforge.build.run import TaskDraft
-from taskforge.canonical import digest
+from taskforge.content_hash import digest
 from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import Control
 from taskforge.validate.adversary import SUBMIT_DESCRIPTION, AdversaryRole, adversary_brief
