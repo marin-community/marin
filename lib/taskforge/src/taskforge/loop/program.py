@@ -218,6 +218,11 @@ class EventLog:
             raise ValueError(f"event {seq} of {self.item_id} did not reach {self.path}; the ledger writes elsewhere")
 
 
+def evidence_dir(item_directory: Path, round: int, digest: str) -> Path:  # noqa: A002 - matches LedgerEntry.round
+    """The directory an item keeps the validation evidence of round ``round`` of the task with ``digest`` in."""
+    return item_directory / ROUNDS_DIR / str(round) / f"evidence-{digest[:DIGEST_CHARS]}"
+
+
 def idea_item_id(idea_id: str) -> str:
     return f"{IDEA_PREFIX}{idea_id}"
 
@@ -335,7 +340,7 @@ class _Item:
         return self.directory / ROUNDS_DIR / str(round)
 
     def evidence_dir(self, round: int, digest: str) -> Path:  # noqa: A002 - matches LedgerEntry.round
-        return self.round_dir(round) / f"evidence-{digest[:DIGEST_CHARS]}"
+        return evidence_dir(self.directory, round, digest)
 
     def draft(self, state: ItemState) -> TaskDraft:
         assert state.task_digest is not None
