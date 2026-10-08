@@ -27,6 +27,7 @@ from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from pydantic import BaseModel, ConfigDict
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.task_curation.images.recipes import RECIPES, ImageRecipe
 
@@ -261,6 +262,8 @@ def built_image(recipe: ImageRecipe) -> ImageArtifact:
 @click.option("--registry", default=DEFAULT_REGISTRY, show_default=True, help="Registry the build pushes to.")
 def main(names: tuple[str, ...], registry: str) -> None:
     logging.basicConfig(level=logging.INFO)
+    # A workstation reaches the CoreWeave artifact prefix through its ambient CW_KEY_* pair.
+    configure_coreweave_s3()
     recipes = [RECIPES[name] for name in names or sorted(RECIPES)]
     for image in run(*(image_artifact(recipe, registry) for recipe in recipes)):
         click.echo(f"{image.name}: {image.image} ({image.path})")
