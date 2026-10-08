@@ -71,9 +71,13 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
-Docker stops the command's process group on a timeout or caller cancellation.
-A successful stop preserves the machine. A failed stop raises an infrastructure error and closes the machine.
-Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
+Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
+A failed stop raises an infrastructure error and closes the machine.
+Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
+
+Docker stops commands as the command user or the image's default user.
+Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
+Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.

@@ -5,9 +5,12 @@
 
 import asyncio
 import os
+import shutil
+import signal
 import stat
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AsyncExitStack
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,10 +21,17 @@ pytest.importorskip("daytona")
 
 from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
 from daytona_api_client_async import SnapshotState
-from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
+from rigging.timing import ExponentialBackoff
+from shellbox.backends.daytona.machine import (
+    DaytonaMachine,
+    DaytonaMachineFactory,
+    DaytonaNetworkMode,
+    DaytonaNetworkPolicy,
+)
+from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, DownloadLimitExceeded, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import Command, DockerImage, DownloadLimitExceeded, ExitReason, MachineSpec, UnsupportedMachineSpec
 
 
 class LocalFiles:
@@ -51,6 +61,9 @@ class LocalFiles:
 
 
 class LocalProcess:
+    def __init__(self):
+        self.processes = []
+
     async def exec(self, command: str, cwd: str | None = None, env: dict[str, str] | None = None, timeout=None):
         process = await asyncio.create_subprocess_shell(
             command,
@@ -58,9 +71,20 @@ class LocalProcess:
             env={**os.environ, **(env or {})},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
+        self.processes.append(process)
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
         return SimpleNamespace(exit_code=process.returncode, result=stdout.decode(errors="replace"))
+
+    async def close(self):
+        for process in self.processes:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            await process.wait()
 
 
 class LocalSnapshots:
@@ -96,6 +120,7 @@ class LocalDaytona:
 
     async def delete(self, sandbox):
         assert sandbox is self.sandbox
+        await sandbox.process.close()
         self.deleted = True
 
     async def __aenter__(self):
@@ -161,6 +186,193 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
+def test_daytona_command_timeout_stops_descendants_and_preserves_next_command(tmp_path):
+    async def scenario():
+        client = LocalDaytona()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            await machine.run(Command(("sh", "-c", "echo 12 > answer")))
+            result = await machine.run(Command(("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"), timeout=0.5))
+            assert result.reason is ExitReason.TIMED_OUT
+            child = int((tmp_path / "child.pid").read_text())
+            stopped = await machine.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
+                        'test "$state" = Z; fi',
+                        "child-state",
+                        str(child),
+                    )
+                )
+            )
+            assert stopped.exit_code == 0
+            graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
+            assert (graded.exit_code, graded.stdout) == (0, b"1.0")
+            assert not client.deleted and not client.closed
+        finally:
+            await machine.close()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout"])
+def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, interrupt_failure):
+    class FailedStop(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "candidate-block" in command:
+                raise TimeoutError("Command deadline expired")
+            if "stop-command" in command:
+                if interrupt_failure == "timeout":
+                    raise TimeoutError("Provider interruption timed out")
+                return SimpleNamespace(exit_code=1, result="Cannot stop the process group")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = FailedStop()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        with pytest.raises(RuntimeError) as failure:
+            await machine.run(Command(("candidate-block",), timeout=0.01))
+        assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+        assert client.deleted and client.closed
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(scenario())
+
+
+def test_daytona_completion_at_pid_removal_preserves_the_sandbox(tmp_path):
+    armed, removed, released = (tmp_path / name for name in ("armed", "removed", "released"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    removal = bin_dir / "rm"
+    # Pause after the trap's PID-file removal, before its remaining work can finish.
+    removal.write_text(
+        '#!/bin/sh\n/bin/rm "$@"\ncase "$2" in */pid)\n'
+        f'if [ -f "{armed}" ] && [ ! -f "{removed}" ]; then touch "{removed}"; '
+        f'while [ ! -f "{released}" ]; do /bin/sleep 0.01; done; fi;; esac\n'
+    )
+    removal.chmod(0o755)
+    executions = []
+
+    class DeadlineAtRemoval(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "candidate-finished" in command:
+                execution = asyncio.create_task(super().exec(command, **kwargs))
+                executions.append(execution)
+                backoff = ExponentialBackoff(initial=0.001, maximum=0.01)
+                async with asyncio.timeout(5):
+                    while not removed.exists():
+                        await asyncio.sleep(backoff.next_interval())
+                raise TimeoutError("The command deadline expired after PID removal")
+            return await super().exec(command, **kwargs)
+
+        async def close(self):
+            released.touch()
+            await super().close()
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = DeadlineAtRemoval()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(
+                RegistryImage("ubuntu:24.04"), workdir=str(tmp_path), env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            )
+        )
+        try:
+            result = await machine.run(Command(("sh", "-c", f"touch {armed}; printf candidate-finished"), timeout=5))
+            assert result.reason is ExitReason.TIMED_OUT
+            following = await machine.run(Command(("printf", "still-ready")))
+            assert (following.exit_code, following.stdout) == (0, b"still-ready")
+            assert not client.deleted
+        finally:
+            released.touch()
+            await asyncio.gather(*executions)
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("backend", ["docker", "daytona"])
+@pytest.mark.parametrize("tampering", ["delete", "forge"])
+def test_nonroot_pid_tampering_cannot_authorize_a_root_kill(backend, tampering):
+    # The Daytona SDK boundary uses Docker only to test real guest UIDs and processes.
+    # This is not a live Daytona service test.
+    async def scenario():
+        guest = await DockerMachineFactory().create(MachineSpec(DockerImage("ubuntu:24.04"), workdir="/tmp"))
+
+        class GuestProcess:
+            async def exec(self, command, cwd=None, env=None, timeout=None):
+                args = ["exec", "--user", "0"]
+                if cwd:
+                    args.extend(("-w", cwd))
+                for key, value in (env or {}).items():
+                    args.extend(("-e", f"{key}={value}"))
+                result = await docker(*args, guest.name, "sh", "-c", command, timeout=timeout)
+                return SimpleNamespace(exit_code=result.exit_code, result=result.stdout.decode())
+
+        class GuestFiles:
+            async def download_file(self, source):
+                result = await docker("exec", "--user", "0", guest.name, "cat", source)
+                assert result.exit_code == 0
+                return result.stdout
+
+        resources = AsyncExitStack()
+        resources.push_async_callback(guest.close)
+        machine = (
+            guest
+            if backend == "docker"
+            else DaytonaMachine(SimpleNamespace(process=GuestProcess(), fs=GuestFiles()), guest.spec, resources)
+        )
+        try:
+            await guest.run(Command(("sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")))
+            mutation = 'rm -f "$file"' if tampering == "delete" else 'printf "%s\\n" "$victim" > "$file"'
+            candidate = Command(
+                (
+                    "sh",
+                    "-c",
+                    "victim=$(cat /tmp/victim.pid); "
+                    "for file in /tmp/.shellbox-command-* /tmp/.shellbox-*/pid; do "
+                    f'[ ! -w "$file" ] || {mutation}; done; '
+                    "sleep 3600 & echo $! > /tmp/candidate-child.pid; wait",
+                ),
+                user="nobody",
+                timeout=1,
+            )
+            result = await machine.run(candidate)
+            assert result.reason is ExitReason.TIMED_OUT
+            result = await guest.run(Command(("sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')))
+            assert result.exit_code == 0
+            followup = await machine.run(Command(("printf", "ready"), user="nobody"))
+            assert (followup.exit_code, followup.stdout) == (0, b"ready")
+            child = await guest.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        'path="/proc/$(cat /tmp/candidate-child.pid)/stat"; '
+                        'if [ -f "$path" ]; then read pid comm state rest < "$path"; test "$state" = Z; fi',
+                    )
+                )
+            )
+            assert child.exit_code == 0
+        finally:
+            await machine.close()
+        disposed = await docker("inspect", guest.name)
+        assert disposed.exit_code != 0
+
+    asyncio.run(scenario())
+
+
 def test_daytona_download_caps_a_file_that_grows_after_the_regular_file_probe(tmp_path):
     source, target = tmp_path / "archive.tar", tmp_path / "download"
     source.write_bytes(b"archive")
@@ -203,6 +415,31 @@ def test_daytona_download_caps_a_file_that_grows_after_the_regular_file_probe(tm
             assert client.sandbox.fs.download_closed
             assert peak < 8 * 1024**2
             assert not list(tmp_path.glob(".shellbox-download-*"))
+            following = await machine.run(Command(("printf", "still-ready")))
+            assert (following.exit_code, following.stdout) == (0, b"still-ready")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_path):
+    class MissingSessionOption(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if command == "su --help":
+                return SimpleNamespace(exit_code=0, result="su -c command")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = MissingSessionOption()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(UnsupportedMachineSpec, match="--session-command"):
+                await machine.run(Command(("sh", "-c", "touch candidate-ran"), user="nobody"))
+            assert not (tmp_path / "candidate-ran").exists()
             following = await machine.run(Command(("printf", "still-ready")))
             assert (following.exit_code, following.stdout) == (0, b"still-ready")
         finally:

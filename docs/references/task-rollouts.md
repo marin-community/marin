@@ -66,6 +66,7 @@ An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.
 `MachineRuntimeSpec.user` supplies the default user for session commands.
+When its user is set, the task machine executes a startup command as that user after root setup and before model inference.
 An explicit command user overrides that default.
 The verifier uses its own machine user.
 
@@ -104,7 +105,7 @@ Worker-only resources do not enter a separate verifier.
 
 | Field | Boundary |
 | --- | --- |
-| Machine `startup_timeout` | Machine creation, resource upload, and setup commands |
+| Machine `startup_timeout` | Machine creation, resource upload, setup commands, and the explicit execution-user probe |
 | `model_turn_timeout` | One model request |
 | `command_timeout` | Each shell-tool command, including separate calls within one model turn |
 | `tool_turn_timeout` | One `advance` call, including its tool operations |

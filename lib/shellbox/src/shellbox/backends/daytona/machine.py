@@ -33,11 +33,21 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.file_transfer import write_download
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+RUN_COMMAND = (
+    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
+    'trap \'touch "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
+)
+STOP_COMMAND = (
+    '[ -f "$1" ] || exit 1; read -r pid < "$1"; '
+    'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
+    '[ "$pid" -gt 1 ] || exit 1; set -- "$pid"; ' + KILL_PROCESS_GROUP_COMMAND
+)
 
 
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
@@ -123,7 +133,8 @@ class DaytonaMachine:
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
-        stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
+        stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
+        pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
         argv = command.argv
         if command.user not in (None, "root", "0"):
             user = command.user
@@ -133,12 +144,31 @@ class DaytonaMachine:
                 if account.exit_code or not account.result.strip():
                     raise ValueError(f"Execution user {user} has no guest account")
                 user = account.result.split(":", 1)[0]
-            argv = ("su", "-s", "/bin/sh", "-m", user, "-c", shlex.join(command.argv))
+            capabilities = await self.sandbox.process.exec("su --help")
+            if capabilities.exit_code or "--session-command" not in capabilities.result:
+                raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
+            argv = ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+        argv = (
+            "sh",
+            "-c",
+            START_COMMAND,
+            "shellbox-start",
+            "sh",
+            "-c",
+            RUN_COMMAND,
+            "shellbox-command",
+            pidfile,
+            completed_path,
+            *argv,
+        )
         script = (
             f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
+            prepared = await self.sandbox.process.exec(f"umask 077; mkdir {shlex.quote(prefix)}")
+            if prepared.exit_code:
+                raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
             if command.stdin:
                 await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
             operation = self.sandbox.process.exec(
@@ -160,16 +190,24 @@ class DaytonaMachine:
                 ExitReason.EXITED,
             )
         except TimeoutError:
-            await self.close()
+            try:
+                async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                    stopped = await self.sandbox.process.exec(
+                        f"if [ -f {shlex.quote(completed_path)} ]; then exit 0; fi; "
+                        + shlex.join(("sh", "-c", STOP_COMMAND, "stop-command", pidfile))
+                    )
+                    if stopped.exit_code:
+                        raise RuntimeError(stopped.result)
+            except Exception as error:
+                await self.close()
+                raise RuntimeError("Cannot stop the Daytona command process group") from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError:
             await self.close()
             raise
         finally:
             if not self._closed:
-                await self.sandbox.process.exec(
-                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
-                )
+                await self.sandbox.process.exec(f"rm -rf {shlex.quote(prefix)}")
 
     async def upload(self, source: Path, target: str) -> None:
         if self._closed:
@@ -293,6 +331,9 @@ class DaytonaMachineFactory:
                     timeout=timeout,
                 )
             lifetime.push_async_callback(client.delete, sandbox)
+            prepared = await sandbox.process.exec("command -v setsid", timeout=INTERRUPT_TIMEOUT)
+            if prepared.exit_code:
+                raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
             machine = DaytonaMachine(sandbox, spec, lifetime)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/"))
