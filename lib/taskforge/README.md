@@ -139,7 +139,10 @@ modules, each of which keeps its types beside the code that checks their invaria
   trial is an agent loop (`llm.agent.run_agent`) on its own prepared task machine with a `shell`
   tool and a `submit` tool that grades a candidate (reply plus listed workspace files) through
   `ShellboxRolloutEngine.grade_state` on a fresh machine and returns the grade;
-  `ValidationPolicy.adversary_submissions` bounds the verifier calls per attempt. The brief
+  `ValidationPolicy.adversary_submissions` bounds the verifier calls per attempt. A candidate is
+  graded as assistant text, so under a convention that submits through a tool call (`AnswerCall`,
+  `FinalAction`) each trial is one refused `SUBMISSION_UNSUPPORTED` attempt
+  (`adversary_convention`). The brief
   (`adversary_brief(submissions, context)`) is the system turn, persisted as `adversary.system` in
   the attempt file beside every submission (`attempts.load_adversary_attempt`); `run_adversaries`
   takes the run's `GlmClient` and the consumer's `AdversaryContext` text, and records its model and
