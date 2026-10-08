@@ -310,9 +310,10 @@ def files_text(files: Sequence[TaskResource], root: str) -> str:
     return "\n\n".join(sections) or "(none)"
 
 
-def machine_facts(container: bool) -> str:
-    """What the solver's machine is, for prompts."""
-    return (CONTAINER_FACTS if container else SHELLSIM_FACTS).format(workdir=WORKDIR)
+def machine_facts(environment: Environment) -> str:
+    """What the solver's machine is, for prompts: a container, or ShellSim for every other environment."""
+    facts = CONTAINER_FACTS if environment is Environment.CONTAINER else SHELLSIM_FACTS
+    return facts.format(workdir=WORKDIR)
 
 
 def grader_contract(requirements: EnvironmentRequirements) -> str:
@@ -381,7 +382,7 @@ async def sources(b: Build, guidance: str) -> Sources:
 async def fixtures(b: Build, found: Sources, guidance: str) -> Fixtures:
     """Write the solver-visible files and the private reference data the proposal's build plan calls for."""
     request = (
-        f"{machine_facts(b.proposal.header.environment is Environment.CONTAINER)}\n\n"
+        f"{machine_facts(b.proposal.header.environment)}\n\n"
         f"# Research notes\n\n{found.notes or '(none)'}\n\n"
         "Write the task fixtures from the proposal's Build plan. Solver-visible files go under "
         f"{WORKSPACE}/ (a reasoning task may put everything in the instruction and ship no files). "
@@ -452,7 +453,7 @@ def output_paths(package: GraderPackage, reference_files: Sequence[TaskResource]
 async def grader(b: Build, made: Fixtures, task_machine: EnvironmentRequirements, guidance: str) -> Grader:
     """Write the grader and prototype it: the reference answer gets full credit, an empty answer does not."""
     request = (
-        f"{machine_facts(task_machine.docker_image is not None)}\n\n{grader_contract(task_machine)}\n\n"
+        f"{machine_facts(b.proposal.header.environment)}\n\n{grader_contract(task_machine)}\n\n"
         f"# Fixture facts\n\n{made.facts}\n\n# Solver-visible files\n\n{files_text(made.agent_files, '/')}\n\n"
         f"# Private data files already shipped with a grader script\n\n{files_text(made.private_files, '')}\n\n"
         f"{SUBMISSION}\n\n{NUMERIC_LITERALS}\n\n"
@@ -525,7 +526,7 @@ async def instructions(
 ) -> Instructions:
     """Write the solver-facing instruction around the grader's answer contract."""
     request = (
-        f"{machine_facts(task_machine.docker_image is not None)}\n\n"
+        f"{machine_facts(b.proposal.header.environment)}\n\n"
         f"# Solver-visible files\n\n{files_text(made.agent_files, '/')}\n\n"
         f"# Answer contract the grader enforces\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"
         "Write the solver-facing instruction from the proposal's Task section: the scenario, every input the "
