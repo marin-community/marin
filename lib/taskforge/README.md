@@ -416,8 +416,8 @@ an Iris attempt restored from the previous attempt's archive (`restore_from`), r
 
 `summary.json` is the one place a run lists its accepted tasks for consumers; there is no separate
 export file. Each accepted record carries the synthesis pass rate (solved of `k` and the solve rate)
-from the calibration summary it was accepted on, because until now that rate lived only in the round's
-`calibration.json`, and the band outcome. The band on an accepted record is the decision's: `in_band`,
+from the calibration summary it was accepted on, so a consumer need not open the round's `calibration.json`,
+and the band outcome. The band on an accepted record is the decision's: `in_band`,
 or `too_easy` / `too_hard` when the policy's `BandRules` chose to accept a task still outside the band
 after its revisions. A consumer reads the band rather than treat acceptance as calibration.
 
