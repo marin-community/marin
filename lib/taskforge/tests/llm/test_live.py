@@ -4,9 +4,9 @@
 """Live validation of taskforge.llm against GLM-5.3 on the interactive tier.
 
 Every run writes its exact first request body (bearer token excluded), full completions (raw stream
-events included), and measurements to ``lib/taskforge/.evidence/llm/runs/<check>-<utc>.json``. Only
-a run whose assertions pass is copied to ``lib/taskforge/.evidence/llm/<check>.json``, so a failing
-run never overwrites cited evidence.
+events included), and measurements to ``<evidence_root>/llm/runs/<check>-<utc>.json``. Only a
+run whose assertions pass is copied to ``<evidence_root>/llm/<check>.json``, so a failing run never
+overwrites cited evidence. ``evidence_root`` is the fixture in ``tests/conftest.py``.
 """
 
 import asyncio
@@ -38,9 +38,13 @@ from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import StructuredTool, complete_structured
 
-EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".evidence" / "llm"
 COMPLETIONS = TypeAdapter(tuple[Completion, ...])
 CONTEXT_TOKENS = 262_144
+
+
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "llm"
 
 
 def endpoint(glm_settings) -> GlmEndpoint:
@@ -68,9 +72,9 @@ def summary(completion: Completion) -> dict[str, object]:
     }
 
 
-def record(check: str, purpose: str, body: dict[str, object], completions, **extra) -> Path:
+def record(evidence_dir: Path, check: str, purpose: str, body: dict[str, object], completions, **extra) -> Path:
     """Write this run's evidence under ``runs/`` and return its path."""
-    runs = EVIDENCE_DIR / "runs"
+    runs = evidence_dir / "runs"
     runs.mkdir(parents=True, exist_ok=True)
     evidence = {
         "check": check,
@@ -85,8 +89,8 @@ def record(check: str, purpose: str, body: dict[str, object], completions, **ext
     return path
 
 
-def promote(run: Path, check: str) -> None:
-    shutil.copyfile(run, EVIDENCE_DIR / f"{check}.json")
+def promote(evidence_dir: Path, run: Path, check: str) -> None:
+    shutil.copyfile(run, evidence_dir / f"{check}.json")
 
 
 def segment_deltas(completion: Completion, segment: int) -> tuple[str, str]:
@@ -98,11 +102,12 @@ def segment_deltas(completion: Completion, segment: int) -> tuple[str, str]:
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_plain_completion_at_model_max_tokens(glm_settings):
+def test_plain_completion_at_model_max_tokens(glm_settings, evidence_dir):
     messages = [{"role": "user", "content": "Explain in about 300 words how a hash table resolves collisions."}]
     policy = LLMPolicy()
     completion = call(glm_settings, messages, policy)
     run = record(
+        evidence_dir,
         "a_plain_completion",
         "plain completion, usage, finish_reason, decode tok/s",
         request_body(glm_settings.model, messages, policy.max_tokens, policy, {}),
@@ -112,12 +117,12 @@ def test_plain_completion_at_model_max_tokens(glm_settings):
     assert completion.usage.completion_tokens > 0 and completion.content
     assert completion.attempts[-1].max_tokens == GLM_MAX_OUTPUT_TOKENS
     assert completion.attempts[-1].http_status == 200
-    promote(run, "a_plain_completion")
+    promote(evidence_dir, run, "a_plain_completion")
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_long_prompt_lowers_max_tokens_to_remaining_context(glm_settings):
+def test_long_prompt_lowers_max_tokens_to_remaining_context(glm_settings, evidence_dir):
     # ~250k filler tokens: 131072 output tokens cannot fit, and the ~12k left bounds the reply even
     # if the model degenerates into repeating the filler.
     instruction = "Reply with the single word OK. Everything between the markers is filler; ignore it."
@@ -126,6 +131,7 @@ def test_long_prompt_lowers_max_tokens_to_remaining_context(glm_settings):
     completion = call(glm_settings, messages, policy)
     elided = [{"role": "user", "content": f"{instruction}\\n<filler>\\n'apple ' * 250000\\n</filler>\\n{instruction}"}]
     run = record(
+        evidence_dir,
         "b_context_overflow",
         "max_tokens=131072 with a ~250k-token prompt: the server rejects, the client probes and lowers it",
         request_body(glm_settings.model, elided, policy.max_tokens, policy, {}),
@@ -142,12 +148,12 @@ def test_long_prompt_lowers_max_tokens_to_remaining_context(glm_settings):
     assert final.max_tokens == CONTEXT_TOKENS - completion.usage.prompt_tokens
     assert completion.usage.completion_tokens <= final.max_tokens
     assert completion.finish_reason in (FinishReason.STOP, FinishReason.LENGTH)
-    promote(run, "b_context_overflow")
+    promote(evidence_dir, run, "b_context_overflow")
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_truncated_answer_is_continued(glm_settings):
+def test_truncated_answer_is_continued(glm_settings, evidence_dir):
     messages = [
         {
             "role": "user",
@@ -160,6 +166,7 @@ def test_truncated_answer_is_continued(glm_settings):
     policy = LLMPolicy(max_tokens=150, reasoning_effort=ReasoningEffort.LOW, max_continuations=8)
     completion = call(glm_settings, messages, policy)
     run = record(
+        evidence_dir,
         "c_continue_on_length",
         "max_tokens=150 forces truncation; continuation concatenates",
         request_body(glm_settings.model, messages, policy.max_tokens, policy, {}),
@@ -168,12 +175,12 @@ def test_truncated_answer_is_continued(glm_settings):
     assert completion.continuations >= 1
     assert completion.finish_reason is FinishReason.STOP
     assert completion.content.rstrip().endswith("END")
-    promote(run, "c_continue_on_length")
+    promote(evidence_dir, run, "c_continue_on_length")
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_reply_cut_off_while_reasoning_is_continued(glm_settings):
+def test_reply_cut_off_while_reasoning_is_continued(glm_settings, evidence_dir):
     messages = [
         {
             "role": "user",
@@ -186,6 +193,7 @@ def test_reply_cut_off_while_reasoning_is_continued(glm_settings):
     completion = call(glm_settings, messages, policy)
     first_reasoning, first_content = segment_deltas(completion, 0)
     run = record(
+        evidence_dir,
         "c_continue_mid_reasoning",
         "max_tokens=32 cuts the first segment off while reasoning; continuation carries reasoning_content",
         request_body(glm_settings.model, messages, policy.max_tokens, policy, {}),
@@ -197,7 +205,7 @@ def test_reply_cut_off_while_reasoning_is_continued(glm_settings):
     assert completion.continuations >= 1
     assert completion.finish_reason is FinishReason.STOP
     assert completion.content.strip()
-    promote(run, "c_continue_mid_reasoning")
+    promote(evidence_dir, run, "c_continue_mid_reasoning")
 
 
 class Capital(BaseModel):
@@ -219,7 +227,7 @@ class ShoutedCapital(BaseModel):
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_structured_output(glm_settings):
+def test_structured_output(glm_settings, evidence_dir):
     tool = StructuredTool(name="record_capital", description="Record a country's capital.", output_type=Capital)
     messages = [{"role": "user", "content": "What is the capital of Japan and its city population in millions?"}]
     policy = LLMPolicy(reasoning_effort=ReasoningEffort.LOW)
@@ -230,6 +238,7 @@ def test_structured_output(glm_settings):
 
     result = asyncio.run(go())
     run = record(
+        evidence_dir,
         "d_structured",
         "forced strict tool call validated into a pydantic model",
         request_body(glm_settings.model, messages, policy.max_tokens, policy, tool.request_fields()),
@@ -237,12 +246,12 @@ def test_structured_output(glm_settings):
         value=result.value.model_dump(),
     )
     assert result.value.city == "Tokyo"
-    promote(run, "d_structured")
+    promote(evidence_dir, run, "d_structured")
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_structured_repair_keeps_prior_output(glm_settings):
+def test_structured_repair_keeps_prior_output(glm_settings, evidence_dir):
     tool = StructuredTool(name="record_capital", description="Record a capital city.", output_type=ShoutedCapital)
     messages = [{"role": "user", "content": "Record the capital of France."}]
     policy = LLMPolicy(reasoning_effort=ReasoningEffort.LOW)
@@ -253,6 +262,7 @@ def test_structured_repair_keeps_prior_output(glm_settings):
 
     result = asyncio.run(go())
     run = record(
+        evidence_dir,
         "d_structured_repair",
         "validator the schema cannot express; expect one repair turn carrying the prior output",
         request_body(glm_settings.model, messages, policy.max_tokens, policy, tool.request_fields()),
@@ -260,12 +270,12 @@ def test_structured_repair_keeps_prior_output(glm_settings):
         value=result.value.model_dump(),
     )
     assert result.value.city == "PARIS"
-    promote(run, "d_structured_repair")
+    promote(evidence_dir, run, "d_structured_repair")
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_prefilled_answer_continues_the_prefix_without_thinking(glm_settings):
+def test_prefilled_answer_continues_the_prefix_without_thinking(glm_settings, evidence_dir):
     messages = [
         {
             "role": "user",
@@ -284,6 +294,7 @@ def test_prefilled_answer_continues_the_prefix_without_thinking(glm_settings):
 
     completion = asyncio.run(go())
     run = record(
+        evidence_dir,
         "g_prefilled",
         "front matter prefilled as the start of the assistant turn; the model continues it as content, no reasoning",
         request_body(
@@ -299,13 +310,13 @@ def test_prefilled_answer_continues_the_prefix_without_thinking(glm_settings):
     assert completion.content.startswith(prefix)
     assert "\ntitle:" in completion.content and completion.content.count("---") >= 2
     assert (completion.reasoning, completion.usage.reasoning_tokens) == ("", 0)
-    promote(run, "g_prefilled")
+    promote(evidence_dir, run, "g_prefilled")
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
-def test_rollout_model_turn_is_recorded_in_the_ledger(glm_settings):
-    ledger = JsonlLedger(EVIDENCE_DIR / "ledger" / "h_rollout_model_record")
+def test_rollout_model_turn_is_recorded_in_the_ledger(glm_settings, evidence_dir):
+    ledger = JsonlLedger(evidence_dir / "ledger" / "h_rollout_model_record")
     record_to = CallLedger(
         ledger=ledger, item_id=f"live-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}", round=0, step="solver"
     )

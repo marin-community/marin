@@ -135,8 +135,10 @@ uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check           # from lib/taskforge;
 
 ## Evidence
 
-Every live check writes raw evidence under `lib/taskforge/.evidence/<package>/`: what was
-checked, the request, the full response (including `usage` and `finish_reason`) and the wall
-time. `.evidence/` is gitignored and stays on the machine that ran the check; the measurements a
-change relies on are recorded in its pull request description. Strip `Authorization` headers
-before saving a request, and never write a token or key there.
+Every live check writes raw evidence under `<evidence root>/<package>/`: what was checked, the
+request, the full response (including `usage` and `finish_reason`) and the wall time. The evidence
+root is `$TASKFORGE_EVIDENCE_DIR` when set, else `taskforge-evidence/` in the system temp directory
+(`tempfile.gettempdir()`); the `evidence_root` fixture in `tests/conftest.py` resolves it. Evidence
+stays outside the checkout on the machine that ran the check; the measurements a change relies on
+are recorded in its pull request description. Strip `Authorization` headers before saving a
+request, and never write a token or key there.
