@@ -6,21 +6,17 @@
 import asyncio
 import sys
 import tracemalloc
-from contextlib import AsyncExitStack
-from types import SimpleNamespace
 
 import pytest
-from shellbox.backends.daytona.machine import DaytonaMachine, DaytonaMachineFactory
-from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine
 from shellbox.backends.gvisor.machine import GvisorMachine
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
-    Command,
     DockerImage,
     DownloadLimitExceeded,
-    ExitReason,
     MachineSpec,
     QemuBundle,
     ShellSimBuiltins,
