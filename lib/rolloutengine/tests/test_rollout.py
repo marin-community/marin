@@ -17,10 +17,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES, write_download
 from shellbox.machine import (
     Command,
+    DockerImage,
     DownloadLimitExceeded,
     ExitReason,
     Machine,
@@ -85,11 +87,12 @@ async def local_file_chunks(path):
 @pytest.fixture
 def local_artifact_factory(tmp_path):
     class Machine:
-        def __init__(self, root, spec, archive_growth, archive_members):
+        def __init__(self, root, spec, archive_growth, archive_members, archive_failure):
             self.root = root
             self.spec = spec
             self.archive_growth = archive_growth
             self.archive_members = archive_members
+            self.archive_failure = archive_failure
             self.closed = False
             (root / "workspace").mkdir(parents=True)
             (root / "tmp").mkdir()
@@ -99,6 +102,18 @@ def local_artifact_factory(tmp_path):
             return self.root / value.lstrip("/")
 
         async def run(self, command):
+            if command.argv[0] == "tar" and self.archive_failure:
+                if self.archive_failure == "tar_timeout":
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                return Result(
+                    2,
+                    b"",
+                    b"Archive failed",
+                    False,
+                    False,
+                    ExitReason.EXITED,
+                )
+
             def rewrite(value):
                 for path in re.findall(r"(?<![\w/%*])/[^\s'\";)}]*", value):
                     self.path(path)
@@ -162,14 +177,17 @@ def local_artifact_factory(tmp_path):
             self.closed = True
 
     class Factory:
-        def __init__(self, prepare_artifacts, *, archive_growth=0, archive_members=()):
+        def __init__(self, prepare_artifacts, *, archive_growth=0, archive_members=(), archive_failure=None):
             self.machines = []
             self.prepare_artifacts = prepare_artifacts
             self.archive_growth = archive_growth
             self.archive_members = archive_members
+            self.archive_failure = archive_failure
 
         async def create(self, spec):
-            machine = Machine(tmp_path / str(len(self.machines)), spec, self.archive_growth, self.archive_members)
+            machine = Machine(
+                tmp_path / str(len(self.machines)), spec, self.archive_growth, self.archive_members, self.archive_failure
+            )
             self.machines.append(machine)
             if spec.env.get("ARTIFACT_TASK_MACHINE") == "1":
                 self.prepare_artifacts(machine)
@@ -205,6 +223,8 @@ def local_artifact_factory(tmp_path):
         "host_edquot",
         "host_eio",
         "host_emfile",
+        "tar_timeout",
+        "tar_failed",
     ],
 )
 async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
@@ -253,6 +273,7 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
         prepare_artifacts,
         archive_growth=32 * 1024**2 if artifact_case == "grown_archive" else 0,
         archive_members=archive_members,
+        archive_failure=artifact_case if artifact_case in {"tar_failed", "tar_timeout"} else None,
     )
     if artifact_case == "oversized_archive":
         monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024)
@@ -299,12 +320,18 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
             raise OSError(host_errors[artifact_case], "Host artifact extraction failed")
 
         monkeypatch.setattr(tarfile.TarFile, "extract", failed_extract)
+    if artifact_case in host_errors or artifact_case in {"tar_failed", "tar_timeout"}:
         with pytest.raises(RolloutInterrupted) as caught:
             await engine(model, {"local": root}).run(
                 lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
             )
-        assert isinstance(caught.value.__cause__, OSError)
-        assert caught.value.__cause__.errno == host_errors[artifact_case]
+        assert caught.value.operation is RolloutOperation.GRADE
+        assert caught.value.rollout.grade.reward is None
+        if artifact_case in host_errors:
+            assert isinstance(caught.value.__cause__, OSError)
+            assert caught.value.__cause__.errno == host_errors[artifact_case]
+        else:
+            assert isinstance(caught.value.__cause__, TimeoutError if artifact_case == "tar_timeout" else RuntimeError)
         assert all(machine.closed for machine in root.machines)
         return
     if artifact_case == "grown_archive":
@@ -325,6 +352,105 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
     assert all(machine.closed for machine in root.machines)
     if artifact_case == "grown_archive":
         assert peak < 8 * 1024**2
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("attack", [None, "source", "archive"])
+async def test_artifact_collection_cannot_read_root_files_through_candidate_path_changes(attack):
+    # The successful case checks archive write permissions with a real non-root guest user.
+    machines = []
+
+    class CandidateMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv[0] == "tar":
+                if attack == "source":
+                    mutation = await self.machine.run(
+                        Command(
+                            (
+                                "sh",
+                                "-c",
+                                "mv /workspace/artifacts /workspace/submitted && ln -s /private /workspace/artifacts",
+                            ),
+                            user="nobody",
+                        )
+                    )
+                    assert mutation.exit_code == 0
+                elif attack == "archive":
+                    mutation = await self.machine.run(
+                        Command(("ln", "-sf", "/private/answer", command.argv[2]), user="nobody")
+                    )
+                    assert mutation.exit_code != 0
+            return await self.machine.run(command)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target, *, max_bytes=None):
+            await self.machine.download(source, target, max_bytes=max_bytes)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            machine = await DockerMachineFactory().create(replace(spec, source=DockerImage("busybox:1.36")))
+            machines.append(machine)
+            if spec.env.get("ARTIFACT_TASK_MACHINE") != "1":
+                return machine
+            prepared = await machine.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        "mkdir -m 700 /private; printf secret > /private/answer; "
+                        "chmod 600 /private/answer; chmod 777 /workspace; "
+                        "mkdir -m 777 /workspace/artifacts",
+                    ),
+                    user="0",
+                )
+            )
+            assert prepared.exit_code == 0
+            written = await machine.run(
+                Command(("sh", "-c", "printf public > /workspace/artifacts/answer"), user="nobody")
+            )
+            assert written.exit_code == 0
+            return CandidateMachine(machine)
+
+    verifier = ShellVerifierSpec(
+        argv=("sh", "-c", "cmp /workspace/artifacts/answer /tests/expected"),
+        reward=ExitCodeReward(),
+        artifacts=(VerifierArtifact(source="/workspace/artifacts", target="/workspace/artifacts"),),
+    )
+    task = file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                docker_image=FIXTURE_IMAGE,
+                working_directory="/workspace",
+                environment_variables={"ARTIFACT_TASK_MACHINE": "1"},
+            ),
+            "verifier": VerifierSpec(
+                kind="shell",
+                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
+                parameters_json=verifier.model_dump_json(),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("expected", b"public"),)),
+        }
+    )
+    runtime = lowered(task, machine=machine_runtime(user="nobody"), verifier_machine=machine_runtime())
+    rollout_engine = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
+    if attack == "source":
+        with pytest.raises(RolloutInterrupted) as caught:
+            await rollout_engine.run(runtime)
+        assert caught.value.operation is RolloutOperation.GRADE
+        assert caught.value.rollout.grade.reward is None
+    else:
+        record = await rollout_engine.run(runtime)
+        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    for machine in machines:
+        assert (await docker("inspect", machine.name)).exit_code != 0
 
 
 @dataclass
@@ -1278,7 +1404,7 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
             if command.argv[:2] == ("tar", "-cf"):
                 await self.machine.upload(archive_path, command.argv[2])
                 return Result(0, b"", b"", False, False, ExitReason.EXITED)
-            if command.argv[:2] == ("rm", "-f") and command.argv[2].startswith("/tmp/taskcompendium-artifact-"):
+            if command.argv[:2] == ("rm", "-rf") and command.argv[2].startswith("/tmp/taskcompendium-artifact-"):
                 raise OSError("Cannot remove artifact archive")
             return await self.machine.run(command)
 

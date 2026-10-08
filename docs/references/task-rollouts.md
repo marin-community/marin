@@ -92,15 +92,21 @@ The serialized task and lowered record contain private grading inputs. Do not se
 The Shellbox session installs private verifier resources in `/tests` on the verifier machine after the turn loop.
 Oracle resources contain private control inputs for task-curation checks. They do not enter a rollout.
 
-A separate shell verifier receives `resources.all` and the declared artifacts from the task machine.
-Collect commands execute on the task machine before artifact transfer.
+A separate shell verifier receives the common resources (`resources.all`) and the declared artifacts from the task machine.
+The `ShellVerifierSpec.collect` commands execute on the task machine before artifact transfer.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
-Artifact transfer rejects symlinked source paths and all included symlink and hardlink archive members, including in-tree links.
+Source inspection rejects symlinks in the artifact path and its ancestors.
+Archive extraction rejects all included symlink and hardlink members, including in-tree links.
+Artifact inspection and archive creation use the agent's execution user.
+Source-path changes do not grant additional read permissions.
+The root-owned temporary directory prevents a non-root agent from replacing the archive path.
+Source inspection does not provide an atomic filesystem snapshot.
 The archive and expanded contents each have a 1 GiB limit. An archive can have at most 100,000 members.
 Downloads use fixed 64 KiB chunks, so a file that grows during transfer cannot bypass the byte limit.
 Invalid artifacts and missing required artifacts give `SUBMISSION_FAILURE` with reward zero.
-The `skip` missing-file policy omits absent artifacts. Provider I/O failures remain infrastructure errors.
+The `skip` missing-file policy omits absent artifacts.
+Archive command failures, archive timeouts, and provider I/O failures remain infrastructure errors.
 VerifyIT supplies shared verifier specifications and grading implementations.
 A separate VerifyIT grader receives captured `output_paths`, common resources, and private verifier resources.
 Worker-only resources do not enter a separate verifier.

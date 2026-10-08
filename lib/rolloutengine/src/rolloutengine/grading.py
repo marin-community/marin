@@ -193,7 +193,7 @@ async def _verifyit_grade(
 
 
 async def _remove_archive(machine: Machine, path: str, timeout: float | None) -> None:
-    result = await machine.run(Command(("rm", "-f", path), timeout=timeout, user="0"))
+    result = await machine.run(Command(("rm", "-rf", path), timeout=timeout, user="0", env={"PATH": "/usr/bin:/bin"}))
     if result.exit_code != 0:
         raise RuntimeError("Cannot remove private artifact archive")
 
@@ -221,7 +221,6 @@ async def _download_artifact(
                 artifact.source,
             ),
             timeout=timeout,
-            user="0",
         )
     )
     if result.exit_code == MISSING_FILE_EXIT and artifact.missing == MissingArtifactPolicy.SKIP:
@@ -238,10 +237,28 @@ async def _download_artifact(
         raise SubmissionFailure(f"Invalid grading artifact kind: {artifact.source}") from error
     if artifact.kind != ArtifactKind.AUTO and artifact.kind != kind:
         raise SubmissionFailure(f"Grading artifact has the wrong kind: {artifact.source}")
-    remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
-    resources.push_async_callback(
-        cleanup.run, "artifact_archive_remove", partial(_remove_archive, machine, remote_archive, timeout)
+    remote_directory = f"/tmp/taskcompendium-artifact-{uuid4().hex}"
+    remote_archive = f"{remote_directory}/archive.tar"
+    prepared = await machine.run(
+        Command(
+            (
+                "sh",
+                "-c",
+                'umask 077; mkdir "$1" && chmod 755 "$1" && : > "$1/archive.tar" && chmod 666 "$1/archive.tar"',
+                "artifact-directory",
+                remote_directory,
+            ),
+            timeout=timeout,
+            user="0",
+            env={"PATH": "/usr/bin:/bin"},
+        )
     )
+    if prepared.exit_code != 0:
+        raise RuntimeError("Cannot create protected artifact directory")
+    resources.push_async_callback(
+        cleanup.run, "artifact_archive_remove", partial(_remove_archive, machine, remote_directory, timeout)
+    )
+    # The agent can write this file, but the root-owned parent prevents pathname replacement.
     result = await machine.run(
         Command(
             argv=(
@@ -255,11 +272,12 @@ async def _download_artifact(
                 "." if kind == ArtifactKind.DIRECTORY else PurePosixPath(artifact.source).name,
             ),
             timeout=timeout,
-            user="0",
         )
     )
+    if result.reason is ExitReason.TIMED_OUT:
+        raise TimeoutError(f"Grading artifact archive timed out: {artifact.source}")
     if result.exit_code != 0:
-        raise SubmissionFailure(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
+        raise RuntimeError(f"Cannot archive grading artifact {artifact.source}: exit={result.exit_code}")
     archive_path = target.with_suffix(".tar")
     await machine.download(remote_archive, archive_path, max_bytes=MAX_ARTIFACT_ARCHIVE_BYTES)
     extracted = target.with_suffix(".contents")
