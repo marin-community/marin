@@ -53,12 +53,13 @@ from types import ModuleType
 
 from pydantic import TypeAdapter
 
+from taskforge.atomic_file import write_atomic
 from taskforge.build.author import PROGRAM_FILE, Revision, author, load_program
 from taskforge.build.infrastructure import HOST_REJECTIONS, BuildInfrastructureFailure
 from taskforge.build.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
 from taskforge.build.sdk import BuildFailure, BuildServices
 from taskforge.build.step import CacheStatus
-from taskforge.canonical import pretty_json, sha256_hex, write_atomic
+from taskforge.content_hash import pretty_json, sha256_hex
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry, SpanFields, check_item_id, span
 from taskforge.llm.client import Completion, GlmClient, GlmUnavailable
