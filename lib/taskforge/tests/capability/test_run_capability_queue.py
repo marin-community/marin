@@ -31,7 +31,6 @@ TASKFORGE = Path(__file__).parents[2]
 SCRIPT = TASKFORGE / "scripts" / "run_capability_queue.py"
 EXAMPLE = TASKFORGE / "docs" / "policy.example.json"
 CAPABILITY_ID = "d01.algebra.linear-transformations"
-LIVE_EVIDENCE = TASKFORGE / ".evidence" / "capability_queue"
 TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
 PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
 SECTION = "A technician reconciles the stock sheet against the labels and records the total in millilitres. " * 4
@@ -155,10 +154,10 @@ def test_an_unknown_capability_is_refused_before_the_run_starts(tmp_path):
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(10800)
-async def test_one_capability_through_the_queue_live(glm_settings, image_cache, capability_catalog):
+async def test_one_capability_through_the_queue_live(glm_settings, image_cache, capability_catalog, evidence_root):
     script = load_script()
     ideas = script.selected_ideas(capability_catalog, [CAPABILITY_ID])
-    root = LIVE_EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
+    root = evidence_root / "capability_queue" / time.strftime("%Y%m%d-%H%M%S")
     example = load_run_config(EXAMPLE)
     web = os.environ.get(PARALLEL_KEY_FILE_ENV)
     config = replace(

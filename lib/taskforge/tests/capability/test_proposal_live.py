@@ -4,8 +4,8 @@
 """Live validation of the capability proposal source against GLM-5.3 on the interactive tier.
 
 Runs ``CapabilitySource.propose`` with 10 slots on each of two real catalog capabilities. Evidence
-goes to ``lib/taskforge/.evidence/proposal/run-<timestamp>/<capability>/``: the planning request
-and completions, and per slot the request messages, the completions, and the rendered ``.md`` (or
+goes to ``<evidence_root>/proposal/run-<timestamp>/<capability>/``: the planning request and
+completions, and per slot the request messages, the completions, and the rendered ``.md`` (or
 the raw replies of a slot that failed). ``summary.json`` has parse and repair counts, pairings,
 wall time, and tokens per slot.
 """
@@ -24,7 +24,6 @@ from taskforge.proposal.model import render
 from taskforge.proposal.source import SlotFailure, SlotProposal
 from taskforge.proposal.sources.capability import CapabilityIdea, CapabilitySource, load_capability_ideas
 
-EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".evidence" / "proposal"
 CAPABILITY_IDS = ("d01.algebra.linear-transformations", "d27.reporting.close_measurement")
 SLOTS = 10
 
@@ -114,13 +113,18 @@ async def run_capability(source: CapabilitySource, idea: CapabilityIdea, out: Pa
     }
 
 
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "proposal"
+
+
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-def test_capability_source_on_two_real_capabilities(glm_settings, capability_catalog):
+def test_capability_source_on_two_real_capabilities(glm_settings, capability_catalog, evidence_dir):
     ideas = load_capability_ideas(capability_catalog)
     endpoint = GlmEndpoint(base_url=glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
     policy = LLMPolicy()
-    out = EVIDENCE_DIR / time.strftime("run-%Y%m%d-%H%M%S")
+    out = evidence_dir / time.strftime("run-%Y%m%d-%H%M%S")
 
     async def go() -> list[dict]:
         async with GlmClient(endpoint) as client:

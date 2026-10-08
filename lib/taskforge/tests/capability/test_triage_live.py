@@ -3,10 +3,10 @@
 
 """Live validation of triage against GLM-5.3 on the interactive tier.
 
-Evaluates every proposal the proposal builder saved under ``.evidence/proposal/`` with
+Evaluates every proposal the proposal builder saved under ``<evidence_root>/proposal/`` with
 ``RUBRIC_SAMPLES`` rubric samples each, then repairs up to ``REPAIRS`` of the REPAIR verdicts and
-re-evaluates them. Evidence goes to
-``lib/taskforge/.evidence/triage/run-<timestamp>/``: ``calls/`` is the CallStore (every request and
+re-evaluates them. ``evidence_root`` is the fixture in ``tests/conftest.py``. Evidence goes to
+``<evidence_root>/triage/run-<timestamp>/``: ``calls/`` is the CallStore (every request and
 full response), ``verdicts/`` one verdict per proposal, ``repairs/`` each rewritten document and its
 new verdict, and ``summary.json`` the distributions, wall time, and tokens per evaluation.
 """
@@ -29,8 +29,6 @@ from taskforge.triage.checks import ALL_COMBINATIONS, CHECKS, CheckContext, Chec
 from taskforge.triage.program import GlmRubric, evaluate, sample_decision
 from taskforge.triage.verdict import RubricAxis, TriageDecision, Verdict
 
-EVIDENCE_ROOT = Path(__file__).resolve().parents[2] / ".evidence"
-PROPOSALS = EVIDENCE_ROOT / "proposal"
 REPAIRS = 3
 RUBRIC_SAMPLES = 3
 
@@ -110,14 +108,15 @@ async def repair_and_reevaluate(
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-def test_triage_on_proposal_evidence(glm_settings, capability_catalog):
+def test_triage_on_proposal_evidence(glm_settings, capability_catalog, evidence_root):
     ideas = load_capability_ideas(capability_catalog)
     sources = {source_ref(idea): capability_prompt_record(idea) for idea in ideas.values()}
-    paths = sorted(PROPOSALS.rglob("*.md"))
-    assert paths, f"no proposals under {PROPOSALS}; run the proposal live test first"
-    names = ["__".join(path.relative_to(PROPOSALS).with_suffix("").parts) for path in paths]
+    proposal_dir = evidence_root / "proposal"
+    paths = sorted(proposal_dir.rglob("*.md"))
+    assert paths, f"no proposals under {proposal_dir}; run the proposal live test first"
+    names = ["__".join(path.relative_to(proposal_dir).with_suffix("").parts) for path in paths]
     proposals = [parse(path.read_text()) for path in paths]
-    out = EVIDENCE_ROOT / "triage" / f"run-{time.strftime('%Y%m%d-%H%M%S')}"
+    out = evidence_root / "triage" / f"run-{time.strftime('%Y%m%d-%H%M%S')}"
     (out / "verdicts").mkdir(parents=True)
     (out / "repairs").mkdir()
     (out / "errors").mkdir()
