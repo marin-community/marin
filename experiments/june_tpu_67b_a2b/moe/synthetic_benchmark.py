@@ -126,6 +126,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
+    parser.add_argument(
+        "--step-timeout",
+        type=float,
+        default=300.0,
+        help="Exit with status 1 if a step takes longer than this many seconds (0 disables). "
+        "The first step and watch steps have no timeout.",
+    )
     return parser.parse_args()
 
 
@@ -218,7 +225,11 @@ def main() -> None:
         resources=ResourceConfig(),
         optimizer=AdamConfig(learning_rate=args.learning_rate, warmup=0.0),
         trainer=GrugTrainerConfig(
-            trainer=trainer, expert_axis_size=args.expert_axis, replica_axis_size=1, save_checkpoints=False
+            trainer=trainer,
+            expert_axis_size=args.expert_axis,
+            replica_axis_size=1,
+            save_checkpoints=False,
+            step_timeout=args.step_timeout or None,
         ),
         eval=None,
     )
