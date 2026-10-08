@@ -4,6 +4,7 @@
 """Select bounded workspace files without granting access to private grading mounts."""
 
 import fnmatch
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 
 from rigging.filesystem.path_validation import validate_relative_file_path
@@ -90,7 +91,7 @@ def validate_output_directories(selections: tuple[OutputDirectory, ...], workspa
             raise ValueError(f"Output directory overlaps private mounts or escapes workspace: {selection.root}")
 
 
-def selected_directory_files(selection: OutputDirectory, files: dict[str, bytes]) -> dict[str, bytes]:
+def selected_directory_files(selection: OutputDirectory, files: Mapping[str, bytes]) -> dict[str, bytes]:
     """Recheck submission membership and budgets before transferring files to the grader machine."""
     selected = {}
     total = 0

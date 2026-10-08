@@ -124,6 +124,7 @@ def usable_schema(schema: object) -> dict | Rejected:
     if not isinstance(schema, dict) or not schema:
         return Rejected(ConvertStatus.NULL_GRADER, f"schema missing or not an object: {type(schema).__name__}")
     normalized = normalize_schema(schema)
+    assert isinstance(normalized, dict)
     if is_trivial(normalized):
         return Rejected(ConvertStatus.NULL_GRADER, "schema has no properties or required fields to check")
     error = schema_error(normalized)
