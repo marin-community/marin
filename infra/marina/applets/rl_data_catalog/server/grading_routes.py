@@ -24,6 +24,7 @@ class GradingMode(StrEnum):
 
 
 class VerifyitMode(StrEnum):
+    MCQ = "mcq"
     SCRIPT = "script"
     EXACT = "exact"
     MATH = "math"
@@ -77,7 +78,9 @@ def skyrl_grading_routes(
     bindings = {"self.verifyit_enabled": mode == GradingMode.VERIFYIT, "verifyit_enabled": mode == GradingMode.VERIFYIT}
     environment = row["environment"]
     if environment != "nemotron_ultra":
-        if environment == "lcb" and mode == GradingMode.VERIFYIT:
+        if environment == "mcq":
+            bindings[VERIFYIT_MODES_BINDING] = [VerifyitMode.MCQ]
+        elif environment == "lcb" and mode == GradingMode.VERIFYIT:
             roots[LCB_EXECUTION_MODULE] = ["_execute"]
             bindings[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT, VerifyitMode.EXACT]
         elif environment == "text_to_sql" and mode == GradingMode.VERIFYIT:
@@ -92,7 +95,9 @@ def skyrl_grading_routes(
         selected = {module: list(names) for module, names in roots.items()}
         values = {**bindings, "self.agent": agent}
         resources = ()
-        if agent in {"ns_tools_simple_agent", "math_with_judge_simple_agent"} and mode == GradingMode.VERIFYIT:
+        if agent == "mcqa_simple_agent":
+            values[VERIFYIT_MODES_BINDING] = [VerifyitMode.MCQ]
+        elif agent in {"ns_tools_simple_agent", "math_with_judge_simple_agent"} and mode == GradingMode.VERIFYIT:
             selected[NEMOTRON_PREFIX + "math_judge_verifyit"] = ["_evaluate"]
             values[VERIFYIT_MODES_BINDING] = [VerifyitMode.SCRIPT, VerifyitMode.MATH, VerifyitMode.JUDGE]
         elif agent in JUDGE_AGENTS or agent.startswith("jailbreak_"):

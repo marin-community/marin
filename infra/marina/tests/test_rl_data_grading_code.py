@@ -12,6 +12,7 @@ from infra.marina.applets.rl_data_catalog.server.grading_dependencies import (
     locked_grading_packages,
     verifyit_repository,
 )
+from infra.marina.applets.rl_data_catalog.server.grading_routes import skyrl_grading_routes
 
 GRADER = '''
 from shared.math import compare
@@ -133,6 +134,36 @@ class Modules:
         if module not in self.modules:
             raise ModuleNotFoundError(module)
         return self.modules[module]
+
+
+def test_mcq_source_ignores_unrelated_verifier_modes() -> None:
+    modules = {
+        "skyrl_gym.envs.mcq.env": (
+            "from verifyit.spec import McqSpec\nclass Env:\n"
+            " def __init__(self):\n  self.spec = McqSpec()\n"
+            " def step(self, answer):\n  return self.spec.mode\n"
+        ),
+        "skyrl_gym.envs.base_text_env": (
+            "class BaseTextEnv:\n def init(self,x):\n  return x\n"
+            " def close(self):\n  pass\n def set_rollout_evidence(self,x):\n  pass\n"
+        ),
+        "skyrl_train.trajectory_runners.skyrl_gym_contracts": (
+            "def verification_from_env_step(x):\n return x\ndef fold_verification_results(x):\n return x\n"
+        ),
+        "verifyit.spec": (
+            'from enum import StrEnum\nclass Mode(StrEnum):\n MCQ="mcq"\n PYTEST="pytest"\n'
+            "class McqSpec:\n mode=Mode.MCQ\n"
+        ),
+    }
+    row = {"environment": "mcq", "gym_entrypoint": "skyrl_gym.envs.mcq.env:Env", "verifier_mode": "verifyit"}
+    source = Modules(modules)
+    route = skyrl_grading_routes(row, source, ())[0]
+    packages = ("skyrl_gym", "skyrl_train", "verifyit")
+    original = python_grading_program(source, route.roots, packages, route.bindings)
+    unrelated = {**modules, "verifyit.spec": modules["verifyit.spec"].replace('PYTEST="pytest"', 'PYTEST="new-pytest"')}
+    assert python_grading_program(Modules(unrelated), route.roots, packages, route.bindings).digest == original.digest
+    changed = {**modules, "verifyit.spec": modules["verifyit.spec"].replace('MCQ="mcq"', 'MCQ="changed-mcq"')}
+    assert python_grading_program(Modules(changed), route.roots, packages, route.bindings).digest != original.digest
 
 
 def test_grading_program_tracks_only_reachable_imported_graders() -> None:
