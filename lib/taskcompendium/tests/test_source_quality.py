@@ -168,7 +168,7 @@ def test_missing_responses_do_not_count_as_defects_or_replace_trust_threshold(kn
         (49, 11, 0, "incomplete"),
         (51, 9, 0, "incomplete"),
         (50, 48, 1, "full_review"),
-        (49, 49, 1, "incomplete"),
+        (49, 49, 1, "full_review"),
     ],
 )
 def test_missing_reviews_cannot_block_a_certain_middle_band(good, defects, uncertain, expected):
@@ -193,6 +193,31 @@ def test_missing_reviews_cannot_block_a_certain_middle_band(good, defects, uncer
     assert report.assessments.get(Assessment.DEFECT, 0) == defects
     assert report.assessments[Assessment.UNAVAILABLE] == 100 - good - defects - uncertain
     assert report.defect_fraction is None
+
+
+@pytest.mark.parametrize("unavailable,expected", [(2, "full_review"), (3, "incomplete")])
+def test_unusable_raw_rows_do_not_count_as_resolvable_when_bounding_the_decision(unavailable, expected):
+    """A raw panel with 48 defects, 20 unsupported rows and 2 missing reviews is decided: even two more
+    defects reach only the 50% threshold, so resuming the sample cannot change the outcome."""
+    usable = 80
+    ids = tuple(str(i) for i in range(usable))
+    good = usable - 48 - unavailable
+    reviews = (
+        [reviewed(task_id) for task_id in ids[:good]]
+        + [reviewed(task_id, Quality.BAD) for task_id in ids[good : good + 48]]
+        + [
+            ReviewRecord(task_id=task_id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="HTTP 400")
+            for task_id in ids[good + 48 :]
+        ]
+    )
+    report = source_quality_report(
+        QualitySample(100, usable, {"normalization:unsupported": 20}, {"numeric": usable}, ids),
+        reviews,
+        SourceQualityPolicy(),
+        coverage=QualitySampleCoverage.RAW_SAMPLE,
+    )
+    assert report.assessments[Assessment.UNUSABLE] == 20
+    assert report.status == expected
 
 
 @pytest.mark.parametrize("good,expected", [(4, SourceQualityStatus.REJECT), (5, SourceQualityStatus.CENSUS)])

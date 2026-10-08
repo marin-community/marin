@@ -227,8 +227,10 @@ def source_quality_report(
     # provide neither good judgments nor evidence of bad source content.
     known_defects = counts[Assessment.DEFECT] / panel_size if panel_size else 0.0
     known_good = counts[Assessment.GOOD] / panel_size if panel_size else 0.0
-    possible_good = (counts[Assessment.GOOD] + unresolved) / panel_size if panel_size else 0.0
-    possible_defects = (counts[Assessment.DEFECT] + unresolved) / panel_size if panel_size else 0.0
+    # Only unavailable responses change on resume; uncertain judgments and unusable rows stay as they are.
+    resolvable = counts[Assessment.UNAVAILABLE]
+    possible_good = (counts[Assessment.GOOD] + resolvable) / panel_size if panel_size else 0.0
+    possible_defects = (counts[Assessment.DEFECT] + resolvable) / panel_size if panel_size else 0.0
     if known_defects > policy.reject_above:
         status, reason = SourceQualityStatus.REJECT, "Known defects exceed the rejection threshold over the whole panel"
     elif not reviews:
