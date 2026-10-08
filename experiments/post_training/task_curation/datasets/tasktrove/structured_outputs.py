@@ -15,8 +15,14 @@ import json
 from taskcompendium.convert.answers import answer_task, json_schema_task, source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
-from taskcompendium.convert.tasktrove_converted_task import archive_conversion
-from taskcompendium.convert.tasktrove_nemotron_structured_outputs import convert_nemotron_structured_outputs
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, ConvertStatus, Rejected, archive_conversion
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from taskcompendium.convert.tasktrove_nemotron_structured_outputs import (
+    MISSING_INSTRUCTION,
+    SchemaType,
+    graded_by,
+)
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -85,8 +91,34 @@ def invalid_contract(detail: str) -> ImportRejection:
     return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_structured_contract", detail=detail)
 
 
+def _format_conversion(task: TaskFiles) -> ConvertedTask | Rejected:
+    """The format contract of a structured-output task, graded in process.
+
+    The TaskTrove release wraps this contract in a script that also asks a judge whether the values
+    are grounded in the document; the curation pipeline has no judge control path yet, so it grades
+    the format alone. TODO(rl-data): grounded-value judge once a judge control exists.
+    """
+    data = verifier_data(task)
+    raw_type = data.get("schema_type")
+    try:
+        schema_type = SchemaType(raw_type)
+    except ValueError:
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"unknown schema_type {raw_type!r}")
+    graded = graded_by(schema_type, data.get("schema"))
+    if isinstance(graded, Rejected):
+        return graded
+    spec, data_files = graded
+    return ConvertedTask(
+        instruction=task.text(INSTRUCTION) + MISSING_INSTRUCTION,
+        spec=spec,
+        dockerfile=task.text(DOCKERFILE),
+        tags=("structured-outputs", "nemotron", schema_type.value),
+        data_files=data_files,
+    )
+
+
 def convert_structured_outputs(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    converted = archive_conversion(row.data, convert_nemotron_structured_outputs)
+    converted = archive_conversion(row.data, _format_conversion)
     if isinstance(converted, ImportRejection):
         return converted
     original = converted.instruction
