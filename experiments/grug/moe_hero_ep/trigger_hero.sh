@@ -139,6 +139,8 @@ printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator 
 gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
 
+# The memory fraction and XLA flags come from `_apply_hero_ep_runtime_defaults` in train.py. An
+# explicit value here takes precedence and would replace the carry-offload memory budget.
 IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-extra-resources \
   --target-cluster "$TARGET_CLUSTER" \
   --priority system \
@@ -150,8 +152,6 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32614 \
-  -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.75 \
-  -e XLA_FLAGS "--xla_gpu_memory_limit_slop_factor=85" \
   -- python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \
