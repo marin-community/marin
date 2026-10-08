@@ -217,6 +217,19 @@ def capability_prompt_record(idea: CapabilityIdea) -> dict[str, object]:
     }
 
 
+def capability_idea_record(idea: CapabilityIdea) -> dict[str, object]:
+    """The idea record ``run_idea`` writes to ``items/idea--<id>/idea.json``: the identifiers the viewer lists
+    and the record the models were shown."""
+    return {
+        "capability_id": idea.capability_id,
+        "subject_id": idea.subject_id,
+        "subject_name": idea.subject_name,
+        "catalog_version": idea.catalog_version,
+        "capability_hash": idea.capability_hash,
+        "record": capability_prompt_record(idea),
+    }
+
+
 def plan_prompt(idea: CapabilityIdea, n: int) -> str:
     return f"""Design a portfolio of exactly {n} genuinely different task proposals for this capability.
 Diversity means different workflows, artifacts, failure modes, and reasoning, not renamed entities or

@@ -12,8 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import Pool
-from taskforge.loop.events import Terminal
+from taskforge.loop.events import EventKind, ProposalOrigin, Terminal
+from taskforge.loop.program import IDEA_FILE, IDEA_PREFIX, ITEMS_DIR, LEDGER_DIR
 from taskforge.proposal.model import REQUIRED_HEADINGS
 from taskforge.queue.config import LaptopGlm, load_run_config
 from taskforge.queue.job import SUMMARY_FILE, run_job
@@ -114,6 +117,12 @@ async def test_a_named_capability_is_proposed_triaged_against_its_catalog_record
     review_request = json.dumps(fake_glm.requests[2]["messages"])
     assert "Linear transformations" in review_request
     assert json.loads((config.root / SUMMARY_FILE).read_text())["items"] == {f"{CAPABILITY_ID}--1": "rejected"}
+    idea_record = json.loads((config.root / ITEMS_DIR / f"{IDEA_PREFIX}{CAPABILITY_ID}" / IDEA_FILE).read_text())
+    assert idea_record["capability_id"] == CAPABILITY_ID
+    assert idea_record["capability_hash"] == ideas[CAPABILITY_ID].capability_hash
+    entries = read_entries(JsonlLedger(config.root / LEDGER_DIR).path_for(f"{CAPABILITY_ID}--1"))
+    (opened,) = [e for e in entries if e.kind is EntryKind.EVENT and e.step == EventKind.OPENED]
+    assert opened.attrs["origin"] == ProposalOrigin.GENERATED
 
 
 def test_an_unknown_capability_is_refused_before_the_run_starts(tmp_path):

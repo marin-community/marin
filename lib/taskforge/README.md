@@ -79,6 +79,8 @@ or on a package the order does not name.
 - `proposal.sources.capability.CapabilitySource(client, policy)` is the `ProposalSource` for
   catalog capabilities (`load_capability_ideas(path)` reads the catalog). `proposal_prefix(id, idea)`
   is the front matter's fixed opening, which the prompt dictates and the document repair prefills.
+  `capability_idea_record(idea)` is the capability run's `describe_idea`: the capability id, subject
+  id and name, catalog version, capability hash, and the prompt record the models were shown.
 - `proposal.model.TaskProposal`: YAML front matter (`ProposalHeader`) plus a markdown body with
   required section headings. `parse` and `render` round-trip it; `digest` is the sha256 of the
   canonical form.
