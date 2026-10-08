@@ -27,7 +27,7 @@ from marin.processing.classification.deduplication.cluster_verify import (
     ClusterVerifiedFuzzyDupsAttrData,
     VerifiedFuzzyDupsPerSource,
 )
-from marin.processing.tokenize.attributes import TokenizedAttrData
+from marin.processing.tokenize.attributes import TokenizedAttrData, iter_tokenized_documents
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
@@ -35,7 +35,6 @@ from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExa
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
     ClusteredStoreData,
-    _iter_tokenized_documents,
     build_clustered_store,
 )
 
@@ -463,7 +462,7 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
         ),
     )
 
-    documents = [(doc_id, list(tokens)) for doc_id, tokens in _iter_tokenized_documents(path)]
+    documents = [(doc_id, list(tokens)) for doc_id, tokens in iter_tokenized_documents(path)]
     assert documents == [("a", [1, 2, 3]), ("b", [4]), ("b", [5, 6])]
 
     orphan_path = str(tmp_path / "orphan.parquet")
@@ -479,7 +478,7 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="chunk 1 of b, but chunk 1 of a must come next"):
-        list(_iter_tokenized_documents(orphan_path))
+        list(iter_tokenized_documents(orphan_path))
 
     # Out of order within one id: concatenating in file order would silently
     # reverse a document's tokens.
@@ -496,7 +495,7 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="chunk 2 of a, but chunk 1 of a must come next"):
-        list(_iter_tokenized_documents(shuffled_path))
+        list(iter_tokenized_documents(shuffled_path))
 
 
 def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
@@ -505,4 +504,4 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
     _write_parquet(path, pa.table({"id": ["a"], "input_ids": pa.array([[1, 2]])}))
 
     with pytest.raises(RuntimeError, match="no chunk_index column"):
-        list(_iter_tokenized_documents(path))
+        list(iter_tokenized_documents(path))

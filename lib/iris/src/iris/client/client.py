@@ -930,6 +930,7 @@ class IrisClient:
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
@@ -959,7 +960,14 @@ class IrisClient:
                 for sandboxing untrusted child workloads).
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
-                admin role at submission when auth is enabled.
+                admin role at submission when auth is enabled. SANDBOX sends only
+                ``environment.env_vars`` and ``environment.setup_scripts``, no
+                workspace bundle, and skips parent env inheritance (see
+                ``EnvironmentSpec.to_sandbox_proto``).
+            egress_policy: What the job's network reaches: CLUSTER, INTERNET
+                (public addresses only) or NONE. UNSPECIFIED resolves to
+                INTERNET for SANDBOX and CLUSTER otherwise; SANDBOX rejects
+                CLUSTER.
 
         Returns:
             Job handle for the submitted job
@@ -994,13 +1002,15 @@ class IrisClient:
         # from the parent. A child that specifies its own setup (explicit
         # setup_scripts, or builder inputs to rebuild the default) takes control of
         # its environment; one that specifies only env vars (or nothing) reuses the
-        # parent's setup so it lands in the same environment.
+        # parent's setup so it lands in the same environment. A sandbox child
+        # inherits neither; placement constraints still apply.
+        sandboxed = container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
         if parent_job_id:
             job_info = get_job_info()
-            inherited = dict(job_info.env) if job_info else {}
+            inherited = dict(job_info.env) if job_info and not sandboxed else {}
             child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
 
-            parent_setup_scripts = job_info.setup_scripts if job_info else None
+            parent_setup_scripts = job_info.setup_scripts if job_info and not sandboxed else None
 
             if environment:
                 child_owns_setup = (
@@ -1043,7 +1053,10 @@ class IrisClient:
 
         # Convert to wire format
         resources_proto = resources.to_proto()
-        environment_proto = environment.to_proto() if environment else None
+        if sandboxed:
+            environment_proto = (environment or EnvironmentSpec()).to_sandbox_proto()
+        else:
+            environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 
@@ -1067,6 +1080,7 @@ class IrisClient:
                 task_image=task_image,
                 priority_band=priority_band,
                 container_profile=container_profile,
+                egress_policy=egress_policy,
                 submit_argv=submit_argv,
             )
         except ConnectError as e:

@@ -8,13 +8,14 @@ import json
 
 import pytest
 
-from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
-from taskcompendium.pipeline.models import ImportRejection, RawRow
+from taskcompendium.pipeline.models import CheckStatus, ImportRejection, RawRow
+from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import PlainText
 
 
 def row(name, instruction, data):
@@ -32,9 +33,9 @@ def row(name, instruction, data):
 
 
 def grade(task, answer):
-    return grade_answer(
+    return grade_task(
         task,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 
@@ -89,6 +90,45 @@ def test_numeric_scope_and_tolerance_survive_delivery_normalization():
     assert grade(task, "0.541").reward == 0.0
 
 
+@pytest.mark.parametrize(
+    "expected,correct,wrong",
+    [
+        (0.1, "0.1", "0.10000000000000001"),
+        (9007199254740993, "9007199254740993", "9007199254740992"),
+        ("9007199254740993", "9007199254740993", "9007199254740992"),
+        ("1/3", "1/3", "0.3333333333333333"),
+    ],
+)
+def test_numeric_source_literals_preserve_scoring_precision(expected, correct, wrong):
+    task = atlas_math_qa.normalize(
+        row(
+            "advanced_calculations",
+            "Return the final numeric answer.",
+            {"expected_value": expected, "tolerance_abs": 0, "tolerance_rel": 0},
+        ),
+        "advanced_calculations",
+    )
+    assert isinstance(task, TaskSpec)
+    assert grade(task, correct).reward == 1.0
+    assert grade(task, wrong).reward == 0.0
+
+
+@pytest.mark.parametrize("expected,absolute", [("9" * 4096, 0.0), ("-" + "9" * 4096, 0.0), ("1/" + "9" * 4096, 1e308)])
+def test_numeric_boundary_references_complete_pipeline_grading_controls(expected, absolute):
+    task = atlas_math_qa.normalize(
+        row(
+            "advanced_calculations",
+            "Return the final numeric answer.",
+            {"expected_value": expected, "tolerance_abs": absolute, "tolerance_rel": 0.0},
+        ),
+        "advanced_calculations",
+    )
+    assert isinstance(task, TaskSpec)
+    controls = verify_task(task)
+    assert {control.check for control in controls} == {"empty", "reference", "perturbed"}
+    assert all(control.status is CheckStatus.PASS for control in controls)
+
+
 @pytest.mark.parametrize("name", ["knowledge_mcqa", "web_search_mcqa"])
 def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wrapper(name):
     instruction = "Write to a file.\n---\n\nWhich option equals two?\nA: one\nB: two\nC: three"
@@ -99,7 +139,7 @@ def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wr
     assert "A: one\nB: two\nC: three" in task.context.events[0].content
     assert grade(task, "B").reward == 1.0
     assert grade(task, "A").reward == 0.0
-    assert grade(task, "Answer: B").status == Outcome.EXTRACTION_ERROR
+    assert (grade(task, "Answer: B").status, grade(task, "Answer: B").reward) == (Outcome.GRADED, 0.0)
     assert not task.resources.worker and not task.resources.all
 
 

@@ -33,7 +33,7 @@ from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
-from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
+from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 
@@ -227,6 +227,8 @@ class DaytonaMachine:
 
 class DaytonaMachineFactory:
     """Create a Daytona sandbox from a registry image or Docker build context."""
+
+    backend: Backend = Backend.DAYTONA
 
     def __init__(
         self,

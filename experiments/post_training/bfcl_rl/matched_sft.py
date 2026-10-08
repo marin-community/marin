@@ -14,15 +14,22 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 
 from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, complement_data_step
-from experiments.post_training.bfcl_rl.matched_sft_data import MatchedChosenCache, MatchedChosenConfig, run_matched_chosen
+from experiments.post_training.bfcl_rl.matched_sft_data import (
+    MatchedChosenCache,
+    MatchedChosenConfig,
+    run_matched_chosen,
+)
 from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache
+
 
 def matched_chosen_step(source: ArtifactStep[RecoveryPreferenceCache], *, seed: int, presentations: int) -> ArtifactStep:
     data = complement_data_step()
     name = user_owned_name("data/bfcl-rl-matched-chosen")
 
     def build_config(ctx: StepContext) -> MatchedChosenConfig:
-        return MatchedChosenConfig(ctx.artifact_path(source), ctx.artifact_path(data), seed, presentations, ctx.output_path)
+        return MatchedChosenConfig(
+            ctx.artifact_path(source), ctx.artifact_path(data), seed, presentations, ctx.output_path
+        )
 
     return ArtifactStep(
         name=name,
@@ -42,7 +49,9 @@ def matched_chosen_step(source: ArtifactStep[RecoveryPreferenceCache], *, seed: 
 @rl_build_options
 def main(preference_name: str, preference_version: str, seed: int, presentations: int) -> ArtifactStep:
     name = user_owned_name(preference_name)
-    source = ArtifactStep.adopt(name + "-input", preference_version, f"{name}/{preference_version}", kind=RecoveryPreferenceCache)
+    source = ArtifactStep.adopt(
+        name + "-input", preference_version, f"{name}/{preference_version}", kind=RecoveryPreferenceCache
+    )
     step = matched_chosen_step(source, seed=seed, presentations=presentations)
     return replace(step, runtime_args={"execution": COLLECTION_EXECUTION})
 

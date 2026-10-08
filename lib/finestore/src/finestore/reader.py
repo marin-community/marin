@@ -8,9 +8,12 @@ from __future__ import annotations
 import heapq
 import io
 import itertools
+import threading
+import time
 from collections import defaultdict
-from collections.abc import Generator, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, closing
+from dataclasses import dataclass, replace
 from typing import BinaryIO, ClassVar, Protocol
 
 import pyarrow as pa
@@ -19,6 +22,7 @@ import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
@@ -37,15 +41,58 @@ from finestore.layout import (
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 
 
+@dataclass
+class BlobReadDiagnostics:
+    """Cumulative batch-read work; returned bytes exclude storage read amplification."""
+
+    read_calls: int = 0
+    requested_names: int = 0
+    found_names: int = 0
+    descriptor_seconds: float = 0.0
+    payload_seconds: float = 0.0
+    descriptor_lookups: int = 0
+    selected_shards: int = 0
+    bytes_returned: int = 0
+
+    def add(self, other: BlobReadDiagnostics) -> None:
+        self.read_calls += other.read_calls
+        self.requested_names += other.requested_names
+        self.found_names += other.found_names
+        self.descriptor_seconds += other.descriptor_seconds
+        self.payload_seconds += other.payload_seconds
+        self.descriptor_lookups += other.descriptor_lookups
+        self.selected_shards += other.selected_shards
+        self.bytes_returned += other.bytes_returned
+
+
+_BLOB_READ_CALLS = telemetry.counter("finestore_blob_read_calls", unit="{call}")
+_BLOB_REQUESTED_NAMES = telemetry.counter("finestore_blob_requested_names", unit="{name}")
+_BLOB_FOUND_NAMES = telemetry.counter("finestore_blob_found_names", unit="{name}")
+_BLOB_RETURNED_BYTES = telemetry.counter("finestore_blob_returned_bytes", unit="By")
+_BLOB_DESCRIPTOR_LOOKUPS = telemetry.counter("finestore_blob_descriptor_lookups", unit="{lookup}")
+_BLOB_DESCRIPTOR_SECONDS = telemetry.histogram("finestore_blob_descriptor_seconds", unit="s")
+_BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", unit="s")
+_BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
+
+
+class _BlobReadHandler(FSSpecHandler):
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
+        # read-ahead, which can fetch unrelated inline blobs after a small read.
+        return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
+
+
 @dataclass(frozen=True)
 class _ScanProfile:
     batch_rows: int
     batch_readahead: int
     fragment_readahead: int
+    pre_buffer: bool = True
 
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
-_BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1)
+_BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 
 
 @dataclass(frozen=True)
@@ -108,6 +155,42 @@ class BlobDescriptor:
         if part_count is not None and not isinstance(part_count, int):
             raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
         return cls(name=name, size=size, metadata_json=metadata_json, data=data, part_count=part_count)
+
+
+def _validated_blob_parts(descriptor: BlobDescriptor, rows: Iterable[Mapping[str, object]]) -> Iterator[bytes]:
+    """Yield a descriptor's bytes while checking its committed part and size metadata."""
+    name = descriptor.name
+    part_count = descriptor.part_count
+    if part_count is None:
+        data = descriptor.data
+        if data is None:
+            raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
+        if descriptor.size is not None and len(data) != descriptor.size:
+            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
+        yield data
+        return
+    if part_count <= 0:
+        raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
+    expected_part = 0
+    total_bytes = 0
+    for row in rows:
+        part = row.get(BlobColumns.PART)
+        if not isinstance(part, int):
+            raise BlobCorruptionError(f"blob {name!r} has invalid part number {part!r}")
+        if part >= part_count:
+            break
+        if part != expected_part:
+            raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
+        data = row.get(BlobColumns.DATA)
+        if not isinstance(data, bytes):
+            raise BlobCorruptionError(f"blob {name!r} part {part} has invalid data")
+        total_bytes += len(data)
+        expected_part += 1
+        yield data
+    if expected_part != part_count:
+        raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
+    if descriptor.size is not None and total_bytes != descriptor.size:
+        raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
 
 
 class _BlobReader(io.RawIOBase):
@@ -222,36 +305,40 @@ def iter_shard_rows(
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
-) -> Iterator[VersionedRow]:
+) -> Generator[VersionedRow, None, None]:
     """Yield rows from one shard in primary-key order with version coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    if shard.primary_key_sorted:
-        batches = dataset.scanner(
-            columns=columns,
-            filter=_build_filter(where),
-            use_threads=False,
-            batch_size=scan_profile.batch_rows,
-            batch_readahead=scan_profile.batch_readahead,
-            fragment_readahead=scan_profile.fragment_readahead,
-        ).to_batches()
-    else:
-        source = dataset.to_table(columns=columns, filter=_build_filter(where))
-        sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-        batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
-    for batch in batches:
-        for row in batch.to_pylist():
-            commit_sequence = row.get(SystemColumns.COMMIT)
-            if commit_sequence is None:
-                commit_sequence = shard.commit_sequence
-            row[SystemColumns.COMMIT] = commit_sequence
-            key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
-            yield VersionedRow(
-                key=key,
-                commit_sequence=commit_sequence,
-                sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                generation=shard.generation,
-                row=row,
+    with ExitStack() as stack:
+        if shard.primary_key_sorted:
+            batches = stack.enter_context(
+                dataset.scanner(
+                    columns=columns,
+                    filter=_build_filter(where),
+                    use_threads=False,
+                    batch_size=scan_profile.batch_rows,
+                    batch_readahead=scan_profile.batch_readahead,
+                    fragment_readahead=scan_profile.fragment_readahead,
+                    fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+                ).to_reader()
             )
+        else:
+            source = dataset.to_table(columns=columns, filter=_build_filter(where))
+            sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
+            batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
+        for batch in batches:
+            for row in batch.to_pylist():
+                commit_sequence = row.get(SystemColumns.COMMIT)
+                if commit_sequence is None:
+                    commit_sequence = shard.commit_sequence
+                row[SystemColumns.COMMIT] = commit_sequence
+                key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+                yield VersionedRow(
+                    key=key,
+                    commit_sequence=commit_sequence,
+                    sequence=row.get(SystemColumns.SEQUENCE) or 0,
+                    generation=shard.generation,
+                    row=row,
+                )
 
 
 def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
@@ -264,7 +351,7 @@ def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[M
 
 
 def _read_plan(
-    root: str,
+    filesystem: PyFileSystem,
     shards: tuple[_ReadableShard, ...],
     primary_key: tuple[str, ...],
     columns: Sequence[str] | None,
@@ -273,8 +360,6 @@ def _read_plan(
     if not shards:
         return None
     pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
-    fs, _ = factory.url_to_fs(root)
-    filesystem = PyFileSystem(FSSpecHandler(fs))
     schema = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
         promote_options="permissive",
@@ -303,7 +388,7 @@ def _read_plan(
     )
 
 
-def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
+def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: _ScanProfile | None = None) -> pa.Table:
     by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
     for shard in plan.shards:
         by_version[(shard.commit_sequence, shard.generation)].append(shard.path)
@@ -311,7 +396,20 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     parts: list[pa.Table] = []
     for (commit_sequence, generation), paths in sorted(by_version.items()):
         dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
-        part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
+        if scan_profile is None:
+            part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
+        else:
+            # Inline blob values can make a compacted shard gigabytes larger than the
+            # requested results. Bound decoding and disable whole-fragment prefetch.
+            part = dataset.scanner(
+                columns=plan.columns,
+                filter=_build_filter(plan.pushdown_where),
+                batch_size=scan_profile.batch_rows,
+                batch_readahead=scan_profile.batch_readahead,
+                fragment_readahead=scan_profile.fragment_readahead,
+                fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+                use_threads=False,
+            ).to_table()
         part = part.append_column(
             SystemColumns.GENERATION,
             pa.array([generation] * part.num_rows, pa.int32()),
@@ -341,6 +439,27 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
 class _ReadOperations:
     """Read operations shared by manifest and legacy listing snapshots."""
 
+    def __init__(self) -> None:
+        self._read_diagnostics = BlobReadDiagnostics()
+        self._read_diagnostics_lock = threading.Lock()
+
+    def read_diagnostics(self) -> BlobReadDiagnostics:
+        """Return a snapshot of cumulative ``read_blobs`` work on this view."""
+        with self._read_diagnostics_lock:
+            return replace(self._read_diagnostics)
+
+    def _record_blob_read(self, diagnostics: BlobReadDiagnostics) -> None:
+        with self._read_diagnostics_lock:
+            self._read_diagnostics.add(diagnostics)
+        _BLOB_READ_CALLS.add(diagnostics.read_calls)
+        _BLOB_REQUESTED_NAMES.add(diagnostics.requested_names)
+        _BLOB_FOUND_NAMES.add(diagnostics.found_names)
+        _BLOB_RETURNED_BYTES.add(diagnostics.bytes_returned)
+        _BLOB_DESCRIPTOR_LOOKUPS.add(diagnostics.descriptor_lookups)
+        _BLOB_DESCRIPTOR_SECONDS.record(diagnostics.descriptor_seconds)
+        _BLOB_PAYLOAD_SECONDS.record(diagnostics.payload_seconds)
+        _BLOB_SELECTED_SHARDS.record(diagnostics.selected_shards)
+
     root: str
 
     def primary_key(self, table: str) -> tuple[str, ...]:
@@ -358,7 +477,9 @@ class _ReadOperations:
         shards = tuple(self.list_shards(table))
         if not shards:
             return None
-        return _read_plan(self.root, shards, self.primary_key(table), columns, where)
+        fs, _ = factory.url_to_fs(self.root)
+        handler = _BlobReadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
+        return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
 
     def scan(
         self,
@@ -395,29 +516,34 @@ class _ReadOperations:
         columns: Sequence[str] | None,
         where: list[tuple[str, str, object]] | None,
         scan_profile: _ScanProfile,
-    ) -> Iterator[dict]:
+    ) -> Generator[dict, None, None]:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return
-        streams = [
-            iter_shard_rows(
-                shard,
-                plan.schema,
-                plan.primary_key,
-                plan.filesystem,
-                plan.columns,
-                plan.pushdown_where,
-                scan_profile,
-            )
-            for shard in plan.shards
-        ]
-        for merged in merge_deduplicated_rows(streams):
-            row = merged.row
-            if not _matches_filter(row, plan.post_dedup_where):
-                continue
-            if columns is not None:
-                row = {name: row[name] for name in columns if name in row}
-            yield row
+        with ExitStack() as stack:
+            streams = [
+                stack.enter_context(
+                    closing(
+                        iter_shard_rows(
+                            shard,
+                            plan.schema,
+                            plan.primary_key,
+                            plan.filesystem,
+                            plan.columns,
+                            plan.pushdown_where,
+                            scan_profile,
+                        )
+                    )
+                )
+                for shard in plan.shards
+            ]
+            for merged in merge_deduplicated_rows(streams):
+                row = merged.row
+                if not _matches_filter(row, plan.post_dedup_where):
+                    continue
+                if columns is not None:
+                    row = {name: row[name] for name in columns if name in row}
+                yield row
 
     def point(self, table: str, **keys) -> dict | None:
         result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
@@ -437,60 +563,91 @@ class _ReadOperations:
 
     def read_blob(self, name: str) -> bytes | None:
         """Return a named blob, or ``None`` when it is absent."""
-        stream = self.open_blob(name)
-        if stream is None:
-            return None
-        with stream:
-            return stream.read()
+        return self.read_blobs((name,)).get(name)
+
+    def read_blobs(self, names: Sequence[str]) -> dict[str, bytes]:
+        """Read named blobs, omitting absent names."""
+        diagnostics = BlobReadDiagnostics(read_calls=1, requested_names=len(set(names)))
+        values: dict[str, bytes] = {}
+        try:
+            if not names:
+                return {}
+            rows = self._blob_descriptors(names, diagnostics=diagnostics)
+            if rows is None:
+                return {}
+            started = time.monotonic()
+            chunked: dict[str, BlobDescriptor] = {}
+            try:
+                for row in rows.to_pylist():
+                    descriptor = BlobDescriptor.from_row(row)
+                    if descriptor.part_count is None:
+                        values[descriptor.name] = b"".join(_validated_blob_parts(descriptor, ()))
+                    else:
+                        chunked[descriptor.name] = descriptor
+                if chunked:
+                    with closing(
+                        self._iter_rows(
+                            BlobTables.PARTS,
+                            columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
+                            where=[(BlobColumns.NAME, "in", list(chunked))],
+                            scan_profile=_BLOB_PART_SCAN_PROFILE,
+                        )
+                    ) as part_rows:
+                        for name, group in itertools.groupby(part_rows, key=lambda row: row[BlobColumns.NAME]):
+                            values[name] = b"".join(_validated_blob_parts(chunked[name], group))
+                    for name, descriptor in chunked.items():
+                        if name not in values:
+                            values[name] = b"".join(_validated_blob_parts(descriptor, ()))
+            finally:
+                diagnostics.payload_seconds += time.monotonic() - started
+            diagnostics.found_names = len(values)
+            diagnostics.bytes_returned = sum(len(value) for value in values.values())
+            return values
+        finally:
+            self._record_blob_read(diagnostics)
+
+    def _blob_descriptors(
+        self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
+    ) -> pa.Table | None:
+        started = time.monotonic()
+        if diagnostics is not None:
+            diagnostics.descriptor_lookups += 1
+        try:
+            plan = self._read_plan(BlobTables.DESCRIPTORS, None, [(BlobColumns.NAME, "in", list(names))])
+            if plan is None:
+                return None
+            if diagnostics is not None:
+                diagnostics.selected_shards += len(plan.shards)
+            return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+        finally:
+            if diagnostics is not None:
+                diagnostics.descriptor_seconds += time.monotonic() - started
 
     def open_blob(self, name: str) -> BinaryIO | None:
         """Open a named blob as a forward-only stream, or return ``None`` when absent.
 
         Chunk and size validation completes when the caller reads through EOF.
         """
-        row = self.point(BlobTables.DESCRIPTORS, **{BlobColumns.NAME: name})
-        if row is None:
+        rows = self._blob_descriptors((name,))
+        if rows is None or rows.num_rows == 0:
             return None
+        row = rows.slice(0, 1).to_pylist()[0]
         return io.BufferedReader(_BlobReader(self.blob_parts(BlobDescriptor.from_row(row))))
 
     def blob_parts(self, descriptor: BlobDescriptor) -> Generator[bytes, None, None]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
-        name = descriptor.name
-        part_count = descriptor.part_count
-        if part_count is None:
-            data = descriptor.data
-            if data is None:
-                raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
-            if descriptor.size is not None and len(data) != descriptor.size:
-                raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
-            yield data
+        if descriptor.part_count is None:
+            yield from _validated_blob_parts(descriptor, ())
             return
-        if part_count <= 0:
-            raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
-        expected_part = 0
-        total_bytes = 0
-        for row in self._iter_rows(
-            BlobTables.PARTS,
-            columns=[BlobColumns.PART, BlobColumns.DATA],
-            where=[(BlobColumns.NAME, "==", name)],
-            scan_profile=_BLOB_SCAN_PROFILE,
-        ):
-            part = row.get(BlobColumns.PART)
-            if part is not None and part >= part_count:
-                break
-            if part != expected_part:
-                raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
-            data = row.get(BlobColumns.DATA)
-            if data is None:
-                raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
-            value = bytes(data)
-            total_bytes += len(value)
-            expected_part += 1
-            yield value
-        if expected_part != part_count:
-            raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
-        if descriptor.size is not None and total_bytes != descriptor.size:
-            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
+        with closing(
+            self._iter_rows(
+                BlobTables.PARTS,
+                columns=[BlobColumns.PART, BlobColumns.DATA],
+                where=[(BlobColumns.NAME, "==", descriptor.name)],
+                scan_profile=_BLOB_PART_SCAN_PROFILE,
+            )
+        ) as part_rows:
+            yield from _validated_blob_parts(descriptor, part_rows)
 
     def resolve(self, uri: str) -> bytes | None:
         """Resolve a blob URI, returning ``None`` when absent and rejecting unsupported references."""
@@ -506,6 +663,7 @@ class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
     def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
+        super().__init__()
         self.root = root
         self._layout = FineStoreLayout(self.root)
         # The marker only distinguishes a v1 archive from an empty root: v1 archives have no

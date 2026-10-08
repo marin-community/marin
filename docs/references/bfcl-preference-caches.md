@@ -64,3 +64,50 @@ not configure inline evaluation.
 After changing collection, curation or training code, validate the complete
 collection→curation→training pipeline before using it for a scaled candidate.
 Local cache tests do not establish live training success or holdout improvement.
+
+## Compare chosen-only SFT with DPO
+
+Use `matched_sft` to project the DPO control's actual exposure into a chosen-only
+cache. Supply the same preference artifact and sampling seed; set `--presentations`
+to the global preference-row exposures per optimizer update multiplied by its update
+count, including gradient accumulation. The projection
+preserves token IDs, assistant masks and order without rendering or tokenizing again.
+User messages and tool observations retain their original loss masks.
+
+```bash
+uv run python -m experiments.post_training.bfcl_rl.matched_sft \
+  --version <projection-version> \
+  --preference-name data/bfcl-rl-native-preference-union \
+  --preference-version <control-cache-version> \
+  --seed 42 --presentations 32
+```
+
+The cache records the source selection hash and every selected preference-row
+index. Repeated exposures remain repeated. SFT disables packing and reshuffling;
+its single-entry mixture blocks prevent a second permutation of the materialized
+control order. The dataset readers must agree on tokens, shifted loss weights and
+effective attention masks exactly for every selected exposure before this is treated
+as a matched comparison. The implementation's reader-parity and holdout-leakage
+regressions run with:
+
+```bash
+uv run pytest experiments/post_training/bfcl_rl/test_matched_sft.py -n 0
+```
+
+These use small local caches. Independently check the produced projection's source
+hash, selected indices and token/mask arrays against the control cache before training.
+
+`matched_sft_optimize` consumes the projection through `--projection-version`,
+alongside the control's `--preference-name` and `--preference-version`. Its remaining
+checkpoint, update-count, learning-rate and export flags match `native_optimize`.
+It reuses the DPO control's model, optimizer, initialization, global training batch,
+per-device parallelism, update count and GPU configuration.
+The projection must match the control's source, tokenizer, context, seed and number
+of presentations. The training objective changes to chosen-only cross-entropy.
+
+Both entrypoints print their artifact graphs. Preflight the projection, then run and
+verify its finished cache. Preflight the training graph against that verified
+projection. After code changes, complete the collection→curation→projection→training
+smoke described above before using the new path for a scaled candidate.
+A projected cache is not a trained
+model, and training completion is not a holdout result.

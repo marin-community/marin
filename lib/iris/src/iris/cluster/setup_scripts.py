@@ -102,17 +102,6 @@ def default_setup_script(
         'cd "$IRIS_WORKDIR"',
         "echo 'syncing deps'",
         sync_cmd,
-        # uv sync writes .pth links for editable path sources but does not invoke
-        # the build backend, so rust-dev mode (editable = true) leaves native
-        # extensions unbuilt. Build every maturin member explicitly.
-        "if sed -n '/BEGIN RUST-DEV SOURCES/,/END RUST-DEV SOURCES/p' pyproject.toml"
-        " | grep -q 'editable = true'; then"
-        " echo 'rust-dev mode: building native extensions';"
-        " for crate in lib/*/rust/pyproject.toml; do"
-        ' if grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null; then'
-        ' uv pip install -e "$(dirname "$crate")"; fi;'
-        " done;"
-        " fi",
     ]
     if pip_packages:
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)

@@ -73,37 +73,34 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
-def test_default_setup_with_editable_python_dependency_reaches_task_command(tmp_path):
+def test_default_setup_with_editable_python_dependency_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
-    package = workdir / "lib" / "editable_payload"
+    package = workdir / "lib" / "payload"
     package.mkdir(parents=True)
-    (package / "pyproject.toml").write_text(
-        '[project]\nname = "editable-payload"\nversion = "0.1.0"\n'
-        '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n'
-    )
-    (package / "editable_payload.py").write_text("value = 17\n")
+    (package / "pyproject.toml").write_text('[project]\nname = "setup-payload"\nversion = "0.1.0"\n')
+    (package / "setup_payload.py").write_text("value = 42\n")
     (workdir / "pyproject.toml").write_text(
         '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
-        'dependencies = ["editable-payload"]\n[tool.uv]\npackage = false\n'
-        '[tool.uv.sources]\neditable-payload = { path = "lib/editable_payload", editable = true }\n'
+        'dependencies = ["setup-payload"]\n'
+        "[tool.uv]\npackage = false\n"
+        "[tool.uv.sources]\n"
+        'setup-payload = { path = "lib/payload", editable = true }\n'
     )
     venv = tmp_path / "venv"
     env = {
         **os.environ,
         "IRIS_VENV": str(venv),
         "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
         "UV_PROJECT_ENVIRONMENT": str(venv),
     }
-    script = default_setup_script(python_version="3.12")
-    subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
-    result = subprocess.run(
-        [venv / "bin" / "python", "-c", "import editable_payload; print(editable_payload.value)"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
+
+    completed = subprocess.run(
+        ["bash", "-c", default_setup_script()], env=env, capture_output=True, text=True, check=False
     )
-    assert result.stdout.splitlines()[-1] == "17"
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    subprocess.run([venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 42"], check=True)
 
 
 @pytest.mark.parametrize("link_mode", ["copy", "symlink"])

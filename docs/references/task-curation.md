@@ -181,6 +181,8 @@ with the expected request identity, keyed by the exact submitted query and model
 revision. Task provenance IDs are canonicalized out of cached review queries.
 Changing only catalog layout does not require GLM inference; changing a prompt,
 rubric, model or supplied environment inventory creates a different query.
+Each Zephyr review window probes its FineStore keys in one batch and submits only
+the missing queries. Cache hits and misses can share the same window.
 
 A failed mapper can submit its unfinished review batch again. The audit records
 the final result for each task. Earlier attempt files are debug logs; they do not

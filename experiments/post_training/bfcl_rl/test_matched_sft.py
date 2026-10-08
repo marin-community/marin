@@ -127,12 +127,22 @@ def test_matched_optimizer_rejects_projection_from_a_different_control(tmp_path,
     source, partition, _, _ = source_cache
     projected = project_chosen_exposure(source, partition, seed=42, presentations=16, output_path=str(tmp_path / "sft"))
     model = MODELS["student"]
-    source = source.model_copy(update={"tokenizer_uri": model.model, "tokenizer_revision": model.revision, "max_length": 40960})
+    source = source.model_copy(
+        update={"tokenizer_uri": model.model, "tokenizer_revision": model.revision, "max_length": 40960}
+    )
     projected = projected.model_copy(
-        update={"tokenizer": f"{model.model}@{model.revision}", "max_length": 40960, "source_cache_path": "different-control"}
+        update={
+            "tokenizer": f"{model.model}@{model.revision}",
+            "max_length": 40960,
+            "source_cache_path": "different-control",
+        }
     )
     for artifact in (source, projected):
-        write_record(ArtifactRecord(output_path=artifact.path, result_type=result_type_name(type(artifact)), result=artifact.result_payload()))
+        write_record(
+            ArtifactRecord(
+                output_path=artifact.path, result_type=result_type_name(type(artifact)), result=artifact.result_payload()
+            )
+        )
     cache = ArtifactStep.adopt("preferences", "2026.10.08", source.path, kind=RecoveryPreferenceCache)
     projection = ArtifactStep.adopt("projection", "2026.10.08", projected.path, kind=type(projected))
     policy = ArtifactHfModel(
@@ -153,7 +163,11 @@ def test_matched_optimizer_rejects_projection_from_a_different_control(tmp_path,
     with pytest.raises(ValueError, match="does not derive from the configured DPO cache"):
         step.build_config(context)
     projected = projected.model_copy(update={"source_cache_path": source.path})
-    write_record(ArtifactRecord(output_path=projected.path, result_type=result_type_name(type(projected)), result=projected.result_payload()))
+    write_record(
+        ArtifactRecord(
+            output_path=projected.path, result_type=result_type_name(type(projected)), result=projected.result_payload()
+        )
+    )
     context = StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=step.deps)
     config = step.build_config(context)
     assert config.train_config.initialize_from_hf == str(tmp_path / "policy/hf/step-57")
