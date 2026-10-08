@@ -7,6 +7,7 @@ import enum
 import logging
 import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -59,11 +60,14 @@ logger = logging.getLogger(__name__)
 # Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
+MAX_EXECUTION_NAME_LENGTH = 64
 
 
-def _generate_execution_id() -> str:
+def _generate_execution_id(name: str | None = None) -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{ts}-{uuid.uuid4().hex[:8]}"
+    suffix = f"{ts}-{uuid.uuid4().hex[:8]}"
+    prefix = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:MAX_EXECUTION_NAME_LENGTH].rstrip("-")
+    return f"{prefix}-{suffix}" if prefix else suffix
 
 
 # Application errors that should never be retried by the execute() retry loop.
@@ -446,10 +450,22 @@ class ZephyrContext:
         verbose: bool = False,
         dry_run: bool = False,
         *,
+        name: str | None = None,
         map_task_resources: ResourceConfig | None = None,
         reduce_task_resources: ResourceConfig | None = None,
     ) -> ZephyrExecutionResult:
-        """Execute one dataset on a dedicated or supplied shared pool."""
+        """Execute one dataset on a dedicated or supplied shared pool.
+
+        Args:
+            dataset: Dataset to execute.
+            verbose: Log the execution plan.
+            dry_run: Log the plan without executing it.
+            name: Optional execution ID prefix, normalized to lowercase ASCII
+                alphanumerics and dashes and truncated to 64 characters. An empty
+                normalized prefix keeps the timestamp/hash ID format.
+            map_task_resources: Per-task resources for map stages.
+            reduce_task_resources: Per-task resources for reduce stages.
+        """
         plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
@@ -474,7 +490,7 @@ class ZephyrContext:
 
         if state in {_ContextState.OWNER, _ContextState.BORROWED}:
             assert coordinator is not None
-            execution_id = _generate_execution_id()
+            execution_id = _generate_execution_id(name)
             logger.info("Starting shared Zephyr pipeline %s", execution_id)
             self._upload_shared_data(execution_id)
             try:
@@ -497,7 +513,8 @@ class ZephyrContext:
         last_exception: Exception | None = None
         backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
-            execution_id = _generate_execution_id()
+            execution_id = _generate_execution_id(name)
+            logger.info("Starting dedicated Zephyr pipeline %s", execution_id)
             pool: _OwnedPool | None = None
             try:
                 self._upload_shared_data(execution_id)
@@ -525,7 +542,8 @@ class ZephyrContext:
                     raise
                 delay = backoff.next_interval()
                 logger.warning(
-                    "Pipeline attempt %d failed (%d retries left), retrying in %.1fs: %s",
+                    "Pipeline %s attempt %d failed (%d retries left), retrying in %.1fs: %s",
+                    execution_id,
                     attempt,
                     self.max_execution_retries - attempt,
                     delay,
