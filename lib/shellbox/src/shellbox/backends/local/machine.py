@@ -109,11 +109,51 @@ def _interpreter_roots(bin_dirs: Iterable[Path]) -> tuple[str, ...]:
     return tuple(roots)
 
 
+MAX_LINK_HOPS = 40
+
+
+def _link_chain(path: Path) -> list[tuple[str, str]]:
+    """Every symlink met while resolving ``path``, as ``(link, target)`` pairs in resolution order."""
+    links: list[tuple[str, str]] = []
+    parts = list(path.parts[1:])
+    current = PurePosixPath("/")
+    while parts:
+        current = current / parts.pop(0)
+        if not os.path.islink(current):
+            continue
+        if len(links) >= MAX_LINK_HOPS:
+            raise RuntimeError(f"{path} has more than {MAX_LINK_HOPS} symlink hops")
+        target = os.readlink(current)
+        links.append((str(current), target))
+        resolved = PurePosixPath(os.path.normpath(current.parent / target))
+        parts = [*resolved.parts[1:], *parts]
+        current = PurePosixPath("/")
+    return links
+
+
+def _interpreter_links(bin_dirs: Iterable[Path], roots: Iterable[str]) -> tuple[tuple[str, str], ...]:
+    """Symlinks on the way from each venv's ``python3`` to its interpreter that lie outside the mounted ``roots``.
+
+    uv links a venv's interpreter through a minor-version alias directory beside the install it resolves to;
+    the sandbox mounts the resolved install, so it must recreate the alias for the venv's link to resolve.
+    """
+    mounted = tuple(map(PurePosixPath, (*SYSTEM_DIRECTORIES, *roots)))
+    links = []
+    for directory in bin_dirs:
+        if not (directory.parent / "pyvenv.cfg").exists():
+            continue
+        for link, target in _link_chain(directory / "python3"):
+            if not _within(PurePosixPath(link), mounted) and (link, target) not in links:
+                links.append((link, target))
+    return tuple(links)
+
+
 def _sandbox_argv(
     bwrap: Path,
     *,
     root: Path,
     read_only: Iterable[str],
+    links: Iterable[tuple[str, str]] = (),
     network: NetworkPolicy,
     account: pwd.struct_passwd | None,
 ) -> list[str]:
@@ -138,6 +178,8 @@ def _sandbox_argv(
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
     for path in read_only:
         argv += ["--ro-bind-try", path, path]
+    for link, target in links:
+        argv += ["--symlink", target, link]
     if account is not None:
         argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
     return argv
@@ -253,11 +295,13 @@ class LocalMachine:
         bwrap: Path,
         root: Path,
         read_only: tuple[str, ...],
+        links: tuple[tuple[str, str], ...],
         environment: dict[str, str],
     ):
         self.spec = spec
         self.root = root
         self.read_only = read_only
+        self._links = links
         self._bwrap = bwrap
         self._environment = environment
         self._closed = False
@@ -288,6 +332,7 @@ class LocalMachine:
             self._bwrap,
             root=self.root,
             read_only=self.read_only,
+            links=self._links,
             network=self.spec.network,
             account=_command_account(command.user),
         )
@@ -380,6 +425,7 @@ class LocalMachineFactory:
         self.hash_seed = hash_seed
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
         self._read_only = _interpreter_roots(self.bin_dirs)
+        self._links = _interpreter_links(self.bin_dirs, self._read_only)
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
@@ -403,4 +449,6 @@ class LocalMachineFactory:
         }
         if self.hash_seed is not None:
             environment["PYTHONHASHSEED"] = self.hash_seed
-        return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=self._read_only, environment=environment)
+        return LocalMachine(
+            spec, bwrap=self.bwrap, root=root, read_only=self._read_only, links=self._links, environment=environment
+        )
