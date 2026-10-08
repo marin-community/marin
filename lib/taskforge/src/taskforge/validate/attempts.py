@@ -8,10 +8,17 @@
 review can run offline on the files alone. A trial is settled when its last attempt is graded, or
 ungraded for a cause a fresh attempt cannot change; a re-entered validation re-runs only the
 unsettled trials, numbering their attempts after the ones on disk.
+
+An adversary attempt file is the same record with one more key, ``ADVERSARY_KEY``: the system turn the
+attempt ran under, its parsed verdict and every verifier submission (``adversary_attempt_json``).
+``load_outcome`` ignores that key, so ``trial_files`` reads adversary directories unchanged;
+``load_adversary_attempt`` reads all of it.
 """
 
+import dataclasses
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,12 +26,15 @@ from pydantic import TypeAdapter
 from rolloutengine.contracts import RolloutData
 
 from taskforge.validate.outcome import RETRYABLE, Cause, Graded, Outcome, Ungraded
+from taskforge.validate.submissions import SUBMISSIONS, AdversaryTrial, Submission, trial_claim
+from taskforge.validate.trials import outcome_json
 
 RERUNNABLE: frozenset[Cause] = RETRYABLE | {Cause.TOKEN_CONTRACT}
 """Causes a re-entered validation runs again: infrastructure flakiness and the transport's sampling noise."""
 
 ATTEMPT_FILE = re.compile(r"attempt-(\d+)\.json")
 ROLLOUT = TypeAdapter(RolloutData)
+ADVERSARY_KEY = "adversary"
 
 
 def load_outcome(path: Path) -> Outcome:
@@ -40,11 +50,12 @@ def load_outcome(path: Path) -> Outcome:
 
 @dataclass(frozen=True)
 class TrialFiles:
-    """The attempt files of one trial: how many there are (the next attempt number) and the last outcome."""
+    """The attempt files of one trial: how many there are (the next attempt number), the last outcome and its file."""
 
     trial: str
     attempts: int
     last: Outcome | None
+    last_path: Path | None
 
     @property
     def settled(self) -> bool:
@@ -67,5 +78,35 @@ def trial_files(evidence_dir: Path, kind: str) -> dict[str, TrialFiles]:
     for directory, attempts in numbers.items():
         last = max(attempts)
         trial = directory.relative_to(root).as_posix()
-        trials[trial] = TrialFiles(trial, last + 1, load_outcome(directory / f"attempt-{last}.json"))
+        path = directory / f"attempt-{last}.json"
+        trials[trial] = TrialFiles(trial, last + 1, load_outcome(path), path)
     return dict(sorted(trials.items()))
+
+
+def adversary_attempt_json(outcome: Outcome, submissions: Sequence[Submission], system: str) -> bytes:
+    """``outcome_json(outcome)`` with ``ADVERSARY_KEY``: ``system`` (the exact system text of every request of the
+    attempt), ``claim`` (``trial_claim(outcome)``) and ``submissions`` in order, each grade in full."""
+    record = json.loads(outcome_json(outcome))
+    record[ADVERSARY_KEY] = {
+        "system": system,
+        "claim": dataclasses.asdict(trial_claim(outcome)),
+        "submissions": SUBMISSIONS.dump_python(tuple(submissions), mode="json"),
+    }
+    return json.dumps(record, indent=1).encode()
+
+
+def load_adversary_attempt(path: Path) -> AdversaryTrial:
+    """The inverse of ``adversary_attempt_json``.
+
+    Raises:
+        ValueError: the record has no ``ADVERSARY_KEY``: a solver or control file read as an adversary's.
+    """
+    record = json.loads(path.read_bytes())
+    adversary = record.get(ADVERSARY_KEY)
+    if adversary is None:
+        raise ValueError(f"{path} is not an adversary attempt: it has no {ADVERSARY_KEY!r} record")
+    return AdversaryTrial(
+        outcome=load_outcome(path),
+        system=adversary["system"],
+        submissions=SUBMISSIONS.validate_python(adversary["submissions"]),
+    )
