@@ -4,7 +4,7 @@
 """Adversary trials: an agent loop that red-teams a task's grader with the verifier as a tool.
 
 Each trial is ``llm.agent.run_agent`` on its own prepared task machine with two tools: ``shell`` runs
-commands in that machine as the solver's user, and ``submit`` grades one candidate (a final reply
+commands in that machine as the solver's user, and ``submit`` grades one candidate (a final answer
 plus files the adversary lists from its workspace) through ``ShellboxRolloutEngine.grade_state`` on a
 fresh machine and returns the grade. The verifier's files exist only on the grading machine, so the
 grader stays as unreadable from the adversary's shell as from the solver's, and the shell state is
@@ -17,8 +17,9 @@ the spirit of the task or does not need the task's intended computation. Its fin
 one verdict line, ``NO_SHORTCUT`` or ``SHORTCUT: <why>`` (``submissions.parse_claim``). The brief is
 the system turn of every request; the task follows exactly as the solver sees it
 (``rolloutengine.task_session.session_start``), and a grading conversation is that task prefix plus
-the candidate's reply as assistant text, so a convention whose submission is a tool call (``AnswerCall``,
-``FinalAction``) is refused before any attempt (``adversary_convention``). ``calibration`` tiers a
+the candidate's final assistant turn, rendered as the draft's convention submits an answer
+(``submission_turn``): assistant text, an ``AnswerCall`` answer call, or a ``FinalAction``'s function
+calls. ``calibration`` tiers a
 trial from its submissions, mainly the ordinal of the accepted submission the claim refers to, never
 from the adversary's account alone.
 
@@ -65,9 +66,16 @@ from rolloutengine.task_session import session_start
 from shellbox.machine import Command, Machine
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import TaskResource, TaskSpec
+from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskResource, TaskSpec, TextMessage
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.submission import AnswerCall, FinalAction, SubmissionConvention, conversation_messages
+from taskcompendium.submission import (
+    ANSWER_CALL_NAME,
+    ANSWER_FIELD,
+    AnswerCall,
+    FinalAction,
+    SubmissionConvention,
+    conversation_messages,
+)
 
 from taskforge.builder.run import TaskDraft
 from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, ToolOutcome, assistant_message, run_agent, shell_tool
@@ -79,6 +87,7 @@ from taskforge.sandbox.factories import task_refusals
 from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 from taskforge.validate.attempts import adversary_attempt_json, load_adversary_attempt, trial_files
 from taskforge.validate.classify import classify
+from taskforge.validate.controls import wire_message
 from taskforge.validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, TrialKind, Ungraded
 from taskforge.validate.solver import TrialPolicy, ValidationSite, draft_settings
 from taskforge.validate.submissions import NO_SHORTCUT_LINE as NO_SHORTCUT_LINE
@@ -141,14 +150,19 @@ BRIEF_TEMPLATE = (
 """``str.format`` over ``{submissions}`` and ``{context}``; ``adversary_brief`` renders it."""
 
 SUBMIT_DESCRIPTION = (
-    "Grade one candidate with the task's verifier and return the grade. reply is the final assistant message "
-    "the verifier reads; files are absolute paths in your workspace whose current contents are copied into a "
-    "fresh workspace before grading. Each call spends one of your submissions."
+    "Grade one candidate with the task's verifier and return the grade. reply is the final answer, submitted "
+    "the way the task asks for one; files are absolute paths in your workspace whose current contents are copied "
+    "into a fresh workspace before grading. Each call spends one of your submissions."
 )
+CALLS_DESCRIPTION = (
+    "The function calls of the final assistant message, each a final tool of the task; reply is the text beside "
+    "them. Without calls the final message is reply alone."
+)
+"""The description of ``submit``'s ``calls`` under a ``FinalAction`` convention."""
+SUBMISSION_CALL_ID = "submission-{index}"
+"""``str.format`` over ``{index}``: the call id of a candidate's ``index``-th function call."""
 
 VERIFIER_FAILED = "the verifier failed on this candidate"
-TOOL_CALL_CONVENTIONS = (AnswerCall, FinalAction)
-"""Conventions whose submission is a tool call, which a ``submit`` reply (assistant text) cannot express."""
 
 type AdversaryContext = Callable[[TaskProposal], str]
 """The consumer's section of the adversary brief for one item's proposal; "" for none."""
@@ -179,12 +193,22 @@ def with_preamble(preamble: str, messages: Sequence[Mapping[str, Any]]) -> tuple
     return ({"role": "system", "content": preamble}, *(dict(m) for m in messages))
 
 
-def submit_parameters(executable: bool) -> dict[str, object]:
+def submit_parameters(executable: bool, final_action: bool) -> dict[str, object]:
     """JSON schema of ``submit``: ``reply`` (string, required); on an executable environment also ``files``
-    (absolute paths in the adversary's workspace the verifier must see; default none)."""
+    (absolute paths in the adversary's workspace the verifier must see; default none); under a ``FinalAction``
+    convention also ``calls`` (the final message's function calls, each a name and an arguments object; default
+    none)."""
     properties: dict[str, object] = {"reply": {"type": "string"}}
     if executable:
         properties["files"] = {"type": "array", "items": {"type": "string", "pattern": "^/"}}
+    if final_action:
+        call = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}},
+            "required": ["name", "arguments"],
+            "additionalProperties": False,
+        }
+        properties["calls"] = {"type": "array", "items": call, "description": CALLS_DESCRIPTION}
     return {"type": "object", "properties": properties, "required": ["reply"], "additionalProperties": False}
 
 
@@ -208,28 +232,51 @@ async def no_model(request: ModelRequest) -> ModelTurn:
     raise AssertionError("grade_state never calls the model")
 
 
-def adversary_convention(task: TaskSpec, convention: SubmissionConvention) -> SubmissionConvention:
-    """``trials.task_convention`` over the draft's ``convention``, refusing one a text reply cannot submit through.
+class UnofferedCall(ValueError):
+    """A candidate's function call names no final tool of the task; its argument is the name."""
 
-    A task whose answer is the machine state is graded from its files whatever the convention.
+
+def submission_turn(
+    task: TaskSpec, convention: SubmissionConvention, reply: str, calls: Sequence[Mapping[str, Any]]
+) -> TextMessage | AssistantToolCalls:
+    """The final assistant turn that submits ``reply`` (and, under ``FinalAction``, ``calls``) as ``convention``
+    carries an answer for ``task``.
+
+    A task whose answer is the machine state reads no submission, so its turn is the text reply under any
+    convention. ``AnswerCall`` submits ``reply`` as the ``ANSWER_CALL_NAME`` call's ``ANSWER_FIELD``.
+    ``FinalAction`` makes ``calls`` (``name`` and ``arguments`` each) with ``reply`` as their text, or replies
+    with text alone without calls. Other conventions read the text reply.
 
     Raises:
-        ConventionUnavailable: ``convention`` is incompatible with ``task``, or carries its answer as a tool call
-            (``TOOL_CALL_CONVENTIONS``).
+        UnofferedCall: a call names no final tool of ``task``.
     """
-    chosen = task_convention(task, (convention,))
-    if task.answer_type not in MACHINE_ANSWER_TYPES and isinstance(chosen, TOOL_CALL_CONVENTIONS):
-        raise ConventionUnavailable(
-            f"{chosen.id}: {type(chosen).__name__} submits through a tool call; adversary candidates are text replies"
+    if task.answer_type in MACHINE_ANSWER_TYPES:
+        return TextMessage(role="assistant", content=reply)
+    if isinstance(convention, AnswerCall):
+        call = ConversationToolCall(
+            call_id=SUBMISSION_CALL_ID.format(index=0), name=ANSWER_CALL_NAME, arguments={ANSWER_FIELD: reply}
         )
-    return chosen
+        return AssistantToolCalls(calls=(call,))
+    if not isinstance(convention, FinalAction) or not calls:
+        return TextMessage(role="assistant", content=reply)
+    offered = {function.name for function in task.final_tools}
+    unoffered = [call["name"] for call in calls if call["name"] not in offered]
+    if unoffered:
+        raise UnofferedCall(unoffered[0])
+    return AssistantToolCalls(
+        calls=tuple(
+            ConversationToolCall.model_validate(
+                {"call_id": SUBMISSION_CALL_ID.format(index=index), "name": call["name"], "arguments": call["arguments"]}
+            )
+            for index, call in enumerate(calls)
+        ),
+        content=reply or None,
+    )
 
 
 def candidate_state(messages: tuple[dict[str, Any], ...], candidate: Candidate) -> SuppliedState:
     """The conversation the verifier grades, over the solver's exact task prefix, and the candidate's files."""
-    return SuppliedState(
-        messages=(*messages, {"role": "assistant", "content": candidate.reply}), resources=candidate.files
-    )
+    return SuppliedState(messages=(*messages, wire_message(candidate.turn)), resources=candidate.files)
 
 
 async def capture(machine: Machine, paths: Sequence[str]) -> tuple[TaskResource, ...]:
@@ -285,6 +332,7 @@ class Verifier:
     """
 
     lowered: LoweredTaskSpec
+    convention: SubmissionConvention
     task_messages: tuple[dict[str, Any], ...]
     engine: ShellboxRolloutEngine
     machine: Machine | None
@@ -298,12 +346,18 @@ class Verifier:
             )
         reply = arguments["reply"]
         paths = arguments.get("files", [])
-        assert isinstance(reply, str) and isinstance(paths, list)
+        calls = arguments.get("calls", [])
+        assert isinstance(reply, str) and isinstance(paths, list) and isinstance(calls, list)
+        try:
+            turn = submission_turn(self.lowered.task, self.convention, reply, calls)
+        except UnofferedCall as error:
+            offered = sorted(function.name for function in self.lowered.task.final_tools)
+            return json.dumps({"error": f"{error.args[0]} is not a final tool of the task; calls may name {offered}"})
         try:
             files = () if self.machine is None or not paths else await capture(self.machine, paths)
         except FileNotFoundError as error:
             return json.dumps({"error": f"no file at {error.args[0]} in your workspace"})
-        candidate = Candidate(reply, files)
+        candidate = Candidate(turn, files)
         ordinal = len(self.submissions) + 1
         started = time.monotonic()
         try:
@@ -489,13 +543,14 @@ async def _agent_attempt(
                     raise RolloutInterrupted(_empty(task), RolloutOperation.START) from error
             verifier = Verifier(
                 lowered,
+                convention,
                 task_messages,
                 settings.engine(no_model, convention),
                 machine,
                 policy.adversary_submissions,
                 submissions,
             )
-            parameters = submit_parameters(machine is not None)
+            parameters = submit_parameters(machine is not None, isinstance(convention, FinalAction))
             submit = AgentTool(SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, parameters, verifier.submit)
             tools = (submit,)
             if machine is not None:
@@ -556,17 +611,16 @@ async def run_adversary_trial(
 ) -> AdversaryTrial:
     """One adversary trial: attempts until graded or the retries are spent, each attempt one agent loop.
 
-    Mirrors ``trials.run_trial`` with the agent loop as the attempt body: a task no convention or factory can
-    carry, or whose convention a text reply cannot submit through (``adversary_convention``), is one refused
-    attempt; attempts are numbered from ``plan.first_attempt``; ``RETRYABLE`` causes are retried
-    ``plan.max_retries`` times with ``plan.retry_backoff``. There is no token contract to retry. Each attempt is
-    one ``TRIAL`` ledger span (step ``adversary/<trial>/<attempt>``) and one attempt file, with a fresh submission
-    budget.
+    Mirrors ``trials.run_trial`` with the agent loop as the attempt body: a task the draft's convention or no
+    factory can carry is one refused attempt; attempts are numbered from ``plan.first_attempt``; ``RETRYABLE``
+    causes are retried ``plan.max_retries`` times with ``plan.retry_backoff``. There is no token contract to
+    retry. Each attempt is one ``TRIAL`` ledger span (step ``adversary/<trial>/<attempt>``) and one attempt file,
+    with a fresh submission budget.
     """
     lowered = settings.apply(plan.deadlines.apply(draft.lowered))
     task = lowered.task
     try:
-        convention = adversary_convention(task, draft.convention)
+        convention = task_convention(task, (draft.convention,))
     except ConventionUnavailable as error:
         outcome = Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None)
         return _refuse(lowered, None, plan, trial, brief, outcome)

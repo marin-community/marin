@@ -8,14 +8,15 @@ Adversary trials run for real against ``fake_glm`` (scripted agent turns) on She
 script that runs on the host."""
 
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 from rigging.timing import ExponentialBackoff
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import AnswerType
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, AssistantToolCalls, ConversationToolCall
+from taskcompendium.submission import ANSWER_CALL_NAME, ANSWER_FIELD, PlainText
 
 from taskforge.builder.step import StepRole
 from taskforge.ledger.jsonl import JsonlLedger
@@ -282,6 +283,15 @@ async def test_honest_submissions_come_from_solved_solver_trials_and_positive_tr
     assert honest_submissions(evidence(math_facts, (), (await answer("The answer is 395."),))) == ("The answer is 395.",)
     # Only the transcript positive's last reply; the workspace positive and the negatives contribute nothing.
     assert honest_submissions(evidence(file_facts, files)) == ("Done.",)
+
+
+async def test_an_answer_calls_answer_is_an_honest_submission(answer, math_controls, math_facts):
+    right = await answer("395")
+    correct = next(c for c in math_controls if c.kind is ControlKind.POSITIVE)
+    call = ConversationToolCall(call_id="c1", name=ANSWER_CALL_NAME, arguments={ANSWER_FIELD: "395."})
+    called = replace(correct, payload=Transcript((AssistantToolCalls(calls=(call,)),)))
+
+    assert honest_submissions(evidence(math_facts, (control_outcome(called, right),))) == ("395.",)
 
 
 def test_task_facts_name_inputs_grader_files_and_uniqueness(file_task, math_task, file_facts, math_facts):

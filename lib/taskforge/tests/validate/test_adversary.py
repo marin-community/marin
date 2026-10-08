@@ -13,13 +13,15 @@ import pytest
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON
 from rolloutengine.task_session import session_start
 from shellbox.machine import Backend
-from taskcompendium.models import ConversationInput, TextMessage
+from taskcompendium.models import AnswerType, AssistantToolCalls, ConversationInput, FunctionDefinition, TextMessage
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import AnswerCall, PlainText
+from taskcompendium.submission import ANSWER_CALL_NAME, ANSWER_FIELD, AnswerCall, FinalAction, PlainText
+from verifyit.spec import FunctionCall, PredictedActionSpec
 
 from taskforge.ledger.jsonl import read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.sandbox.factories import SHELLSIM
+from taskforge.spec.draft import answer_verifier, assemble
 from taskforge.validate.adversary import (
     CONTEXT_HEADER,
     PREAMBLE_SEPARATOR,
@@ -357,17 +359,58 @@ async def test_a_refused_machine_is_one_unsupported_attempt(tmp_path, file_task,
     assert load_adversary_attempt(directory / "attempt-0.json") == trial
 
 
-async def test_a_tool_call_convention_is_refused_before_the_model_is_called(
-    tmp_path, math_task, rounds, fakes, fake_glm, glm_client
+async def test_an_answer_call_candidate_is_submitted_through_the_answer_call(
+    tmp_path, math_task, rounds, fakes, fake_glm, glm_client, turns
 ):
-    trial, directory = await one_trial(
-        tmp_path, math_task, rounds, fakes, glm_client, convention=AnswerCall(id="answer-call")
+    turns(fake_glm, ("submit", "391"), ("submit", "395"), "NO_SHORTCUT")
+
+    trial, _ = await one_trial(tmp_path, math_task, rounds, fakes, glm_client, convention=AnswerCall(id="answer-call"))
+
+    assert [(s.grade.reward, s.passed) for s in trial.submissions] == [(0.0, False), (1.0, True)]
+    candidate = trial.submissions[1].candidate
+    assert isinstance(candidate.turn, AssistantToolCalls)
+    assert [(c.name, c.arguments) for c in candidate.turn.calls] == [(ANSWER_CALL_NAME, {ANSWER_FIELD: "395"})]
+    assert candidate.reply == "395"
+
+
+@pytest.fixture
+def action_task(math_task, relower):
+    """A machine-less task whose answer is one ``lookup`` call for Paris."""
+    lookup = FunctionDefinition(name="lookup", parameters={"type": "object", "properties": {"city": {"type": "string"}}})
+    spec = PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"city": "Paris"}),))
+    return relower(
+        assemble(
+            "validate-action",
+            "Look up the capital of France.",
+            AnswerType.NATIVE_ACTION,
+            answer_verifier(spec),
+            math_task.task.source,
+            environment=None,
+            final_tools=(lookup,),
+        )
     )
 
-    assert isinstance(trial.outcome, Ungraded) and trial.outcome.cause is Cause.SUBMISSION_UNSUPPORTED
-    assert "AnswerCall" in trial.outcome.detail and trial.submissions == ()
-    assert fake_glm.requests == []
-    assert load_adversary_attempt(directory / "attempt-0.json") == trial
+
+async def test_a_final_action_candidate_makes_the_calls_it_lists(
+    tmp_path, action_task, rounds, fakes, fake_glm, glm_client, turns
+):
+    for calls in (
+        [{"name": "search", "arguments": {}}],
+        [{"name": "lookup", "arguments": {"city": "Rome"}}],
+        [{"name": "lookup", "arguments": {"city": "Paris"}}],
+    ):
+        arguments = json.dumps({"reply": "", "calls": calls})
+        fake_glm.stream(tool_calls=((SUBMIT_TOOL_NAME, arguments),), finish="tool_calls")
+    turns(fake_glm, "NO_SHORTCUT")
+
+    trial, _ = await one_trial(tmp_path, action_task, rounds, fakes, glm_client, convention=FinalAction(id="action"))
+
+    (submit,) = fake_glm.requests[0]["tools"]
+    assert "calls" in submit["function"]["parameters"]["properties"]
+    assert tool_results(fake_glm)[0] == {"error": "search is not a final tool of the task; calls may name ['lookup']"}
+    assert [(s.ordinal, s.grade.reward) for s in trial.submissions] == [(1, 0.0), (2, 1.0)]
+    candidate = trial.submissions[1].candidate
+    assert isinstance(candidate.turn, AssistantToolCalls) and candidate.reply is None
 
 
 def test_the_budget_and_threshold_are_in_the_policy_digest(rounds):

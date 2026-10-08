@@ -45,7 +45,7 @@ from rolloutengine.contracts import (
 )
 from rolloutengine.shell_tool import SHELL_TOOL_NAME
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import TaskSpec
 from verifyit.spec import Mode
 
 from taskforge.atomic_file import write_atomic
@@ -58,11 +58,10 @@ from taskforge.spec.controls import (
     ControlKind,
     Expectation,
     Transcript,
-    reply,
 )
 from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 from taskforge.validate.adversary import CONTEXT_STOP_REASON, AdversaryRole
-from taskforge.validate.controls import ControlOutcome, ControlVerdict, workspace_turn
+from taskforge.validate.controls import ControlOutcome, ControlVerdict, wire_message, workspace_turn
 from taskforge.validate.evidence import Complete, Evidence, Incomplete, RewardStats
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 from taskforge.validate.submissions import (
@@ -70,8 +69,10 @@ from taskforge.validate.submissions import (
     Candidate,
     ClaimKind,
     Submission,
+    final_answer,
     final_reply,
     passing,
+    submitted_answer,
     trial_claim,
 )
 
@@ -466,7 +467,7 @@ def candidate_control(role: AdversaryRole, index: int, ordinal: int, task_digest
     """An accepted adversary candidate as a negative control that demands no credit.
 
     One ``validate.controls.workspace_turn`` per file (the shell writes the agent would make), then the
-    candidate's reply; a candidate without files is the reply alone.
+    candidate's final turn; a candidate without files is the final turn alone.
     """
     writes = tuple(workspace_turn(serial, file) for serial, file in enumerate(candidate.files))
     return Control(
@@ -475,7 +476,7 @@ def candidate_control(role: AdversaryRole, index: int, ordinal: int, task_digest
         category=ControlCategory.REWARD_HACK,
         concern=ControlConcern.SHORTCUT,
         author=f"adversary/{role}/{index}#{ordinal}",
-        payload=Transcript((*writes, reply(candidate.reply))),
+        payload=Transcript((*writes, candidate.turn)),
         expect=Expectation(status=GradeStatus.GRADED, reward_max=REJECTION_CEILING),
     )
 
@@ -578,17 +579,16 @@ def numeric_tokens(text: str) -> frozenset[str]:
 
 
 def honest_submissions(evidence: RoundEvidence) -> tuple[str, ...]:
-    """Final text replies of solved solver trials, then the last turn of every positive transcript control when
-    it is a text reply; deduplicated, in that order."""
+    """The answers solved solver trials submitted, then the answer the last turn of every positive transcript
+    control submits (``submissions.submitted_answer``: a text reply or an answer call's answer); deduplicated, in
+    that order."""
     solver = (
-        final_reply(outcome.rollout) for outcome in evidence.solver if isinstance(outcome, Graded) and solved(outcome)
+        final_answer(outcome.rollout) for outcome in evidence.solver if isinstance(outcome, Graded) and solved(outcome)
     )
     controls = (
-        c.control.payload.turns[-1].content
+        submitted_answer(wire_message(c.control.payload.turns[-1]))
         for c in evidence.controls
-        if c.control.kind is ControlKind.POSITIVE
-        and isinstance(c.control.payload, Transcript)
-        and isinstance(c.control.payload.turns[-1], TextMessage)
+        if c.control.kind is ControlKind.POSITIVE and isinstance(c.control.payload, Transcript)
     )
     return tuple(dict.fromkeys(text for text in (*solver, *controls) if text is not None))
 

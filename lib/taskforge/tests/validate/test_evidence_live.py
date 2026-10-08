@@ -113,7 +113,7 @@ def adversary_summary(trial: AdversaryTrial) -> dict[str, object]:
                 "ordinal": s.ordinal,
                 "turn": s.turn,
                 "files": list(s.candidate.paths),
-                "reply": s.candidate.reply[-400:],
+                "reply": None if s.candidate.reply is None else s.candidate.reply[-400:],
                 "status": s.grade.status,
                 "reward": s.grade.reward,
                 "passed": s.passed,
