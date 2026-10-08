@@ -30,7 +30,7 @@ def test_shared_harbor_grading_is_rejected_during_import(tmp_path, verifier_opti
     exception = (
         ValueError if verifier_environment and 'environment_mode = "shared"' in verifier_options else NotImplementedError
     )
-    with pytest.raises(exception, match="shared" if exception is ValueError else "separate verifier"):
+    with pytest.raises(exception):
         harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
 
 

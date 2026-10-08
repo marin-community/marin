@@ -172,8 +172,7 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("oversized", [False, True])
-def test_iris_bounded_file_download_preserves_binary_data_and_target(tmp_path, oversized):
+def test_iris_bounded_file_download_preserves_binary_data_and_target(tmp_path):
     async def scenario():
         payload = b"\x00\xffpayload" * 32768
         source = tmp_path / "source"
@@ -182,13 +181,11 @@ def test_iris_bounded_file_download_preserves_binary_data_and_target(tmp_path, o
         target.write_bytes(b"existing")
         machine, job = local_machine(tmp_path)
         try:
-            if oversized:
-                with pytest.raises(DownloadLimitExceeded):
-                    await machine.download(str(source), target, max_bytes=len(payload) - 1)
-                assert target.read_bytes() == b"existing"
-            else:
-                await machine.download(str(source), target, max_bytes=len(payload))
-                assert target.read_bytes() == payload
+            with pytest.raises(DownloadLimitExceeded):
+                await machine.download(str(source), target, max_bytes=len(payload) - 1)
+            assert target.read_bytes() == b"existing"
+            await machine.download(str(source), target, max_bytes=len(payload))
+            assert target.read_bytes() == payload
             tracemalloc.start()
             try:
                 await machine.download(str(source), target, max_bytes=1024**3)
