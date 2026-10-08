@@ -99,16 +99,20 @@ modules, each of which keeps its types beside the code that checks their invaria
   independent samples, and the decision is ACCEPT or REJECT by strict majority, otherwise REPAIR.
 - `builder.run.run_build(program, proposal, ...)`: runs a builder program of memoized async steps.
   A step's memo key covers its code, arguments, the data globals it reads, `SDK_VERSION`, the
-  proposal and the model policy. The verifier must come from a GRADER step and the controls from
+  proposal and the model policy. The grader must come from a GRADER step and the controls from
   a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The SDK reference
-  lists the concerns each control category allows; every stage needs a reference, an acceptance
-  and a shortcut control. The draft holds the task, its `TaskExecution` and its controls. A host
-  failure during the build raises
-  `builder.infrastructure.BuildInfrastructureFailure` with a `cause` of `no_factory`,
-  `scheduling_timeout` or `host_unreachable`, even when the program wrapped it; it is never a
-  `BuildFailure`, and the caller does not charge it to the program.
-  `builder.infrastructure.HOST_REJECTIONS` names the causes that hold for as long as the host is
-  unchanged (`no_factory`).
+  lists the concerns each control category allows; a task needs a reference, an acceptance and a
+  shortcut control. The program lowers its task with `Build.lower` (`spec.lower` for the build's
+  host), and `run_build` checks the result with RolloutEngine's `validate_lowered_task`. The draft
+  (`TaskDraft(task, lowered, convention, controls, provenance)`) is written as `task.json`,
+  `lowered.json`, `convention.json`, `controls.json` and `provenance.json`; `load_draft` reads it
+  back. A draft is bound to its host: `lowered.json` names that host's machine backends. Images are
+  published by digest through `BuildServices.images` (`Build.publish_image`). A host failure during
+  the build raises `builder.infrastructure.BuildInfrastructureFailure` with a `cause` of
+  `no_factory`, `no_image_builder`, `scheduling_timeout` or `host_unreachable`, even when the
+  program wrapped it; it is never a `BuildFailure`, and the caller does not charge it to the
+  program. `builder.infrastructure.HOST_REJECTIONS` names the causes that hold for as long as the
+  host is unchanged (`no_factory`, `no_image_builder`).
 - `validate.trials.run_trials(lowered, plan, settings, model)`: runs k trials of a
   `LoweredTaskSpec` through `ShellboxRolloutEngine`. `TrialPlan.deadlines` (`total_turn_timeout`,
   `attempt_timeout`) and `EngineSettings` (turn, command, tool-turn, model-turn and cleanup limits)
@@ -199,10 +203,11 @@ prefilled text, so a prefix with surrounding whitespace is rejected rather than 
 
 A build tells host failures from program failures by where the error was raised, not by its
 message. `Build` wraps its machine factories (`builder.infrastructure.host_checked_factories`): a
-missing factory for the machine kind, a `TimeoutError` from the factory's own wait, and a
-connection or controller transport error from creating or driving a machine are infrastructure.
-Everything else is the program's, including an image it built or named that fails, a spec the
-backend refuses, and a deadline the program set with `startup_timeout`. Shellbox raises a bare
+missing factory for a backend the host should have, a missing image builder, a `TimeoutError`
+from the factory's own wait, and a connection or controller transport error from creating or
+driving a machine are infrastructure. Everything else is the program's, including an image it
+built or named that fails, a spec the backend refuses, and a deadline the program set with
+`spec.machine(startup_timeout=...)`. Shellbox raises a bare
 `RuntimeError` for both a failed Docker build and an unreachable Docker daemon, so the daemon case
 is charged to the program until shellbox types it.
 
