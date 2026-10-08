@@ -22,9 +22,9 @@ sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh
     experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
 ```
 
-The wrapper turns off XLA command buffers, keeps XLA autotune results out of
-the JAX compilation cache, and filters repeated ROCm log lines. Variables
-already set in the environment take precedence.
+The wrapper turns off XLA command buffers and allocator preallocation, keeps
+XLA autotune results out of the JAX compilation cache, and filters repeated
+ROCm log lines. Variables already set in the environment take precedence.
 
 The wrapper leaves `RAGGED_DOT_IMPL` unset, so Haliax picks the `ragged_dot`
 implementation: on GPU it tries Triton and falls back to XLA. Set
@@ -57,5 +57,12 @@ uv pip install jax==0.11.0 jaxlib==0.11.0
   slower: `save_moe` at batch 64 took 4.95 s per step with reused results and
   1.83 s with fresh autotuning. The wrapper sets
   `JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=none`.
+- With a preallocated allocator pool, steps whose temp buffer is 94-97 GiB
+  (batch 96 with reference attention, or `ring_dedup` with `save_moe` at batch
+  64) can fail with out-of-memory around step 5. XLA returns the temp buffer to
+  the pool while the step still runs, and a small buffer allocated in that
+  window can land right after it. The next step's temp then no longer fits in
+  the free space. The wrapper sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so the
+  pool grows by region. Step time is unchanged.
 - Processes can report a `double free` at exit, after the last step. It does
   not affect the results the run already printed or wrote.

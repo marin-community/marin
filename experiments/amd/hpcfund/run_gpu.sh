@@ -19,6 +19,12 @@ export XLA_FLAGS="--xla_gpu_enable_command_buffer= $XLA_FLAGS"
 # executables but autotunes each new compilation.
 export JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=${JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES:-none}
 
+# A preallocated BFC pool is one fixed range. XLA frees the step's large temp buffer while the step still
+# runs, and a small buffer allocated then can land right after it, leaving the next step's temp no hole
+# big enough (OOM around step 5 with 94-97 GiB temps). Without preallocation the pool grows by region, at the
+# same step time.
+export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
+
 # Drop ROCm runtime log lines that repeat on every step. Exit with Python's status: grep exits 1
 # when it prints nothing.
 uv run --no-sync python "$@" 2>&1 | grep --line-buffered -v -E "rocm_pcie_bandwidth|rocm_executor"

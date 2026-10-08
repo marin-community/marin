@@ -163,11 +163,11 @@ The verifier machine receives the extracted answer at `answer_path`.
 It receives the conversation as OpenAI-style chat-message JSON at `conversation_path`, by default `/tests/conversation.json`.
 The session's verifier deadline controls the full grading phase.
 
-| Reward source | Result |
-| --- | --- |
-| `StdoutReward` | Zero exit code and one finite number on standard output |
-| `ExitCodeReward` | Reward 1 for zero exit code, otherwise reward 0 |
-| `FileReward` | The first existing file supplies the scalar grade |
+| Reward source | Result | Origin / reason |
+| --- | --- | --- |
+| `StdoutReward` | Zero exit code and one finite number on standard output | Marin API choice: simple graders without reward files |
+| `ExitCodeReward` | Reward 1 for zero exit code, otherwise reward 0 | Marin API choice: pass/fail shell checks |
+| `FileReward` | The first existing file supplies the scalar grade | Harbor compatibility: existing Harbor task graders |
 
 `FileReward` accepts a number or a JSON object with the configured numeric key.
 A JSON object's `detail` object becomes the grade detail.

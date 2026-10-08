@@ -290,6 +290,30 @@ def test_a_shared_root_keeps_its_files_and_loses_only_the_machine_uploads(tmp_pa
     assert not (shared / "staged").exists()
 
 
+def test_an_archive_extracts_at_the_filesystem_root_into_an_owned_root(tmp_path, roots, factory):
+    # The grading runtime unpacks its inputs with ``tar -C /``; tar opens "/" to extract relative members.
+    import tarfile
+
+    archive = tmp_path / "inputs.tar"
+    with tarfile.open(archive, "w") as tar:
+        payload = tmp_path / "payload"
+        payload.write_text("7")
+        tar.add(payload, arcname=str(roots[0]).lstrip("/") + "/answer.txt")
+
+    async def scenario() -> Result:
+        machine = await factory.create(MachineSpec(HostImage(), workdir=""))
+        try:
+            await machine.upload(archive, "/tmp/shellbox-test-inputs.tar")
+            return await machine.run(
+                Command(("sh", "-c", f"tar -xf /tmp/shellbox-test-inputs.tar -C / && cat {roots[0]}/answer.txt"))
+            )
+        finally:
+            await machine.close()
+
+    result = asyncio.run(scenario())
+    assert (result.exit_code, result.stdout) == (0, b"7"), result.stderr
+
+
 def test_the_filesystem_root_as_workdir_runs_commands_there(factory):
     # Grader scripts that read absolute paths run with cwd "/", which no machine owns.
     assert run_command(factory, MachineSpec(HostImage(), workdir="/"), Command(("pwd",))).stdout == b"/\n"

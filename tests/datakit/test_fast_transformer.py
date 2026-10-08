@@ -3,8 +3,9 @@
 
 """Tests for the fast-transformer quality scorer's two algorithmic contracts:
 
-- ``scorer.score_bme`` — whole-doc (begin/middle/end) window coverage + mean-pooling,
-  the fix for scoring long docs on a truncated lead / prefix-degenerate sources.
+- ``scorer.score_bme`` — whole-doc (begin/middle/end) token-window coverage +
+  mean-pooling, the fix for scoring long docs on a truncated lead / prefix-degenerate
+  sources.
 - ``calibrate.fit_cutpoints`` / ``calibration_knots`` — the monotonic cutpoint remap
   that makes the fixed 0.2-bucket quantization recover the oracle quality level.
 
@@ -20,69 +21,74 @@ import pytest
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
 from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
-from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
+from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, score_bme
+
+MAX_TOKENS = 8
 
 
 class _FakeScorer:
-    """Deterministic stand-in for ``PooledScorer``: ``score(texts)`` returns a value
-    per text keyed on its first character (default otherwise), and records the exact
-    chunk lists it was called with so tests can assert which windows were scored."""
+    """Deterministic stand-in for ``PooledScorer``: ``score_windows(windows)`` returns a
+    value per window keyed on its first token id (default otherwise), and records the
+    exact window lists it was called with so tests can assert which windows were scored."""
 
-    def __init__(self, by_first_char: dict[str, float] | None = None, default: float = 0.0) -> None:
-        self._map = by_first_char or {}
+    def __init__(self, by_first_id: dict[int, float] | None = None, default: float = 0.0) -> None:
+        self._map = by_first_id or {}
         self._default = default
-        self.calls: list[list[str]] = []
+        self.max_tokens = MAX_TOKENS
+        self.calls: list[list[np.ndarray]] = []
 
-    def score(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
-        self.calls.append(list(texts))
-        return np.array([self._map.get(t[:1], self._default) for t in texts], dtype=float)
+    def score_windows(self, windows: list[np.ndarray], batch_size: int = 64) -> np.ndarray:
+        self.calls.append(list(windows))
+        return np.array([self._map.get(int(w[0]), self._default) for w in windows], dtype=float)
 
 
 def _as_scorer(fake: _FakeScorer) -> PooledScorer:
     return cast(PooledScorer, fake)
 
 
-# ---------- _score_bme: whole-doc window coverage + pooling ----------
+# ---------- score_bme: whole-doc window coverage + pooling ----------
 
 
 def test_bme_short_doc_scores_as_single_window():
-    fake = _FakeScorer({"x": 0.3})
-    doc = "x" * 100  # <= CHUNK_CHARS
+    fake = _FakeScorer({10: 0.3})
+    doc = np.full(5, 10)  # <= MAX_TOKENS
     out = score_bme(_as_scorer(fake), [doc])
-    assert fake.calls == [[doc]]  # exactly one chunk = the whole doc
+    assert len(fake.calls) == 1 and len(fake.calls[0]) == 1
+    assert fake.calls[0][0].tolist() == doc.tolist()  # exactly one window = the whole doc
     assert out.tolist() == pytest.approx([0.3])
 
 
 def test_bme_long_doc_covers_begin_middle_end_and_mean_pools():
-    fake = _FakeScorer({"A": 0.0, "B": 0.6, "C": 0.9})
-    # begin -> A block, middle -> B block, end -> C block (each exactly one chunk)
-    doc = "A" * CHUNK_CHARS + "B" * CHUNK_CHARS + "C" * CHUNK_CHARS
+    fake = _FakeScorer({10: 0.0, 20: 0.6, 30: 0.9})
+    # begin -> 10 block, middle -> 20 block, end -> 30 block (each exactly one window)
+    doc = np.array([10] * MAX_TOKENS + [20] * MAX_TOKENS + [30] * MAX_TOKENS)
     out = score_bme(_as_scorer(fake), [doc])
 
-    chunks = fake.calls[0]
-    assert len(chunks) == 3
-    assert all(len(c) == CHUNK_CHARS for c in chunks)
+    windows = fake.calls[0]
+    assert len(windows) == 3
+    assert all(len(w) == MAX_TOKENS for w in windows)
     # the three windows are begin / middle / end of the whole doc -- not just the lead
-    assert (chunks[0][0], chunks[1][0], chunks[2][0]) == ("A", "B", "C")
+    assert (windows[0][0], windows[1][0], windows[2][0]) == (10, 20, 30)
     assert out.tolist() == pytest.approx([(0.0 + 0.6 + 0.9) / 3])  # mean-pooled
 
 
 def test_bme_batch_pools_each_doc_independently():
-    fake = _FakeScorer({"x": 0.3, "A": 0.0, "B": 0.6, "C": 0.9})
-    short = "x" * 100
-    long = "A" * CHUNK_CHARS + "B" * CHUNK_CHARS + "C" * CHUNK_CHARS
+    fake = _FakeScorer({10: 0.3, 11: 0.0, 20: 0.6, 30: 0.9})
+    short = np.full(5, 10)
+    long = np.array([11] * MAX_TOKENS + [20] * MAX_TOKENS + [30] * MAX_TOKENS)
     out = score_bme(_as_scorer(fake), [short, long])
-    # all 1 + 3 chunks scored in a single batched call; spans map back per doc
+    # all 1 + 3 windows scored in a single batched call; spans map back per doc
     assert len(fake.calls) == 1 and len(fake.calls[0]) == 4
     assert out.tolist() == pytest.approx([0.3, (0.0 + 0.6 + 0.9) / 3])
 
 
-def test_bme_window_count_switches_at_chunk_boundary():
+def test_bme_window_count_switches_at_max_tokens():
     fake = _FakeScorer(default=0.5)
-    score_bme(_as_scorer(fake), ["y" * CHUNK_CHARS])  # == threshold
-    score_bme(_as_scorer(fake), ["y" * (CHUNK_CHARS + 1)])  # one char over
-    assert len(fake.calls[0]) == 1  # <= CHUNK_CHARS -> single window
-    assert len(fake.calls[1]) == 3  # > CHUNK_CHARS  -> begin/middle/end
+    score_bme(_as_scorer(fake), [np.arange(MAX_TOKENS)])  # == threshold
+    score_bme(_as_scorer(fake), [np.arange(MAX_TOKENS + 1)])  # one token over
+    assert len(fake.calls[0]) == 1  # <= MAX_TOKENS -> single window
+    assert len(fake.calls[1]) == 3  # > MAX_TOKENS  -> begin/middle/end
+    assert all(len(w) == MAX_TOKENS for w in fake.calls[1])  # each window exactly MAX_TOKENS
 
 
 # ---------- calibrate: monotonic cutpoint remap ----------
