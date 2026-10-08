@@ -1017,6 +1017,8 @@ class GrugModelConfig:
     mla_shared_kv: bool = False
     mla_shared_kv_tied: bool = False
     mla_kv_direct: bool = False
+    mla_value_norm: str = "none"
+    """Tied-value RMSNorm: ``none``, ``rms`` or ``learned``."""
     """No KV latent: MLA keys / values project the normed attention input directly."""
     """With ``mla_shared_kv``: the one cached vector is both key and value."""
     """MLA keys and values are one head each (MQA), broadcast to every query head."""
@@ -2359,6 +2361,7 @@ class CausalSelfAttention(eqx.Module):
     logit_mix_w: Float[Array, "D N2"] | None
     dcmha: Dcmha | DcmhaPaper | None
     gauss: Gauss | None
+    v_norm: "LearnedRMSNorm | None"
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
     latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
@@ -2487,6 +2490,7 @@ class CausalSelfAttention(eqx.Module):
                     else None
                 ),
                 **mla_sparse_params(cfg, d, n, h, random.fold_in(k_q, 10), std, _init_weight),
+                v_norm=_learned_rms_norm(cfg, h, cfg.layer_norm_eps) if cfg.mla_value_norm == "learned" else None,
                 match_head=(
                     reshard(
                         _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
@@ -2645,6 +2649,7 @@ class CausalSelfAttention(eqx.Module):
             logit_mix_w=None,
             dcmha=None,
             gauss=None,
+            v_norm=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
             latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
@@ -2778,6 +2783,10 @@ class CausalSelfAttention(eqx.Module):
             second_qk = (project_q(tiled(self.w_qn)), project_k(tiled(self.w_ukn)))
         if self.w_uv is None:  # mla_shared_kv_tied: the value is the cached key vector itself
             v = k
+            if self.cfg.mla_value_norm == "rms":
+                v = rms_norm(v)
+            elif self.v_norm is not None:
+                v = self.v_norm(v)
         else:
             v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
