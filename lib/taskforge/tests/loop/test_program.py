@@ -270,6 +270,22 @@ async def test_a_shortcut_found_after_the_threshold_is_noted_and_the_item_accept
     assert [s.passed for s in submissions] == [False, False, False, True]
 
 
+async def test_a_shortcut_claim_cut_off_on_the_output_budget_is_counted_as_no_claim(loop, programs, fake_glm):
+    proposal = programs.proposal()
+    programs.submit(fake_glm, programs.source())
+    programs.adversary_turns(fake_glm, READ)
+    fake_glm.stream(content="SHORTCUT: any integer passes because the grader", finish="length")
+
+    async with loop.services() as services:
+        await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(), services)
+    item_id = item_id_for(proposal)
+
+    (adversaries,) = events_of(loop, item_id, EventKind.ADVERSARIES_RUN)
+    assert (adversaries.attrs["shortcut_graded"], adversaries.attrs["shortcut_claimed"]) == ("1", "0")
+    calibration = json.loads((evidence_dir(loop, item_id, 0) / "calibration.json").read_text())
+    assert calibration["roles"]["shortcut"]["claims"] == {"shortcut": 0, "no_shortcut": 0, "none": 1}
+
+
 async def test_a_shortcut_within_the_threshold_is_repaired_with_its_candidate_control(loop, programs, fake_glm):
     proposal = programs.proposal()
     programs.submit(fake_glm, programs.source(lenient=True))

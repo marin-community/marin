@@ -99,14 +99,14 @@ from taskforge.review.rules import ItemHistory, decide, staged_repair
 from taskforge.triage.checks import Check, CheckContext
 from taskforge.triage.program import RubricProgram, evaluate
 from taskforge.triage.verdict import ModelCall, TriageDecision, Verdict
-from taskforge.validate.adversary import AdversaryContext, ClaimKind, parse_claim, run_adversaries
-from taskforge.validate.calibration import CalibrationSummary, Finding, final_reply, summarize, write_summary
+from taskforge.validate.adversary import AdversaryContext, run_adversaries
+from taskforge.validate.calibration import CalibrationSummary, Finding, summarize, write_summary
 from taskforge.validate.controls import ControlVerdict, Tokenize
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Graded, TrialKind
 from taskforge.validate.run import load_validation, replay_controls
 from taskforge.validate.solver import ModelFactory, ValidationSite, run_solver
-from taskforge.validate.submissions import passing
+from taskforge.validate.submissions import ClaimKind, passing, trial_claim
 from taskforge.validate.trials import EngineSettings, RetryBackoff, task_digest
 
 logger = logging.getLogger(__name__)
@@ -657,7 +657,7 @@ async def _trials(item: _Item, state: ItemState) -> None:
         attrs = {"context_digest": sha256_hex(context.encode()) if context else ""}
         for role, trials in by_role.items():
             graded = [(trial, trial.outcome) for trial in trials if isinstance(trial.outcome, Graded)]
-            claims = [parse_claim(final_reply(outcome.rollout)).kind for _, outcome in graded]
+            claims = [trial_claim(outcome).kind for _, outcome in graded]
             attrs[f"{role}_graded"] = str(len(graded))
             attrs[f"{role}_passes"] = str(sum(passing(outcome.grade) for _, outcome in graded))
             attrs[f"{role}_submissions"] = str(sum(len(trial.submissions) for trial, _ in graded))
