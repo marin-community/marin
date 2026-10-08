@@ -46,7 +46,7 @@ from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVI
 from taskcompendium.pipeline.sources import source_files_identity
 from zephyr.dataset import Dataset
 
-from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
 
 PIPELINE_VERSION = "2026.10.07.1"
 GRADER_SCRIPT_SUFFIX = "_grade.py"
@@ -146,8 +146,7 @@ class RlDataPipeline:
     atlas_id: str | None = None
 
 
-class RlDataArtifact(Artifact):
-    status: str
+class RlDataArtifact(CampaignArtifact):
     manifest: dict[str, Any]
 
 

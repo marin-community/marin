@@ -30,6 +30,9 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
 from taskcompendium.runtime.task_grading import grade_task
 
+MALFORMED_JSON = "[}"
+"""A reply no JSON parser accepts."""
+
 
 def control_result(grade: GradeResult, name: str, expected_reward: float) -> CheckResult:
     """Require the expected reward, counting a rejected submission as zero, while retaining runtime errors."""
@@ -85,7 +88,7 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
         return _action_checks(task, verifier)
     if isinstance(verifier, JsonSchemaSpec):
         return [
-            *answer_checks(task, (("empty", "", 0.0), ("malformed", "[}", 0.0))),
+            *answer_checks(task, (("empty", "", 0.0), ("malformed", MALFORMED_JSON, 0.0))),
             CheckResult(check="reference", status=CheckStatus.SKIPPED, detail="No schema-valid reference supplied"),
         ]
     if isinstance(verifier, NumericSpec):

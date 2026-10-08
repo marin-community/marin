@@ -20,7 +20,13 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.code import has_code_block, validate_code_cases
+from taskcompendium.convert.code import (
+    CODE_GRADER_MEMORY_MB,
+    FAILING_PROGRAM,
+    THREAD_ENVIRONMENT,
+    python_reply,
+    validate_code_cases,
+)
 from taskcompendium.convert.nemotron_ultra import (
     PLACEHOLDER_FIELD,
     BlendRequest,
@@ -66,9 +72,6 @@ PLACEHOLDER_SOURCE_FIELD = "placeholder_source"
 AGENT_CAPABILITY_PREFIX = "nemotron-agent:"
 SCORER_TIMEOUT = 60.0
 CODE_SCORER_TIMEOUT = 330.0
-# The LiveCodeBench child process may use 4 GiB; the grading machine also needs room for its runtime.
-CODE_MEMORY_MB = 5120
-THREAD_ENVIRONMENT = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 STATE_PATH = "/app/state.json"
 """Where the runtime writes the captured terminal message, which the code scorer inspects."""
 
@@ -124,7 +127,6 @@ TOOL_ACTION_AGENTS = (
 RDKIT_PROPERTIES = frozenset({"count", "bool", "presence", "fragment"})
 STRUCTURED_SCHEMA_TYPES = frozenset({"json", "yaml", "toml", "xml", "csv"})
 WRONG_TOOL = "__wrong_tool__"
-FAILING_PROGRAM = '```python\nraise RuntimeError("negative control")\n```'
 
 DAPO = "BytedTsinghua-SIA/DAPO-Math-17k"
 DAPO_PREFIX = (
@@ -425,10 +427,8 @@ def mcqa_golden(task: TaskSpec) -> Reply | None:
 
 def code_golden(task: TaskSpec) -> Reply | None:
     """Only a source-provided program can be a known-correct submission."""
-    solution = grader_config(task)["contract"].get("gold_standard_solution")
-    if not isinstance(solution, str) or not solution.strip():
-        return None
-    return answer_reply(task, solution if has_code_block(solution) else f"```python\n{solution}\n```")
+    reply = python_reply(grader_config(task)["contract"].get("gold_standard_solution"))
+    return answer_reply(task, reply) if reply is not None else None
 
 
 def code_negative(task: TaskSpec) -> Reply:
@@ -469,6 +469,6 @@ def tool_action_negative(task: TaskSpec) -> Reply:
 
 
 MCQA_CONTROLS = Controls(golden=mcqa_golden)
-CODE_CONTROLS = Controls(golden=code_golden, negative=code_negative, memory_mb=CODE_MEMORY_MB)
+CODE_CONTROLS = Controls(golden=code_golden, negative=code_negative, memory_mb=CODE_GRADER_MEMORY_MB)
 RDKIT_CONTROLS = Controls(golden=rdkit_golden, negative=rdkit_negative)
 TOOL_ACTION_CONTROLS = Controls(golden=tool_action_golden, negative=tool_action_negative)

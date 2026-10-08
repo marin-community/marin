@@ -36,7 +36,7 @@ from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, GraderReadiness, VerificationReport
-from taskcompendium.pipeline.sampling import merge_sample_rows
+from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order
 from taskcompendium.pipeline.stages import (
     ACCEPTED_SHARD_TEMPLATE,
     AUDIT_INPUT_PATTERN,
@@ -331,8 +331,7 @@ class SourceReport(BaseModel):
 
 
 def _sample_key(row: dict[str, Any], seed: int) -> tuple[str, str]:
-    task_id = row["task_id"]
-    return hashlib.sha256(f"{seed}:{task_id}".encode()).hexdigest(), task_id
+    return seeded_order(row["task_id"], seed)
 
 
 def sample_rows(rows: Iterator[dict[str, Any]], *, size: int, seed: int) -> VerificationSample:

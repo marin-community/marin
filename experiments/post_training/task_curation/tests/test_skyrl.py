@@ -280,7 +280,7 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert not pipeline.source.select({**ROWS["eurus2_code"], "ability": "math"}, {})
     task = converted_task(pipeline, ROWS["eurus2_code"])
     assert [event.role for event in task.context.events] == ["system", "user"]
-    assert grader_config(task)["test_cases"] == json.dumps(SUM_TESTS)
+    assert grader_config(task)["test_cases"] == SUM_TESTS
 
 
 @pytest.mark.parametrize(
@@ -333,6 +333,10 @@ REJECTIONS = [
     *(
         ("apps", {"input_output": encoded}, ImportFailureKind.SOURCE_DEFECT, "invalid_test_contract")
         for encoded in ("", "{", "null", "[]", '{"inputs": "1 2", "outputs": ["3"]}')
+    ),
+    *(
+        ("apps", {"solutions": solutions}, ImportFailureKind.SOURCE_DEFECT, "invalid_solutions")
+        for solutions in ("[", '{"solution": "print(1)"}')
     ),
     (
         "verifiable_code",

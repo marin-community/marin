@@ -15,6 +15,7 @@ from pathlib import Path
 LCB_MODULE = "skyrl_gym.envs.lcb.livecodebench"
 
 
+# Each grade script ships alone to /tests in the grader image, so sql_grade.py keeps its own copy.
 def source_module(root: Path, name: str):
     """Import ``name`` from the checkout at ``root``, refusing a copy installed elsewhere."""
     sys.path.insert(0, str(root))

@@ -1,16 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Checks for code tasks whose hidden tests use the LiveCodeBench test-case layout."""
+"""Checks and grading settings for code tasks whose hidden tests use the LiveCodeBench test-case layout."""
 
-import json
 import re
 from collections.abc import Mapping
+from typing import Any
+
+CODE_GRADER_MEMORY_MB = 5120
+"""The LiveCodeBench child process may use 4 GiB; the grading machine also needs room for its runtime."""
+THREAD_ENVIRONMENT = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
+"""Run each test's numeric libraries on one thread."""
+FAILING_PROGRAM = '```python\nraise RuntimeError("negative control")\n```'
 
 
-def validate_code_cases(ground_truth: str | Mapping | list) -> None:
-    """Reject test layouts the LiveCodeBench scorer cannot normalize."""
-    cases = json.loads(ground_truth) if isinstance(ground_truth, str) else ground_truth
+def validate_code_cases(cases: Mapping[str, Any] | list[Any]) -> None:
+    """Reject decoded test layouts the LiveCodeBench scorer cannot normalize."""
     if isinstance(cases, Mapping) and "test_cases" in cases:
         if cases.get("language") not in (None, "python"):
             raise ValueError("LCB supports only Python verification specs")
@@ -52,3 +57,10 @@ def validate_code_cases(ground_truth: str | Mapping | list) -> None:
 def has_code_block(response: str) -> bool:
     """Match a fenced code block the way the source scorers extract one."""
     return re.search(r"```(?:\w+)?\n(.*?)```", response, re.DOTALL) is not None
+
+
+def python_reply(solution: Any) -> str | None:
+    """A source solution as a reply the scorers extract code from, or ``None`` when there is none."""
+    if not isinstance(solution, str) or not solution.strip():
+        return None
+    return solution if has_code_block(solution) else f"```python\n{solution}\n```"

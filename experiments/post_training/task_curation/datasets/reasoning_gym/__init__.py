@@ -17,7 +17,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,19 +26,17 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
+from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
-from taskcompendium.convert.tasktrove import archive_file, archive_resources
+from taskcompendium.convert.source_scorer import ANSWER_PATH, grade_script_package
+from taskcompendium.convert.tasktrove import archive_resources, archive_script_grader
 from taskcompendium.grader import GraderPackage, grader_config
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    FileReward,
     PlainText,
     ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
-    ScriptGrader,
     TaskSpec,
     TextMessage,
 )
@@ -50,14 +47,13 @@ from taskcompendium.pipeline.models import (
     ImportFailureKind,
     ImportRejection,
     IntendedUse,
-    NormalizationChange,
     NormalizedTask,
     RawRow,
     Reply,
 )
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove import ANSWER_FILE_DELIVERY, tasktrove_source
 from experiments.post_training.task_curation.images import REASONING_GYM_IMAGE
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
 
@@ -81,18 +77,9 @@ GENERATED_PACKAGE = "/opt/reasoning-gym-generated"
 SKYRL_GYM_PACKAGE = "/opt/skyrl_gym"
 GRADE = "reasoning_gym_grade.py"
 GRADE_BYTES = Path(__file__).with_name(GRADE).read_bytes()
-ANSWER_PATH = "/app/answer.txt"
-SCORE_PATH = "/logs/verifier/score.json"
-ARCHIVE_REWARD_PATH = "/logs/verifier/reward.txt"
-ARCHIVE_GRADER_FILES = ("tests/test.sh", "tests/verifier.py", "task.toml")
 SCORER_TIMEOUT = 60.0
-ANSWER_FILE_NOTE = "\nThe runtime writes your final assistant response to /app/answer.txt."
-# Instruction phrases asking for a file, and their reply-based replacements.
-FILE_DELIVERY_PHRASES = (
-    ("write your final answer to `/app/answer.txt`", "return your final answer in the assistant response"),
-    ("Write ONLY your final answer to **`/app/answer.txt`**", "Return ONLY your final answer in the assistant response"),
-    ("The verifier reads that file", "The verifier reads the assistant response"),
-)
+ANSWER_FILE_NOTE = f"\nThe runtime writes your final assistant response to {ANSWER_PATH}."
+REWRITE_REASON = f"The grader reads the reply, which the runtime writes to {ANSWER_PATH}"
 
 GENERATED_RUBRIC = """
 Read the complete generated question and verify that every grid, rule, sequence, or example required to solve it is
@@ -211,20 +198,13 @@ class RecordedControls(BaseModel):
 
 
 def _scorer_package(mode: str, contract: dict[str, Any], package_path: str) -> GraderPackage:
-    return GraderPackage(
-        ScriptGrader(
-            argv=("python3", f"/tests/{GRADE}", "/tests/config.json", ANSWER_PATH, SCORE_PATH),
-            cwd="/",
-            env={"PYTHONPATH": f"{package_path}:{SKYRL_GYM_PACKAGE}"},
-            environment=REASONING_GYM_IMAGE.requirements(),
-            answer_path=ANSWER_PATH,
-            reward=FileReward(files=(RewardFile(path=SCORE_PATH, format=RewardFileFormat.JSON),)),
-            timeout=SCORER_TIMEOUT,
-        ),
-        (
-            inline_resource(GRADE, GRADE_BYTES),
-            inline_resource("config.json", json.dumps({"mode": mode, "contract": contract}, allow_nan=False).encode()),
-        ),
+    return grade_script_package(
+        GRADE,
+        GRADE_BYTES,
+        config={"mode": mode, "contract": contract},
+        environment=REASONING_GYM_IMAGE.requirements(),
+        timeout=SCORER_TIMEOUT,
+        env={"PYTHONPATH": f"{package_path}:{SKYRL_GYM_PACKAGE}"},
     )
 
 
@@ -270,10 +250,8 @@ def generated_golden(task: TaskSpec) -> Reply | None:
 
 def reply_instruction(instruction: str) -> str:
     """Ask for the answer in the reply where the instruction asked for ``/app/answer.txt``."""
-    public = instruction
-    for phrase, replacement in FILE_DELIVERY_PHRASES:
-        public = public.replace(phrase, replacement)
-    if public == instruction and "/app/answer.txt" in instruction:
+    public = replace_phrases(instruction, ANSWER_FILE_DELIVERY)
+    if public == instruction and ANSWER_PATH in instruction:
         # Unrecognized wording: keep it, and say where the reply ends up.
         public += ANSWER_FILE_NOTE
     return public
@@ -290,44 +268,26 @@ def convert_tasktrove(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejectio
         return unsupported("missing_scorer", "metadata.source_dataset is required")
     if not isinstance(data.get("answer"), str):
         return source_defect("invalid_entry", "Entry answer must be a string")
-    if row.data.get("archive_links"):
-        return unsupported(
-            "unsupported_reasoning_archive_links",
-            "The source archive contains links that cannot be mounted as regular files",
-        )
-    task_toml = archive_file(row.data, "task.toml")
-    if task_toml is None or any(archive_file(row.data, path) is None for path in ARCHIVE_GRADER_FILES):
-        return unsupported(
-            "missing_original_reasoning_grader", "The source row lacks tests/test.sh, tests/verifier.py, or task.toml"
-        )
-    public = reply_instruction(instruction)
+    grader = archive_script_grader(
+        row.data,
+        required=("tests/verifier.py",),
+        environment=REASONING_GYM_IMAGE.requirements(),
+        answer_path=ANSWER_PATH,
+        env={"PYTHONPATH": TASKTROVE_PACKAGE},
+    )
+    if isinstance(grader, ImportRejection):
+        return grader
     task = TaskSpec(
         id=row.id,
         source=row.source,
-        context=ConversationInput(events=(TextMessage(role="user", content=public),)),
+        context=ConversationInput(events=(TextMessage(role="user", content=reply_instruction(instruction)),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
-        grader=ScriptGrader(
-            argv=("bash", "/tests/test.sh"),
-            cwd="/",
-            env={"PYTHONPATH": TASKTROVE_PACKAGE},
-            environment=REASONING_GYM_IMAGE.requirements(),
-            answer_path=ANSWER_PATH,
-            reward=FileReward(files=(RewardFile(path=ARCHIVE_REWARD_PATH, format=RewardFileFormat.NUMBER),)),
-            timeout=float(tomllib.loads(task_toml.decode())["verifier"]["timeout_sec"]),
-        ),
+        grader=grader,
         resources=archive_resources(row.data),
     )
-    if public == instruction:
-        return task
-    change = NormalizationChange(
-        field="instruction",
-        reason="The grader reads the reply, which the runtime writes to /app/answer.txt",
-        original=instruction,
-        replacement=public,
-    )
-    return NormalizedTask(task, (change,))
+    return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
 def tasktrove_golden(task: TaskSpec) -> Reply:

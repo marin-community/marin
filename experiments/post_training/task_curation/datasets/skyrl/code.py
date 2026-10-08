@@ -18,14 +18,20 @@ from pathlib import Path
 from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.code import has_code_block, validate_code_cases
+from taskcompendium.convert.code import (
+    CODE_GRADER_MEMORY_MB,
+    FAILING_PROGRAM,
+    THREAD_ENVIRONMENT,
+    python_reply,
+    validate_code_cases,
+)
 from taskcompendium.convert.conversation import conversation_task
-from taskcompendium.grader import GraderPackage, grader_config
-from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.convert.source_scorer import grade_script_package
+from taskcompendium.grader import grader_config
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import SourceFormat, StagedInputs
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
-from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.images import APPS_IMAGE, SKYRL_CODE_SQL_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource, Image, RlDataPipeline, ShellSim
@@ -37,18 +43,12 @@ GRADE_SCRIPTS = {name: Path(__file__).with_name(name).read_bytes() for name in (
 APPS_TESTING_UTIL_PATH = "/opt/apps/eval/testing_util.py"
 APPS_TESTING_UTIL_SHA256 = "9a4e58ff2634ef606c42597457c0733910862e0588ea750d901265bbfe65d36f"
 SKYRL_GYM_ROOT = "/opt/skyrl_gym"
-ANSWER_PATH = "/app/answer.txt"
-SCORE_PATH = "/logs/verifier/score.json"
 GRADER_TIMEOUT = 330.0
-# The LiveCodeBench child process may use 4 GiB; the grading machine also needs room for its runtime.
-GRADER_MEMORY_MB = 5120
-THREAD_ENVIRONMENT = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 CODE_INSTRUCTION = "\nReturn the complete Python solution in this format:\n```python\n# solution\n```"
 SQL_INSTRUCTION = (
     "\nTarget dialect is SQLite. Write exactly one SELECT statement (a leading WITH is allowed) that "
     "answers the question. Return only the query, inside <solution></solution>."
 )
-FAILING_CODE = '```python\nraise RuntimeError("negative control")\n```'
 FAILING_SQL = "SELECT FROM"
 NONDETERMINISTIC_SQL = re.compile(
     r"\b(?:random|randomblob|current_date|current_time|current_timestamp)\b", re.IGNORECASE
@@ -83,13 +83,6 @@ Identify missing public context separately from implementation difficulty.
 """
 
 
-def python_reply(solution: Any) -> str | None:
-    """A source solution as a reply the scorers extract code from, or ``None`` when there is none."""
-    if not isinstance(solution, str) or not solution.strip():
-        return None
-    return solution if has_code_block(solution) else f"```python\n{solution}\n```"
-
-
 def _with_instruction(events: Sequence[TextMessage], instruction: str) -> tuple[TextMessage, ...]:
     """Append the answer instruction to the last user message."""
     last_user = max(index for index, event in enumerate(events) if event.role == "user")
@@ -111,33 +104,16 @@ def scored_task(
     evidence: Mapping[str, Any],
 ) -> TaskSpec:
     """A conversation task whose reply ``script`` grades by calling the image-installed ``scorer``."""
-    package = GraderPackage(
-        ScriptGrader(
-            argv=("python3", f"/tests/{script}", scorer, "/tests/config.json", ANSWER_PATH, SCORE_PATH),
-            cwd="/",
-            env=THREAD_ENVIRONMENT,
-            environment=image.requirements(),
-            answer_path=ANSWER_PATH,
-            reward=FileReward(files=(RewardFile(path=SCORE_PATH, format=RewardFileFormat.JSON),)),
-            timeout=GRADER_TIMEOUT,
-        ),
-        (
-            inline_resource(script, GRADE_SCRIPTS[script]),
-            inline_resource("config.json", json.dumps(dict(config), allow_nan=False).encode()),
-        ),
+    package = grade_script_package(
+        script,
+        GRADE_SCRIPTS[script],
+        leading_args=(scorer,),
+        config=config,
+        environment=image.requirements(),
+        timeout=GRADER_TIMEOUT,
+        env=THREAD_ENVIRONMENT,
     )
     return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
-
-
-def _apps_reference(solutions: Any) -> str | None:
-    """The first nonempty solution of APPS's JSON-encoded solution list."""
-    try:
-        decoded = json.loads(solutions) if isinstance(solutions, str) else solutions
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(decoded, list):
-        return None
-    return next((reply for reply in map(python_reply, decoded) if reply is not None), None)
 
 
 def convert_apps(row: RawRow) -> TaskSpec | ImportRejection:
@@ -151,6 +127,13 @@ def convert_apps(row: RawRow) -> TaskSpec | ImportRejection:
     inputs, outputs = (tests.get("inputs"), tests.get("outputs")) if isinstance(tests, dict) else (None, None)
     if not isinstance(inputs, list) or not inputs or not isinstance(outputs, list) or len(inputs) != len(outputs):
         return source_defect("invalid_test_contract", "Paired nonempty inputs and outputs are required")
+    # APPS leaves ``solutions`` empty when it has none; anything else must be a JSON list.
+    try:
+        solutions = json.loads(row.data.get("solutions") or "[]")
+    except (json.JSONDecodeError, TypeError) as error:
+        return source_defect("invalid_solutions", f"solutions is not JSON: {error}")
+    if not isinstance(solutions, list):
+        return source_defect("invalid_solutions", "solutions must be a JSON list")
     starter = row.data.get("starter_code")
     prompt = question + (f"\n\nStarter code:\n{starter}" if starter else "")
     return scored_task(
@@ -163,7 +146,7 @@ def convert_apps(row: RawRow) -> TaskSpec | ImportRejection:
         config={
             "apps_source_sha256": APPS_TESTING_UTIL_SHA256,
             "input_output": encoded,
-            "reference_reply": _apps_reference(row.data.get("solutions")),
+            "reference_reply": next((reply for reply in map(python_reply, solutions) if reply is not None), None),
         },
         evidence={
             key: row.data[key] for key in ("solutions", "difficulty", "url", "id", "problem_id") if key in row.data
@@ -172,7 +155,11 @@ def convert_apps(row: RawRow) -> TaskSpec | ImportRejection:
 
 
 def _lcb_task(
-    row: RawRow, events: Sequence[TextMessage], test_cases: Any, reference: str | None, evidence: Mapping[str, Any]
+    row: RawRow,
+    events: Sequence[TextMessage],
+    test_cases: Mapping[str, Any] | list[Any],
+    reference: str | None,
+    evidence: Mapping[str, Any],
 ) -> TaskSpec | ImportRejection:
     try:
         validate_code_cases(test_cases)
@@ -196,12 +183,17 @@ def is_code_row(row: dict[str, Any], _inputs: StagedInputs) -> bool:
 
 def convert_eurus2_code(row: RawRow) -> TaskSpec | ImportRejection:
     messages, reward = row.data.get("prompt"), row.data.get("reward_model")
-    if not isinstance(messages, list) or not messages or not isinstance(reward, dict) or not reward.get("ground_truth"):
+    ground_truth = reward.get("ground_truth") if isinstance(reward, dict) else None
+    if not isinstance(messages, list) or not messages or not isinstance(ground_truth, str) or not ground_truth:
         return source_defect("missing_prompt_or_tests", "prompt and reward_model ground_truth are required")
+    try:
+        test_cases = json.loads(ground_truth)
+    except json.JSONDecodeError as error:
+        return unsupported("unsupported_test_cases", str(error))
     events = tuple(TextMessage(role=message["role"], content=message["content"]) for message in messages)
     evidence = {key: row.data[key] for key in ("extra_info", "data_source", "ability") if key in row.data}
     # Eurus-2 publishes no solutions, so these tasks have no golden control.
-    return _lcb_task(row, events, reward["ground_truth"], None, evidence)
+    return _lcb_task(row, events, test_cases, None, evidence)
 
 
 def convert_verifiable_code(row: RawRow) -> TaskSpec | ImportRejection:
@@ -271,15 +263,15 @@ def reference_solution(task: TaskSpec) -> Reply | None:
 
 
 def failing_code(task: TaskSpec) -> Reply:
-    return answer_reply(task, FAILING_CODE)
+    return answer_reply(task, FAILING_PROGRAM)
 
 
 def failing_sql(task: TaskSpec) -> Reply:
     return answer_reply(task, FAILING_SQL)
 
 
-CODE_CONTROLS = Controls(golden=reference_solution, negative=failing_code, memory_mb=GRADER_MEMORY_MB)
-SQL_CONTROLS = Controls(golden=reference_solution, negative=failing_sql, memory_mb=GRADER_MEMORY_MB)
+CODE_CONTROLS = Controls(golden=reference_solution, negative=failing_code, memory_mb=CODE_GRADER_MEMORY_MB)
+SQL_CONTROLS = Controls(golden=reference_solution, negative=failing_sql, memory_mb=CODE_GRADER_MEMORY_MB)
 
 
 def pipelines() -> list[RlDataPipeline]:

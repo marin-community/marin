@@ -12,14 +12,25 @@ import hashlib
 import io
 import json
 import tarfile
+import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from taskcompendium.models import ResourceGroups, TaskResource
+from taskcompendium.convert.answers import unsupported
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    FileReward,
+    ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    TaskResource,
+)
 from taskcompendium.pipeline.inputs import StagedInputs
+from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
 TASKS_FILE = "tasks.parquet"
@@ -32,6 +43,8 @@ SOLUTION_DIR = "solution/"
 SOLVE_SH = "solution/solve.sh"
 TESTS_MOUNT = "/tests"
 """Where Harbor mounts a task's ``tests/`` directory, and only at grading time."""
+TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
+"""The numeric reward file a Harbor ``tests/test.sh`` writes."""
 
 
 @dataclass
@@ -135,3 +148,34 @@ def archive_resources(data: Mapping[str, Any]) -> ResourceGroups:
 def archive_files(data: Mapping[str, Any]) -> TaskFiles:
     """The files of a row decoded by :func:`unpack_task_binary`."""
     return TaskFiles({path: base64.b64decode(encoded, validate=True) for path, encoded in data["files"].items()})
+
+
+def archive_script_grader(
+    data: Mapping[str, Any],
+    *,
+    required: tuple[str, ...],
+    environment: EnvironmentRequirements,
+    answer_path: str | None,
+    env: Mapping[str, str] | None = None,
+) -> ScriptGrader | ImportRejection:
+    """Grade with the archive's own ``tests/test.sh``, under the verifier timeout in its ``task.toml``.
+
+    ``required`` names the other archive files the test script reads. An archive with links, which
+    cannot be mounted as regular files, or without these files is unsupported.
+    """
+    if data.get("archive_links"):
+        return unsupported("unsupported_archive_links", "The archive has links that cannot be mounted as regular files")
+    missing = [path for path in (TASK_TOML, TEST_SH, *required) if archive_file(data, path) is None]
+    if missing:
+        return unsupported("missing_archive_grader", f"The archive lacks {', '.join(missing)}")
+    task_toml = archive_file(data, TASK_TOML)
+    assert task_toml is not None
+    return ScriptGrader(
+        argv=("bash", f"{TESTS_MOUNT}/test.sh"),
+        cwd="/",
+        env=dict(env or {}),
+        environment=environment,
+        answer_path=answer_path,
+        reward=TEST_SH_REWARD,
+        timeout=float(tomllib.loads(task_toml.decode())["verifier"]["timeout_sec"]),
+    )

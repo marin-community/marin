@@ -16,6 +16,7 @@ from pathlib import Path
 SQL_MODULE = "skyrl_gym.envs.text_to_sql.scoring"
 
 
+# Each grade script ships alone to /tests in the grader image, so lcb_grade.py keeps its own copy.
 def source_module(root: Path, name: str):
     """Import ``name`` from the checkout at ``root``, refusing a copy installed elsewhere."""
     sys.path.insert(0, str(root))

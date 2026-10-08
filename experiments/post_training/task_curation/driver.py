@@ -24,6 +24,7 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.qemu.machine import QemuMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy, QemuBundle, UnsupportedMachineSpec
+from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.direct_transport import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.models import FilterPolicy
 from taskcompendium.pipeline.review import BatchReviewer, DirectReviewer, Reviewer
@@ -56,57 +57,83 @@ class VerificationBackend(StrEnum):
     QEMU = "qemu"
 
 
+def machines_identity(backend: VerificationBackend, worker_image: str) -> dict[str, Any]:
+    """The settings every backend's grading machines share; the worker image carries the grading code."""
+    return {"backend": backend.value, "worker_image": worker_image, "network": NetworkPolicy.DENY.value}
+
+
 @dataclass(frozen=True)
-class CampaignMachines:
-    """Fresh, network-denied grading machines on one backend for every source in a campaign.
+class QemuMachines:
+    """Boot the QEMU guest bundle that the worker image carries for each grader image."""
 
-    QEMU boots the guest bundle that the worker image carries for each grader image; gVisor runs
-    the image on the local Docker daemon; Iris schedules it as a task on ``controller_url``.
-    """
-
-    backend: VerificationBackend
     worker_image: str
-    controller_url: str | None
-    qemu_bundles: Mapping[str, str]
+    bundles: Mapping[str, str]
 
     def __post_init__(self) -> None:
-        if self.backend == VerificationBackend.IRIS and self.controller_url is None:
-            raise ValueError("Iris verification requires a controller URL")
-        if self.backend == VerificationBackend.QEMU and PINNED_IMAGE.fullmatch(self.worker_image) is None:
+        if PINNED_IMAGE.fullmatch(self.worker_image) is None:
             raise ValueError("QEMU verification requires a digest-pinned worker image carrying the bundles")
 
     def identity(self) -> dict[str, Any]:
         return {
-            "backend": self.backend.value,
-            "worker_image": self.worker_image,
-            "network": NetworkPolicy.DENY.value,
-            "qemu_bundles": dict(sorted(self.qemu_bundles.items())),
+            **machines_identity(VerificationBackend.QEMU, self.worker_image),
+            "qemu_bundles": dict(sorted(self.bundles.items())),
         }
 
     def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        if self.backend == VerificationBackend.QEMU:
-            bundle = self.qemu_bundles.get(image)
-            if bundle is None:
-                raise UnsupportedMachineSpec(f"The worker image carries no QEMU bundle for {image}")
-            return QemuMachineFactory(), MachineSpec(
-                QemuBundle(Path(bundle)), network=NetworkPolicy.DENY, memory_mb=memory_mb
-            )
-        if self.backend == VerificationBackend.IRIS:
-            assert self.controller_url is not None
-            return (
-                IrisMachineFactory(
-                    controller_url=self.controller_url,
-                    scheduling_timeout=IRIS_SCHEDULING_TIMEOUT,
-                    job_ttl=IRIS_JOB_TTL,
-                    secret_env=None,
-                ),
-                MachineSpec(RegistryImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb),
-            )
+        bundle = self.bundles.get(image)
+        if bundle is None:
+            raise UnsupportedMachineSpec(f"The worker image carries no QEMU bundle for {image}")
+        return QemuMachineFactory(), MachineSpec(
+            QemuBundle(Path(bundle)), network=NetworkPolicy.DENY, memory_mb=memory_mb
+        )
+
+
+@dataclass(frozen=True)
+class IrisMachines:
+    """Schedule each grader image as a task on the Iris controller at ``controller_url``."""
+
+    worker_image: str
+    controller_url: str
+
+    def identity(self) -> dict[str, Any]:
+        return machines_identity(VerificationBackend.IRIS, self.worker_image)
+
+    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        factory = IrisMachineFactory(
+            controller_url=self.controller_url,
+            scheduling_timeout=IRIS_SCHEDULING_TIMEOUT,
+            job_ttl=IRIS_JOB_TTL,
+            secret_env=None,
+        )
+        return factory, MachineSpec(RegistryImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
+
+
+@dataclass(frozen=True)
+class GvisorMachines:
+    """Run each grader image under gVisor on the local Docker daemon."""
+
+    worker_image: str
+
+    def identity(self) -> dict[str, Any]:
+        return machines_identity(VerificationBackend.GVISOR, self.worker_image)
+
+    def machine(self, image: str, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         return GvisorMachineFactory(), MachineSpec(DockerImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
 
 
 def qemu_bundles() -> dict[str, str]:
     return {image.reference: image.qemu_bundle for image in IMAGES if image.qemu_bundle is not None}
+
+
+def campaign_machines(backend: VerificationBackend, worker_image: str, controller_url: str | None) -> GradingMachines:
+    """Fresh, network-denied grading machines on ``backend`` for every source in a campaign."""
+    if backend == VerificationBackend.QEMU:
+        return QemuMachines(worker_image, qemu_bundles())
+    if backend == VerificationBackend.IRIS:
+        if controller_url is None:
+            raise ValueError("Iris verification requires a controller URL")
+        return IrisMachines(worker_image, controller_url)
+    return GvisorMachines(worker_image)
 
 
 @click.command(help=__doc__)
@@ -208,9 +235,7 @@ def main(
         ),
         filter_policy=FilterPolicy(),
         normalized_shards=normalized_shards,
-        machines=CampaignMachines(
-            VerificationBackend(verification_backend), worker_image, controller_url, qemu_bundles()
-        ),
+        machines=campaign_machines(VerificationBackend(verification_backend), worker_image, controller_url),
     )
     runtime = CampaignRuntime()
     steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]

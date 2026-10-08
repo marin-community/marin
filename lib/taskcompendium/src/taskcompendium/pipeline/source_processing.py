@@ -29,7 +29,7 @@ from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
 from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe
-from taskcompendium.pipeline.sampling import merge_sample_rows
+from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order
 from taskcompendium.pipeline.source_quality import (
     SOURCE_QUALITY_REVISION,
     QualitySampleCoverage,
@@ -110,8 +110,7 @@ class RawSample:
 
 
 def _raw_order(row: dict[str, Any], seed: int) -> tuple[str, str]:
-    locator = row["locator"]
-    return hashlib.sha256(f"{seed}:{locator}".encode()).hexdigest(), locator
+    return seeded_order(row["locator"], seed)
 
 
 def sample_raw_rows(rows: Iterator[dict[str, Any]], *, size: int, seed: int) -> RawSample:

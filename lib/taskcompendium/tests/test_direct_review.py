@@ -162,12 +162,17 @@ def test_direct_provider_failures_have_finite_neutral_retries(tmp_path, recover)
     assert len(list((tmp_path / "review").rglob("requests.jsonl"))) == 3
 
 
-@pytest.mark.parametrize("operation", ["load_many", "store", "close", "read_diagnostics"])
-def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monkeypatch, operation):
-    def fail(*_args, **_kwargs):
-        raise OSError("Cache storage unavailable")
+@pytest.mark.parametrize("failure", ["unreadable", "store", "close"])
+def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monkeypatch, failure):
+    cache_root = tmp_path / "cache"
+    if failure == "unreadable":
+        cache_root.write_text("not a FineStore archive")
+    else:
 
-    monkeypatch.setattr(PersistentKvCache, operation, fail)
+        def fail(*_args, **_kwargs):
+            raise OSError("Cache storage unavailable")
+
+        monkeypatch.setattr(PersistentKvCache, failure, fail)
     requests = [{"custom_id": "task", "body": {"prompt": "Count apples."}}]
     raw = json.dumps({"custom_id": "task", "answer": "2"})
     submitted = []
@@ -179,7 +184,7 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
     result = cached_request_output(
         requests,
         tmp_path / "review",
-        cache_root=str(tmp_path / "cache"),
+        cache_root=str(cache_root),
         model_revision="pinned",
         valid_completion=lambda result, _task_id: result == raw,
         submit=submit,

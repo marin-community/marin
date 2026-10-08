@@ -24,7 +24,7 @@ from taskcompendium.models import (
 from taskcompendium.submission import (
     answer_call_tool,
     conversation_messages,
-    submission_compatibility,
+    require_submission_compatibility,
     submission_instruction,
 )
 
@@ -62,9 +62,7 @@ def session_start(task: TaskSpec) -> SessionStart:
         for function in (*task.final_tools, *task.interaction_tools)
     ]
     if not isinstance(task.grader, SessionGrader) and task.answer_type in CONVERSATION_ANSWERS:
-        compatibility = submission_compatibility(task)
-        if not compatibility.compatible:
-            raise ValueError(f"Answer format is incompatible: {compatibility.reasons}")
+        require_submission_compatibility(task)
         instruction = submission_instruction(answer_format)
         if instruction:
             messages.append({"role": "user", "content": instruction})

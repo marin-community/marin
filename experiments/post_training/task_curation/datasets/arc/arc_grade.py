@@ -3,9 +3,10 @@
 
 """Grade a Nemotron Ultra inductive ARC reply with the scorer the grader image installs.
 
-The NVARC scorer runs the submitted transform through the NeMo Skills sandbox server. Reads the
-row contract from ``/tests/config.json`` and the reply from ``/app/answer.txt``; writes the reward
-JSON to ``/logs/verifier/reward.json``.
+The NVARC scorer runs the submitted transform through the NeMo Skills sandbox server.
+
+Usage: ``arc_grade.py CONFIG ANSWER SCORE``. Reads the row contract from ``CONFIG`` and the reply from
+``ANSWER``; writes the reward JSON to ``SCORE``.
 """
 
 import importlib
@@ -13,6 +14,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -79,11 +81,10 @@ def grade_inductive(answer, contract):
 
 
 def main():
-    config = json.loads((TESTS / "config.json").read_text())
-    contract = config["contract"]
-    answer = Path("/app/answer.txt").read_text()
-    reward, diagnostics = grade_inductive(answer, contract)
-    (LOGS / "reward.json").write_text(json.dumps({"reward": reward, "detail": diagnostics}))
+    config_path, answer_path, score_path = map(Path, sys.argv[1:4])
+    contract = json.loads(config_path.read_text())["contract"]
+    reward, diagnostics = grade_inductive(answer_path.read_text(), contract)
+    score_path.write_text(json.dumps({"reward": reward, "detail": diagnostics}))
 
 
 if __name__ == "__main__":

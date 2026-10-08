@@ -16,10 +16,9 @@ from shellbox.machine import NetworkPolicy, QemuBundle, UnsupportedMachineSpec
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import (
-    CampaignMachines,
     VerificationBackend,
+    campaign_machines,
     main,
-    qemu_bundles,
 )
 from experiments.post_training.task_curation.images import APPS_IMAGE, ARC_IMAGE
 
@@ -144,7 +143,7 @@ def test_full_run_reuses_only_admitted_sample_outputs(tmp_path, monkeypatch, cat
 
 
 def test_qemu_runs_committed_images_from_their_worker_bundles():
-    qemu = CampaignMachines(VerificationBackend.QEMU, PINNED_WORKER, None, qemu_bundles())
+    qemu = campaign_machines(VerificationBackend.QEMU, PINNED_WORKER, None)
     factory, spec = qemu.machine(APPS_IMAGE.reference, 2048)
     assert factory.backend.value == "qemu"
     assert spec.source == QemuBundle(Path(APPS_IMAGE.qemu_bundle))

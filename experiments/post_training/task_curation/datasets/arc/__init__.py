@@ -10,26 +10,20 @@ inductive reply by ``arc_grade.py``, which runs the transform through the image'
 Both run in ``ARC_IMAGE``.
 """
 
-import json
-import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from taskcompendium.convert.answers import source_defect, unsupported
+from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
-from taskcompendium.convert.source_scorer import source_scorer_package
-from taskcompendium.convert.tasktrove import archive_file, archive_resources
-from taskcompendium.grader import GraderPackage, grader_config
+from taskcompendium.convert.source_scorer import ANSWER_PATH, grade_script_package, source_scorer_package
+from taskcompendium.convert.tasktrove import archive_resources, archive_script_grader
+from taskcompendium.grader import grader_config
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    FileReward,
     PlainText,
-    RewardFile,
-    RewardFileFormat,
-    ScriptGrader,
     TaskSpec,
     TextMessage,
 )
@@ -43,7 +37,6 @@ from taskcompendium.pipeline.models import (
     Reply,
     WorkspaceFiles,
 )
-from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
 from experiments.post_training.task_curation.images import ARC_IMAGE
@@ -59,13 +52,9 @@ TRANSDUCTIVE_SCORER = {
     "function": "skyrl_gym.envs.nemotron_ultra.nvarc:grade_transductive_arc",
     "args": ["answer", "contract"],
 }
-ANSWER_PATH = "/app/answer.txt"
 SOLUTION_PATH = "/app/solution.py"
-REPLY_REWARD_PATH = "/logs/verifier/reward.json"
-ARCHIVE_REWARD_PATH = "/logs/verifier/reward.txt"
 REPLY_TIMEOUT = 45.0
 GRADER_MEMORY_MB = 4096
-ARCHIVE_GRADER_FILES = ("tests/test.sh", "tests/verifier.py", "task.toml")
 FAILING_TRANSFORM = "def transform(grid):\n    raise RuntimeError('__negative_control__')\n"
 
 TASKTROVE_INDUCTIVE_RUBRIC = """
@@ -131,16 +120,11 @@ def _tasktrove_task(
         check_reference(data)
     except (KeyError, TypeError, ValueError) as error:
         return source_defect("invalid_verifier_data", str(error))
-    task_toml = archive_file(row.data, "task.toml")
-    if (
-        row.data.get("archive_links")
-        or task_toml is None
-        or any(archive_file(row.data, path) is None for path in ARCHIVE_GRADER_FILES)
-    ):
-        return unsupported(
-            "missing_original_arc_command",
-            "The archive needs tests/test.sh, tests/verifier.py, task.toml and no archive links",
-        )
+    grader = archive_script_grader(
+        row.data, required=("tests/verifier.py",), environment=ARC_IMAGE.requirements(), answer_path=None
+    )
+    if isinstance(grader, ImportRejection):
+        return grader
     return TaskSpec(
         id=row.id,
         source=row.source,
@@ -150,14 +134,7 @@ def _tasktrove_task(
         output_paths=output_paths,
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
-        grader=ScriptGrader(
-            argv=("bash", "/tests/test.sh"),
-            cwd="/",
-            environment=ARC_IMAGE.requirements(),
-            answer_path=None,
-            reward=FileReward(files=(RewardFile(path=ARCHIVE_REWARD_PATH, format=RewardFileFormat.NUMBER),)),
-            timeout=float(tomllib.loads(task_toml.decode())["verifier"]["timeout_sec"]),
-        ),
+        grader=grader,
     )
 
 
@@ -189,19 +166,8 @@ def convert_ultra_arc(row: RawRow) -> NormalizedTask | ImportRejection:
             invocation=TRANSDUCTIVE_SCORER, config=config, environment=ARC_IMAGE.requirements(), timeout=REPLY_TIMEOUT
         )
     else:
-        package = GraderPackage(
-            ScriptGrader(
-                argv=("python3", f"/tests/{ARC_GRADE}"),
-                cwd="/",
-                environment=ARC_IMAGE.requirements(),
-                answer_path=ANSWER_PATH,
-                reward=FileReward(files=(RewardFile(path=REPLY_REWARD_PATH, format=RewardFileFormat.JSON),)),
-                timeout=REPLY_TIMEOUT,
-            ),
-            (
-                inline_resource(ARC_GRADE, ARC_GRADE_BYTES),
-                inline_resource("config.json", json.dumps(config, allow_nan=False).encode()),
-            ),
+        package = grade_script_package(
+            ARC_GRADE, ARC_GRADE_BYTES, config=config, environment=ARC_IMAGE.requirements(), timeout=REPLY_TIMEOUT
         )
     return blend_task(row, request, package)
 

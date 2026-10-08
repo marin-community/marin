@@ -27,15 +27,8 @@ def _function(reference: str, source_path: str | None = None):
     return getattr(loaded, name)
 
 
-def _terminal_message(path: Path, answer: str, state_path: Path | None, input_format: str) -> dict[str, Any]:
-    if state_path is not None and state_path.is_file():
-        state = json.loads(state_path.read_text())
-        captured = state.get("assistant_message")
-        if isinstance(captured, Mapping):
-            return {**captured, "content": answer}
-    if input_format == "text":
-        return {"role": "assistant", "content": answer, "tool_calls": []}
-    event = json.loads(path.read_text())
+def _event_message(event: dict[str, Any]) -> dict[str, Any]:
+    """The chat message of a terminal assistant event: its text and any tool calls."""
     if event["type"] == "message" and event["role"] == "assistant":
         return {"content": event["content"], "tool_calls": []}
     if event["type"] == "assistant_tool_calls":
@@ -47,6 +40,17 @@ def _terminal_message(path: Path, answer: str, state_path: Path | None, input_fo
             ],
         }
     raise ValueError("Source scorer requires a terminal assistant event")
+
+
+def _terminal_message(answer: str, state_path: Path | None, event: dict[str, Any] | None) -> dict[str, Any]:
+    if state_path is not None and state_path.is_file():
+        state = json.loads(state_path.read_text())
+        captured = state.get("assistant_message")
+        if isinstance(captured, Mapping):
+            return {**captured, "content": answer}
+    if event is None:
+        return {"role": "assistant", "content": answer, "tool_calls": []}
+    return _event_message(event)
 
 
 def _value(reference: str, *, contract: dict, answer: str, message: dict) -> Any:
@@ -83,22 +87,14 @@ def main(descriptor_path: Path, config_path: Path, answer_path: Path, result_pat
     config = json.loads(config_path.read_text())
     contract = config.get("contract", config)
     raw_answer = answer_path.read_text()
-    input_format = descriptor.get("input_format", "text")
-    answer = raw_answer
-    if input_format == "event":
-        event = json.loads(raw_answer)
-        if event["type"] == "message" and event["role"] == "assistant":
-            answer = event["content"]
-        elif event["type"] == "assistant_tool_calls":
-            answer = event["content"] or ""
-        else:
-            raise ValueError("Source scorer requires a terminal assistant event")
+    event = json.loads(raw_answer) if descriptor.get("input_format", "text") == "event" else None
+    answer = raw_answer if event is None else _event_message(event)["content"]
     extractor = descriptor.get("answer_extractor")
     if extractor is not None:
         answer = _function(extractor)(answer)
     needs_message = "terminal_message" in (*descriptor["args"], *descriptor.get("kwargs", {}).values())
-    message = _terminal_message(answer_path, answer, state_path, input_format) if needs_message else {}
-    if message and input_format == "event":
+    message = _terminal_message(answer, state_path, event) if needs_message else {}
+    if message and event is not None:
         message["content"] = answer
     references = {"contract": contract, "answer": answer, "message": message}
     args = [_value(item, **references) for item in descriptor["args"]]

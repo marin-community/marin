@@ -396,5 +396,9 @@ def test_repository_tasks_keep_source_grading_terms():
         "1a2b3c4",
         "/testbed",
     )
-    assert set(resource_map(task.resources.verifier)) == {"config.json", "test.sh"}
-    assert set(resource_map(task.resources.oracle)) == {"environment/Dockerfile", SOLVE_SH}
+    assert set(resource_map(task.resources.verifier)) == {
+        "taskcompendium/archive-provenance.json",
+        "config.json",
+        "test.sh",
+    }
+    assert set(resource_map(task.resources.oracle)) == {"instruction.md", "environment/Dockerfile", SOLVE_SH}

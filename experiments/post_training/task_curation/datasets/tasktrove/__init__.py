@@ -10,6 +10,12 @@ from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
+ANSWER_FILE_DELIVERY = (
+    ("write your final answer to `/app/answer.txt`", "return your final answer in the assistant response"),
+    ("Write ONLY your final answer to **`/app/answer.txt`**", "Return ONLY your final answer in the assistant response"),
+    ("The verifier reads that file", "The verifier reads the assistant response"),
+)
+"""The answer-file wording of the Nemotron Gym puzzle archives, and its reply-based replacement."""
 
 
 def tasktrove_source(config: str) -> HfSource:

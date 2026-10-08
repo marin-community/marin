@@ -15,6 +15,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from zephyr.dataset import Dataset
 
 from experiments.post_training.task_curation.campaign import (
+    CampaignArtifact,
     CampaignFailed,
     CampaignPool,
     CampaignRuntime,
@@ -25,7 +26,7 @@ from experiments.post_training.task_curation.campaign import (
 )
 
 
-class CampaignResult(Artifact):
+class CampaignResult(CampaignArtifact):
     status: str = "completed"
     rows: list[int]
 
@@ -174,7 +175,7 @@ def test_full_campaign_records_gated_and_unsupported_without_dispatch(tmp_path):
         raise AssertionError("A gated or unsupported source must not execute")
 
     steps = [
-        ArtifactStep(name, "2026.10.06", Artifact, unexpected_execution, lambda ctx: {})
+        ArtifactStep(name, "2026.10.06", CampaignArtifact, unexpected_execution, lambda ctx: {})
         for name in ("gated", "unsupported")
     ]
     samples = {

@@ -9,6 +9,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
@@ -18,7 +19,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewT
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
-from experiments.post_training.task_curation.driver import CampaignMachines, VerificationBackend
+from experiments.post_training.task_curation.driver import VerificationBackend, campaign_machines
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
     UrlSource,
@@ -41,8 +42,8 @@ def math500():
     return next(pipeline for pipeline in skyrl_math.pipelines() if pipeline.name == "math500")
 
 
-def machines(backend: VerificationBackend) -> CampaignMachines:
-    return CampaignMachines(backend, "fixture-worker", "http://controller.invalid", {})
+def machines(backend: VerificationBackend) -> GradingMachines:
+    return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
 
 
 @pytest.fixture

@@ -95,6 +95,15 @@ def submission_compatibility(task: TaskSpec) -> SubmissionCompatibility:
     return SubmissionCompatibility(())
 
 
+def require_submission_compatibility(task: TaskSpec) -> None:
+    """Raise ``ValueError`` naming the parts of the task its answer format cannot carry."""
+    compatibility = submission_compatibility(task)
+    if not compatibility.compatible:
+        raise ValueError(
+            f"Answer format {task.answer_format.kind!r} is incompatible: {'; '.join(compatibility.reasons)}"
+        )
+
+
 def submission_instruction(answer_format: BaseAnswerFormat) -> str:
     """Return the instruction added after a conversation prefix."""
     match answer_format:
@@ -116,11 +125,7 @@ def submission_instruction(answer_format: BaseAnswerFormat) -> str:
 
 def render_instruction(task: TaskSpec) -> str:
     """Return readable instruction text for the task's answer format."""
-    compatibility = submission_compatibility(task)
-    if not compatibility.compatible:
-        raise ValueError(
-            f"Answer format {task.answer_format.kind!r} is incompatible: {'; '.join(compatibility.reasons)}"
-        )
+    require_submission_compatibility(task)
     if isinstance(task.answer_format, FinalAction):
         return format_conversation(task.context.events)
     return f"{format_conversation(task.context.events)}\n\n{submission_instruction(task.answer_format)}\n"
@@ -160,9 +165,7 @@ def chat_request(task: TaskSpec) -> dict[str, Any]:
     unsupported = unsupported_direct_chat_features(task)
     if unsupported:
         raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
-    compatibility = submission_compatibility(task)
-    if not compatibility.compatible:
-        raise ValueError(f"Answer format is incompatible: {'; '.join(compatibility.reasons)}")
+    require_submission_compatibility(task)
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
     instruction = submission_instruction(answer_format)

@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 from verifyit.spec import PytestSpec, Spec
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.tasktrove import SOLVE_SH, archive_files
+from taskcompendium.convert.tasktrove import SOLVE_SH, archive_files, archive_resources
 from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, ConvertFn, archive_conversion
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
@@ -333,19 +333,7 @@ def swe_task(row: RawRow, *, workspace: str) -> TaskSpec | ImportRejection:
             },
         ),
         interaction_tools=(BASH,),
-        resources=ResourceGroups(
-            worker=tuple(inline_resource(path, data) for path, data in files.items() if path.startswith("setup_files/")),
-            oracle=tuple(
-                inline_resource(path, data)
-                for path, data in files.items()
-                if path.startswith(("environment/", "solution/"))
-            ),
-            verifier=tuple(
-                inline_resource(path.removeprefix("tests/"), data)
-                for path, data in files.items()
-                if path.startswith("tests/")
-            ),
-        ),
+        resources=archive_resources(row.data),
         answer_type=AnswerType.STATE,
         answer_format=PlainText(),
         grader=grader,

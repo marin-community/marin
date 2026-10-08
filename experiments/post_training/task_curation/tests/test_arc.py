@@ -104,7 +104,7 @@ def test_tasktrove_arc_runs_the_archive_grader_on_the_agents_files(name):
                 }
             ),
             ImportFailureKind.UNSUPPORTED,
-            "missing_original_arc_command",
+            "missing_archive_grader",
         ),
     ],
 )
@@ -137,7 +137,13 @@ def test_ultra_inductive_ships_the_grade_script_and_has_no_known_program():
     result = arc.convert_ultra_arc(ultra_row(arc.INDUCTIVE_AGENT, test_cases=[{"input": GRID, "output": GRID}]))
     assert not isinstance(result, ImportRejection)
     task = result.task
-    assert isinstance(task.grader, ScriptGrader) and task.grader.argv == ("python3", f"/tests/{arc.ARC_GRADE}")
+    assert isinstance(task.grader, ScriptGrader) and task.grader.argv == (
+        "python3",
+        f"/tests/{arc.ARC_GRADE}",
+        "/tests/config.json",
+        "/app/answer.txt",
+        "/logs/verifier/score.json",
+    )
     scripts = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     assert scripts[arc.ARC_GRADE] == arc.ARC_GRADE_BYTES
     assert arc.ultra_arc_golden(task) is None

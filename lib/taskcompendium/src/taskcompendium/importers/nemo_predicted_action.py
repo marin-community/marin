@@ -151,7 +151,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
 
 
 def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpec:
-    """Verify row identity and retain the expected action only in private TaskSpec data."""
+    """Verify row identity and keep the expected action only in the grader's predicted-action spec."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")
     request = row.get("responses_create_params")

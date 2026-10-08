@@ -33,7 +33,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import submission_compatibility
+from taskcompendium.submission import require_submission_compatibility
 
 
 def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
@@ -109,9 +109,7 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
         raise TypeError(f"In-process grading requires a verifyit grader without an environment, not {grader.kind}")
     verifier = verifyit_spec(grader)
     if task.answer_type in CONVERSATION_ANSWERS:
-        compatibility = submission_compatibility(task)
-        if not compatibility.compatible:
-            raise ValueError(f"Answer format is incompatible: {compatibility.reasons}")
+        require_submission_compatibility(task)
     try:
         candidate = _candidate(verifier, answer_submission(task, attempt))
     except SubmissionFailure as error:

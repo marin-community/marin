@@ -1,10 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Merge bounded source samples while retaining their full population counts."""
+"""Seeded sample order, and merging bounded source samples while retaining their full population counts."""
 
+import hashlib
 import heapq
 from collections.abc import Callable, Iterable, Iterator
+
+
+def seeded_order(identifier: str, seed: int) -> tuple[str, str]:
+    """Order identifiers by their seeded SHA-256, breaking ties by the identifier itself."""
+    return hashlib.sha256(f"{seed}:{identifier}".encode()).hexdigest(), identifier
 
 
 def merge_sample_rows[Row](

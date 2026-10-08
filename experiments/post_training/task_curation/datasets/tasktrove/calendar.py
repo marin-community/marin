@@ -7,26 +7,21 @@ The archive's verifier (``tests/verifier.py``, run by ``tests/test.sh``) accepts
 meets the final event constraints. It needs only the Python 3.11 standard library, matching the
 source's ``python:3.11-slim`` environment, so it runs in the executable math image. A source
 witness (``solution/answer.json``) is the golden control, and the witness without its first event
-is the negative.
+is the negative; an archive whose witness is not a nonempty JSON list of events is a source defect.
 """
 
 import json
-import tomllib
 from typing import Any
 
-from taskcompendium.convert.answers import source_defect, unsupported
+from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import archive_file, archive_resources
+from taskcompendium.convert.source_scorer import ANSWER_PATH
+from taskcompendium.convert.tasktrove import archive_file, archive_resources, archive_script_grader
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    FileReward,
     PlainText,
-    ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
-    ScriptGrader,
     TaskSpec,
     TextMessage,
 )
@@ -46,8 +41,7 @@ from experiments.post_training.task_curation.images import EXECUTABLE_MATH_IMAGE
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 WITNESS_PATH = "solution/answer.json"
-GRADER_FILES = ("tests/test.sh", "tests/verifier.py", "tests/verifier_data.json", "task.toml")
-REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
+GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
 DELIVERY = (
     "write your final calendar as a JSON list to `/app/answer.txt`",
     "return your final calendar as a JSON list in the assistant response",
@@ -103,6 +97,19 @@ def calendar_defect(expected_events: Any) -> str | None:
     return None
 
 
+def witness_defect(witness: bytes | None) -> str | None:
+    """Why a source witness cannot be a final calendar, or ``None`` when it can or is absent."""
+    if witness is None:
+        return None
+    try:
+        events = json.loads(witness)
+    except ValueError as error:
+        return f"Witness is not JSON: {error}"
+    if not isinstance(events, list) or not events or not all(isinstance(event, dict) for event in events):
+        return "Witness must be a nonempty JSON list of events"
+    return None
+
+
 def convert_calendar(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
     instruction, data = row.data["instruction"], row.data.get("verifier_data")
     if not instruction.strip() or not isinstance(data, dict):
@@ -110,28 +117,20 @@ def convert_calendar(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection
     defect = calendar_defect(data.get("expected_events"))
     if defect is not None:
         return source_defect("invalid_calendar", defect)
-    if row.data.get("archive_links") or any(path not in row.data["files"] for path in GRADER_FILES):
-        return unsupported(
-            "missing_original_calendar_command",
-            "The source row needs its original test script, verifier, data, and task.toml without archive links",
-        )
-    task_toml = archive_file(row.data, "task.toml")
-    assert task_toml is not None
-    archive = archive_resources(row.data)
-    grader = ScriptGrader(
-        argv=("bash", "/tests/test.sh"),
-        cwd="/",
-        environment=EXECUTABLE_MATH_IMAGE.requirements(),
-        answer_path="/app/answer.txt",
-        reward=REWARD,
-        timeout=float(tomllib.loads(task_toml.decode())["verifier"]["timeout_sec"]),
+    defect = witness_defect(archive_file(row.data, WITNESS_PATH))
+    if defect is not None:
+        return source_defect("invalid_witness", defect)
+    grader = archive_script_grader(
+        row.data, required=GRADER_FILES, environment=EXECUTABLE_MATH_IMAGE.requirements(), answer_path=ANSWER_PATH
     )
+    if isinstance(grader, ImportRejection):
+        return grader
     task = TaskSpec(
         id=row.id,
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction.replace(*DELIVERY)),)),
         environment_requirements=EnvironmentRequirements(),
-        resources=ResourceGroups(worker=archive.worker, verifier=archive.verifier, oracle=archive.oracle),
+        resources=archive_resources(row.data),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=grader,
@@ -153,13 +152,9 @@ def calendar_golden(task: TaskSpec) -> Reply | None:
 def calendar_negative(task: TaskSpec) -> Reply:
     """The witness without its first event: a required event is missing, so no slot has to be guessed."""
     witness = witness_text(task)
-    try:
-        events = json.loads(witness) if witness is not None else None
-    except ValueError:
-        events = None
-    if not isinstance(events, list) or not events or not isinstance(events[0], dict):
+    if witness is None:
         return wrong_reply(task)
-    return answer_reply(task, json.dumps(events[1:]))
+    return answer_reply(task, json.dumps(json.loads(witness)[1:]))
 
 
 def pipelines() -> list[RlDataPipeline]:

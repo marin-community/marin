@@ -72,26 +72,18 @@ def cached_request_output(
             key = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             keys[task_id] = key
         started = time.monotonic()
-        try:
-            saved_queries = cache.load_many(list(keys.values()))
-        except Exception as error:
-            logger.warning("Inference cache lookup failed; treating entries as misses: %s", error)
-            metrics.update_counter("review/cache/lookup_failures", 1)
-            saved_queries = {}
-        finally:
-            metrics.update_counter("review/cache/lookup_seconds", time.monotonic() - started)
-            try:
-                diagnostics = cache.read_diagnostics().blob_reads
-                for name, value in (
-                    ("descriptor_seconds", diagnostics.descriptor_seconds),
-                    ("payload_seconds", diagnostics.payload_seconds),
-                    ("descriptor_lookups", diagnostics.descriptor_lookups),
-                    ("selected_shards", diagnostics.selected_shards),
-                    ("bytes_returned", diagnostics.bytes_returned),
-                ):
-                    metrics.update_counter(f"review/cache/{name}", value)
-            except Exception as error:
-                logger.warning("Inference cache diagnostics unavailable: %s", error)
+        # PersistentKvCache already treats unreadable storage as misses.
+        saved_queries = cache.load_many(list(keys.values()))
+        metrics.update_counter("review/cache/lookup_seconds", time.monotonic() - started)
+        diagnostics = cache.read_diagnostics().blob_reads
+        for name, value in (
+            ("descriptor_seconds", diagnostics.descriptor_seconds),
+            ("payload_seconds", diagnostics.payload_seconds),
+            ("descriptor_lookups", diagnostics.descriptor_lookups),
+            ("selected_shards", diagnostics.selected_shards),
+            ("bytes_returned", diagnostics.bytes_returned),
+        ):
+            metrics.update_counter(f"review/cache/{name}", value)
         for request in requests:
             task_id = request["custom_id"]
             identity = {"format": 1, "model_revision": model_revision, "request": request}

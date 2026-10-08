@@ -13,6 +13,7 @@ import io
 import json
 
 from taskcompendium.convert.answers import answer_task, json_schema_task, source_defect
+from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
 from taskcompendium.convert.tasktrove_converted_task import archive_conversion
 from taskcompendium.convert.tasktrove_nemotron_structured_outputs import convert_nemotron_structured_outputs
@@ -23,23 +24,23 @@ from taskcompendium.pipeline.models import (
     ImportFailureKind,
     ImportRejection,
     IntendedUse,
-    NormalizationChange,
     NormalizedTask,
     RawRow,
     Reply,
 )
+from taskcompendium.pipeline.verification import MALFORMED_JSON
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
-FILE_DELIVERY = {
-    "Write your final answer to `/app/answer.txt`.": "Return your final answer in the assistant response.",
-    "Write your final JSON to `/app/answer.txt`.": "Return your final JSON in the assistant response.",
-}
+FILE_DELIVERY = (
+    ("Write your final answer to `/app/answer.txt`.", "Return your final answer in the assistant response."),
+    ("Write your final JSON to `/app/answer.txt`.", "Return your final JSON in the assistant response."),
+)
 SUBMISSION_FOOTER = "\n## Submitting your answer (IMPORTANT)\n"
-MALFORMED_JSON = "[}"
+REWRITE_REASON = "Adapt terminal file delivery to direct assistant response"
 
 STRUCTURED_OUTPUTS_RUBRIC = """
 A request to read a supplied document and produce structured output from it implies grounding in that
@@ -72,8 +73,7 @@ authoritative any-valid-instance preamble when the supplied request has none.
 
 def reply_instruction(instruction: str) -> str:
     """Ask for the answer in the reply instead of the terminal answer file."""
-    for written, replied in FILE_DELIVERY.items():
-        instruction = instruction.replace(written, replied)
+    instruction = replace_phrases(instruction, FILE_DELIVERY)
     if SUBMISSION_FOOTER in instruction:
         body, _, submission = instruction.partition(SUBMISSION_FOOTER)
         if "Your chat reply is NOT graded" in submission and "/app/answer.txt" in submission:
@@ -85,7 +85,7 @@ def invalid_contract(detail: str) -> ImportRejection:
     return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_structured_contract", detail=detail)
 
 
-def convert_structured_outputs(row: RawRow) -> NormalizedTask | ImportRejection:
+def convert_structured_outputs(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
     converted = archive_conversion(row.data, convert_nemotron_structured_outputs)
     if isinstance(converted, ImportRejection):
         return converted
@@ -105,19 +105,7 @@ def convert_structured_outputs(row: RawRow) -> NormalizedTask | ImportRejection:
         if any(not name for name in (*spec.required, *spec.any_of)):
             return invalid_contract("Required and alternative names must be nonempty strings")
         task = answer_task(row, prompt=instruction, spec=spec)
-    changes = (
-        ()
-        if instruction == original
-        else (
-            NormalizationChange(
-                field="instruction",
-                reason="Adapt terminal file delivery to direct assistant response",
-                original=original,
-                replacement=instruction,
-            ),
-        )
-    )
-    return NormalizedTask(task, changes)
+    return rewritten_task(task, original=original, reason=REWRITE_REASON)
 
 
 def _names(spec: XmlElementsSpec | CsvColumnsSpec) -> tuple[str, ...]:

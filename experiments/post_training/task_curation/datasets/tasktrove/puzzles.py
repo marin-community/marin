@@ -17,16 +17,11 @@ from taskcompendium.pipeline.controls import reference_reply, wrong_reply
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
-from experiments.post_training.task_curation.datasets.tasktrove import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove import ANSWER_FILE_DELIVERY, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 
 ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list", "number", "coords"})
 MATH_ANSWER_TYPES = frozenset({"number", "coords"})
-DELIVERY = (
-    ("write your final answer to `/app/answer.txt`", "return your final answer in the assistant response"),
-    ("Write ONLY your final answer to **`/app/answer.txt`**", "Return ONLY your final answer in the assistant response"),
-    ("The verifier reads that file", "The verifier reads the assistant response"),
-)
 REWRITE_REASON = "Adapt the puzzle's answer-file delivery to the assistant response"
 
 RUBRIC = """
@@ -63,7 +58,9 @@ def convert_puzzle(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
             raise ValueError("Puzzle reference must contain a nonempty answer and supported answer type")
     except (ValueError, KeyError, TypeError) as error:
         return unsupported("invalid_puzzle_key", str(error))
-    task = answer_task(row, prompt=replace_phrases(instruction, DELIVERY), spec=puzzle_spec(expected, answer_type))
+    task = answer_task(
+        row, prompt=replace_phrases(instruction, ANSWER_FILE_DELIVERY), spec=puzzle_spec(expected, answer_type)
+    )
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 

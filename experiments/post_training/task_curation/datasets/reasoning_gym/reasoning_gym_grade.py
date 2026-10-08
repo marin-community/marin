@@ -29,6 +29,9 @@ from typing import cast
 
 import numpy as np
 
+# These constants and json_value repeat generate.py: this script ships alone to /tests in the grader
+# image, where generate.py and its generator checkout are absent. A mismatch fails loudly, because
+# the locator and regenerated-entry checks in generated_input refuse the contract.
 ROWS_PER_TASK = 1000
 GENERATION_SEED = 42
 

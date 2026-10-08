@@ -14,12 +14,11 @@ from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
 from rolloutengine.spec import LoweredTaskSpec
-
-MISSING_FILE_EXIT = 44
 
 
 async def _grade_rollout(
@@ -63,7 +62,7 @@ async def _capture_outputs(machine: Machine | None, paths: tuple[str, ...], time
                 (
                     "sh",
                     "-c",
-                    f'if [ -f "$1" ]; then head -c "$2" -- "$1"; else exit {MISSING_FILE_EXIT}; fi',
+                    f'if [ -f "$1" ]; then head -c "$2" -- "$1"; else exit {MISSING_CAPTURE_EXIT_CODE}; fi',
                     "capture-output",
                     path,
                     str(DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES + 1),
@@ -73,7 +72,7 @@ async def _capture_outputs(machine: Machine | None, paths: tuple[str, ...], time
                 output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES + 1,
             )
         )
-        if result.exit_code == MISSING_FILE_EXIT:
+        if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
             continue
         if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES:
             raise RuntimeError(f"Cannot capture task output within the size limit: {path}")

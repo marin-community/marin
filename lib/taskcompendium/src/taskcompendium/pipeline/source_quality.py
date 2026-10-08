@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,6 +24,7 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
     TaskAudit,
 )
+from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order
 from taskcompendium.runtime.resources import resource_bytes
 
 SOURCE_QUALITY_REVISION = "7"
@@ -151,10 +153,6 @@ def contract_signature(audit: TaskAudit) -> str:
     )
 
 
-def sample_order(task_id: str, seed: int) -> tuple[str, str]:
-    return hashlib.sha256(f"{seed}:{task_id}".encode()).hexdigest(), task_id
-
-
 def sample_quality_rows(records: Iterator[dict], *, policy: SourceQualityPolicy) -> QualitySample:
     """Sample IDs with bounded memory while counting every population and exclusion."""
     inputs = 0
@@ -174,26 +172,26 @@ def sample_quality_rows(records: Iterator[dict], *, policy: SourceQualityPolicy)
             contracts[contract_signature(audit)] += 1
             yield audit.task_id
 
-    selected = heapq.nsmallest(policy.sample_size, candidates(), key=lambda task_id: sample_order(task_id, policy.seed))
+    selected = heapq.nsmallest(policy.sample_size, candidates(), key=partial(seeded_order, seed=policy.seed))
     return QualitySample(inputs, eligible, dict(exclusions), dict(contracts), tuple(selected))
 
 
 def merge_quality_samples(samples: Iterator[QualitySample], *, policy: SourceQualityPolicy) -> QualitySample:
     inputs = 0
-    eligible = 0
     exclusions: Counter[str] = Counter()
     contracts: Counter[str] = Counter()
 
-    def candidates():
-        nonlocal inputs, eligible
+    def shard_samples() -> Iterator[tuple[int, tuple[str, ...]]]:
+        nonlocal inputs
         for sample in samples:
             inputs += sample.input_count
-            eligible += sample.eligible_count
             exclusions.update(sample.exclusions)
             contracts.update(sample.contracts)
-            yield from sample.task_ids
+            yield sample.eligible_count, sample.task_ids
 
-    selected = heapq.nsmallest(policy.sample_size, candidates(), key=lambda task_id: sample_order(task_id, policy.seed))
+    eligible, selected = merge_sample_rows(
+        shard_samples(), size=policy.sample_size, key=partial(seeded_order, seed=policy.seed)
+    )
     return QualitySample(inputs, eligible, dict(exclusions), dict(contracts), tuple(selected))
 
 

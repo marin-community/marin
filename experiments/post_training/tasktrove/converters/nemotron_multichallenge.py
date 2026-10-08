@@ -6,8 +6,8 @@
 The original RewardKit grader uses numeric criteria and ``all_pass``: every normalized score
 must be greater than zero. This legacy conversion instead extracts ``Requirement:`` questions
 into VerifyIT's binary checklist with mean aggregation and different judge prompts. It is not
-source-faithful. The task-curation MultiChallenge adapter preserves the original private runtime
-contract and leaves execution unsupported until that runtime is bound.
+source-faithful. The task-curation MultiChallenge source instead grades with the archive's own
+``tests/test.sh`` in the RewardKit image.
 """
 
 import re

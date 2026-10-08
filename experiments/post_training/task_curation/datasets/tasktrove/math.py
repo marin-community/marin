@@ -17,16 +17,14 @@ from pathlib import Path
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import SOLVE_SH, archive_files
+from taskcompendium.convert.source_scorer import ANSWER_PATH
+from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH_REWARD, archive_files
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    FileReward,
     PlainText,
     ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
     ScriptGrader,
     TaskSpec,
     TextMessage,
@@ -59,8 +57,6 @@ SCORER_RUNNERS = {
 """SHA-256 of each known ``tests/verifier.py`` mapped to the SHA-256 of the ``tests/test.sh`` that runs it."""
 SCORER_PINS = ("python==3.11", "sympy==1.13.3", "antlr4-python3-runtime==4.11.0")
 GYM_SCORER_PINS = ("numpy==2.1.3",)
-ANSWER_PATH = "/app/answer.txt"
-REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
 GRADER_TIMEOUT = 600.0
 REWRITE_REASON = "Replace the source's answer-file delivery with an answer in the assistant response"
 
@@ -177,7 +173,7 @@ class MathConverter:
             cwd="/app",
             environment=EXECUTABLE_MATH_IMAGE.requirements(),
             answer_path=ANSWER_PATH,
-            reward=REWARD,
+            reward=TEST_SH_REWARD,
             timeout=GRADER_TIMEOUT,
         )
         task = TaskSpec(

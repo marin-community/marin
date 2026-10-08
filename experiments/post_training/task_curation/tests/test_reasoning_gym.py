@@ -121,7 +121,7 @@ def test_tasktrove_instruction_asks_for_the_answer_in_the_reply():
                 {"instruction.md": b"Solve.", "tests/verifier_data.json": json.dumps(TASKTROVE_ENTRY).encode()}
             ),
             ImportFailureKind.UNSUPPORTED,
-            "missing_original_reasoning_grader",
+            "missing_archive_grader",
         ),
     ],
 )

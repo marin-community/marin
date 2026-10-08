@@ -14,7 +14,6 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Protocol, cast
 
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
@@ -71,8 +70,9 @@ class CampaignFailed(RuntimeError):
     """The campaign retained completed sources but at least one source failed."""
 
 
-class CampaignSourceResult(Protocol):
-    path: str
+class CampaignArtifact(Artifact):
+    """A source artifact that records the terminal status the campaign reports for it."""
+
     status: str
 
 
@@ -134,14 +134,48 @@ def require_matching_sample(
     return tuple(by_name[step.name] for step in sample_steps)
 
 
-def _build_source(step: ArtifactStep[Artifact], started: Callable[[ArtifactStep[Artifact]], None]) -> SourceOutcome:
+def _build_source(
+    step: ArtifactStep[CampaignArtifact], started: Callable[[ArtifactStep[CampaignArtifact]], None]
+) -> SourceOutcome:
     started(step)
-    result = cast(CampaignSourceResult, run(step, max_concurrent=1)[0])
-    return SourceOutcome(step.name, str(result.path), str(result.status))
+    result = run(step, max_concurrent=1)[0]
+    return SourceOutcome(step.name, result.path, result.status)
+
+
+def error_chain(error: BaseException) -> str:
+    """The error and each explicit cause, outermost first."""
+    causes = []
+    cause: BaseException | None = error
+    while cause is not None:
+        causes.append(f"{type(cause).__name__}: {cause}")
+        cause = cause.__cause__
+    return " <- ".join(causes)
+
+
+def campaign_report(
+    status: str,
+    *,
+    mode: str,
+    sample_identity: str | None,
+    outcomes: Sequence[SourceOutcome],
+    sample_outcomes: Mapping[str, SourceOutcome] | None,
+) -> dict[str, object]:
+    """The campaign's status with each source outcome, their counts, and the sample outcomes that admitted them."""
+    return {
+        "status": status,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "mode": mode,
+        "sample_identity": sample_identity,
+        "counts": dict(Counter(outcome.status for outcome in outcomes)),
+        "sources": [asdict(outcome) for outcome in outcomes],
+        "sample_outcomes": (
+            {name: asdict(outcome) for name, outcome in sample_outcomes.items()} if sample_outcomes is not None else None
+        ),
+    }
 
 
 def run_campaign(
-    steps: Sequence[ArtifactStep[Artifact]],
+    steps: Sequence[ArtifactStep[CampaignArtifact]],
     *,
     pool: CampaignPool,
     runtime: CampaignRuntime,
@@ -176,26 +210,16 @@ def run_campaign(
     report_lock = Lock()
 
     def write_report(status: str) -> None:
-        StoragePath(report_path).write_text(
-            json.dumps(
-                {
-                    "status": status,
-                    "updated_at": datetime.now(UTC).isoformat(),
-                    "mode": mode,
-                    "sample_identity": sample_identity,
-                    "counts": dict(Counter(outcome.status for outcome in outcomes.values())),
-                    "sources": [asdict(outcomes[step.name]) for step in steps],
-                    "sample_outcomes": (
-                        {name: asdict(outcome) for name, outcome in sample_outcomes.items()}
-                        if sample_outcomes is not None
-                        else None
-                    ),
-                },
-                indent=2,
-            )
+        report = campaign_report(
+            status,
+            mode=mode,
+            sample_identity=sample_identity,
+            outcomes=[outcomes[step.name] for step in steps],
+            sample_outcomes=sample_outcomes,
         )
+        StoragePath(report_path).write_text(json.dumps(report, indent=2))
 
-    def started(step: ArtifactStep[Artifact]) -> None:
+    def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:
             outcomes[step.name] = SourceOutcome(step.name, step.path(), "running")
             write_report("running")
@@ -232,12 +256,7 @@ def run_campaign(
                         outcome = future.result()
                     except Exception as error:
                         logger.exception("Source failed: %s", step.name)
-                        causes = []
-                        cause: BaseException | None = error
-                        while cause is not None:
-                            causes.append(f"{type(cause).__name__}: {cause}")
-                            cause = cause.__cause__
-                        outcome = SourceOutcome(step.name, step.path(), "failed", " <- ".join(causes))
+                        outcome = SourceOutcome(step.name, step.path(), "failed", error_chain(error))
                     with report_lock:
                         outcomes[step.name] = outcome
                         write_report("running")

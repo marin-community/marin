@@ -524,6 +524,12 @@ def test_calendar_rejects_malformed_expected_events(events):
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "invalid_calendar")
 
 
+@pytest.mark.parametrize("witness", [b"[{", b"[]", b'{"0": {"start": 9}}', b"[1]"])
+def test_calendar_rejects_a_witness_that_is_not_a_list_of_events(witness):
+    rejection = rejection_of("tasktrove-calendar", calendar_row({"0": {"duration": 30}}, witness=witness))
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "invalid_witness")
+
+
 def test_ifeval_removes_the_shell_preamble():
     task = task_of("tasktrove-ifeval", ROWS["tasktrove-ifeval"])
     assert prompt_of(task).startswith("Write a story about a lighthouse keeper.")

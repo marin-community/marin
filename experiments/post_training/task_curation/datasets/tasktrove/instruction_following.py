@@ -19,6 +19,7 @@ from taskcompendium.convert.json_schema import required_object_conflicts
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow, Reply
+from taskcompendium.pipeline.verification import MALFORMED_JSON
 from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
@@ -43,7 +44,6 @@ POSITIONAL_WORDS = {
 
 JSON_DELIVERY = ("Write your final JSON to `/app/answer.txt`.", "Return your final JSON in the assistant response.")
 STRUCTURED_REWRITE_REASON = "Replace the source's answer-file delivery with an answer in the assistant response"
-MALFORMED_JSON = "[}"
 
 IFEVAL_RUBRIC = """
 Identify the underlying content request independently of the formatting constraints. A topic fragment, random text, or
