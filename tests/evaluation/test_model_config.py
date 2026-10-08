@@ -148,9 +148,8 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     model = ModelConfig(
         name="qwen3-32b",
         location="Qwen/Qwen3-32B",
-        # The memory hint keeps the lowering offline: it skips the checkpoint measurement the same
-        # way auto_overrides=False skips the config.json fetch. This test covers flag rendering.
-        resource_hint=ResourceHint(gpu={"H100": 2}, memory="128g"),
+        # Explicit resource hints and auto_overrides=False keep this flag-rendering test offline.
+        resource_hint=ResourceHint(gpu={"H100": 2}, memory="128g", disk="100g"),
         serve=ServeConfig(
             tensor_parallel_size=2,
             max_model_len=32768,
@@ -183,6 +182,7 @@ resource_hint:
   gpu:
     H100: 2
   memory: 128g
+  disk: 100g
 serve:
   tensor_parallel_size: 2
   auto_overrides: false
