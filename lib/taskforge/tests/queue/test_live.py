@@ -5,7 +5,8 @@
 config through triage (the GLM rubric), authoring, a ShellSim build, controls, solver and adversary
 trials and review, then a relaunch on the same root that reaches the same terminal without a model call.
 
-The run root is kept under ``lib/taskforge/.evidence/queue/<timestamp>/``.
+The run root is kept under ``<evidence_root>/queue/<timestamp>/``, where ``evidence_root`` is the fixture in
+``tests/conftest.py``.
 """
 
 import json
@@ -39,7 +40,6 @@ from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, RetryBackoff
 
-EVIDENCE = Path(__file__).parents[2] / ".evidence" / "queue"
 TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
 SUBMISSIONS = 10
 
@@ -152,10 +152,17 @@ def entries(root: Path) -> list[LedgerEntry]:
     return [entry for path in ledger_files(root / LEDGER_DIR) for entry in read_entries(path)]
 
 
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "queue"
+
+
 @pytest.mark.live_glm
 @pytest.mark.timeout(7200)
-async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_call(glm_settings, image_cache):
-    root = EVIDENCE / time.strftime("%Y%m%d-%H%M%S")
+async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_call(
+    glm_settings, image_cache, evidence_dir
+):
+    root = evidence_dir / time.strftime("%Y%m%d-%H%M%S")
     config = RunConfig(
         run_id=f"queue-live-{root.name}",
         root=root,
