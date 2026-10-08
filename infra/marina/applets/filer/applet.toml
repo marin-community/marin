@@ -1,0 +1,4 @@
+title = "Filer"
+description = "Explore Marin object storage and inspect datasets, documents, and images."
+python_entrypoint = "server.app:create_api"
+build_command = "npm ci && npm run build"
