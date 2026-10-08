@@ -49,6 +49,8 @@ TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
+IDLE_ENTRYPOINT = "trap 'exit 0' TERM INT; sleep infinity & wait"
+"""Keeps the sandbox alive for exec while exiting promptly when Iris stops it."""
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
@@ -87,6 +89,7 @@ class IrisMachine:
         self.task = task
         self.spec = spec
         self._closed = False
+        self._container_user: tuple[str, str] | None = None
 
     def _exec_sync(
         self, argv: list[str], timeout: float | None = None
@@ -153,11 +156,21 @@ class IrisMachine:
             chunks.append(base64.b64decode(encoded))
         return b"".join(chunks), size > count
 
+    async def _user_identity(self) -> tuple[str, str]:
+        """The ``(uid, name)`` the container runs commands as; Iris exec cannot switch users."""
+        if self._container_user is None:
+            uid, name = (await self._checked("id -u && id -un")).split()
+            self._container_user = (uid, name)
+        return self._container_user
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
-        if command.user is not None:
-            raise UnsupportedMachineSpec("Iris does not provide execution user overrides")
+        if command.user is not None and command.user not in await self._user_identity():
+            uid, name = await self._user_identity()
+            raise UnsupportedMachineSpec(
+                f"Iris runs every command as the container user {name} ({uid}); cannot run as {command.user}"
+            )
         if not command.argv:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
@@ -295,7 +308,9 @@ class IrisMachineFactory:
                 send_compression=None,
             )
             job = client.submit(
-                entrypoint=Entrypoint.from_command("sleep", "infinity"),
+                # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
+                # capacity for the whole termination grace period.
+                entrypoint=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT),
                 name=f"shellbox-{uuid.uuid4().hex}",
                 environment=EnvironmentSpec(
                     setup_scripts=[],

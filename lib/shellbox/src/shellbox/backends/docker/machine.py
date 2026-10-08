@@ -359,6 +359,13 @@ class DockerMachineFactory:
             prepared = await docker("exec", name, "/bin/sh", "-c", "command -v setsid")
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Docker task images require setsid for command cancellation")
+            # Commands run in the working directory, which the image need not contain; Iris machines create it too.
+            if spec.workdir:
+                created = await docker("exec", "--user", "0", name, "mkdir", "-p", spec.workdir)
+                if created.exit_code:
+                    raise RuntimeError(
+                        f"Cannot create workdir {spec.workdir}: {created.stderr.decode(errors='replace')}"
+                    )
         except BaseException:
             await docker("rm", "-f", name)
             raise
