@@ -258,8 +258,12 @@ def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
                 }
             )
         elif index < 20:
+            # A failed check carries the decision it produced, as _with_checks records it.
             audit = audit.model_copy(
-                update={"checks": [CheckResult(check="contract", status=CheckStatus.FAIL, detail="Broken")]}
+                update={
+                    "checks": [CheckResult(check="contract", status=CheckStatus.FAIL, detail="Broken")],
+                    "decision": Decision(task_id=str(index), disposition=Disposition.REJECT, reasons=["check:contract"]),
+                }
             )
         else:
             audit = audit.model_copy(
@@ -352,13 +356,14 @@ def test_contract_signature_separates_grader_code_but_not_reference_values():
     assert contract_signature(audit) != contract_signature(audit.model_copy(update={"normalized": different_grader}))
 
 
+@pytest.mark.parametrize("exclusion", ["normalization:source_defect", "check:failed"])
 @pytest.mark.parametrize(
     "source_defects,expected",
     [(1, SourceQualityStatus.TRUST), (51, SourceQualityStatus.REJECT), (100, SourceQualityStatus.REJECT)],
 )
-def test_raw_panel_counts_broken_apps_contracts_against_all_drawn_rows(source_defects, expected):
+def test_raw_panel_counts_broken_contracts_and_failed_checks_against_all_drawn_rows(exclusion, source_defects, expected):
     ids = tuple(str(index) for index in range(source_defects, 100))
-    sample = QualitySample(100, len(ids), {"normalization:source_defect": source_defects}, {"apps": len(ids)}, ids)
+    sample = QualitySample(100, len(ids), {exclusion: source_defects}, {"apps": len(ids)}, ids)
     report = source_quality_report(
         sample, [reviewed(task_id) for task_id in ids], SourceQualityPolicy(), coverage=QualitySampleCoverage.RAW_SAMPLE
     )

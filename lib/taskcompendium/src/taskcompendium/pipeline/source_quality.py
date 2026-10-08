@@ -102,10 +102,12 @@ def quality_exclusion(audit: TaskAudit) -> str | None:
     """Identify rows outside the unique, structurally usable review population."""
     if audit.normalization_rejection is not None:
         return f"normalization:{audit.normalization_rejection.kind}"
-    if audit.decision is not None:
-        return audit.decision.reasons[0]
+    # A failed preparation check is a source defect, whatever decision it produced;
+    # other decisions (duplicates, unsupported conversions) are neutral exclusions.
     if any(check.status in REJECTING_CHECK_STATUSES for check in audit.checks):
         return "check:failed"
+    if audit.decision is not None:
+        return audit.decision.reasons[0]
     return None
 
 
