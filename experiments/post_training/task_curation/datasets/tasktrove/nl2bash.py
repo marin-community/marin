@@ -20,8 +20,7 @@ from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline
 
 AGENT_IMAGE = AgentImage(
-    "ghcr.io/marin-community/task-curation-executable@sha256:"
-    "66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
+    "ghcr.io/marin-community/iris-task@sha256:" "66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
 )
 """The nl2bash image the agent's shell runs in."""
 

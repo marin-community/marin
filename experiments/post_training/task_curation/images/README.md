@@ -5,6 +5,9 @@ recipe in [`recipes.py`](recipes.py). A declaration names it with
 `grader_image=GRADER`, and its converter reads the built image's environment from
 `context.grader_environment`. Agent images are separate: a workspace declaration
 names the image its agent works in with an `AgentImage` literal.
+Iris workers and training pull images anonymously, so every agent image is a
+tag of the public `ghcr.io/marin-community/iris-task` package; a digest copied
+there with `crane copy` keeps its reference's `sha256`.
 
 ## The grader recipe
 

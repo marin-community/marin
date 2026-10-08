@@ -31,8 +31,7 @@ from experiments.post_training.task_curation.images.recipes import GRADER
 from experiments.post_training.task_curation.pipeline import AgentImage, RlDataPipeline
 
 AGENT_IMAGE = AgentImage(
-    "ghcr.io/marin-community/task-curation-executable@sha256:"
-    "d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
+    "ghcr.io/marin-community/iris-task@sha256:" "d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
 )
 """The executable image the agent writes and runs its program in."""
 
