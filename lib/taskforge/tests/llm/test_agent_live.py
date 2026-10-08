@@ -3,11 +3,12 @@
 
 """Live validation of taskforge.llm.agent and taskforge.llm.web against GLM-5.3 (interactive tier).
 
-Each check writes ``lib/taskforge/.evidence/llm/agent/<check>-<utc>.json``: the purpose, the policy,
+Each check writes ``<evidence_root>/llm/agent/<check>-<utc>.json``: the purpose, the policy,
 the full ``AgentRun`` (every message, every completion with its raw stream events, every tool
 result), a summary (turns, tool calls, tokens, wall time) and the check's own observations. Ledger
-spans go to ``.evidence/llm/agent/ledger/<check>/<item>.jsonl``. The web check also needs the
-Parallel key file (the ``parallel_key`` fixture in ``tests/conftest.py``).
+spans go to ``<evidence_root>/llm/agent/ledger/<check>/<item>.jsonl``. ``evidence_root`` is the
+fixture in ``tests/conftest.py``. The web check also needs the Parallel key file (the
+``parallel_key`` fixture there).
 """
 
 import asyncio
@@ -41,7 +42,6 @@ from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.web import web_tools
 
-EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".evidence" / "llm" / "agent"
 PYPI_PACKAGE_URL = "https://pypi.org/pypi/shellsim/json"
 RUNS = TypeAdapter(tuple[AgentRun, ...])
 SHELL_TIMEOUT = 120.0
@@ -58,12 +58,17 @@ SYSTEM = (
 )
 
 
+@pytest.fixture
+def evidence_dir(evidence_root: Path) -> Path:
+    return evidence_root / "llm" / "agent"
+
+
 def endpoint(glm_settings, base_url: str | None = None) -> GlmEndpoint:
     return GlmEndpoint(base_url=base_url or glm_settings.base_url, token=glm_settings.token, pool=Pool.HIGH)
 
 
-def ledger_record(check: str, item_id: str) -> CallLedger:
-    return CallLedger(ledger=JsonlLedger(EVIDENCE_DIR / "ledger" / check), item_id=item_id, round=0, step=check)
+def ledger_record(evidence_dir: Path, check: str, item_id: str) -> CallLedger:
+    return CallLedger(ledger=JsonlLedger(evidence_dir / "ledger" / check), item_id=item_id, round=0, step=check)
 
 
 async def shellsim() -> ShellSimMachine:
@@ -99,8 +104,8 @@ def summary(run: AgentRun, wall_time: float) -> dict[str, object]:
     }
 
 
-def record(check: str, purpose: str, policy: LLMPolicy, runs: Sequence[AgentRun], **extra) -> Path:
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+def record(evidence_dir: Path, check: str, purpose: str, policy: LLMPolicy, runs: Sequence[AgentRun], **extra) -> Path:
+    evidence_dir.mkdir(parents=True, exist_ok=True)
     evidence = {
         "check": check,
         "purpose": purpose,
@@ -108,7 +113,7 @@ def record(check: str, purpose: str, policy: LLMPolicy, runs: Sequence[AgentRun]
         **extra,
         "runs": RUNS.dump_python(tuple(runs), mode="json"),
     }
-    path = EVIDENCE_DIR / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    path = evidence_dir / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n")
     return path
 
@@ -139,7 +144,7 @@ T1_TASK = (
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(3600)
-def test_t1_package_and_tests_in_shellsim(glm_settings):
+def test_t1_package_and_tests_in_shellsim(glm_settings, evidence_dir):
     policy = LLMPolicy()
     messages: list[Message] = [
         {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
@@ -150,7 +155,9 @@ def test_t1_package_and_tests_in_shellsim(glm_settings):
         machine = await shellsim()
         tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
         async with GlmClient(endpoint(glm_settings)) as client:
-            run, wall = await timed_agent(client, policy, messages, [tool], 60, ledger_record("t1_shellsim", "t1"))
+            run, wall = await timed_agent(
+                client, policy, messages, [tool], 60, ledger_record(evidence_dir, "t1_shellsim", "t1")
+            )
         check = await machine.run(Command(argv=("sh", "-c", "pytest -v tests/test_textstats.py"), timeout=SHELL_TIMEOUT))
         await machine.close()
         return (
@@ -163,6 +170,7 @@ def test_t1_package_and_tests_in_shellsim(glm_settings):
     pytest_outputs = [json.loads(o) for o in executed(run, "shell")]
     failing_runs = sum(1 for o in pytest_outputs if "FAILED" in o["stdout"] or "Error" in o["stderr"])
     record(
+        evidence_dir,
         "t1_shellsim",
         "T1: package plus tests in a ShellSim machine, fix until green; independent pytest rerun afterwards",
         policy,
@@ -225,7 +233,7 @@ T1B_TASK = (
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(3600)
-def test_t1b_fix_loop_in_shellsim(glm_settings):
+def test_t1b_fix_loop_in_shellsim(glm_settings, evidence_dir):
     policy = LLMPolicy()
     messages: list[Message] = [
         {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
@@ -240,7 +248,9 @@ def test_t1b_fix_loop_in_shellsim(glm_settings):
         before = await machine.run(pytest_command)
         tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
         async with GlmClient(endpoint(glm_settings)) as client:
-            run, wall = await timed_agent(client, policy, messages, [tool], 60, ledger_record("t1b_fix_loop", "t1b"))
+            run, wall = await timed_agent(
+                client, policy, messages, [tool], 60, ledger_record(evidence_dir, "t1b_fix_loop", "t1b")
+            )
         check = await machine.run(pytest_command)
         await machine.close()
         rerun = {"exit_code": check.exit_code, "stdout": check.stdout.decode(), "stderr": check.stderr.decode()}
@@ -248,6 +258,7 @@ def test_t1b_fix_loop_in_shellsim(glm_settings):
 
     run, wall, rerun, before = asyncio.run(go())
     record(
+        evidence_dir,
         "t1b_fix_loop",
         "T1b: seeded failing package in ShellSim; the agent must run, fix, extend and rerun the tests",
         policy,
@@ -271,7 +282,7 @@ def stable_metadata(http: httpx.Client) -> tuple[str, str]:
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-def test_web_search_through_parallel(glm_settings, parallel_key):
+def test_web_search_through_parallel(glm_settings, evidence_dir, parallel_key):
     policy = LLMPolicy()
     messages: list[Message] = [
         {"role": "system", "content": SYSTEM},
@@ -287,7 +298,7 @@ def test_web_search_through_parallel(glm_settings, parallel_key):
     async def go() -> tuple[AgentRun, float]:
         async with GlmClient(endpoint(glm_settings)) as client, httpx.AsyncClient() as http:
             tools = web_tools(http, parallel_key.value)
-            return await timed_agent(client, policy, messages, tools, 20, ledger_record("web", "web"))
+            return await timed_agent(client, policy, messages, tools, 20, ledger_record(evidence_dir, "web", "web"))
 
     # Parallel serves cached pages, so the check uses metadata that does not change between releases.
     with httpx.Client(timeout=60.0) as http:
@@ -296,6 +307,7 @@ def test_web_search_through_parallel(glm_settings, parallel_key):
     searches = executed(run, "web_search")
     answer = str(run.messages[-1]["content"])
     record(
+        evidence_dir,
         "web_parallel",
         "web search through Parallel /v1/search and /v1/extract; transcript must show search results",
         policy,
@@ -371,7 +383,7 @@ def corrupting_proxy(glm_settings) -> Iterator[dict]:
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-def test_malformed_tool_call_is_returned_to_the_model_and_recovered(glm_settings, corrupting_proxy):
+def test_malformed_tool_call_is_returned_to_the_model_and_recovered(glm_settings, evidence_dir, corrupting_proxy):
     policy = LLMPolicy()
     messages: list[Message] = [
         {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
@@ -382,7 +394,9 @@ def test_malformed_tool_call_is_returned_to_the_model_and_recovered(glm_settings
         machine = await shellsim()
         tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
         async with GlmClient(endpoint(glm_settings, corrupting_proxy["base_url"])) as client:
-            run, wall = await timed_agent(client, policy, messages, [tool], 20, ledger_record("malformed", "malformed"))
+            run, wall = await timed_agent(
+                client, policy, messages, [tool], 20, ledger_record(evidence_dir, "malformed", "malformed")
+            )
         content = await machine.run(Command(argv=("cat", "/workspace/hello.txt"), timeout=SHELL_TIMEOUT))
         await machine.close()
         return run, wall, content.stdout.decode()
@@ -390,6 +404,7 @@ def test_malformed_tool_call_is_returned_to_the_model_and_recovered(glm_settings
     run, wall, content = asyncio.run(go())
     first = run.turns[0].tool_results[0]
     record(
+        evidence_dir,
         "malformed_tool_call",
         "a relay truncates the first tool call's arguments; the loop returns an error result, the replay is "
         "accepted by the real server, and the model retries",
@@ -406,7 +421,7 @@ def test_malformed_tool_call_is_returned_to_the_model_and_recovered(glm_settings
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-def test_twenty_concurrent_agents_share_one_client(glm_settings):
+def test_twenty_concurrent_agents_share_one_client(glm_settings, evidence_dir):
     policy = LLMPolicy()
     agents = 20
 
@@ -425,7 +440,9 @@ def test_twenty_concurrent_agents_share_one_client(glm_settings):
     async def one(client: GlmClient, n: int) -> tuple[AgentRun, float, str]:
         machine = await shellsim()
         tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
-        run, wall = await timed_agent(client, policy, messages(n), [tool], 20, ledger_record("concurrent", f"agent-{n}"))
+        run, wall = await timed_agent(
+            client, policy, messages(n), [tool], 20, ledger_record(evidence_dir, "concurrent", f"agent-{n}")
+        )
         content = await machine.run(Command(argv=("cat", "/workspace/answer.txt"), timeout=SHELL_TIMEOUT))
         await machine.close()
         return run, wall, content.stdout.decode().strip()
@@ -455,6 +472,7 @@ def test_twenty_concurrent_agents_share_one_client(glm_settings):
     ]
     runs = [r[0] for r in results if not isinstance(r, BaseException)]
     record(
+        evidence_dir,
         "concurrent_20",
         f"{agents} agents gathered over one GlmClient, each with its own ShellSim machine",
         policy,
@@ -468,7 +486,7 @@ def test_twenty_concurrent_agents_share_one_client(glm_settings):
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-def test_length_cut_inside_a_tool_call_is_returned_and_retried(glm_settings):
+def test_length_cut_inside_a_tool_call_is_returned_and_retried(glm_settings, evidence_dir):
     policy = LLMPolicy(max_tokens=400, reasoning_effort=ReasoningEffort.LOW)
     messages: list[Message] = [
         {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
@@ -485,7 +503,9 @@ def test_length_cut_inside_a_tool_call_is_returned_and_retried(glm_settings):
         machine = await shellsim()
         tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
         async with GlmClient(endpoint(glm_settings)) as client:
-            run, wall = await timed_agent(client, policy, messages, [tool], 30, ledger_record("length_cut", "cut"))
+            run, wall = await timed_agent(
+                client, policy, messages, [tool], 30, ledger_record(evidence_dir, "length_cut", "cut")
+            )
         lines = await machine.run(Command(argv=("sh", "-c", "wc -l < /workspace/numbers.txt"), timeout=SHELL_TIMEOUT))
         await machine.close()
         return run, wall, lines.stdout.decode().strip()
@@ -493,6 +513,7 @@ def test_length_cut_inside_a_tool_call_is_returned_and_retried(glm_settings):
     run, wall, lines = asyncio.run(go())
     outcomes = [r.outcome for t in run.turns for r in t.tool_results]
     record(
+        evidence_dir,
         "length_cut_tool_call",
         "max_tokens=400 cuts a large heredoc tool call; the cut call is returned as an error and the model "
         "re-issues the work in smaller calls",
@@ -508,16 +529,16 @@ def test_length_cut_inside_a_tool_call_is_returned_and_retried(glm_settings):
     assert lines == "300"
 
 
-def write_probe(check: str, purpose: str, cases: list[dict]) -> Path:
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    path = EVIDENCE_DIR / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+def write_probe(evidence_dir: Path, check: str, purpose: str, cases: list[dict]) -> Path:
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    path = evidence_dir / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps({"check": check, "purpose": purpose, "cases": cases}, indent=2) + "\n")
     return path
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-def test_probe_tool_call_cut_by_max_tokens_is_reported_as_length(glm_settings):
+def test_probe_tool_call_cut_by_max_tokens_is_reported_as_length(glm_settings, evidence_dir):
     policy = LLMPolicy(max_tokens=300, reasoning_effort=ReasoningEffort.LOW, max_continuations=0)
     messages: list[Message] = [
         {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
@@ -558,6 +579,7 @@ def test_probe_tool_call_cut_by_max_tokens_is_reported_as_length(glm_settings):
 
     case = asyncio.run(go())
     write_probe(
+        evidence_dir,
         "probe_tool_call_cut",
         "a heredoc tool call cut by max_tokens=300: vLLM reports finish_reason tool_calls, GlmClient reports length",
         [case],
@@ -570,7 +592,7 @@ def test_probe_tool_call_cut_by_max_tokens_is_reported_as_length(glm_settings):
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-def test_probe_replayed_tool_call_arguments_must_be_a_json_object(glm_settings):
+def test_probe_replayed_tool_call_arguments_must_be_a_json_object(glm_settings, evidence_dir):
     policy = LLMPolicy(max_tokens=2000, reasoning_effort=ReasoningEffort.LOW)
     tool = {
         "type": "function",
@@ -619,6 +641,7 @@ def test_probe_replayed_tool_call_arguments_must_be_a_json_object(glm_settings):
 
     cases = asyncio.run(go())
     write_probe(
+        evidence_dir,
         "probe_replay_arguments",
         "replaying malformed or non-object tool-call arguments raw versus wrapped by replay_arguments",
         cases,

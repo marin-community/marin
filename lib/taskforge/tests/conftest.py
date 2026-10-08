@@ -6,6 +6,7 @@
 Live tests carry ``@pytest.mark.live_glm`` and request the ``glm_settings`` fixture, which skips
 them unless the interactive GLM-5.3 endpoint is configured through the environment. Web tests take
 ``parallel_key``, which skips unless ``TASKFORGE_PARALLEL_KEY_FILE`` names the Parallel key file.
+Live tests write raw evidence under ``evidence_root``, which is outside the checkout.
 
 ``fake_glm`` is a scripted fake of the GLM router: ``POST /v1/chat/completions`` streams queued
 responses and ``GET /health`` reports queued worker counts. It runs as a real local HTTP server.
@@ -14,6 +15,7 @@ responses and ``GET /health`` reports queued worker counts. It runs as a real lo
 
 import json
 import os
+import tempfile
 import threading
 from collections import deque
 from collections.abc import Iterator
@@ -31,6 +33,8 @@ TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
 TOKEN_KEY = "GLM_API_TOKEN"
 PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
 PARALLEL_KEY = "PARALLEL_KEY"
+EVIDENCE_DIR_ENV = "TASKFORGE_EVIDENCE_DIR"
+DEFAULT_EVIDENCE_ROOT = Path(tempfile.gettempdir()) / "taskforge-evidence"
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,16 @@ def parallel_key() -> ParallelKey:
     if not key_file:
         pytest.skip(f"live web test: set {PARALLEL_KEY_FILE_ENV} to the Parallel key file")
     return ParallelKey(read_key_line(Path(key_file).expanduser(), PARALLEL_KEY))
+
+
+@pytest.fixture(scope="session")
+def evidence_root() -> Path:
+    """Where live checks write raw evidence: ``TASKFORGE_EVIDENCE_DIR`` when set, else ``<tmp>/taskforge-evidence``.
+
+    The default is the system temp directory, so evidence survives across runs on one machine and never
+    lands in the checkout.
+    """
+    return Path(os.environ.get(EVIDENCE_DIR_ENV) or DEFAULT_EVIDENCE_ROOT).expanduser()
 
 
 class ListLedger:
