@@ -173,16 +173,18 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
             modes[name] = resource.mode
     if "tests/test.sh" not in files:
         raise UnsupportedHarborTask("Script grader has no test.sh resource")
-    # Public resources also belong to the fresh grading environment; the agent never sees tests/.
-    if public:
-        for resource in public:
+    outputs = list(task.output_paths)
+    if answer_path:
+        outputs.append(answer_path)
+    # Harbor uploads submissions before running test.sh. Do not restore initial
+    # copies of files the agent edits, including when the agent deleted a file.
+    grader_public = [resource for resource in public if "/" + resource.path not in outputs]
+    if grader_public:
+        for resource in grader_public:
             files["tests/public/" + resource.path] = resource_bytes(resource)
             if resource.mode:
                 modes["tests/public/" + resource.path] = resource.mode
         files["tests/test.sh"] = b"#!/bin/bash\nset -euo pipefail\ncp -a /tests/public/. /\n" + files["tests/test.sh"]
-    outputs = list(task.output_paths)
-    if answer_path:
-        outputs.append(answer_path)
     metadata = {
         "taskcompendium_id": task.id,
         "source_dataset": task.source.dataset,
