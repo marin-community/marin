@@ -19,8 +19,8 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
-from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.local import run_local_sources
+from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_pipelines
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
