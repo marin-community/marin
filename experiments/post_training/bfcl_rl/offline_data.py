@@ -59,7 +59,7 @@ class NativeModelTrace:
     initial_prompt_sha256: str
     model_tokenizer: str
     tool_call_format: LiteralToolCallFormat
-    assistant_completion_token_ids: tuple[tuple[int, ...], ...]
+    assistant_completion_token_ids: tuple[tuple[tuple[int, ...], ...], ...]
 
 
 def native_prompt_sha256(messages: list[dict], tools: list[dict], assistant_prefill: str) -> str:
@@ -75,6 +75,27 @@ def native_prompt_sha256(messages: list[dict], tools: list[dict], assistant_pref
         add_generation_prompt=True,
     )
     return hashlib.sha256(prompt.encode()).hexdigest()
+
+
+def native_assistant_body(message: Mapping[str, Any]) -> dict:
+    """Compare captured messages independently of transport metadata and JSON serialization."""
+    body = {key: value for key, value in message.items() if key != "provider_specific_fields"}
+    if not body.get("tool_calls"):
+        return body
+    calls = []
+    for call in body["tool_calls"]:
+        function = dict(call["function"])
+        arguments = function["arguments"]
+        if isinstance(arguments, str):
+            try:
+                decoded = json.loads(arguments)
+            except json.JSONDecodeError:
+                pass  # Malformed sampled arguments remain literal negative-example data.
+            else:
+                if isinstance(decoded, dict):
+                    function["arguments"] = decoded
+        calls.append({**call, "function": function})
+    return {**body, "tool_calls": calls}
 
 
 def native_model_trace(
@@ -165,48 +186,90 @@ def native_model_trace(
     messages = [*request["messages"], assistant]
     completions = []
     captured_compaction = False
+    summary_timestamps = set()
+    used_timestamps = set()
     previous_timestamp = float("-inf")
-    for index, message in enumerate(messages):
-        if message["role"] != "assistant" or (index and messages[index - 1]["role"] == "assistant"):
+    for role, indexed_group in groupby(enumerate(messages), key=lambda item: item[1]["role"]):
+        if role != "assistant":
             continue
+        group = list(indexed_group)
+        index = group[0][0]
+        has_captured_summary = any(
+            not message.get("tool_calls")
+            and any(
+                not entry["request"].get("tools")
+                and entry["timestamp"] < final["timestamp"]
+                and entry["literal"]["assistant_message"] is not None
+                and not entry["literal"]["assistant_message"].get("tool_calls")
+                and native_assistant_body(entry["literal"]["assistant_message"]) == native_assistant_body(message)
+                for entry in entries
+            )
+            for _, message in group
+        )
         candidates = [
             entry
             for entry in entries
-            if entry["request"]["messages"] == messages[:index]
+            if not has_captured_summary
+            and entry["request"]["messages"] == messages[:index]
             and (entry["request"].get("tools") or []) == (request.get("tools") or [])
         ]
         retained_candidates = [entry for entry in candidates if entry in selected]
         if retained_candidates:
             candidates = retained_candidates
-        if not candidates and not message.get("tool_calls"):
-            # OpenCode can replace history with a model-generated summary. Its
-            # tool-free request has a different prefix, but the captured body
-            # must exactly equal the history turn; transport metadata is not text.
-            body = {key: value for key, value in message.items() if key != "provider_specific_fields"}
-            candidates = [
-                entry
-                for entry in entries
-                if not entry["request"].get("tools")
-                and entry["literal"]["assistant_message"] is not None
-                and not entry["literal"]["assistant_message"].get("tool_calls")
-                and previous_timestamp < entry["timestamp"] < final["timestamp"]
-                and {
-                    key: value
-                    for key, value in entry["literal"]["assistant_message"].items()
-                    if key != "provider_specific_fields"
-                }
-                == body
-            ]
-            captured_compaction = bool(candidates)
-        if len(candidates) != 1:
-            raise NativeAssistantCaptureError(
-                "Every native assistant turn requires one unambiguous captured completion "
-                f"(turn={index}, candidates={len(candidates)})"
-            )
-        if candidates[0]["timestamp"] <= previous_timestamp:
-            raise NativeAssistantCaptureError("Native assistant history requires ordered captured completions")
-        previous_timestamp = candidates[0]["timestamp"]
-        completions.append(tuple(candidates[0]["literal"]["completion_token_ids"]))
+        captures = []
+        if candidates:
+            if len(candidates) != 1:
+                raise NativeAssistantCaptureError(
+                    "Every native assistant turn requires one unambiguous captured completion "
+                    f"(turn={index}, candidates={len(candidates)})"
+                )
+            captures = candidates
+        else:
+            # A compacted context can place its new summary ahead of older retained
+            # exchanges. Prove every carried message from its captured body; keep
+            # the ordinary model-call chain ordered independently of the summary.
+            for message_index, message in group:
+                body = native_assistant_body(message)
+                summaries = [
+                    entry
+                    for entry in entries
+                    if not message.get("tool_calls")
+                    and not entry["request"].get("tools")
+                    and entry["literal"]["assistant_message"] is not None
+                    and not entry["literal"]["assistant_message"].get("tool_calls")
+                    and entry["timestamp"] < final["timestamp"]
+                    and native_assistant_body(entry["literal"]["assistant_message"]) == body
+                ]
+                candidates = summaries
+                if not candidates and captured_compaction:
+                    candidates = [
+                        entry
+                        for entry in entries
+                        if (entry["request"].get("tools") or []) == (request.get("tools") or [])
+                        and entry["timestamp"] <= final["timestamp"]
+                        and entry["literal"]["assistant_message"] is not None
+                        and native_assistant_body(entry["literal"]["assistant_message"]) == body
+                    ]
+                if len(candidates) != 1:
+                    raise NativeAssistantCaptureError(
+                        "Every native assistant turn requires one unambiguous captured completion "
+                        f"(turn={message_index}, candidates={len(candidates)})"
+                    )
+                captured_compaction = captured_compaction or bool(summaries)
+                if summaries:
+                    summary_timestamps.add(candidates[0]["timestamp"])
+                captures.append(candidates[0])
+        for capture in captures:
+            timestamp = capture["timestamp"]
+            if timestamp in used_timestamps:
+                raise NativeAssistantCaptureError("Native assistant history repeats a captured completion")
+            used_timestamps.add(timestamp)
+            if timestamp in summary_timestamps:
+                continue
+            if timestamp <= previous_timestamp:
+                raise NativeAssistantCaptureError("Native assistant history requires ordered captured completions")
+            previous_timestamp = timestamp
+        completions.append(tuple(tuple(capture["literal"]["completion_token_ids"]) for capture in captures))
     if captured_compaction:
         task_requests = [
             entry["request"]
@@ -249,17 +312,21 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
         for role, group in groupby(trace.messages, key=lambda message: message["role"])
         if role == "assistant"
     ]
-    for completion, group in zip(trace.assistant_completion_token_ids, assistant_groups, strict=True):
-        tokens = list(completion)
-        while tokens and tokens[-1] in terminal_ids:
-            tokens.pop()
-        text = tokenizer.decode(tokens)
-        if (
-            trace.assistant_prefill
-            and re.search(r"</think>|<\|end_think\|>", text)
-            and not re.search(r"<think>|<\|start_think\|>", text)
-        ):
-            text = trace.assistant_prefill + text
+    for completions, group in zip(trace.assistant_completion_token_ids, assistant_groups, strict=True):
+        parts = []
+        for completion in completions:
+            tokens = list(completion)
+            while tokens and tokens[-1] in terminal_ids:
+                tokens.pop()
+            text = tokenizer.decode(tokens)
+            if (
+                trace.assistant_prefill
+                and re.search(r"</think>|<\|end_think\|>", text)
+                and not re.search(r"<think>|<\|start_think\|>", text)
+            ):
+                text = trace.assistant_prefill + text
+            parts.append(text)
+        text = "\n".join(parts)
         calls = [call for message in group for call in message.get("tool_calls") or []]
         literals.append(
             normalize_tool_call_literals(
@@ -267,15 +334,26 @@ def native_chat_document(trace: NativeModelTrace) -> dict:
             )
         )
     messages = []
-    for message in trace.messages:
-        if message["role"] != "assistant":
-            messages.append(message)
+    for role, message_group in groupby(trace.messages, key=lambda message: message["role"]):
+        group = list(message_group)
+        if role != "assistant":
+            messages.extend(group)
             continue
+        # The renderer replaces one logical assistant group with its captured
+        # literals. Merge adjacent source fragments before validating chat channels.
         structural = {
             key: value
-            for key, value in message.items()
-            if key not in {"content", "reasoning_content", "unparsed_content"}
+            for key, value in group[0].items()
+            if key not in {"content", "reasoning_content", "unparsed_content", "tool_calls", "function_call"}
         }
+        calls = [call for message in group for call in message.get("tool_calls") or []]
+        if calls:
+            structural["tool_calls"] = calls
+        functions = [message["function_call"] for message in group if message.get("function_call")]
+        if len(functions) > 1:
+            raise ValueError("Adjacent assistant fragments contain multiple legacy function calls")
+        if functions:
+            structural["function_call"] = functions[0]
         structural["content"] = None
         # Only call identity is needed to associate tool observations. The renderer
         # replaces this entire assistant turn with the captured literal above.

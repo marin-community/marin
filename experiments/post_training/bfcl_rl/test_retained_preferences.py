@@ -189,7 +189,138 @@ def test_native_compaction_requires_unique_captured_summary_and_preserves_task_r
     trace = native_model_trace(**arguments)
     assert trace.initial_messages == original
     assert trace.messages[:-1] == history
-    assert trace.assistant_completion_token_ids == ((30, 31), (21,))
+    assert trace.assistant_completion_token_ids == (((30, 31),), ((21,),))
+
+
+@pytest.mark.parametrize("capture_fault", [None, "missing_call", "ambiguous_call", "changed_arguments"])
+@pytest.mark.parametrize("task_prefix_preserved", [False, True])
+def test_native_compaction_retains_captured_tool_history_and_assistant_masks(
+    tmp_path: Path, capture_fault, task_prefix_preserved
+):
+    original = [{"role": "system", "content": "SYSTEM_CONTEXT"}, {"role": "user", "content": "USER_CONTEXT"}]
+    summary = {"role": "assistant", "content": "COMPACT_SUMMARY"}
+    call = {"id": "a", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "TOOL_ARGUMENT"}'}}
+    captured_call = {"role": "assistant", "content": None, "tool_calls": [call]}
+    history_call = {
+        **captured_call,
+        "tool_calls": [{**call, "function": {**call["function"], "arguments": {"key": "TOOL_ARGUMENT"}}}],
+    }
+    if capture_fault == "changed_arguments":
+        history_call["tool_calls"][0]["function"]["arguments"] = {"key": "CHANGED_ARGUMENT"}
+    history = [
+        original[0],
+        original[1] if task_prefix_preserved else {"role": "user", "content": "COMPACT_CONTEXT"},
+        summary,
+        history_call,
+        {"role": "tool", "tool_call_id": "a", "content": "TOOL_OBSERVATION"},
+    ]
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    literal_texts = (
+        "COMPACT_SUMMARY",
+        '<tool_call>\n{"name":"lookup","arguments":{"key":"TOOL_ARGUMENT"}}\n</tool_call>',
+        "INCORRECT_ANSWER",
+    )
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
+    tokenizer.train_from_iterator(
+        [json.dumps(history), json.dumps(original), json.dumps(tools), *literal_texts],
+        trainer=trainers.BpeTrainer(vocab_size=300, initial_alphabet=pre_tokenizers.ByteLevel.alphabet()),
+    )
+    hf_tokenizer = PreTrainedTokenizerFast(tokenizer_object=tokenizer, eos_token="<eos>", pad_token="<pad>")
+    hf_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
+    tokenizer_path = tmp_path / "tokenizer"
+    hf_tokenizer.save_pretrained(tokenizer_path)
+    summary_tokens, call_tokens, answer_tokens = (
+        [*hf_tokenizer.encode(text, add_special_tokens=False), hf_tokenizer.eos_token_id] for text in literal_texts
+    )
+    record = _record("student", 0.0)
+    record["response"] = {
+        "token_ids": answer_tokens,
+        "loss_mask": [1] * len(answer_tokens),
+        "step_boundaries": [{"prompt_token_ids": [1, 2], "token_start": 0, "token_end": len(answer_tokens)}],
+    }
+    trial = {
+        "task_name": TASK.name,
+        "exception_info": None,
+        "verifier_result": {"rewards": {"reward": 0.0}},
+        "config": {"agent": {"name": "opencode"}},
+        "agent_info": {"name": "opencode", "version": "1.18.2"},
+        "agent_result": {"metadata": {"rollout_correlation_id": "carried-history"}},
+    }
+    entries = [
+        {
+            "trial_id": "carried-history",
+            "timestamp": 1,
+            "status_code": 200,
+            "request": {"messages": original, "tools": tools},
+            "literal": {
+                "prompt_token_ids": [8],
+                "completion_token_ids": call_tokens,
+                "assistant_message": captured_call,
+            },
+        },
+        {
+            "trial_id": "carried-history",
+            "timestamp": 2,
+            "status_code": 200,
+            "request": {"messages": [{"role": "user", "content": "Summarize"}], "tools": []},
+            "literal": {"prompt_token_ids": [9], "completion_token_ids": summary_tokens, "assistant_message": summary},
+        },
+        {
+            "trial_id": "carried-history",
+            "timestamp": 3,
+            "status_code": 200,
+            "request": {"messages": history, "tools": tools},
+            "literal": {
+                "prompt_token_ids": [1, 2],
+                "completion_token_ids": answer_tokens,
+                "assistant_message": {"role": "assistant", "content": "INCORRECT_ANSWER"},
+            },
+        },
+    ]
+    if capture_fault == "missing_call":
+        entries.pop(0)
+    elif capture_fault == "ambiguous_call":
+        entries.insert(1, {**entries[0], "timestamp": 1.5})
+    arguments = {
+        "identity": replace(_identity("student"), harness="opencode@1.18.2"),
+        "seed": 7,
+        "retained_record": record,
+        "retained_uri": "retained",
+        "native_trace_uri": "native",
+        "trial_result": trial,
+        "literal_entries": entries,
+        "partition": PARTITION,
+        "assistant_prefill": "",
+        "model_tokenizer": str(tokenizer_path),
+        "tool_call_format": LiteralToolCallFormat.HERMES,
+    }
+    if capture_fault:
+        with pytest.raises(NativeAssistantCaptureError, match="unambiguous captured completion"):
+            native_model_trace(**arguments)
+        return
+    trace = native_model_trace(**arguments)
+    assert trace.initial_messages == original
+    assert trace.assistant_completion_token_ids == ((tuple(summary_tokens), tuple(call_tokens)), (tuple(answer_tokens),))
+    document = native_chat_document(trace)
+    normalized = _normalize_chat_record(
+        document, "messages", "id", invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN
+    )
+    processor = ChatProcessor(
+        load_tokenizer(str(tokenizer_path)),
+        chat_template=MARIN_CHAT_TEMPLATE,
+        system_prompt_field=None,
+        mask_user_turns=True,
+    )
+    encoded = processor([chat_training_record(normalized)])[0]
+    masked = hf_tokenizer.decode(
+        np.asarray(encoded["input_ids"])[np.asarray(encoded["assistant_masks"], dtype=bool)].tolist()
+    )
+    assert "COMPACT_SUMMARY" in masked and "TOOL_ARGUMENT" in masked and "INCORRECT_ANSWER" in masked
+    assert all(
+        value not in masked for value in ("SYSTEM_CONTEXT", "USER_CONTEXT", "COMPACT_CONTEXT", "TOOL_OBSERVATION")
+    )
 
 
 def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path: Path):
@@ -264,7 +395,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     assert trace.messages == messages
     assert trace.initial_messages == messages[:2]
-    assert trace.assistant_completion_token_ids == ((248000, 248001), (248003,))
+    assert trace.assistant_completion_token_ids == (((248000, 248001),), ((248003,),))
     continuation_prompt = [1, 2, 9, 248000, 248001, 99]
     continuation_record = {
         **teacher_record,
@@ -349,7 +480,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         trace,
         model_tokenizer=str(tokenizer_path),
         assistant_completion_token_ids=tuple(
-            tuple(hf_tokenizer.encode(text, add_special_tokens=False))
+            (tuple(hf_tokenizer.encode(text, add_special_tokens=False)),)
             for text in (
                 'ASSISTANT_REASONING\n</think>\n<tool_call>\n{"name":"lookup","arguments":{"key":"TOOL_ARGUMENT"}}\n</tool_call>',
                 "VERIFIER_CORRECT",
@@ -363,7 +494,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     unparsed = replace(
         trace,
         messages=[*trace.messages[:-1], {"role": "assistant", "content": ""}],
-        assistant_completion_token_ids=(*trace.assistant_completion_token_ids[:-1], captured),
+        assistant_completion_token_ids=(*trace.assistant_completion_token_ids[:-1], (captured,)),
         model_tokenizer=str(tokenizer_path),
     )
     literal_document = native_chat_document(unparsed)
@@ -373,7 +504,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         unparsed,
         assistant_completion_token_ids=(
             *unparsed.assistant_completion_token_ids[:-1],
-            (*hf_tokenizer.encode(raw_loop, add_special_tokens=False), turn_end, hf_tokenizer.eos_token_id),
+            ((*hf_tokenizer.encode(raw_loop, add_special_tokens=False), turn_end, hf_tokenizer.eos_token_id),),
         ),
     )
     terminated_document = native_chat_document(terminated)
@@ -405,7 +536,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
             ],
             assistant_prefill="",
             assistant_completion_token_ids=(
-                tuple(hf_tokenizer.encode(raw_call, add_special_tokens=False)),
+                (tuple(hf_tokenizer.encode(raw_call, add_special_tokens=False)),),
                 trace.assistant_completion_token_ids[-1],
             ),
         )
