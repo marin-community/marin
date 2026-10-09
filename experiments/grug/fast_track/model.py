@@ -66,6 +66,7 @@ from experiments.grug.fast_track.activations import polynorm, polynorm_over_inpu
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
 from experiments.grug.fast_track.head_loss import prototype_target_logits, reduce_token_loss
+from experiments.grug.fast_track.kda_state_read import StateRead, repeat_heads, state_read_features, state_read_init
 from experiments.grug.fast_track.key_offset import (
     MatchAppend,
     append_shared_match,
@@ -933,9 +934,7 @@ class GrugModelConfig:
     """In the selecting layers, add a learned ``w_latent_down`` projection to the selected channels before
     ``latent_norm`` (projection on top of selection)."""
     expert_read_subset: int = 0
-    """If > 0, each routed expert reads only this many of its input channels (a fixed 0/1 mask on the rows of
-    ``w_up``/``w_gate``, applied at init and in the forward, so the masked rows stay zero under MuonH): the experts
-    together cover the whole input, but each one reads a slice. ``expert_read_subset_pattern`` picks the slices."""
+    """Each routed expert reads only a subset of its input channels (see ``expert_read_groups``)."""
     expert_read_subset_pattern: str = "blocks"
     """``blocks``: expert ``e`` reads contiguous block ``e mod (in_dim / expert_read_subset)``; ``random``: a fixed
     random subset per expert; ``shared``: every expert reads channels ``[0, expert_read_subset)`` (the control that
@@ -945,10 +944,7 @@ class GrugModelConfig:
     ``latent_dim`` is set, so the G slices are G separate latent down-projections, "multi-head LatentMoE"; else the
     MLP-pre-normed stream), each slice with its own RMSNorm; needs an explicit ``latent_out_dim``."""
     expert_write_groups: int = 0
-    """G > 0: each routed expert's neurons split into G contiguous groups and group g writes only output block g
-    of the expert's output (a fixed 0/1 mask on ``w_down``, block-diagonal per expert, so MuonH keeps the masked
-    entries at zero). With ``latent_out_dim = hidden_dim`` the experts write the full stream with each neuron's
-    write at 1/G of the width."""
+    """G > 0: each routed expert's neurons split into G groups, group g writing only output block g."""
     tail_expert_write_groups: int = 0
     """``expert_write_groups`` for the ``latent_out_full_layers`` tail layers only."""
     expert_write_blocks: int = 0
@@ -1022,6 +1018,10 @@ class GrugModelConfig:
     mla_kv_direct: bool = False
     mla_prev_key_concat: bool = False
     """MLA keys are ``[k_j ; k_{j-1}]`` (each normed) against 2x-wide queries; the emulation only."""
+    kda_state_reads: int = 0
+    """Fixed-query reads per KDA state head into a small MLP (``kda_state_read.py``); 0: off."""
+    kda_state_reads_tail: int = 0
+    kda_state_read_hidden: int = 512
     mla_far_key_half: str = ""
     """Emulation: keys ``mla_far_key_window``+ back score on one key half only (``cur`` / ``prev``)."""
     mla_far_key_window: int = 128
@@ -1315,10 +1315,7 @@ class GrugModelConfig:
     """Token-embedding AttnRes queries (``AttnResTokenQuery``): between the data-independent query and a full
     hidden-state projection (the AttnRes paper's Table 4, arXiv 2603.15031). Single-head AttnRes only."""
     xsa_mode: str = "fixed"
-    """MLA Exclusive Self Attention strength: ``fixed`` subtracts the full self-value projection,
-    ``learned`` scales it by a per-head scalar (init 1), ``gated`` by ``2 * sigmoid(x @ W_xsa)`` per token and
-    head (``W_xsa`` zero-init, so 1 at init), ``tanh`` by ``tanh(alpha_h)`` with ``alpha`` zero-init (modded-nanogpt
-    record #82: no XSA at init)."""
+    """XSA strength: ``fixed`` (1), ``learned`` (per head), ``gated`` (per token and head) or ``tanh``."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
     logit_soft_cap_asym: tuple[float, ...] = ()
@@ -1331,10 +1328,7 @@ class GrugModelConfig:
     log unigram frequencies of the first training batches before step 0 (``lm_head_unigram_batches``); a model
     built without the trainer starts at zero."""
     init_std_mult_gates: float = 1.0
-    """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA output gate ``w_g`` and write strength
-    ``w_beta``). MuonH pins each matrix's Frobenius norm at its init (Hyperball II, arXiv 2606.16899), so the
-    init std fixes that family's scale for the whole run. The zero-init Adam gates (``attn_gate``, ``ve_gate``)
-    move freely and are unaffected."""
+    """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA ``w_g`` / ``w_beta``, MoE gates)."""
     init_std_mult_experts: float = 1.0
     """Init-std multiplier of the routed experts' ``w_up`` / ``w_down`` (see ``init_std_mult_gates``)."""
     init_std_mult_attn_out: float = 1.0
@@ -1345,10 +1339,7 @@ class GrugModelConfig:
     before the delta-rule update, a channel-wise write strength next to KDA's per-head beta. Runs through the
     existing kernel."""
     kda_erase_gate: bool = False
-    """Gated DeltaNet-2 (arXiv 2605.22791) erase gate: the KDA delta rule reads and erases along
-    ``e = b * k`` and writes along ``k``, ``S_t = (I - beta k e^T) D_t S_{t-1} + beta k v^T``, with a
-    channel-wise ``b = 2 sigmoid(x W_b)`` (``W_b`` zero-init, so exactly KDA at init; ``beta * b`` spans
-    the paper's (0, 2) negative-eigenvalue range). Runs through the KDA kernels' erase-key path."""
+    """Gated DeltaNet-2 erase gate on the KDA delta rule (zero-init)."""
     kda_head_pairing: KdaHeadPairing = KdaHeadPairing.NONE
     """Share one KDA state between adjacent heads (``KdaHeadPairing``); every KDA layer."""
     init_std_mult_beta: float | None = None
@@ -1609,10 +1600,7 @@ class GrugModelConfig:
     erc_alpha: float = 1.0
     """ERC coupling margin ``alpha`` in [0, 1]; smaller is stricter (the paper's n=256 optimum is 0.5)."""
     window_embed_dim: int = 0
-    """Explicit short context window as an AttnRes source: every token gets a small ``window_embed_dim``-wide
-    embedding; for position t the embeddings of tokens t, t-1, ..., t-(k-1) (k = hidden_dim / window_embed_dim)
-    are concatenated slot by slot (zero where a slot crosses a document start), linearly projected to
-    ``hidden_dim`` and RMS-normed. 0: off."""
+    """Width of the windowed-embedding extra AttnRes source; 0: off."""
     window_embed_mode: str = "source"
     """``source``: the token window is its own AttnRes source. ``add_embed``: it is added to the token-embedding
     source. As its own source, the gates gave it ~0.001-0.01 weight by step 350, which starved its gradient."""
@@ -1624,9 +1612,7 @@ class GrugModelConfig:
     each token's bigram row by how its token embedding and bigram row interact, which the static AttnRes queries
     can't express (w = 0 and c = +2 at init)."""
     embed2_hash_heads: int = 1
-    """Engram-style multi-head hashing: each bigram row is split into this many slices of ``hidden_dim / heads``, each
-    indexed by its own hash of the bigram, so a collision corrupts only the slices whose hashes collide. The table is
-    stored as ``[heads * rows, hidden_dim / heads]`` (the same parameters and gathered bytes as one table)."""
+    """Hash heads of the second (hashed n-gram) embedding table."""
     embed2_head_orders: tuple[int, ...] = ()
     """With ``embed2_hash_heads``, the n-gram order of each head (e.g. ``(2, 2, 3, 3)``: two bigram and two trigram
     slices in the same table and gather). Empty: every head uses ``embed2_ngram``."""
@@ -3518,6 +3504,7 @@ class KimiDeltaAttention(eqx.Module):
     """Per-bucket, per-channel log-decay logits of the push buckets (``kda_push_buckets``)."""
     w_push: Float[Array, "D NM"] | None
     """Writer's bucket weights, zero-init (uniform split)."""
+    state_read: StateRead | None  # kda_state_reads
     w_rot_down: Float[Array, "D R"] | None
     w_rot_up: Float[Array, "R NP"] | None
     rot_scale: Float[Array, "N P"] | None
@@ -3596,6 +3583,11 @@ class KimiDeltaAttention(eqx.Module):
             sconv_a=ShortConv.init(r, cfg.sconv_kernel, cfg.sconv_impl) if cfg.kda_decay_conv else None,
             vres_lambda=_vres_lambda_init(cfg),
             push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
+            state_read=(
+                state_read_init(random.fold_in(k_o, 3), n, cfg.kda_state_reads, h, h, cfg.kda_state_read_hidden, d)
+                if cfg.kda_state_reads
+                else None
+            ),
             w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
             w_rot_down=(
                 reshard(_init_weight(random.fold_in(k_ad, 1), (d, rot_rank), std), P(_FSDP_AXES, None))
@@ -3765,6 +3757,17 @@ class KimiDeltaAttention(eqx.Module):
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
         kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
+        read_delta = None
+        if self.state_read is not None:  # fixed-query reads of each head's state (kda_state_read.py)
+            m = cfg.kda_state_reads
+            a = self.state_read.queries.astype(q.dtype).reshape(-1, head_dim)
+            q_read = reshard(jnp.broadcast_to(a, (b, s, *a.shape)), spec4)
+            rep_ex = {
+                n_: v_ if n_ == "segment_ids" else repeat_heads(v_, m, axis=0 if n_.startswith("gate_") else 2)
+                for n_, v_ in extras.items()
+            }
+            reads = kernel(q_read, *(repeat_heads(t_, m, 2) for t_ in (k, v, g, beta)), rep_ex)
+            read_delta = state_read_features(self.state_read, reads)
         if self.push_decay is None or self.w_push is None:
             o = kernel(*args)
         else:
@@ -3791,7 +3794,10 @@ class KimiDeltaAttention(eqx.Module):
         if cfg.kda_gate_per_head:
             gate = jnp.repeat(gate, head_dim, axis=-1, total_repeat_length=cfg.num_heads * head_dim)
         o = o * gate
-        return _proj(cfg, o, self.w_o, out_sharding=_batch_spec()), stats
+        out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
+        if read_delta is not None:
+            out = out + reshard(read_delta.astype(out.dtype), _batch_spec())
+        return out, stats
 
 
 class RMSNorm(eqx.Module):
@@ -9017,6 +9023,7 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         mla_sparse_window=cfg.mla_sparse_window if cfg.mla_sparse_tail else 0,
         mla_sparse_topk=cfg.mla_sparse_topk if cfg.mla_sparse_tail else 0,
         mla_sparse_dsa_topk=cfg.mla_sparse_dsa_topk if cfg.mla_sparse_tail else 0,
+        kda_state_reads=cfg.kda_state_reads_tail,
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
