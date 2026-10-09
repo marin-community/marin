@@ -313,10 +313,16 @@ jobs:
           dd if=/dev/zero of="$probe" bs=1M count=256 oflag=direct 2>&1 | tail -n 1 | sed 's/^/[stall-diag] write probe: /'
           dd if="$probe" of=/dev/null bs=1M iflag=direct 2>&1 | tail -n 1 | sed 's/^/[stall-diag] read probe: /'
           rm -f "$probe"
-          # Sample host process state every 30 s until pytest starts.
+          # The stall only shows up on VMs less than about two hours old. On an older
+          # VM, stop after the disk probe so that repeated reruns cost seconds.
+          if [ "$(cut -d. -f1 /proc/uptime)" -gt 7200 ]; then
+            echo "[stall-diag] VM is older than 2 h; skipping the container"
+            exit 0
+          fi
+          # Sample host process state every 30 s while pytest is not running.
           (
-            while ! pgrep -f "bin/pytest -n 0" > /dev/null; do
-              sleep 30
+            while sleep 30; do
+              pgrep -f "bin/pytest -n 0" > /dev/null && continue
               echo "[stall-diag] sample loadavg: $(cut -d' ' -f1-3 /proc/loadavg)"
               diag_disk
               docker ps -a --no-trunc --format '[stall-diag] container {{.ID}} {{.Status}} {{.Image}}'
@@ -326,6 +332,9 @@ jobs:
           ) &
           DIAG_SAMPLER=$!
           trap 'kill "$DIAG_SAMPLER" 2>/dev/null || true' EXIT
+          # On a fresh VM, repeat the container setup to sample more of its first hours.
+          for attempt in 1 2 3; do
+          echo "[stall-diag] attempt $attempt"
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
@@ -367,6 +376,7 @@ jobs:
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
+          done
 
   taskcompendium:
     name: taskcompendium-unit
