@@ -4,7 +4,6 @@
 import io
 import json
 import os
-import re
 import shlex
 import subprocess
 import tarfile
@@ -150,8 +149,7 @@ def test_harbor_mcqa_file_format_matches_its_grader(normalized_row, tmp_path, le
             verifyit_package_root=VERIFYIT_PACKAGE,
         ).task_binary
     )
-    answer_format = re.findall(r"Use the format `([^`]+)`", files["instruction.md"].decode())[-1]
-    (tmp_path / "answer.txt").write_text(answer_format.replace("X", letter))
+    (tmp_path / "answer.txt").write_text(letter)
     spec = parse_spec(files["tests/taskcompendium-verifier.toml"].decode())
     assert grade(spec, tmp_path, tmp_path).reward == reward
 
