@@ -98,6 +98,14 @@ or on a package the order does not name.
 - `proposal.source.ProposalSource[IdeaT]`: `async propose(idea, n) -> ProposalBatch`. A batch holds
   the planning request and completions and one `SlotProposal` or `SlotFailure` per slot, in slot
   order. A failed slot does not drop its siblings.
+- `proposal.sources.capability.CapabilitySource(client, policy)` is the `ProposalSource` for
+  catalog capabilities (`load_capability_ideas(path)` reads the catalog). `proposal_prefix(id, idea)`
+  is the front matter's fixed opening, which the prompt dictates and the document repair prefills.
+  `capability_idea_record(idea)` is the capability run's `describe_idea`: the capability id, subject
+  id and name, catalog version, capability hash, and the prompt record the models were shown.
+  `capability_adversary_context(idea)` is the capability paragraph of the adversary brief: the
+  prompt record as data, and a submission the grader accepts without the capability's new
+  operation (prerequisite work alone, or a route the record's excludes name) counts as a shortcut.
 - `proposal.model.TaskProposal`: YAML front matter (`ProposalHeader`) plus a markdown body with
   required section headings. `parse` and `render` round-trip it; `digest` is the sha256 of the
   canonical form.
@@ -320,6 +328,14 @@ continuation under `reasoning`; the call therefore sends `enable_thinking: false
 same prompt tokens and returns the continuation as `content` (measured live). The template strips
 prefilled text, so a prefix with surrounding whitespace is rejected rather than silently changed.
 
+Capability proposals think first and prefill only the repair. A proposal document opens with its
+fixed lines (`proposal.sources.capability.proposal_prefix`: the `---` line, id, source, grounding and
+the `null_reason` key, ahead of the keys the model fills in). The first request is an ordinary
+thinking call. A reply that fails the parser gets one repair request prefilled with that prefix, so
+the repair cannot drop or mistype those lines. Prefilling the first request too fixed the format but
+turned thinking off: on two capabilities at n=10 the triage rubric (3 samples) accepted 4 of 20 such
+proposals against 7 of 20 written with thinking, and every rubric axis except realism scored lower.
+
 A build tells host failures from program failures by where the error was raised, not by its
 message. `Build` wraps its machine factories (`builder.infrastructure.host_checked_factories`): a
 missing factory for a backend the host should have, a missing image builder, a `TimeoutError`
@@ -497,6 +513,8 @@ Other live inputs:
 
 - `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent and
   builder live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
+- `TASKFORGE_CAPABILITY_CATALOG` names the capability catalog JSON file, which is not checked in,
+  for the capability proposal and triage live tests (`capability_catalog` fixture).
 
 The package pytest config sets `timeout = 60` and `asyncio_mode = "auto"`. Long live tests carry
 `@pytest.mark.timeout(<seconds>)`.
@@ -512,7 +530,12 @@ The cluster scripts run on Iris and document their submit commands in their docs
 `scripts/build_image_job.py` builds a `DockerBuild` context and pushes it to a registry digest
 through `scripts/push_image_task.py`, `scripts/iris_machine_probe.py` probes the shellbox Iris
 backend, and `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task.
-`scripts/run_queue.py` runs a queue from a run config on a laptop or in an Iris task, and
+`scripts/run_queue.py` runs a queue from a run config on a laptop or in an Iris task;
+`scripts/run_capability_queue.py` is the same run over the capability catalog (every capability,
+or the ones `--capability` names, proposed by `CapabilitySource`, triaged against its catalog
+record, and red-teamed by an adversary whose brief carries that record); the policy example is its
+committed configuration, so a too-easy task is revised once and then accepted, labelled in
+`summary.json` with `band: too_easy` and its synthesis pass rate; and
 `scripts/cluster_queue_probe.py` is the fail-fast preflight for an unattended run: GLM health for
 both pools, machine creation without leaked credentials, a width of concurrent validation rounds,
 the Finelog mirror, resume from the event logs, and a registry image pull.
