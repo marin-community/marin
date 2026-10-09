@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -55,6 +56,34 @@ from experiments.grug.parallax.model import GrugModelConfig, Transformer, flops_
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
+
+# GPU runtime defaults from grug/fast_track: the async CUDA allocator (the BFC allocator fragments until the
+# train step's temp arena no longer fits), jemalloc, and XLA's scheduler / command-buffer flags.
+RUNTIME_ENV = {
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
+    "JAX_ENABLE_PGLE": "false",
+    "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
+    "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+}
+XLA_FLAG_DEFAULTS = (
+    "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
+    "--xla_gpu_enable_latency_hiding_scheduler=true",
+    # Size the jit_train_step temp arena below the allocator limit, leaving slack for fragmentation.
+    "--xla_gpu_memory_limit_slop_factor=85",
+    "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN",
+)
+
+
+def _apply_runtime_defaults() -> None:
+    for name, value in RUNTIME_ENV.items():
+        os.environ.setdefault(name, value)
+    xla_flags = os.environ.get("XLA_FLAGS", "").split()
+    explicit = {flag.partition("=")[0] for flag in xla_flags}
+    xla_flags.extend(flag for flag in XLA_FLAG_DEFAULTS if flag.partition("=")[0] not in explicit)
+    os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
 _BACKWARD_FLOW_METRICS_KEY = "_backward_flow"
 
 
@@ -662,6 +691,8 @@ def run_grug(config: GrugRunConfig) -> None:
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
+    # Dispatch snapshots os.environ for the train task, so apply the runtime defaults first.
+    _apply_runtime_defaults()
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
