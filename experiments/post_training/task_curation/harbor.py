@@ -61,6 +61,7 @@ class HarborRecord:
 
 
 TASKS_SCHEMA = arrow_schema(HarborRecord)
+IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema"})
 
 
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
@@ -136,8 +137,9 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     else:
         raise UnsupportedHarborTask(f"Unsupported grader: {grader.kind}")
     if grader.environment is None:
-        raise UnsupportedHarborTask("In-process graders require explicit file-delivery lowering")
-    if grader.environment.setup_commands:
+        if not isinstance(grader, VerifyitGrader) or grader.mode not in IN_PROCESS_FILE_MODES:
+            raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
+    elif grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
     prompt = task.context.events[0].content
     if task.answer_type == AnswerType.TEXT:
@@ -207,7 +209,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
             "environment": {
                 "docker_image": grader_image,
                 "workdir": grader_cwd,
-                "env": grader.environment.environment_variables,
+                "env": grader.environment.environment_variables if grader.environment is not None else {},
             },
         },
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
