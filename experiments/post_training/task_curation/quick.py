@@ -1,22 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert staged sources locally with Zephyr, without model review or grader execution."""
+"""Stage pinned sources and convert them locally with Zephyr, without review or grader execution."""
 
 import json
+import logging
+import time
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import click
+from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from marin.execution.step_runner import StepRunner
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import (
     CampaignFailed,
+    CampaignRuntime,
     CampaignStatus,
     OutcomeStatus,
     SourceOutcome,
@@ -24,20 +29,32 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
 )
 from experiments.post_training.task_curation.conversions import convert_source
+from experiments.post_training.task_curation.pipeline import HfSource, UrlSource, download_step
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
+
+logger = logging.getLogger(__name__)
+
+
+def stage_local_source(source: HfSource | UrlSource, cache_root: Path, campaign: CampaignRuntime) -> str:
+    """Download pinned source files into the local artifact cache, reusing successful downloads."""
+    step = replace(download_step(source, campaign).lower(), output_path_prefix=str(cache_root))
+    StepRunner().run([step], max_concurrent=1)
+    return step.output_path
 
 
 def run_local_sources(
     sources: Mapping[str, RlDataSource],
-    input_root: Path,
+    input_root: Path | None,
     output_root: Path,
     *,
     inputs: Mapping[str, str],
     max_workers: int,
+    download_cache: Path,
 ) -> tuple[SourceOutcome, ...]:
     """Convert sources on one local pool, recording failures while continuing the remaining sources."""
-    input_root, output_root = input_root.resolve(), output_root.resolve()
+    input_root = input_root.resolve() if input_root is not None else None
+    output_root, download_cache = output_root.resolve(), download_cache.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     report_path = output_root / "campaign.json"
     outcomes = {name: SourceOutcome(name, str(output_root / name), OutcomeStatus.QUEUED) for name in sources}
@@ -48,24 +65,43 @@ def run_local_sources(
         )
 
     report(CampaignStatus.RUNNING)
-    with ZephyrContext(
-        client=LocalClient(),
-        max_workers=max_workers,
-        resources=ResourceConfig(cpu=1, ram="4g"),
-        chunk_storage_prefix=str(output_root / ".zephyr"),
-        name="task-curation-quick",
-    ) as context:
+    campaign = CampaignRuntime()
+    client = LocalClient()
+    with (
+        set_current_client(client),
+        ZephyrContext(
+            client=client,
+            max_workers=max_workers,
+            resources=ResourceConfig(cpu=1, ram="4g"),
+            chunk_storage_prefix=str(output_root / ".zephyr"),
+            name="task-curation-quick",
+        ) as context,
+        campaign.activate(context),
+    ):
         for name, source in sources.items():
             outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.RUNNING)
             report(CampaignStatus.RUNNING)
             try:
+                if source.pipeline is None:
+                    raise ValueError(f"{source.name} has no conversion pipeline")
+                started = time.monotonic()
+                source_input = (
+                    str(input_root)
+                    if input_root is not None
+                    else stage_local_source(source.pipeline.source, download_cache, campaign)
+                )
+                staged_inputs = dict(inputs)
+                for key, auxiliary in source.pipeline.inputs.items():
+                    if key not in staged_inputs:
+                        staged_inputs[key] = stage_local_source(auxiliary, download_cache, campaign)
+                logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
                 result = convert_source(
                     source,
                     mode=SourceProcessingMode.QUICK,
                     context=context,
-                    source_input=str(input_root),
+                    source_input=source_input,
                     output_path=str(output_root / name),
-                    inputs=inputs,
+                    inputs=staged_inputs,
                 )
             except Exception as error:
                 outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.FAILED, error_chain(error))
@@ -83,14 +119,26 @@ def run_local_sources(
 
 @click.command(help=__doc__)
 @click.option("--source", "sources", multiple=True, required=True, help="Catalog key; repeat for several sources.")
-@click.option("--input-root", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
+@click.option(
+    "--input-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Use staged primary inputs instead of downloading the declared pinned source.",
+)
 @click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
+@click.option(
+    "--download-cache",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path.home() / ".cache" / "marin",
+    show_default=True,
+    help="Local cache of pinned primary and auxiliary downloads.",
+)
 @click.option("--input", "auxiliary", type=(str, click.Path(exists=True, file_okay=False)), multiple=True)
 @click.option("--max-workers", type=click.IntRange(min=1), default=4, show_default=True)
 def main(
     sources: tuple[str, ...],
-    input_root: Path,
+    input_root: Path | None,
     output_root: Path,
+    download_cache: Path,
     auxiliary: tuple[tuple[str, str], ...],
     max_workers: int,
 ) -> None:
@@ -105,6 +153,7 @@ def main(
         output_root,
         inputs=inputs,
         max_workers=max_workers,
+        download_cache=download_cache,
     )
 
 

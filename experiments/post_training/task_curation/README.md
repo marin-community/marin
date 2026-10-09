@@ -219,7 +219,7 @@ rebuilt without repeating identical inference.
 
 ## Local conversion loop
 
-Quick mode converts every selected row from staged files into TaskSpec parquet.
+Quick mode downloads each selected source's pinned files and converts every row into TaskSpec parquet.
 It skips model review, grader controls, resource admission, mechanical checks
 and deduplication. Explicit converter rejections remain. The output includes every
 input row in `normalize/`, with either `task_json` or a typed rejection, and
@@ -230,15 +230,22 @@ uv run --with-editable './lib/taskcompendium[pipeline]' \
   python -m experiments.post_training.task_curation.quick \
   --source tasktrove-calendar \
   --source tasktrove-math_prism \
-  --input-root /path/to/staged/tasktrove \
   --output-root /tmp/task-curation-pass-1
 ```
 
-The staged root contains the source's declared relative paths, for example
-`laion__nemotron-gym-agent-calendar-v2/tasks.parquet`. Use bytes from the
-source's pinned revision. The command runs a local Zephyr pool and keeps its
-scratch files under the output root. Repeat `--source` to reuse the pool across
-sources. Supply auxiliary inputs with `--input NAME /path/to/staged/input`.
+Downloads use the existing artifact cache under `~/.cache/marin`; choose another
+location with `--download-cache`. Only the declared file patterns are downloaded.
+Successful pinned downloads are reused across passes, including auxiliary inputs.
+Staging time is logged separately from conversion time.
+
+To use existing files, pass `--input-root /path/to/staged/tasktrove`. That root
+must contain the declared relative paths, such as
+`laion__nemotron-gym-agent-calendar-v2/tasks.parquet`, from the source's pinned
+revision. The primary input then needs no download. Override individual auxiliary
+inputs with `--input NAME /path/to/staged/input`.
+
+The command runs a local Zephyr pool and keeps its scratch files under the output
+root. Repeat `--source` to reuse the pool across sources.
 Choose a fresh output root for each pass; existing source outputs are refused.
 Failures are recorded in `campaign.json` while the remaining sources continue;
 the command exits unsuccessfully if any source failed.
@@ -248,7 +255,7 @@ accepts an `RlDataSource` from `all_sources()` and runs its bound conversion rec
 `SAMPLE` and `FULL` use the same function with a matching `SourcePipelineConfig`
 and the resolved grader environment. This entry point and reviewed campaign
 artifacts share the `pipeline.convert_pipeline` dispatcher. Quick mode needs no review config or
-credentials. It records a declared grader image or local dependency lock
+model credentials. It records a declared grader image or local dependency lock
 without building or executing the environment. Sources that declare only PyPI
 pins need an explicit resolved grader environment before quick conversion.
 
