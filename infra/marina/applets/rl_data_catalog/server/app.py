@@ -169,13 +169,10 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     )
     current_data = row.get("dataset_revision") or row.get("revision")
     row["review_stale"] = bool(
-        row["review_id"]
-        and (
-            (row["review_source_revision"] is not None and row["review_source_revision"] != current_data)
-            or (
-                row["review_verifier_revision"] is not None
-                and row["review_verifier_revision"] != row.get("verifier_revision")
-            )
+        (row["review_source_revision"] is not None and row["review_source_revision"] != current_data)
+        or (
+            row["review_verifier_revision"] is not None
+            and row["review_verifier_revision"] != row.get("verifier_revision")
         )
     )
     row["review_applicability"] = (
