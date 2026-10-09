@@ -62,7 +62,7 @@ class HarborRecord:
 
 
 TASKS_SCHEMA = arrow_schema(HarborRecord)
-IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema"})
+IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
 
 
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
