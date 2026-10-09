@@ -189,6 +189,13 @@ are admitted like rows of in-process graders.
    passes at a 95% pass fraction. Judge-graded sources skip this step.
 7. Admit rows and write the outputs.
 
+Verification telemetry records `select`, `trials`, and `row_gate` executions.
+The gate writes the complete audit and accepted rows together and returns
+manifest counts, avoiding separate export and count executions. Control trials
+remain parallel on workers. Review-cache telemetry separates descriptor lookup
+from payload reads; descriptor shards are read with at most four threads per
+lookup, with whole-fragment prefetch disabled.
+
 The campaign runs source procedures in threads over one Zephyr context and
 worker pool. `--concurrent-sources` limits whole-source admission and
 `--max-workers` the shared worker count. A failed source does not stop the

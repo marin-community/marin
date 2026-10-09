@@ -306,7 +306,8 @@ def _count_manifest_rows(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     return tally.manifest_counts()
 
 
-def _combine_manifest_counts(partials: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def combine_manifest_counts(partials: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Sum manifest counts and disposition totals returned by independent shards."""
     counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0)
     dispositions: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
@@ -326,7 +327,7 @@ def manifest_counts(
     dataset = (
         Dataset.from_files(str(path / AUDIT_INPUT_PATTERN))
         .load_parquet(columns=["task_id", *COUNT_COLUMNS])
-        .reduce(_count_manifest_rows, _combine_manifest_counts)
+        .reduce(_count_manifest_rows, combine_manifest_counts)
     )
     return execute_phase(context, dataset, telemetry=telemetry, operation="manifest_count").results[0]
 
@@ -448,7 +449,7 @@ def prepare_source(
         # Reduce resources apply to every shuffle in a plan. Finish preparation
         # with the full worker budget before sharing workers across model waits.
         batch_counts = execute_phase(context, prepared, telemetry=telemetry, operation="prepare").results
-    return _prepared_manifest(output, _combine_manifest_counts(batch_counts), recipe, execution)
+    return _prepared_manifest(output, combine_manifest_counts(batch_counts), recipe, execution)
 
 
 @dataclass(frozen=True)
@@ -768,7 +769,7 @@ def audit_prepared_source(
             telemetry=telemetry,
             operation="review",
         ).results
-    counts = _combine_manifest_counts(tally.manifest_counts() for tally in tallies)
+    counts = combine_manifest_counts(tally.manifest_counts() for tally in tallies)
     if counts["input_rows"] != _read_json(prepared / "manifest.json")["input_rows"]:
         raise ValueError("Quality assessment lost prepared source rows")
     manifest = {
@@ -789,7 +790,9 @@ def _accepted(row: dict[str, Any]) -> dict[str, Any] | None:
     return row if is_accepted(row) else None
 
 
-def _filter_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: StoragePath) -> Iterator[dict[str, Any]]:
+def write_filtered_shard(
+    rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: StoragePath
+) -> Iterator[dict[str, Any]]:
     """Write one shard's complete filtered audit and its accepted rows, and count them."""
     tally = _ManifestTally()
     write_shard_outputs(
@@ -820,14 +823,14 @@ def filter_source(
         Dataset.from_files(str(source / AUDIT_INPUT_PATTERN))
         .load_parquet()
         .map(partial(filter_row, policy=policy))
-        .map_shard(partial(_filter_shard, output=output))
+        .map_shard(partial(write_filtered_shard, output=output))
     )
     with (
         nullcontext(context)
         if context is not None
         else ZephyrContext(max_workers=max_workers, resources=worker_resources, name="filter-tasks")
     ) as context:
-        counts = _combine_manifest_counts(
+        counts = combine_manifest_counts(
             execute_phase(context, filtered, telemetry=telemetry, operation="filter").results
         )
     manifest: dict[str, Any] = {**counts, "policy": asdict(policy), "audited_source": str(source)}
