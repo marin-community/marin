@@ -504,6 +504,17 @@ def test_openqa_judges_against_stripped_references_with_the_exact_gate():
     assert "Return your concise final answer in the assistant response." in prompt_of(task)
 
 
+def test_openqa_preserves_symbolic_reference_for_the_semantic_judge():
+    # TaskTrove openqa-1b77e5fd4e7b: removing punctuation and articles erases a valid equation.
+    task = task_of("knowledge-openqa", tasktrove_row(fixture_files("openqa_symbolic_reference")))
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
+    assert isinstance(spec, JudgeSpec)
+    assert spec.references == ("$ A' = A $",)
+    assert "relationship between $ A $ and $ A' $" in spec.question
+    assert spec.exact_gate
+
+
 @pytest.mark.parametrize("answers,reason", [([], "invalid_references"), (["**"], "invalid_references")])
 def test_openqa_rejects_unusable_references(answers, reason):
     assert rejection_of("knowledge-openqa", openqa_row(answers)).reason == reason

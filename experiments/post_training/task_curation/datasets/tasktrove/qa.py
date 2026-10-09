@@ -20,7 +20,6 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
@@ -119,8 +118,6 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
         return source_defect("missing_question", "The semantic judge requires its source question")
     if not references:
         return source_defect("invalid_references", "At least one reference is required")
-    if any(not normalize_reference(reference) for reference in references):
-        return source_defect("invalid_references", "A reference becomes empty under normalization")
     # JudgeSpec carries the grading inputs; archived scripts remain private provenance only.
     package = verifyit_package(
         JudgeSpec(references=references, question=question),
@@ -245,7 +242,7 @@ def sources() -> list[RlDataSource]:
                     name=name,
                     source=tasktrove_source(config),
                     convert=TaskTroveConverter(config, convert_openqa),
-                    version="2",
+                    version="3",
                     environment=ShellSim(),
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
