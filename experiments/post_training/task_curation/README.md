@@ -277,10 +277,12 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 ```
 
 The source name in the QUICK manifest selects the registry declaration, which
-supplies the exported family and Atlas ID. The verifier image is an explicit
+supplies the exported family and Atlas ID. The verifier base image is an explicit
 runtime input. It must contain the dependencies required by the task's grader
-package lock. Export does not build or run images;
-its manifest records that dependency parity and runtime behavior remain
+package lock. Export emits `tests/Dockerfile` from that pinned base and copies
+the private tests into `/tests`; native Harbor builds this separate verifier
+environment when the task runs. Export itself does not build or run images.
+Its manifest records that builds, dependency parity, and runtime behavior remain
 unverified. Current verifyit code is bundled under the hidden `tests/` directory.
 The exporter supports file submissions graded by verifyit, an archived Harbor
 `test.sh` emitting `reward.txt`, or the canonical `python3 /tests/grade.py` script
