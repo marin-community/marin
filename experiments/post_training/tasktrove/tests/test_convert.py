@@ -55,7 +55,7 @@ def test_math_exemplar_strips_solution_into_its_own_column():
     assert isinstance(parse_spec(task.text(VERIFIER_TOML)), MathSpec)
     assert not task.has_solution and record.has_solution
     assert "solution/solve.sh" in read_task_binary(record.solution_binary).files
-    assert "[answer]" in task.text(DOCKERFILE) or "verifyit[answer]" in task.text(DOCKERFILE)
+    assert "marin-verifyit[math]" in task.text(DOCKERFILE)
 
 
 def test_math_instruction_names_only_the_graded_answer_file():

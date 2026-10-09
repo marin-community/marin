@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 LOCAL_TOOL_REF = "local"
 _TOOL_DIR = Path(__file__).parents[3] / "lib" / "verifyit"
 _INSTALL_LINE = re.compile(
-    r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"verifyit(\[[^\]]*\])? @ [^"]+"$',
+    r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"marin-verifyit(\[[^\]]*\])? @ [^"]+"$',
     re.MULTILINE,
 )
 _WORKDIR_LINE = re.compile(r"^WORKDIR\s+(\S+)", re.MULTILINE | re.IGNORECASE)

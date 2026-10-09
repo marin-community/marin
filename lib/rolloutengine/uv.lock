@@ -1092,8 +1092,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "marin-shellbox" },
+    { name = "marin-taskcompendium" },
     { name = "pydantic" },
-    { name = "taskcompendium" },
 ]
 
 [package.dev-dependencies]
@@ -1108,8 +1108,8 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "marin-shellbox", editable = "../shellbox" },
+    { name = "marin-taskcompendium", editable = "../taskcompendium" },
     { name = "pydantic", specifier = ">=2" },
-    { name = "taskcompendium", editable = "../taskcompendium" },
 ]
 
 [package.metadata.requires-dev]
@@ -1151,6 +1151,84 @@ provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
 
 [package.metadata.requires-dev]
 test = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "marin-taskcompendium"
+version = "0.1.0"
+source = { editable = "../taskcompendium" }
+dependencies = [
+    { name = "marin-rigging" },
+    { name = "marin-shellbox" },
+    { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../finestore" },
+    { name = "marin-rigging", editable = "../rigging" },
+    { name = "marin-shellbox", editable = "../shellbox" },
+    { name = "marin-verifyit", extras = ["judge", "math", "reasoning-gym", "schema"], editable = "../verifyit" },
+    { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "../zephyr" },
+    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
+    { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+provides-extras = ["pipeline"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "../shellbox" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
+name = "marin-verifyit"
+version = "0.1.0"
+source = { editable = "../verifyit" }
+dependencies = [
+    { name = "tomlkit" },
+]
+
+[package.optional-dependencies]
+judge = [
+    { name = "openai" },
+]
+math = [
+    { name = "math-verify" },
+    { name = "sympy" },
+]
+reasoning-gym = [
+    { name = "reasoning-gym" },
+]
+schema = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
+    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../verifyit" },
+    { name = "math-verify", marker = "extra == 'math'", specifier = ">=0.9" },
+    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
+    { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
+    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
+    { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
+    { name = "tomlkit", specifier = ">=0.13" },
+]
+provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-json-report", specifier = ">=1.5" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
 
 [[package]]
 name = "markdown-it-py"
@@ -1998,39 +2076,6 @@ wheels = [
 ]
 
 [[package]]
-name = "taskcompendium"
-version = "0.1.0"
-source = { editable = "../taskcompendium" }
-dependencies = [
-    { name = "marin-rigging" },
-    { name = "marin-shellbox" },
-    { name = "pydantic" },
-    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
-    { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../finestore" },
-    { name = "marin-rigging", editable = "../rigging" },
-    { name = "marin-shellbox", editable = "../shellbox" },
-    { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "../zephyr" },
-    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
-    { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], editable = "../verifyit" },
-]
-provides-extras = ["pipeline"]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "marin-shellbox", extras = ["shellsim"], editable = "../shellbox" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-]
-
-[[package]]
 name = "toml"
 version = "0.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2098,51 +2143,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e3/05/b17359e1cefb4f909b5e40b1b90a496d987258916dbbf88e842c729f510e/urllib3-2.8.0.tar.gz", hash = "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63", size = 458972, upload-time = "2026-09-15T19:29:36.253Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl", hash = "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", size = 135717, upload-time = "2026-09-15T19:29:34.577Z" },
-]
-
-[[package]]
-name = "verifyit"
-version = "0.1.0"
-source = { editable = "../verifyit" }
-dependencies = [
-    { name = "tomlkit" },
-]
-
-[package.optional-dependencies]
-answer = [
-    { name = "math-verify" },
-    { name = "sympy" },
-]
-judge = [
-    { name = "openai" },
-]
-reasoning-gym = [
-    { name = "reasoning-gym" },
-]
-schema = [
-    { name = "jsonschema" },
-    { name = "pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.9" },
-    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
-    { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
-    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
-    { name = "sympy", marker = "extra == 'answer'", specifier = ">=1.12" },
-    { name = "tomlkit", specifier = ">=0.13" },
-    { name = "verifyit", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../verifyit" },
-]
-provides-extras = ["answer", "schema", "judge", "reasoning-gym", "all"]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-json-report", specifier = ">=1.5" },
-    { name = "pytest-timeout" },
-    { name = "pytest-xdist" },
 ]
 
 [[package]]

@@ -122,12 +122,12 @@ argument object as a JSON string in TOML so nested JSON null values survive `par
 ## Install and use
 
 ```bash
-uv tool install --python ">=3.11" \
-  "verifyit[answer] @ git+https://github.com/marin-community/marin@<sha>#subdirectory=lib/verifyit"
+uv tool install --python ">=3.11" "marin-verifyit[math]"
 ```
 
-Extras are `answer`, `schema`, `judge`, `reasoning-gym`, and `all`. Execution modes use the task
-image's toolchain.
+The `math` extra installs `math-verify` and `sympy` for symbolic expression grading. Exact,
+numeric, and multiple-choice modes work with the base package. Other extras are `schema`,
+`judge`, `reasoning-gym`, and `all`. Execution modes use the task image's toolchain.
 
 ```python
 from pathlib import Path

@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "taskcompendium"
+name = "marin-taskcompendium"
 version = "0.1.0"
 description = "Semantic task contracts, submission extraction, and shared grading"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-rigging>=0.2.139.dev37117265303",
     "pydantic>=2.0",
-    "verifyit[answer,judge,reasoning-gym,schema]",
+    "marin-verifyit[judge,math,reasoning-gym,schema]",
     "marin-shellbox",
 ]
 

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "verifyit"
+name = "marin-verifyit"
 version = "0.1.0"
 description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
 readme = "README.md"
@@ -15,11 +15,11 @@ dependencies = ["tomlkit>=0.13"]
 verifyit = "verifyit.grade:main"
 
 [project.optional-dependencies]
-answer = ["math-verify>=0.9", "sympy>=1.12"]
+math = ["math-verify>=0.9", "sympy>=1.12"]
 schema = ["jsonschema>=4.20", "pyyaml>=6.0"]
 judge = ["openai>=1.59.9"]
 reasoning-gym = ["reasoning-gym>=0.1.25"]
-all = ["verifyit[answer,schema,judge,reasoning-gym]"]
+all = ["marin-verifyit[math,schema,judge,reasoning-gym]"]
 
 [dependency-groups]
 test = [

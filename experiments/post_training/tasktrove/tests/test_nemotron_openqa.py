@@ -59,7 +59,7 @@ def test_exemplar_drops_old_grader_files_and_dependency():
     dockerfile = task.text(DOCKERFILE)
     assert "rewardkit" not in dockerfile.lower()
     assert "litellm" not in dockerfile.lower()
-    assert "verifyit[judge]" in dockerfile
+    assert "marin-verifyit[judge]" in dockerfile
 
 
 def test_second_registered_key_routes_to_the_same_converter():

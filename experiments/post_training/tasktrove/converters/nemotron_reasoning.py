@@ -45,7 +45,7 @@ _UNSCORABLE_REASONING_GYM_DATASETS = frozenset({"arc_agi", "rearc"})
 
 _OLD_REASONING_GYM_PIP_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
 """The old grader imported ``reasoning_gym`` directly in the task's system Python; the new grader
-installs its own copy through ``verifyit[reasoning-gym]``, so this line is dead weight."""
+installs its own copy through ``marin-verifyit[reasoning-gym]``, so this line is dead weight."""
 
 TRANSFORM_SCRIPT = "run_transform.py"
 CASES_FILE = "cases.json"

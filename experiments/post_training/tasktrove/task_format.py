@@ -43,7 +43,7 @@ def drop_dockerfile_lines(dockerfile: str, pattern: re.Pattern[str]) -> str:
 
 # Which tool extras a mode needs installed in the task image. Modes absent here run on the core.
 MODE_EXTRAS: dict[Mode, tuple[str, ...]] = {
-    Mode.MATH: ("answer",),
+    Mode.MATH: ("math",),
     Mode.JSON_SCHEMA: ("schema",),
     Mode.REASONING_GYM: ("reasoning-gym",),
     Mode.JUDGE: ("judge",),
@@ -54,7 +54,7 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 
 def tool_install_block(tool_ref: str, extras: tuple[str, ...]) -> str:
     """Return Dockerfile lines that install the pinned verifier and requested mode extras."""
-    package = "verifyit" + (f"[{','.join(extras)}]" if extras else "")
+    package = "marin-verifyit" + (f"[{','.join(extras)}]" if extras else "")
     url = VERIFY_TOOL_URL.format(ref=tool_ref)
     return (
         f"{INSTALL_MARKER}\n"

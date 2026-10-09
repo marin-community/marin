@@ -6,7 +6,7 @@
 
 Builds the pure-Python Marin library packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finestore, marin-shellbox, verifyit, taskcompendium,
+marin-finestore, marin-shellbox, marin-verifyit, marin-taskcompendium,
 marin-rolloutengine) into dist/. The package release engine passes one exact
 version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
@@ -66,8 +66,8 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
     "marin-shellbox": {"path": "lib/shellbox", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "verifyit": {"path": "lib/verifyit", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "taskcompendium": {"path": "lib/taskcompendium", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-verifyit": {"path": "lib/verifyit", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-taskcompendium": {"path": "lib/taskcompendium", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-rolloutengine": {"path": "lib/rolloutengine", "version_file": "pyproject.toml", "kind": "pyproject"},
 }
 

@@ -334,7 +334,7 @@ TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for relativ
 TaskCompendium uses the root workspace's `uv.lock` and `.venv`. Run the package tests from the repository root:
 
 ```bash
-uv run --package taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
+uv run --package marin-taskcompendium --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
 # Type-check from the package project directory with its dependencies available.
 cd lib/taskcompendium

@@ -11,9 +11,8 @@ release families:
   companion.
 - Iris publishes its native companion independently.
 
-Most **distribution names** (what you `pip install`) carry a `marin-` prefix so
-the names don't collide on PyPI, which has no namespaces. `verifyit` and
-`taskcompendium` retain their existing distribution names. The **import name**
+All **distribution names** (what you `pip install`) carry a `marin-` prefix so
+the names don't collide on PyPI, which has no namespaces. The **import name**
 (what you `import`) is unchanged.
 
 | Distribution | Import | Source |
@@ -27,8 +26,8 @@ the names don't collide on PyPI, which has no namespaces. `verifyit` and
 | `marin-zephyr` | `zephyr` | `lib/zephyr` |
 | `marin-finestore` | `finestore` | `lib/finestore` |
 | `marin-shellbox` | `shellbox` | `lib/shellbox` |
-| `verifyit` | `verifyit` | `lib/verifyit` |
-| `taskcompendium` | `taskcompendium` | `lib/taskcompendium` |
+| `marin-verifyit` | `verifyit` | `lib/verifyit` |
+| `marin-taskcompendium` | `taskcompendium` | `lib/taskcompendium` |
 | `marin-rolloutengine` | `rolloutengine` | `lib/rolloutengine` |
 | `marin-finelog` | `finelog` | `lib/finelog` |
 | `marin-finelog-server` | `finelog_server` | `lib/finelog/rust` |
@@ -109,10 +108,9 @@ organization. It cannot be automated from the release workflow.
 Ensure a `marin-community` [PyPI organization](https://pypi.org/manage/organizations/)
 exists with at least two human admins. Every `marin-*` project is owned by it.
 
-Before adding the RL libraries to the release family, create `verifyit`,
-`taskcompendium`, and `marin-rolloutengine` under the Marin PyPI organization,
-and configure their trusted publishers. The next general-library release
-includes all three RL distributions. Their published wheels do not depend on
+The `marin-verifyit`, `marin-taskcompendium`, and `marin-rolloutengine` projects
+have trusted publishers under the Marin PyPI organization. The general-library
+release includes all three RL distributions. Their published wheels do not depend on
 Harbor. The optional Harbor task-import tests install its schema from a pinned
 Git checkout; Marin evaluation installs the complete Harbor runtime from its
 external lock.
@@ -144,8 +142,8 @@ https://pypi.org/manage/project/<name>/settings/publishing/
 ```
 
 (A pending publisher can also create a project on first upload, but it does
-not reserve the project name or assign it to the organization. Create the
-three RL projects under the organization first.)
+not reserve the project name or assign it to the organization. Create any new
+project under the organization first.)
 
 Add a publisher with these values, choosing the workflow that publishes the
 project:
@@ -170,10 +168,10 @@ publishing, change the five native project bindings (`marin-dupekit`,
 `marin-iris-native`) to that same filename and the `pypi-publish` environment.
 No Google Cloud WIF or long-lived credential change is required.
 
-For `verifyit`, `taskcompendium`, and `marin-rolloutengine`, add a trusted
-publisher to each project's Publishing settings with the field values above.
-The general-library schedule and `marin-libs-v*` tags publish them at the same
-version as their siblings. No PyPI API token or GitHub secret is needed.
+The `marin-verifyit`, `marin-taskcompendium`, and `marin-rolloutengine` projects
+use these publisher settings. The general-library schedule and `marin-libs-v*`
+tags publish them at the same version as their siblings. No PyPI API token or
+GitHub secret is needed.
 
 ### 4. The `pypi-publish` GitHub Actions environment
 

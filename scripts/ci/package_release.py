@@ -135,8 +135,8 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-haliax",
                         "marin-finestore",
                         "marin-shellbox",
-                        "verifyit",
-                        "taskcompendium",
+                        "marin-verifyit",
+                        "marin-taskcompendium",
                         "marin-rolloutengine",
                     )
                 }
