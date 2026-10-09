@@ -7,7 +7,7 @@ On H100 our FA4 port's forward is the 128-thread segmented kernel, which runs we
 the Pallas Triton softmax forward (``levanter.kernels.pallas.parallax.pallas_gpu.softmax_forward``) is about twice as
 fast at head dim 128. This backend pairs the two under one ``custom_vjp``: the forward produces ``(out, lse)`` in the
 FlashAttention convention and the FA4 backward consumes them, with the same per-query key bounds (causal masks,
-segments, no sliding window) and the optional banded Inkling bias, whose gradient the SM90 backward computes in-kernel.
+segments, sliding windows) and the optional banded Inkling bias, whose gradient the SM90 backward computes in-kernel.
 Batch/head sharding only.
 """
 
@@ -102,15 +102,16 @@ def gpu_pallas_fa4_attention(
         raise RuntimeError("gpu_pallas_fa4_attention requires the JAX GPU backend.")
     if q.dtype not in (jnp.bfloat16, jnp.float16):
         raise TypeError(f"gpu_pallas_fa4_attention supports only bf16/fp16, got {q.dtype}")
-    if not isinstance(mask, AttentionMask) or not mask.is_causal or mask.sliding_window is not None:
-        raise NotImplementedError("gpu_pallas_fa4_attention supports causal AttentionMasks without a sliding window")
+    if not isinstance(mask, AttentionMask) or not mask.is_causal:
+        raise NotImplementedError("gpu_pallas_fa4_attention supports causal AttentionMasks only")
     if q.shape[1] != k.shape[1]:
         raise ValueError(f"self-attention requires q_len == k_len, got q={q.shape}, k={k.shape}")
     if mask.fa4_bounds is not None:
         lower_bounds, valid = mask.fa4_bounds
     else:
         lower_bounds, valid = _self_attention_lower_bounds(q, k, mask, backend_name="gpu_pallas_fa4_attention")
-    plain_causal = mask.segment_ids is None and mask.fa4_bounds is None
+    # Segments and sliding windows live in the per-query key lower bounds; only a plain causal mask skips them.
+    plain_causal = mask.segment_ids is None and mask.fa4_bounds is None and mask.sliding_window is None
     scale = 1.0 / math.sqrt(q.shape[-1])
     kernel_config = _segmented_kernel_config(q.shape[-1], None if rel_bias is None else rel_extent_of_band(rel_bias))
 

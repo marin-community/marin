@@ -822,6 +822,7 @@ class GrugModelConfig:
     local_kv_heads: int | None = 1
     global_kv_heads: int | None = 1
     head_dim: int | None = 128
+    gpu_attention: str = "gpu_fa4_cute"  # "gpu_pallas_fa4": Pallas fwd, FA4 bwd
     max_seq_len: int = 4096
     sliding_window: int = 2048
     global_every: int = 4
@@ -2984,9 +2985,8 @@ class CausalSelfAttention(eqx.Module):
             stats[ATTN_ROWS_STAT] = attention_rows_probe.probe_attention_rows(q, k, mask, rel_bias, rows, positions)
             if rel_bias is not None:
                 stats[RELPOS_ROWS_STAT] = attention_rows_probe.relpos_rows(rel_bias, rows, positions)
-        # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
-        # on CPU (e.g. the grug variant-contract tests).
-        attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
+        # GPU-only kernels; auto-select off-GPU so the model still lowers on CPU.
+        attn_impl = self.cfg.gpu_attention if jax.default_backend() == "gpu" else None
 
         gdla_noise = self.cfg.mla_gdla_noise_heads if self.cfg.mla else 0
         # GDLA: query heads are laid out group by group ([g signal heads, 1 noise head] per group), so each
