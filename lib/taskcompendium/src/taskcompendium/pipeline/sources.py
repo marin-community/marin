@@ -6,17 +6,20 @@
 import csv
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from fnmatch import fnmatchcase
 from typing import Any
 
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.input_file import InputFileSpec
-from zephyr.readers import load_jsonl, load_parquet
+from zephyr.readers import compute_parquet_splits, load_jsonl, load_parquet
 
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat, StagedInputs
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFiles, SourceFormat, StagedInputs
 from taskcompendium.pipeline.models import SourceRecipe
+
+PARQUET_SHARD_BYTES = 128 * 1024 * 1024
 
 
 def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
@@ -45,8 +48,19 @@ def conversion_context(recipe: SourceRecipe) -> ConversionContext:
     return ConversionContext(staged_inputs(recipe.inputs), recipe.grader_environment)
 
 
-def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
+def staged_files(
+    path: str, spec: SourceFiles, overrides: Mapping[str, SourceFileOverride] | None = None
+) -> tuple[str, ...]:
     """List selected files by pinned relative path, rejecting missing declarations."""
+    if overrides:
+        for logical in overrides:
+            if (
+                logical.startswith("/")
+                or ".." in logical.split("/")
+                or not any(fnmatchcase(logical, pattern) for pattern in spec.patterns)
+            ):
+                raise ValueError(f"Local source filename {logical!r} does not match declaration {spec.patterns}")
+        return tuple(sorted(overrides))
     root = StoragePath(path)
     _, root_path = url_to_fs(path)
     filesystem_root = StoragePath(root_path)
@@ -81,6 +95,7 @@ class SourceShard:
     indices: frozenset[int] | None
     row_start: int = 0
     row_end: int | None = None
+    read_path: str | None = None
 
     @property
     def name(self) -> str:
@@ -88,12 +103,18 @@ class SourceShard:
         return self.file if self.parts == 1 else f"{self.file}#part-{self.part}"
 
 
-def source_shards(path: str, spec: SourceFiles) -> tuple[SourceShard, ...]:
+def source_shards(
+    path: str, spec: SourceFiles, overrides: Mapping[str, SourceFileOverride] | None = None
+) -> tuple[SourceShard, ...]:
     """The independently readable shards of the selected files, in file and part order."""
     parts = spec.parts.count if spec.parts is not None else 1
     if parts < 1:
         raise ValueError("A parted source requires at least one part")
-    return tuple(SourceShard(file, part, parts, None) for file in staged_files(path, spec) for part in range(parts))
+    return tuple(
+        SourceShard(file, part, parts, None, read_path=overrides[file].path if overrides else None)
+        for file in staged_files(path, spec, overrides)
+        for part in range(parts)
+    )
 
 
 def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[dict[str, Any]]:
@@ -134,7 +155,12 @@ def staged_raw_file_rows(
     relative_file = shard.file
     if relative_file.startswith("/") or ".." in relative_file.split("/"):
         raise ValueError(f"Source file must be relative to its staged root: {relative_file}")
-    for index, row in _indexed_rows(StoragePath(path) / relative_file, shard, spec, context):
+    for index, row in _indexed_rows(
+        StoragePath(shard.read_path) if shard.read_path is not None else StoragePath(path) / relative_file,
+        shard,
+        spec,
+        context,
+    ):
         if not isinstance(row, dict):
             raise ValueError(f"Expected an object at {relative_file}:{index}")
         if spec.select is not None and not spec.select(row, context):
@@ -144,8 +170,9 @@ def staged_raw_file_rows(
 
 def decode_staged_row(record: dict[str, Any], spec: SourceFiles, context: ConversionContext) -> dict[str, Any]:
     """Apply a source decoder to an already selected row without changing its locator."""
+    original_path = record.get("original_path", record["data"].get("path"))
     data = spec.decode(record["data"], context) if spec.decode is not None else record["data"]
-    return {**record, "data": data}
+    return {**record, "original_path": original_path, "data": data}
 
 
 def staged_file_rows(
@@ -154,3 +181,30 @@ def staged_file_rows(
     """Yield one shard's selected, decoded records with their original file and row locators."""
     for record in staged_raw_file_rows(path, shard, spec, context):
         yield decode_staged_row(record, spec, context)
+
+
+def conversion_shards(
+    source_input: str,
+    spec: SourceFiles,
+    *,
+    parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
+    overrides: Mapping[str, SourceFileOverride] | None = None,
+) -> tuple[SourceShard, ...]:
+    """Split native Parquet reads at row-group boundaries for mechanical conversion.
+
+    Row groups remain intact, so a single large group can exceed the byte target.
+    Custom readers and explicitly partitioned sources retain their own shard definitions.
+    """
+    shards = source_shards(source_input, spec, overrides)
+    if spec.format != SourceFormat.PARQUET or spec.read is not None or spec.parts is not None:
+        return shards
+    parts = []
+    for shard in shards:
+        ranges = compute_parquet_splits(
+            shard.read_path or str(StoragePath(source_input) / shard.file), parquet_shard_bytes
+        )
+        parts.extend(
+            replace(shard, part=index, parts=len(ranges), row_start=start, row_end=end)
+            for index, (start, end) in enumerate(ranges)
+        )
+    return tuple(parts)

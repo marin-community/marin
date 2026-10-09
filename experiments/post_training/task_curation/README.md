@@ -258,14 +258,48 @@ Choose a fresh output root for each pass; existing source outputs are refused.
 Failures are recorded in `campaign.json` while the remaining sources continue;
 the command exits unsuccessfully if any source failed.
 
-`conversions.convert_source(source, mode=SourceProcessingMode.QUICK, ...)`
-accepts an `RlDataSource` from `all_sources()` and runs its bound conversion recipe.
-`SAMPLE` and `FULL` use the same function with a matching `SourcePipelineConfig`
-and the resolved grader environment. This entry point and reviewed campaign
-artifacts share the `pipeline.convert_pipeline` dispatcher. Quick mode needs no review config or
-model credentials. It records a declared grader image or local dependency lock
-without building or executing the environment. Sources that declare only PyPI
-pins need an explicit resolved grader environment before quick conversion.
+The local CLI and reviewed campaign artifacts call
+`pipeline.run_curation(source.pipeline, mode=..., context=..., source_input=...,
+output_path=..., inputs=...)`. The source comes from `all_sources()`; its
+`pipeline` holds the converter and source declaration. For example, with an
+entered Zephyr context and staged files:
+
+```python
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
+
+from experiments.post_training.task_curation.pipeline import run_curation
+from experiments.post_training.task_curation.sources import all_sources
+
+source = all_sources()["tasktrove-calendar"]
+assert source.pipeline is not None
+result = run_curation(
+    source.pipeline,
+    mode=SourceProcessingMode.QUICK,
+    context=context,
+    source_input="/tmp/tasktrove",
+    output_path="/tmp/calendar-quick",
+    inputs={},
+)
+```
+
+`SAMPLE` and `FULL` also require a matching `SourcePipelineConfig` and resolved
+grader environment. All modes use the same mechanical conversion stage and
+normalized parquet schema. FULL reviews a bounded panel first, then reuses its
+conversions while converting the remaining rows when the quality gate permits.
+Resource admission, fingerprints, deduplication and grader checks follow conversion.
+QUICK writes the converted rows and returns before those stages. It needs no
+review config or model credentials, and records a declared grader image or
+local dependency lock without building or executing the environment. Sources
+that declare only PyPI pins need an explicit resolved grader environment.
+
+To replace a declared file with a local fixture, pass
+`--input-file calendar/tasks.parquet /tmp/calendar-fixture.parquet` instead
+of `--input-root`. Use the filename from the source declaration. Repeat the flag
+for multiple files; these are the selected inputs. Row locators and task IDs use
+the declared filename. The manifest records each local path and SHA-256 so the
+run identifies the substituted bytes separately from its upstream revision.
+No primary-source download runs for this invocation. Auxiliary inputs still use
+`--input` overrides or their pinned download cache.
 
 Compare row counts by source and retain the rejection categories. Quick counts
 can exceed the published TaskTrove release because that release also removes

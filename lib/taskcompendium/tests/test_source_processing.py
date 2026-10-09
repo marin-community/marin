@@ -34,6 +34,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.review import BatchReviewer, completion_body
 from taskcompendium.pipeline.source_processing import (
+    ConversionResult,
     SourcePipelineConfig,
     SourcePipelineResult,
     SourceProcessingMode,
@@ -162,9 +163,11 @@ def run_pipeline(
     recipe: SourceRecipe, source: Path, output: Path, config: SourcePipelineConfig, **options
 ) -> SourcePipelineResult:
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(output.parent / "chunks")) as context:
-        return run_source_pipeline(
-            recipe, context, str(source), str(output), config, canonical_source=recipe.name, **options
+        result = run_source_pipeline(
+            recipe, context, str(source), str(output), config, mode=config.mode, canonical_source=recipe.name, **options
         )
+    assert isinstance(result, SourcePipelineResult)
+    return result
 
 
 def read_json(path) -> dict:
@@ -287,12 +290,19 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     config = pipeline_config(mode, reviewer)
     with PanelPlanContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         result = run_source_pipeline(
-            recipe, context, str(source), str(tmp_path / "output"), config, canonical_source=recipe.name
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "output"),
+            config,
+            mode=config.mode,
+            canonical_source=recipe.name,
         )
         # The procedure leaves the caller's pool entered and usable.
         from_list_result = context.execute(Dataset.from_list([1]).count()).results
     assert from_list_result == [1]
     report = read_json(result.manifest_path)
+    assert isinstance(result, SourcePipelineResult)
     telemetry = read_json(report["telemetry"])
     assert telemetry["source"] == recipe.name and telemetry["status"] == "completed"
     operations = {
@@ -652,7 +662,13 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
     with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         with pytest.raises(ValueError, match="requires a reviewer"):
             run_source_pipeline(
-                recipe, context, str(source), str(tmp_path / "output"), config, canonical_source="catalog-selection"
+                recipe,
+                context,
+                str(source),
+                str(tmp_path / "output"),
+                config,
+                mode=config.mode,
+                canonical_source="catalog-selection",
             )
     report = read_json(tmp_path / "output/telemetry.json")
     assert report["source"] == "catalog-selection"
@@ -799,3 +815,61 @@ def test_sandbox_rows_reach_final_only_after_source_verification_passes(tmp_path
     assert len(parquet_rows(result.final_path)) == (3 if admission == "admitted" else 0)
     checks = {check["check"]: check["status"] for row in parquet_rows(result.verify_path) for check in row["checks"]}
     assert checks == {"golden": "pass" if admission == "admitted" else "infra_error"}
+
+
+def drop_archive_path(row, _context):
+    return {key: value for key, value in row.items() if key != "path"}
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+@pytest.mark.parametrize("source_format", [SourceFormat.JSONL, SourceFormat.PARQUET])
+def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path, mode, source_format):
+    source = tmp_path / "input"
+    rows = [{**row, "path": f"archive-{index}"} for index, row in enumerate(apple_rows(3))]
+    filename = f"source.{source_format.value}"
+    if source_format == SourceFormat.PARQUET:
+        source.mkdir()
+        pq.write_table(pa.Table.from_pylist(rows), source / filename, row_group_size=1)
+    else:
+        write_jsonl(source, rows)
+    conversions = tmp_path / "conversions"
+    conversions.mkdir()
+    recipe = fixture_recipe(
+        RecordingConverter(str(conversions), unsupported=True),
+        source=replace(SOURCE_FILES, patterns=(filename,), format=source_format, decode=drop_archive_path),
+    )
+    reviewer = BatchReviewer(BatchService(quality="good"), "fixture", "revision")
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        quick = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "quick"),
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+            parquet_shard_bytes=1,
+        )
+        reviewed = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "reviewed"),
+            pipeline_config(mode, reviewer),
+            mode=mode,
+            canonical_source=recipe.name,
+            parquet_shard_bytes=1,
+        )
+    assert isinstance(quick, ConversionResult)
+    assert isinstance(reviewed, SourcePipelineResult)
+    quick_rows = mechanical_records(parquet_rows(quick.normalized_path))
+    assert quick_rows == mechanical_records(parquet_rows(reviewed.normalize_path))
+    assert [quick_rows[f"{filename}:{index}"]["original_path"] for index in range(3)] == [row["path"] for row in rows]
+    assert quick_rows[f"{filename}:1"]["normalization_reason"] == "unsupported_variant"
+    assert all(file.read_text().splitlines() == ["converted", "converted"] for file in conversions.iterdir())
+
+
+def mechanical_records(records):
+    return {
+        row["source_row"]: {key: value for key, value in row.items() if key not in {"raw_sha256", "raw_input_sha256"}}
+        for row in records
+    }

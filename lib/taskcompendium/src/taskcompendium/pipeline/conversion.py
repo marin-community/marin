@@ -1,167 +1,136 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mechanical source conversion on an entered Zephyr pool, without review or grading."""
+"""Mechanical row conversion shared by quick, sampled, and full curation."""
 
-import json
 import time
-from collections import Counter
-from collections.abc import Iterator
-from dataclasses import asdict, dataclass, replace
-from functools import partial
+from dataclasses import dataclass
 from typing import Any
 
-import pyarrow as pa
-from rigging.filesystem.storage_path import StoragePath
-from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset, ShardInfo, format_shard_path
-from zephyr.readers import compute_parquet_splits
-from zephyr.writers import write_parquet_file
+from pydantic import ValidationError
+from zephyr import counters
 
-from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
-from taskcompendium.pipeline.models import ImportRejection, RawRow, SourceRecipe
-from taskcompendium.pipeline.sources import SourceShard, conversion_context, source_shards, staged_file_rows
-from taskcompendium.pipeline.transforms import convert_row, row_source, row_task_id
-
-CONVERSION_COLUMNS = (
-    "task_id",
-    "source_dataset",
-    "source_revision",
-    "source_row",
-    "task_json",
-    "normalization_kind",
-    "normalization_reason",
-    "normalization_detail",
-    "normalization_changes",
+from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.models import (
+    ImportFailureKind,
+    ImportRejection,
+    NormalizationChange,
+    NormalizedTask,
+    RawRow,
+    SourceRecipe,
 )
-CONVERSION_SCHEMA = pa.schema(
-    [*(TASK_SCHEMA.field(name) for name in CONVERSION_COLUMNS), ("original_path", pa.string())]
-)
-PARQUET_SHARD_BYTES = 128 * 1024 * 1024
+from taskcompendium.pipeline.sources import conversion_context, decode_staged_row
 
 
-def conversion_shards(
-    source_input: str, spec: SourceFiles, *, parquet_shard_bytes: int = PARQUET_SHARD_BYTES
-) -> tuple[SourceShard, ...]:
-    """Split native Parquet reads at row-group boundaries for mechanical conversion.
+def row_source(recipe: SourceRecipe, locator: str) -> Source:
+    return Source(
+        dataset=recipe.source.dataset,
+        revision=recipe.source.revision,
+        row=locator,
+        importer_revision=recipe.version,
+    )
 
-    Row groups remain intact, so a single large group can exceed the byte target.
-    Custom readers and explicitly partitioned sources retain their own shard definitions.
+
+def row_task_id(recipe: SourceRecipe, source: Source) -> str:
+    return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
+
+
+def convert_row(row: RawRow, recipe: SourceRecipe) -> NormalizedTask | ImportRejection:
+    """Convert one source row, retaining rewrites and enforcing its supplied identity.
+
+    Resource admission and content fingerprints belong to the reviewed pipeline,
+    so mechanical conversion can call this without performing those checks.
     """
-    shards = source_shards(source_input, spec)
-    if spec.format != SourceFormat.PARQUET or spec.read is not None or spec.parts is not None:
-        return shards
-    parts = []
-    for shard in shards:
-        ranges = compute_parquet_splits(str(StoragePath(source_input) / shard.file), parquet_shard_bytes)
-        parts.extend(
-            replace(shard, part=index, parts=len(ranges), row_start=start, row_end=end)
-            for index, (start, end) in enumerate(ranges)
-        )
-    return tuple(parts)
+    try:
+        result = recipe.convert(row, conversion_context(recipe))
+    except ValidationError as error:
+        return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
+    if isinstance(result, ImportRejection):
+        return result
+    normalized = result if isinstance(result, NormalizedTask) else NormalizedTask(result, ())
+    if normalized.task.id != row.id or normalized.task.source != row.source:
+        raise ValueError("A converter must retain its supplied task identity and source provenance")
+    return normalized
 
 
 @dataclass(frozen=True)
-class ConversionResult:
-    normalized_path: str
-    manifest_path: str
-    input_rows: int
-    converted_rows: int
-    rejections: dict[str, int]
-    elapsed_seconds: float
+class ConvertedRow:
+    """A decoded source row and its conversion, before review or resource admission."""
+
+    raw: RawRow
+    original_data: dict[str, Any]
+    original_path: str | None
+    result: NormalizedTask | ImportRejection
 
 
-def _conversion_row(record: dict[str, Any], *, recipe: SourceRecipe) -> dict[str, Any]:
+def convert_record(record: dict[str, Any], recipe: SourceRecipe) -> ConvertedRow:
     source = row_source(recipe, record["locator"])
-    task_id = row_task_id(recipe, source)
-    result = convert_row(RawRow(task_id, source, record["data"]), recipe)
-    rejection = result if isinstance(result, ImportRejection) else None
+    raw = RawRow(row_task_id(recipe, source), source, record["data"])
+    return ConvertedRow(
+        raw, record["data"], record.get("original_path", record["data"].get("path")), convert_row(raw, recipe)
+    )
+
+
+def convert_source_row(record: dict[str, Any], recipe: SourceRecipe) -> ConvertedRow:
+    """Decode and convert once, retaining the archive identity before decoder rewrites."""
+    metrics = counters.current_stage()
+    started = time.monotonic()
+    try:
+        decoded = decode_staged_row(record, recipe.source, conversion_context(recipe))
+    finally:
+        metrics.update_counter("source/decode/seconds", time.monotonic() - started)
+        metrics.update_counter("source/decode/attempts", 1)
+    metrics.update_counter("source/decode/completed_rows", 1)
+    started = time.monotonic()
+    try:
+        converted = convert_record(decoded, recipe)
+    finally:
+        metrics.update_counter("source/normalize/seconds", time.monotonic() - started)
+        metrics.update_counter("source/normalize/attempts", 1)
+    metrics.update_counter("source/normalize/completed_rows", 1)
+    metrics.update_counter("source/normalize/task_rows", int(isinstance(converted.result, NormalizedTask)))
+    if isinstance(converted.result, ImportRejection):
+        metrics.update_counter(f"source/normalize/{converted.result.kind.value}", 1)
+    return ConvertedRow(converted.raw, record["data"], converted.original_path, converted.result)
+
+
+def normalization_columns(
+    task_id: str,
+    source: Source,
+    task: TaskSpec | None,
+    rejection: ImportRejection | None,
+    changes: tuple[NormalizationChange, ...],
+    original_path: str | None,
+) -> dict[str, Any]:
+    """The common mechanical output columns of every curation mode."""
     return {
         "task_id": task_id,
         "source_dataset": source.dataset,
         "source_revision": source.revision,
         "source_row": source.row,
-        "original_path": record["data"].get("path"),
-        "task_json": None if isinstance(result, ImportRejection) else result.task.model_dump_json(),
-        "normalization_kind": rejection.kind.value if rejection else None,
-        "normalization_reason": rejection.reason if rejection else None,
-        "normalization_detail": rejection.detail if rejection else None,
-        "normalization_changes": (
-            [] if isinstance(result, ImportRejection) else [change.model_dump(mode="json") for change in result.changes]
-        ),
+        "original_path": original_path,
+        "task_json": task.model_dump_json() if task is not None else None,
+        "normalization_kind": rejection.kind.value if rejection is not None else None,
+        "normalization_reason": rejection.reason if rejection is not None else None,
+        "normalization_detail": rejection.detail if rejection is not None else None,
+        "normalization_changes": [change.model_dump(mode="json") for change in changes],
     }
 
 
-def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output_path: str) -> Iterator[Counter[str]]:
-    counts: Counter[str] = Counter()
-
-    def counted() -> Iterator[dict[str, Any]]:
-        for row in rows:
-            counts["input_rows"] += 1
-            if row["task_json"] is not None:
-                counts["converted_rows"] += 1
-            else:
-                counts[f"rejection:{row['normalization_kind']}:{row['normalization_reason']}"] += 1
-            yield row
-
-    path = format_shard_path(
-        str(StoragePath(output_path) / "part-{shard:05d}.parquet"), shard.shard_idx, shard.total_shards
-    )
-    write_parquet_file(counted(), path, schema=CONVERSION_SCHEMA)
-    yield counts
-
-
-def run_conversion(
-    recipe: SourceRecipe,
-    context: ZephyrContext,
-    source_input: str,
-    output_path: str,
-    *,
-    parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
-) -> ConversionResult:
-    """Convert every selected staged row, retaining tasks and typed conversion rejections.
-
-    Model review, resource budgets, deduplication, mechanical checks and grader controls do not run.
-    The output is unreviewed and has no production admission or ``final/`` view.
-    Existing outputs are rejected so a failed rerun cannot mix old and new shards.
-    """
-    output = StoragePath(output_path)
-    if output.exists():
-        raise FileExistsError(f"Conversion output already exists: {output_path}")
-    started = time.monotonic()
-    dataset = (
-        Dataset.from_list(list(conversion_shards(source_input, recipe.source, parquet_shard_bytes=parquet_shard_bytes)))
-        .flat_map(partial(staged_file_rows, source_input, spec=recipe.source, context=conversion_context(recipe)))
-        .map(partial(_conversion_row, recipe=recipe))
-        .map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
-    )
-    counts: Counter[str] = Counter()
-    for shard_counts in context.execute(dataset).results:
-        counts.update(shard_counts)
-    result = ConversionResult(
-        normalized_path=str(output / "normalize"),
-        manifest_path=str(output / "manifest.json"),
-        input_rows=counts["input_rows"],
-        converted_rows=counts["converted_rows"],
-        rejections={
-            key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
-        },
-        elapsed_seconds=time.monotonic() - started,
-    )
-    (output / "manifest.json").write_text(
-        json.dumps(
-            {
-                **asdict(result),
-                "mode": "quick",
-                "source": recipe.name,
-                "source_dataset": recipe.source.dataset,
-                "source_revision": recipe.source.revision,
-                "recipe_revision": recipe.version,
-                "reviewed": False,
-                "verified": False,
-            },
-            indent=2,
-        )
-    )
-    return result
+def converted_columns(row: ConvertedRow) -> dict[str, Any]:
+    result = row.result
+    rejection = result if isinstance(result, ImportRejection) else None
+    return {
+        **normalization_columns(
+            row.raw.id,
+            row.raw.source,
+            result.task if isinstance(result, NormalizedTask) else None,
+            rejection,
+            result.changes if isinstance(result, NormalizedTask) else (),
+            row.original_path,
+        ),
+        "source_locator": row.raw.source.row,
+        "raw_input_sha256": None,
+        "raw_sha256": None,
+    }

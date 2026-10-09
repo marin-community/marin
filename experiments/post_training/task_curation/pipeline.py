@@ -35,9 +35,8 @@ from shellbox.machine import Backend
 from taskcompendium.convert.environment import IMAGE_BACKENDS
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.pipeline.controls import controls_identity
-from taskcompendium.pipeline.conversion import ConversionResult, run_conversion
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
-from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFiles, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
     Controls,
@@ -49,6 +48,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
+    ConversionResult,
     SourcePipelineConfig,
     SourcePipelineResult,
     SourceProcessingMode,
@@ -252,7 +252,7 @@ def source_recipe(
     )
 
 
-def convert_pipeline(
+def run_curation(
     pipeline: RlDataPipeline,
     *,
     mode: SourceProcessingMode,
@@ -262,6 +262,7 @@ def convert_pipeline(
     inputs: Mapping[str, str],
     config: SourcePipelineConfig | None = None,
     grader_environment: EnvironmentRequirements | None = None,
+    source_overrides: Mapping[str, SourceFileOverride] | None = None,
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
@@ -286,15 +287,14 @@ def convert_pipeline(
                 raise ValueError(
                     f"Quick conversion of {pipeline.name} needs a declared grader lock or resolved environment"
                 )
-        return run_conversion(source_recipe(pipeline, inputs, grader_environment), context, source_input, output_path)
-    if config is None or config.mode != mode:
-        raise ValueError("Sample and full conversion require a configuration with the requested mode")
     return run_source_pipeline(
         source_recipe(pipeline, inputs, grader_environment),
         context,
         source_input,
         output_path,
         config,
+        mode=mode,
+        source_overrides=source_overrides,
         canonical_source=pipeline.name,
     )
 
@@ -458,7 +458,7 @@ def _run_source(
     if pipeline.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
-    result = convert_pipeline(
+    result = run_curation(
         pipeline,
         mode=config.mode,
         context=campaign.context,
@@ -483,7 +483,7 @@ def source_step(
     ``images.build``.
     """
     if config.mode == SourceProcessingMode.QUICK:
-        raise ValueError("QUICK conversion uses convert_source with staged inputs; it does not build reviewed artifacts")
+        raise ValueError("QUICK conversion uses run_curation with staged inputs; it does not build reviewed artifacts")
     downloaded = download_step(pipeline.source, campaign)
     inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
     grader_step = None

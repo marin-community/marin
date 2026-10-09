@@ -26,7 +26,7 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
-| `experiments/post_training/task_curation/conversions.py`, `quick.py` | Source-level mode dispatch and local mechanical conversion |
+| `experiments/post_training/task_curation/pipeline.py`, `quick.py` | Source-level mode dispatch and local mechanical conversion |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
@@ -197,16 +197,29 @@ are admitted like rows of in-process graders.
 
 ## Conversion modes
 
-`conversions.convert_source(source, mode=SourceProcessingMode.QUICK, ...)`
-accepts an `RlDataSource` from `all_sources()` and staged input paths on an
-entered Zephyr context. `SAMPLE` and `FULL` use the same entry point with a
-matching `SourcePipelineConfig` and resolved grader environment.
+`pipeline.run_curation(source.pipeline, mode=..., context=..., source_input=...,
+output_path=..., inputs=...)` accepts a source's conversion declaration, staged
+input paths and an entered Zephyr context. `SAMPLE` and `FULL` also take a
+matching `SourcePipelineConfig` and resolved grader environment. The local CLI
+and reviewed campaign artifacts use this entry point.
+
+Every mode uses the same mechanical conversion stage and normalized parquet
+schema. FULL converts its bounded panel first, then reuses those conversions
+when the quality gate allows expansion. Resource admission, fingerprints and
+checks run downstream. `original_path` retains the archive identity before
+source decoding can remove it.
 
 Quick mode converts every selected row and preserves explicit converter
 rejections. It skips resource admission, review, deduplication, content
 fingerprints and grader execution. It records declared grader images or local
 dependency locks without building environments. Its parquet output is
 unreviewed and unverified, with no admitted `final/` view.
+
+The local CLI downloads pinned sources by default. `--input-file LOGICAL_PATH
+LOCAL_FILE` selects explicit local files without changing the declared logical
+path or global row indices. The manifest records the physical path and its
+SHA-256 alongside the upstream source revision. This override is distinct from
+`--input-root`, which uses an existing tree of staged files.
 
 SWEsmith and SWE-rebench repository tasks carry unresolved `DockerBuildContext`
 recipes for both actor and verifier. The actor recipe retains the source

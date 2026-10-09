@@ -8,10 +8,9 @@ from collections.abc import Iterator
 from tempfile import SpooledTemporaryFile
 from typing import Any
 
-from pydantic import ValidationError
-
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import ScriptGrader, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
@@ -26,28 +25,13 @@ from taskcompendium.pipeline.models import (
     ImportRejection,
     NormalizedTask,
     QualityBasis,
-    RawRow,
     ReviewRecord,
     SourceRecipe,
     TaskAudit,
 )
-from taskcompendium.pipeline.sources import conversion_context
 from taskcompendium.runtime.resources import resource_bytes
 
 GROUP_MEMORY_BYTES = 1024 * 1024
-
-
-def row_source(recipe: SourceRecipe, locator: str) -> Source:
-    return Source(
-        dataset=recipe.source.dataset,
-        revision=recipe.source.revision,
-        row=locator,
-        importer_revision=recipe.version,
-    )
-
-
-def row_task_id(recipe: SourceRecipe, source: Source) -> str:
-    return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
 
 
 def task_resource_bytes(task: TaskSpec) -> int:
@@ -79,34 +63,21 @@ def _within_budget(task: TaskSpec, budget: int) -> TaskSpec | ImportRejection:
     )
 
 
-def convert_row(row: RawRow, recipe: SourceRecipe) -> NormalizedTask | ImportRejection:
-    """Convert one source row, retaining rewrites and enforcing its supplied identity.
-
-    Resource admission and content fingerprints belong to the reviewed pipeline,
-    so mechanical conversion can call this without performing those checks.
-    """
-    try:
-        result = recipe.convert(row, conversion_context(recipe))
-    except ValidationError as error:
-        return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
-    if isinstance(result, ImportRejection):
-        return result
-    normalized = result if isinstance(result, NormalizedTask) else NormalizedTask(result, ())
-    if normalized.task.id != row.id or normalized.task.source != row.source:
-        raise ValueError("A converter must retain its supplied task identity and source provenance")
-    return normalized
-
-
 def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
-    source = row_source(recipe, record["locator"])
-    task_id = row_task_id(recipe, source)
+    return admit_converted_row(convert_record(record, recipe), recipe)
+
+
+def admit_converted_row(converted: ConvertedRow, recipe: SourceRecipe) -> dict[str, Any]:
+    """Add resource admission, audit identity, and deduplication keys after conversion."""
+    source, task_id = converted.raw.source, converted.raw.id
     raw = {
         "task_id": task_id,
         "source": source.model_dump(),
-        "raw_sha256": canonical_sha256(record["data"]),
-        "data": record["data"],
+        "raw_sha256": canonical_sha256(dict(converted.raw.data)),
+        "original_path": converted.original_path,
+        "data": converted.raw.data,
     }
-    result: TaskSpec | NormalizedTask | ImportRejection = convert_row(RawRow(task_id, source, record["data"]), recipe)
+    result: TaskSpec | NormalizedTask | ImportRejection = converted.result
     audit = TaskAudit(
         task_id=task_id,
         source=source,
@@ -142,7 +113,7 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
         public_key = deduplication_key(result)
         semantic_key = semantic_digest(result, include_reference=True)
     return {
-        "locator": record["locator"],
+        "locator": source.row,
         "public_key": public_key,
         "semantic_key": semantic_key,
         "audit": audit.model_dump(mode="json"),

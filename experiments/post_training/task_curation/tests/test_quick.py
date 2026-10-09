@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import shutil
 from dataclasses import replace
@@ -194,3 +195,31 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     assert next_task.source.revision == next_revision
     assert isinstance(next_task.context.events[0], TextMessage)
     assert next_task.context.events[0].content == "The next pinned question"
+
+
+def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes(tmp_path):
+    source = calendar.sources()[0]
+    assert source.pipeline is not None
+    assert isinstance(source.pipeline.source, HfSource)
+    logical_path = source.pipeline.source.files[0]
+    local_file = tmp_path / "different-name.parquet"
+    blob = (Path(__file__).parent / "fixtures" / "calendar.tar.gz").read_bytes()
+    pq.write_table(pa.Table.from_pylist([{"path": "calendar-fixture.tar.gz", "task_binary": blob}]), local_file)
+    output = tmp_path / "output"
+    run_local_sources(
+        {source.name: source},
+        None,
+        output,
+        inputs={},
+        max_workers=1,
+        download_cache=tmp_path / "downloads",
+        source_files_override={logical_path: local_file},
+    )
+    records = [row for file in (output / source.name / "normalize").glob("*.parquet") for row in load_parquet(str(file))]
+    assert records[0]["source_row"] == f"{logical_path}:0"
+    assert records[0]["original_path"] == "calendar-fixture.tar.gz"
+    manifest = json.loads((output / source.name / "manifest.json").read_text())
+    assert manifest["source_file_overrides"] == {
+        logical_path: {"path": str(local_file.resolve()), "sha256": hashlib.sha256(local_file.read_bytes()).hexdigest()}
+    }
+    assert not (tmp_path / "downloads").exists()

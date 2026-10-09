@@ -15,9 +15,9 @@ from zephyr.readers import load_parquet
 from taskcompendium.convert.answers import exact_answer_task, source_defect
 from taskcompendium.models import ResourceGroups, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
-from taskcompendium.pipeline.conversion import run_conversion
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, ReviewRubric, SourceRecipe
+from taskcompendium.pipeline.source_processing import ConversionResult, SourceProcessingMode, run_source_pipeline
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
@@ -69,13 +69,25 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
         controls=None,
     )
     with ZephyrContext(client=LocalClient(), max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-        whole = run_conversion(
+        whole = run_source_pipeline(
             replace(recipe, source=replace(recipe.source, read=whole_parquet)),
             context,
             str(source),
             str(tmp_path / "whole"),
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
         )
-        split = run_conversion(recipe, context, str(source), str(tmp_path / "split"), parquet_shard_bytes=1)
+        split = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "split"),
+            parquet_shard_bytes=1,
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+        )
+    assert isinstance(whole, ConversionResult)
+    assert isinstance(split, ConversionResult)
     whole_files = list(Path(whole.normalized_path).glob("*.parquet"))
     split_files = list(Path(split.normalized_path).glob("*.parquet"))
     assert len(whole_files) == 1
@@ -112,7 +124,15 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
         resource_budget_bytes=1,
     )
     with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-        result = run_conversion(recipe, context, str(source), str(tmp_path / "output"))
+        result = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "output"),
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+        )
+    assert isinstance(result, ConversionResult)
     records = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
     assert result.input_rows == 3
     assert result.converted_rows == 2

@@ -3,6 +3,7 @@
 
 """Stage pinned sources and convert them locally with Zephyr, without review or grader execution."""
 
+import hashlib
 import json
 import logging
 import time
@@ -16,9 +17,10 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
-from taskcompendium.pipeline.conversion import conversion_shards
+from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.pipeline.sources import conversion_shards
 from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
@@ -31,8 +33,13 @@ from experiments.post_training.task_curation.campaign import (
     campaign_report,
     error_chain,
 )
-from experiments.post_training.task_curation.conversions import convert_source
-from experiments.post_training.task_curation.pipeline import HfSource, UrlSource, download_step, source_files
+from experiments.post_training.task_curation.pipeline import (
+    HfSource,
+    UrlSource,
+    download_step,
+    run_curation,
+    source_files,
+)
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 
@@ -54,8 +61,17 @@ def run_local_sources(
     inputs: Mapping[str, str],
     max_workers: int,
     download_cache: Path,
+    source_files_override: Mapping[str, Path] | None = None,
 ) -> tuple[SourceOutcome, ...]:
     """Convert sources locally, recording failures while continuing the remaining sources."""
+    if input_root is not None and source_files_override:
+        raise ValueError("Choose either a staged input root or explicit local source files")
+    source_overrides = {}
+    for logical, file in (source_files_override or {}).items():
+        file = file.resolve()
+        with file.open("rb") as stream:
+            checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+        source_overrides[logical] = SourceFileOverride(str(file), checksum)
     input_root = input_root.resolve() if input_root is not None else None
     output_root, download_cache = output_root.resolve(), download_cache.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -90,17 +106,20 @@ def run_local_sources(
                 if source.pipeline is None:
                     raise ValueError(f"{source.name} has no conversion pipeline")
                 started = time.monotonic()
-                source_input = (
-                    str(input_root)
-                    if input_root is not None
-                    else stage_local_source(source.pipeline.source, download_cache, campaign)
-                )
+                if source_overrides:
+                    source_input = str(output_root)
+                elif input_root is not None:
+                    source_input = str(input_root)
+                else:
+                    source_input = stage_local_source(source.pipeline.source, download_cache, campaign)
                 staged_inputs = dict(inputs)
                 for key, auxiliary in source.pipeline.inputs.items():
                     if key not in staged_inputs:
                         staged_inputs[key] = stage_local_source(auxiliary, download_cache, campaign)
                 logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
-                shards = conversion_shards(source_input, source_files(source.pipeline.source))
+                shards = conversion_shards(
+                    source_input, source_files(source.pipeline.source), overrides=source_overrides
+                )
                 conversion_context = context
                 if max_workers > 1 and any(shard.row_end is not None and shard.parts > 1 for shard in shards):
                     # Process startup dominates small conversions; reserve it for split Parquet files.
@@ -116,13 +135,14 @@ def run_local_sources(
                             )
                         )
                     conversion_context = process_context
-                result = convert_source(
-                    source,
+                result = run_curation(
+                    source.pipeline,
                     mode=SourceProcessingMode.QUICK,
                     context=conversion_context,
                     source_input=source_input,
                     output_path=str(output_root / name),
                     inputs=staged_inputs,
+                    source_overrides=source_overrides,
                 )
             except Exception as error:
                 outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.FAILED, error_chain(error))
@@ -145,6 +165,13 @@ def run_local_sources(
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Use staged primary inputs instead of downloading the declared pinned source.",
 )
+@click.option(
+    "--input-file",
+    "local_files",
+    type=(str, click.Path(exists=True, dir_okay=False, path_type=Path)),
+    multiple=True,
+    help="Use a local file under its declared logical source filename; repeat for multiple files.",
+)
 @click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
 @click.option(
     "--download-cache",
@@ -157,6 +184,7 @@ def run_local_sources(
 @click.option("--max-workers", type=click.IntRange(min=1), default=4, show_default=True)
 def main(
     sources: tuple[str, ...],
+    local_files: tuple[tuple[str, Path], ...],
     input_root: Path | None,
     output_root: Path,
     download_cache: Path,
@@ -175,6 +203,7 @@ def main(
         inputs=inputs,
         max_workers=max_workers,
         download_cache=download_cache,
+        source_files_override=dict(local_files),
     )
 
 
