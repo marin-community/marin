@@ -56,6 +56,17 @@ def source_record(row: dict[str, Any]) -> dict[str, Any]:
     return json.loads(row["extra_info"]["nemotron_ultra"]["record_json"])
 
 
+def tool_call_message(name: str, arguments: str | dict[str, Any]) -> dict[str, Any]:
+    """An assistant turn that makes one call, with arguments as a JSON string as servers return them."""
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments, ensure_ascii=False)
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "reference", "type": "function", "function": {"name": name, "arguments": arguments}}],
+    }
+
+
 @dataclass(frozen=True)
 class PivotToolCallTask:
     """Tool-call pivots graded by argument comparison (the SWE release)."""
@@ -67,6 +78,17 @@ class PivotToolCallTask:
 
     def grade(self, row: dict[str, Any], message: dict[str, Any]) -> Reward:
         return grade_tool_call(source_record(row)["expected_action"], message)
+
+    def reference(self, row: dict[str, Any]) -> dict[str, Any]:
+        """The expert's action as an assistant turn."""
+        action = source_record(row)["expected_action"]
+        match action["type"]:
+            case "function_call":
+                return tool_call_message(action["name"], action["arguments"])
+            case "message":
+                return {"role": "assistant", "content": action["content"]}
+            case unsupported:
+                raise ValueError(f"unsupported expected action type {unsupported!r}")
 
 
 @dataclass(frozen=True)
@@ -81,6 +103,10 @@ class PivotTerminalTask:
     def grade(self, row: dict[str, Any], message: dict[str, Any]) -> Reward:
         record = source_record(row)
         return grade_terminus(record["expected_answer"], message.get("content") or "", record.get("threshold"))
+
+    def reference(self, row: dict[str, Any]) -> dict[str, Any]:
+        """The expert's Terminus-2 JSON reply as an assistant turn."""
+        return {"role": "assistant", "content": source_record(row)["expected_answer"]}
 
 
 PIVOT_TOOL_CALL = PivotToolCallTask()

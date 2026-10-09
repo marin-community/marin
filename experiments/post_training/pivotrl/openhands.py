@@ -17,7 +17,7 @@ from verifyit.adapters.openhands_next_action import NextActionJudge, TurnState, 
 from verifyit.grade import Reward
 from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.post_training.pivotrl.task import row_id, sort_key, without_nulls
+from experiments.post_training.pivotrl.task import row_id, sort_key, tool_call_message, without_nulls
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,11 @@ class OpenHandsNextActionTask:
             observation=turn["observation"],
             judge=self._judge(),
         )
+
+    def reference(self, row: dict[str, Any]) -> dict[str, Any]:
+        """The expert's call as an assistant turn, without the narration that preceded it."""
+        call = json.loads(row["extra_info"]["openhands"]["expected_call_json"])
+        return tool_call_message(call["name"], call["arguments"])
 
     def _judge(self) -> NextActionJudge | None:
         if self.judge_model is None:
