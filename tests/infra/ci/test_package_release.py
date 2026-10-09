@@ -235,8 +235,8 @@ def test_shared_requirement_path_is_emitted_once() -> None:
     assert requirement_paths_for_packages(["finelog", "iris"]) == (Path("lib/iris/pyproject.toml"),)
 
 
-def _release_files(wheels: int, sdists: int) -> list[dict[str, str]]:
-    return [{"packagetype": "bdist_wheel"}] * wheels + [{"packagetype": "sdist"}] * sdists
+def _release_files(wheels: int, sdists: int) -> list[str]:
+    return ["bdist_wheel"] * wheels + ["sdist"] * sdists
 
 
 def test_latest_native_releases_skip_partially_published_versions() -> None:

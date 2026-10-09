@@ -353,11 +353,10 @@ def _declared_version(repo_root: Path, package: PackageFamily) -> str:
     return max(versions, key=_version_key)
 
 
-def latest_complete_version(releases: Mapping[str, Sequence[Mapping]], expectation: ArtifactExpectation) -> str | None:
+def latest_complete_version(releases: Mapping[str, Sequence[str]], expectation: ArtifactExpectation) -> str | None:
     """Return the greatest supported version whose PyPI files include every expected artifact."""
     complete = []
-    for version, files in releases.items():
-        package_types = [file["packagetype"] for file in files]
+    for version, package_types in releases.items():
         if (
             package_types.count("bdist_wheel") >= expectation.wheels
             and package_types.count("sdist") >= expectation.sdists
@@ -366,8 +365,8 @@ def latest_complete_version(releases: Mapping[str, Sequence[Mapping]], expectati
     return latest_supported_version(complete)
 
 
-def pypi_releases(distribution: str) -> Mapping[str, Sequence[Mapping]]:
-    """Return the PyPI files of each release, or an empty mapping before the first release."""
+def pypi_releases(distribution: str) -> Mapping[str, Sequence[str]]:
+    """Return the PyPI package type of each file per release, or an empty mapping before the first release."""
     url = PYPI_PROJECT_JSON_URL.format(distribution=distribution)
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
@@ -376,7 +375,7 @@ def pypi_releases(distribution: str) -> Mapping[str, Sequence[Mapping]]:
         if error.code == 404:
             return {}
         raise
-    return data.get("releases", {})
+    return {version: tuple(file["packagetype"] for file in files) for version, files in data.get("releases", {}).items()}
 
 
 def latest_pypi_version(distribution: str) -> str | None:
@@ -391,7 +390,7 @@ def latest_family_version(package: PackageFamily) -> str | None:
 
 
 def latest_native_release_versions(
-    releases: Callable[[str], Mapping[str, Sequence[Mapping]]] = pypi_releases,
+    releases: Callable[[str], Mapping[str, Sequence[str]]] = pypi_releases,
 ) -> Mapping[str, str]:
     """Return the newest completely published wheel version consumed by each native family.
 
