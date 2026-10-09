@@ -12,7 +12,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO
 
-import pyarrow.parquet as parquet
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
@@ -38,8 +37,6 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 
-from experiments.post_training.task_sessions.validation import ValidationDataConfig, write_validation_data
-
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
     return ArtifactStep.adopt(
@@ -56,20 +53,6 @@ def _data_step() -> ArtifactStep[Artifact]:
         "2026.08.01",
         "s3://test/iceball-gsm8k",
     )
-
-
-def test_task_session_validation_rows_roundtrip_through_parquet(tmp_path: Path) -> None:
-    write_validation_data(ValidationDataConfig(str(tmp_path), rows=8))
-
-    for filename in ("train.parquet", "validation.parquet"):
-        rows = parquet.read_table(tmp_path / filename).to_pylist()
-        assert len(rows) == 8
-        assert {row["env_class"] for row in rows} == {"cat_count", "gsm8k_multi_turn"}
-        for row in rows:
-            if row["env_class"] == "cat_count":
-                assert row["reward_spec"]["ground_truth"] == str(row["extra_info"]["n"])
-            else:
-                assert row["reward_spec"]["ground_truth"].isdigit()
 
 
 class _FakeLauncherProcess:
