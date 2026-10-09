@@ -197,45 +197,17 @@ are admitted like rows of in-process graders.
 
 ## Conversion modes
 
-The local CLI and reviewed campaign artifacts call `pipeline.run_curation` with
-an entered Zephyr context and staged inputs:
+`pipeline.run_curation` is the common entry point for local and campaign runs.
+All modes share conversion and the normalized schema. QUICK retains TaskSpecs
+and typed rejections, skipping admission, fingerprints, review, deduplication
+and grading. It records declared images or locks without building environments.
 
-```python
-from taskcompendium.pipeline.source_processing import SourceProcessingMode
-
-from experiments.post_training.task_curation.pipeline import run_curation
-from experiments.post_training.task_curation.sources import all_sources
-
-source = next(source for source in all_sources().values() if source.name == "tasktrove-calendar")
-assert source.pipeline is not None
-result = run_curation(
-    source.pipeline,
-    mode=SourceProcessingMode.QUICK,
-    context=context,
-    source_input="/tmp/tasktrove",
-    output_path="/tmp/calendar-quick",
-    inputs={},
-)
-```
-
-All modes share mechanical conversion and the normalized parquet schema.
-`original_path` retains archive identity before decoding. QUICK preserves every
-selected row as a TaskSpec or typed rejection, including known TaskTrove defects.
-It skips resource admission, content fingerprints, review, deduplication and
-grader checks, producing no admitted `final/` view. Declared images and local
-locks are recorded without building or executing environments; sources with only
-PyPI pins require an explicitly resolved grader environment.
-
-SAMPLE and FULL also take `config=SourcePipelineConfig(...)` with the same
-`mode`, and `grader_environment=EnvironmentRequirements(...)` resolved by the
-campaign. FULL reviews a bounded panel and reuses its conversions when
-the quality gate allows expansion; admission and checks follow conversion.
-See [Source procedure](#source-procedure) for these reviewed stages.
-
-The campaign README owns the runnable
-[local commands and input overrides](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#local-conversion-loop),
-[Harbor compatibility and runtime limits](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#harbor-compatibility-view),
-and [pinned content comparison](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#full-tasktrove-content-comparison).
+SAMPLE and FULL require `config=SourcePipelineConfig(...)` with the selected
+mode and a resolved `grader_environment`. FULL reviews a bounded panel, then
+reuses those conversions when its quality gate allows expansion. The procedure
+below describes those reviewed stages. See the
+[campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
+for local overrides, Harbor export and pinned content comparison commands.
 
 ## Source procedure
 

@@ -5,8 +5,8 @@ exports `sources()`, which [sources.py](../sources.py) collects into the catalog
 Each source combines source information and an optional `RlDataPipeline` recipe.
 A declaration names the pinned source, the converter that builds each task with
 its grader, the agent environment, and an optional review rubric and grader
-controls. See the [experiment overview](../README.md) for the fields and the
-artifact each declaration produces.
+controls. See the [reference](../../../../docs/references/task-curation.md#declarations)
+for declaration fields and artifact outputs.
 
 ## Adding a dataset
 
@@ -21,9 +21,8 @@ artifact each declaration produces.
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
    when the entry should be hidden by default.
 3. If adding a module, import it and include its `sources()` results in
-   [all_sources()](../sources.py). Add a representative input to the family test's
-   `ROWS` and run that test and [test_catalog.py](../tests/test_catalog.py)
-   for a new converter.
+   [all_sources()](../sources.py). Add a behavioral conversion test in the family
+   test module, and run it with [test_catalog.py](../tests/test_catalog.py).
 4. Regenerate the Atlas JSON from the repository root:
 
    ```bash
@@ -37,8 +36,7 @@ JSON; commit the Python declarations, not the generated file. The applet build
 regenerates this JSON automatically. To update the dashboard, follow
 [RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
 **Refresh sources** loads the published catalog; it does not rebuild it.
-See the [source API and count command](../README.md#declaring-a-dataset) for
-the compact declaration example and offline parquet counts.
+See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
 
 ## Script graders
 

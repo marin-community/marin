@@ -121,23 +121,15 @@ Each `ProviderRequirement` contains `action_interface`, a versioned contract nam
 The task's environment and worker file mounts describe worker initial state. A grader that runs in its own machine declares that machine's image or build recipe, capabilities, setup commands, and environment variables in `grader.environment`. A grader environment requires a `docker_image`, `docker_build`, or local `packages_lock`, and cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment.
 
 `docker_image`, `docker_build`, and `packages_lock` are mutually exclusive.
-A build context preserves each file's bytes, mode, and timestamp through
-`TaskResource`; paths must be unique and cannot overlap as files and directories.
-Build files are separate from role-specific workspace mounts. Resource budgets
-count actor and grader contexts separately, including duplicated bytes.
+Build files preserve bytes, modes and timestamps; paths cannot collide. Resource
+budgets count actor and grader contexts separately. Execution requires the caller
+to build each context and replace it with a digest-pinned image and supported
+backends. TaskCompendium supplies no build resolver; runtimes and SAMPLE/FULL
+controls reject unresolved contexts. Local and ShellSim backends cannot declare them.
 
-QUICK can retain recipes without executing them. A preserved recipe does not
-make mutable base tags or build-time downloads reproducible. Before execution,
-the caller must build the context, replace it with a digest-pinned image and
-declare supported backends; TaskCompendium supplies no build resolver. Generic execution runtimes and SAMPLE/FULL controls reject
-unresolved contexts before selecting or creating machines. Local and ShellSim
-backends cannot be declared for a Docker build context.
-
-The [Harbor exporter](src/taskcompendium/harbor/export.py) writes build inputs
-without executing them. See the campaign's
-[Harbor compatibility contract](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)
-for shared and separate verifier behavior. The Harbor-to-TaskSpec importer
-requires a prebuilt image; it cannot import Dockerfile-based Harbor tasks.
+The [Harbor exporter](src/taskcompendium/harbor/export.py) emits build inputs;
+see the [campaign quickstart](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)
+for execution limits. The Harbor-to-TaskSpec importer requires a prebuilt image.
 
 ## Resource mounts
 
