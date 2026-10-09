@@ -59,9 +59,10 @@ Verify:
   retention. Confirm layout and checkpoint lineage.
 - A one-rack run of the deploy SHA restores the handoff and trains through a few
   steps, a dropless eval, and more steps after it
-  (`launch_diagnostics.py --restore-from <handoff> --eval-every <k>`). The
-  trial window usually ends before the child's first eval, and switching between
-  eval and train executables has failed before (#8861).
+  (`launch_diagnostics.py --run-id <id> --restore-from <step-N> --eval-every <k>
+  --num-steps <N + 3k> --schedule-steps <hero schedule length>`; `--num-steps` is
+  an absolute stop step). The trial window usually ends before the child's first
+  eval, and switching between eval and train executables has failed before (#8861).
 - Child checkpoint trees are empty for initial cutover. During later recovery,
   preserve them and verify the newest complete child checkpoint instead.
 - No competing coordinator, gang, or hero pods exist apart from the old run.
