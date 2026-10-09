@@ -75,7 +75,7 @@ def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
     Raises ``SubmissionFailure`` when the attempt carries no valid submission.
     """
     if task.answer_type in CONVERSATION_ANSWERS:
-        return task.answer_format.extract(attempt)
+        return task.answer_format.extract(attempt, task.answer_type)
     if task.answer_type == AnswerType.STATE:
         if attempt.state is None:
             raise SubmissionFailure("State submission requires captured state")
