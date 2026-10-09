@@ -32,14 +32,22 @@ ctx.execute(pipeline)
 
 Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_path_column` to use another name). Selecting only that column returns the source path for each matching row. Parquet path-only reads skip source data columns unless a filter needs them.
 
+For CPU-heavy local transforms, `Dataset.from_files(...).load_parquet(max_rows_per_shard=2500)`
+can split a single Parquet row group among workers. Use
+`ZephyrContext(max_workers=4, stage_runner_factory=SubprocessRunner)` with
+`SubprocessRunner` imported from `zephyr.runners` to run Python transforms in
+separate processes. The row limit applies before filtering and also works with
+`load_file` and Parquet batch mode. It adds no intermediate stage, but each
+worker reads its overlapping row groups in full before slicing, increasing I/O
+and memory use. Without a row limit, byte-based splits preserve row groups.
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)
 - `.filter(fn)` - filter items by function or expression
 - `.select(columna, columnb)` - select out the given columns
 - `.window(n)` - group into batches
-- `.reshard(n, chunk_size=None)` - redistribute intermediate chunks across n shards;
-  set `chunk_size` to bound items per chunk before redistribution
+- `.reshard(n)` - redistribute across n shards
 
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)

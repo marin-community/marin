@@ -1794,7 +1794,6 @@ def _compute_tasks_from_shards(
                 shard=shard,
                 operations=stage.operations,
                 stage_name=stage_name,
-                chunk_size=stage.chunk_size,
                 aux_shards=aux_shards,
                 cost=cost,
             )

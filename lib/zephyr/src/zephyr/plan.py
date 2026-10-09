@@ -47,13 +47,7 @@ from zephyr.expr import Expr, referenced_columns
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
-from zephyr.writers import (
-    INTERMEDIATE_CHUNK_SIZE,
-    write_binary_file,
-    write_jsonl_file,
-    write_parquet_file,
-    write_vortex_file,
-)
+from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
@@ -296,7 +290,6 @@ class PhysicalStage:
     operations: list[PhysicalOp] = field(default_factory=list)
     stage_type: StageType = StageType.MAP_WORKER
     output_shards: int | None = None
-    chunk_size: int = INTERMEDIATE_CHUNK_SIZE
 
     def stage_name(self, max_length: int | None = None) -> str:
         """Generate a descriptive name from operations.
@@ -540,7 +533,7 @@ class FusionState:
 
         self._set_stage_type(op)
 
-    def end_stage(self, *, chunk_size: int = INTERMEDIATE_CHUNK_SIZE) -> None:
+    def end_stage(self) -> None:
         """Flush pending ops and close current stage."""
         self.flush_pending()
         if self.current_ops:
@@ -549,7 +542,6 @@ class FusionState:
                     operations=self.current_ops[:],
                     stage_type=self.stage_type,
                     output_shards=self.output_shards,
-                    chunk_size=chunk_size,
                 )
             )
             self.current_ops = []
@@ -616,14 +608,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             state.add_op(Fold(fn=op.global_reducer))
 
         elif isinstance(op, ReshardOp):
-            if op.chunk_size is not None:
-                # A reshard directly after a source or another reshard still
-                # needs a worker stage to materialize chunks at the requested size.
-                if not state.current_ops and not state.pending_fusible:
-                    state.add_op(Map(fn=iter))
-                state.end_stage(chunk_size=op.chunk_size)
-            else:
-                state.end_stage()
+            state.end_stage()
             state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards)
             state.end_stage()
 
@@ -659,21 +644,21 @@ def _row_ranges_per_file(
 ) -> list[list[tuple[int | None, int | None]]]:
     """Row spans covering each file, in input order.
 
-    Without ``approx_shard_bytes`` every file is one unbounded span and no IO
-    happens. With it, each Parquet file is split at row-group boundaries, which
-    costs one footer read per file; those reads run concurrently. Splits are
-    best-effort: a row group is never divided, so a span can exceed
-    ``approx_shard_bytes`` when a single row group is larger.
+    Without a byte or row target, each file is one unbounded span and no IO
+    happens. Splitting costs one footer read per Parquet file; those reads run
+    concurrently. Byte targets preserve row groups; row limits may divide them.
     """
     approx_shard_bytes = load_op.approx_shard_bytes
-    if approx_shard_bytes is None:
+    if approx_shard_bytes is None and load_op.max_rows_per_shard is None:
         return [[_WHOLE_FILE_ROW_RANGE] for _ in files]
 
     def row_ranges(entry: FileEntry) -> list[tuple[int | None, int | None]]:
         is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and entry.path.endswith(".parquet"))
         if not is_parquet:
             return [_WHOLE_FILE_ROW_RANGE]
-        return list(compute_parquet_splits(entry.path, approx_shard_bytes))
+        return list(
+            compute_parquet_splits(entry.path, approx_shard_bytes, max_rows_per_shard=load_op.max_rows_per_shard)
+        )
 
     with ThreadPoolExecutor(max_workers=_FOOTER_READ_CONCURRENCY) as pool:
         return list(pool.map(row_ranges, files))

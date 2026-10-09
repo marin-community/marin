@@ -186,21 +186,10 @@ can appear in total worker counts, but they cannot make progress. If all workers
 failed, the coordinator waits for `no_workers_timeout` (six hours by default) and raises
 `ZephyrWorkerError` with the dead duration and registered-worker count.
 
-Dedicated executions size the worker group for the largest planned shard count,
-up to the configured worker limit. Later stages can reshard while reusing that
-group. More shards than workers is normal because workers pull multiple tasks.
-Read shard progress with alive-worker state; the registered-worker count alone
-can overstate available capacity.
-
-For CPU-heavy work after a small number of input files, use
-`load_parquet().reshard(n, chunk_size=1000).map(transform)` with a
-`SubprocessRunner` context, where `n` is the desired number of downstream
-shards. The read stage materializes chunks once, then the coordinator
-distributes whole chunks round-robin. Choose a chunk size small enough to
-supply at least `n` chunks; fewer chunks leave shards empty. Evenly distributed
-chunks can still contain different amounts of CPU work.
-This adds intermediate disk I/O and does not preserve global row order.
-Parquet source splitting still respects row-group boundaries.
+The first stage caps the worker group to its initial shard count and the configured
+maximum. Later stages can reshard while reusing that group. More shards than workers is
+normal because workers pull multiple tasks. Read shard progress with alive-worker state;
+the registered-worker count alone can overstate available capacity.
 
 ### Stragglers and Data Skew
 

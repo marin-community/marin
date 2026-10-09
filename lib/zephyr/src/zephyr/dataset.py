@@ -239,6 +239,7 @@ class LoadFileOp:
     include_file_paths: bool = False
     file_path_column: str = DEFAULT_FILE_PATH_COLUMN
     batch_mode: bool = False
+    max_rows_per_shard: int | None = None
 
     def __repr__(self):
         return f"LoadFileOp(format={self.format}, columns={self.columns})"
@@ -267,10 +268,13 @@ class MapShardOp:
 
 @dataclass
 class ReshardOp:
-    """Redistribute chunks, optionally sizing the preceding stage's output chunks."""
+    """Reshard operation - redistributes data across target number of shards.
+
+    This is best-effort. It merely re-arranges the set of chunks distributed across shards
+    as a metadata operation. It does not re-materialize the data.
+    """
 
     num_shards: int
-    chunk_size: int | None = None
 
     def __repr__(self):
         return f"ReshardOp(num_shards={self.num_shards})"
@@ -586,17 +590,22 @@ class Dataset(Generic[T]):
         approx_shard_bytes: int | None = None,
         include_file_paths: bool = False,
         file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+        *,
+        max_rows_per_shard: int | None = None,
     ) -> "Dataset[dict]":
         """Load records from file sources, auto-detecting format.
 
         Args:
             columns: Optional column projection (for parquet files)
             approx_shard_bytes: If set, split parquet files into approximately this many
-                bytes per shard, aligned to row-group boundaries. Best-effort: a single
-                row group will never be split, so shards may exceed this size.
+                bytes per shard at row-group boundaries, before applying any row limit.
+                A single row group can exceed this byte target.
             include_file_paths: If True, add a column containing the source file path
                 for each record.
             file_path_column: Name of the column to add when include_file_paths is True.
+            max_rows_per_shard: For Parquet file sources, cap input rows per shard
+                before filtering. May split row groups, causing each worker to
+                read the whole overlapping group. None preserves row-group boundaries.
 
         Returns:
             Dataset yielding records as dictionaries
@@ -612,7 +621,16 @@ class Dataset(Generic[T]):
         """
         return cast(
             "Dataset[dict]",
-            self._derive(LoadFileOp("auto", columns, approx_shard_bytes, include_file_paths, file_path_column)),
+            self._derive(
+                LoadFileOp(
+                    format="auto",
+                    columns=columns,
+                    approx_shard_bytes=approx_shard_bytes,
+                    include_file_paths=include_file_paths,
+                    file_path_column=file_path_column,
+                    max_rows_per_shard=max_rows_per_shard,
+                )
+            ),
         )
 
     @overload
@@ -623,6 +641,7 @@ class Dataset(Generic[T]):
         include_file_paths: bool = ...,
         file_path_column: str = ...,
         *,
+        max_rows_per_shard: int | None = ...,
         batch_mode: Literal[False] = ...,
     ) -> "Dataset[dict]": ...
 
@@ -634,6 +653,7 @@ class Dataset(Generic[T]):
         include_file_paths: bool = ...,
         file_path_column: str = ...,
         *,
+        max_rows_per_shard: int | None = ...,
         batch_mode: Literal[True],
     ) -> "Dataset[RecordBatch]": ...
 
@@ -644,6 +664,7 @@ class Dataset(Generic[T]):
         include_file_paths: bool = False,
         file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
         *,
+        max_rows_per_shard: int | None = None,
         batch_mode: bool = False,
     ) -> "Dataset[dict] | Dataset[RecordBatch]":
         """Load records from parquet files.
@@ -651,11 +672,15 @@ class Dataset(Generic[T]):
         Args:
             columns: Optional column projection.
             approx_shard_bytes: If set, split each file into approximately this many
-                bytes per shard, aligned to row-group boundaries. Best-effort: a single
-                row group will never be split, so shards may exceed this size.
+                bytes per shard at row-group boundaries, before applying any row limit.
+                A single row group can exceed this byte target.
             include_file_paths: If True, add a column containing the source file path
                 for each record or batch.
             file_path_column: Name of the column to add when include_file_paths is True.
+            max_rows_per_shard: For file sources, cap input rows per shard before
+                filtering. May split row groups, causing each worker to read the
+                whole overlapping group. Useful for CPU-heavy local transforms;
+                this does not bound reader memory. None preserves row-group boundaries.
             batch_mode: If True, yield ``pa.RecordBatch`` objects instead of dicts.
         """
         op = LoadFileOp(
@@ -665,6 +690,7 @@ class Dataset(Generic[T]):
             include_file_paths=include_file_paths,
             file_path_column=file_path_column,
             batch_mode=batch_mode,
+            max_rows_per_shard=max_rows_per_shard,
         )
         return Dataset(self.source, [*self.operations, op])
 
@@ -743,25 +769,16 @@ class Dataset(Generic[T]):
         """
         return cast("Dataset[R]", self._derive(MapShardOp(fn)))
 
-    def reshard(self, num_shards: int | None, *, chunk_size: int | None = None) -> "Dataset[T]":
+    def reshard(self, num_shards: int | None) -> "Dataset[T]":
         """Redistribute data across target number of shards (best-effort).
 
-        Distributes whole intermediate chunks round-robin. Set ``chunk_size``
-        to bound the preceding stage's output chunks when a few input shards
-        would otherwise leave subsequent workers idle. This materializes the
-        input once; it does not reread source files for each output shard.
-        Global row order is not preserved.
+        Changes parallelism for subsequent operations.
 
         Useful after operations that reduce parallelism (like filtering) or when
         starting with a small number of input files.
 
         Args:
             num_shards: Optional target number of shards, when None it's a no-op
-            chunk_size: Maximum items per intermediate chunk before redistribution.
-                None retains existing chunking (ordinary worker output uses
-                100,000 items per chunk). Smaller chunks allow finer
-                distribution but create more files. This counts dataset items,
-                so Arrow batches and lists each count as one item.
 
         Returns:
             New dataset with reshard operation appended or self if num_shards is None
@@ -772,16 +789,14 @@ class Dataset(Generic[T]):
             ...     .from_files("/input", "*.jsonl.gz")  # 3 files = 3 shards
             ...     .flat_map(load_jsonl)                 # Still 3 shards
             ...     .filter(lambda r: r["score"] > 0.9)  # Still 3 shards
-            ...     .reshard(num_shards=20, chunk_size=1000)
+            ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
             >>> output_files = ctx.execute(ds).results
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
-        if chunk_size is not None and chunk_size <= 0:
-            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-        return Dataset(self.source, [*self.operations, ReshardOp(num_shards, chunk_size)]) if num_shards else self
+        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)]) if num_shards else self
 
     def write_jsonl(
         self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False
