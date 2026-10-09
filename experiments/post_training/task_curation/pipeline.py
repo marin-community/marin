@@ -426,6 +426,15 @@ def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> Ar
     )
 
 
+def source_downloads(
+    pipeline: RlDataPipeline, campaign: CampaignRuntime
+) -> tuple[ArtifactStep[Artifact], dict[str, ArtifactStep[Artifact]]]:
+    """Pinned primary and auxiliary downloads shared by local and reviewed runs."""
+    return download_step(pipeline.source, campaign), {
+        name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())
+    }
+
+
 @dataclass(frozen=True)
 class SourceRun:
     identity: dict[str, Any]
@@ -484,8 +493,7 @@ def source_step(
     """
     if config.mode == SourceProcessingMode.QUICK:
         raise ValueError("QUICK conversion uses run_curation with staged inputs; it does not build reviewed artifacts")
-    downloaded = download_step(pipeline.source, campaign)
-    inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
+    downloaded, inputs = source_downloads(pipeline, campaign)
     grader_step = None
     grader_built = None
     if pipeline.grader is not None and placement(pipeline.grader) != Placement.IMAGE:

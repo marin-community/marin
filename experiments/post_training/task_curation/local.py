@@ -16,6 +16,8 @@ import click
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import SourceStatus
@@ -30,31 +32,28 @@ from experiments.post_training.task_curation.campaign import (
     CampaignStatus,
     OutcomeStatus,
     SourceOutcome,
-    campaign_report,
     error_chain,
+    write_campaign_report,
 )
 from experiments.post_training.task_curation.pipeline import (
-    HfSource,
-    UrlSource,
-    download_step,
+    RlDataPipeline,
     run_curation,
+    source_downloads,
     source_files,
 )
-from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)
 
 
-def stage_local_source(source: HfSource | UrlSource, cache_root: Path, campaign: CampaignRuntime) -> str:
+def stage_local_download(download: ArtifactStep[Artifact], cache_root: Path) -> str:
     """Download pinned source files into the local artifact cache, reusing successful downloads."""
-    step = replace(download_step(source, campaign).lower(), output_path_prefix=str(cache_root))
+    step = replace(download.lower(), output_path_prefix=str(cache_root))
     StepRunner().run([step], max_concurrent=1)
     return step.output_path
 
 
 def run_local_sources(
-    sources: Mapping[str, RlDataSource],
+    sources: Mapping[str, RlDataPipeline],
     input_root: Path | None,
     output_root: Path,
     *,
@@ -79,8 +78,8 @@ def run_local_sources(
     outcomes = {name: SourceOutcome(name, str(output_root / name), OutcomeStatus.QUEUED) for name in sources}
 
     def report(status: CampaignStatus) -> None:
-        report_path.write_text(
-            json.dumps(campaign_report(status, mode="quick", outcomes=list(outcomes.values())), indent=2)
+        write_campaign_report(
+            str(report_path), status, mode=SourceProcessingMode.QUICK, outcomes=list(outcomes.values())
         )
 
     report(CampaignStatus.RUNNING)
@@ -99,27 +98,26 @@ def run_local_sources(
         ExitStack() as process_pools,
     ):
         process_context: ZephyrContext | None = None
-        for name, source in sources.items():
+        for name, pipeline in sources.items():
             outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.RUNNING)
             report(CampaignStatus.RUNNING)
             try:
-                if source.pipeline is None:
-                    raise ValueError(f"{source.name} has no conversion pipeline")
                 started = time.monotonic()
                 if source_overrides:
                     source_input = str(output_root)
                 elif input_root is not None:
                     source_input = str(input_root)
                 else:
-                    source_input = stage_local_source(source.pipeline.source, download_cache, campaign)
+                    source_input = None
+                primary, auxiliary = source_downloads(pipeline, campaign)
+                if source_input is None:
+                    source_input = stage_local_download(primary, download_cache)
                 staged_inputs = dict(inputs)
-                for key, auxiliary in source.pipeline.inputs.items():
-                    if key not in staged_inputs:
-                        staged_inputs[key] = stage_local_source(auxiliary, download_cache, campaign)
+                for input_name, download in auxiliary.items():
+                    if input_name not in staged_inputs:
+                        staged_inputs[input_name] = stage_local_download(download, download_cache)
                 logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
-                shards = conversion_shards(
-                    source_input, source_files(source.pipeline.source), overrides=source_overrides
-                )
+                shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
                 conversion_context = context
                 if max_workers > 1 and any(shard.row_end is not None and shard.parts > 1 for shard in shards):
                     # Process startup dominates small conversions; reserve it for split Parquet files.
@@ -136,7 +134,7 @@ def run_local_sources(
                         )
                     conversion_context = process_context
                 result = run_curation(
-                    source.pipeline,
+                    pipeline,
                     mode=SourceProcessingMode.QUICK,
                     context=conversion_context,
                     source_input=source_input,
@@ -156,56 +154,3 @@ def run_local_sources(
     if failed:
         raise CampaignFailed(f"Quick conversion failed for some sources; see {report_path}")
     return tuple(outcomes.values())
-
-
-@click.command(help=__doc__)
-@click.option("--source", "sources", multiple=True, required=True, help="Catalog key; repeat for several sources.")
-@click.option(
-    "--input-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Use staged primary inputs instead of downloading the declared pinned source.",
-)
-@click.option(
-    "--input-file",
-    "local_files",
-    type=(str, click.Path(exists=True, dir_okay=False, path_type=Path)),
-    multiple=True,
-    help="Use a local file under its declared logical source filename; repeat for multiple files.",
-)
-@click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
-@click.option(
-    "--download-cache",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=Path.home() / ".cache" / "marin",
-    show_default=True,
-    help="Local cache of pinned primary and auxiliary downloads.",
-)
-@click.option("--input", "auxiliary", type=(str, click.Path(exists=True, file_okay=False)), multiple=True)
-@click.option("--max-workers", type=click.IntRange(min=1), default=4, show_default=True)
-def main(
-    sources: tuple[str, ...],
-    local_files: tuple[tuple[str, Path], ...],
-    input_root: Path | None,
-    output_root: Path,
-    download_cache: Path,
-    auxiliary: tuple[tuple[str, str], ...],
-    max_workers: int,
-) -> None:
-    catalog = {source.name: source for source in all_sources().values() if source.pipeline is not None}
-    unknown = set(sources) - catalog.keys()
-    if unknown:
-        raise click.UsageError(f"Unknown sources: {', '.join(sorted(unknown))}")
-    inputs = {name: str(Path(path).resolve()) for name, path in auxiliary}
-    run_local_sources(
-        {name: catalog[name] for name in dict.fromkeys(sources)},
-        input_root,
-        output_root,
-        inputs=inputs,
-        max_workers=max_workers,
-        download_cache=download_cache,
-        source_files_override=dict(local_files),
-    )
-
-
-if __name__ == "__main__":
-    main()

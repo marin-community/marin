@@ -26,7 +26,7 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
-| `experiments/post_training/task_curation/pipeline.py`, `quick.py` | Source-level mode dispatch and local mechanical conversion |
+| `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
@@ -198,6 +198,10 @@ are admitted like rows of in-process graders.
 ## Conversion modes
 
 `pipeline.run_curation` is the common entry point for local and campaign runs.
+Pass an explicit `mode`: QUICK takes no config; SAMPLE/FULL require a matching
+`config.mode`. The single `driver` CLI requires `--mode quick|sample|full` and
+prints a plan unless `--run` is supplied. QUICK runs locally without review or
+controller settings. See the campaign quickstart below for input overrides.
 All modes share conversion and the normalized schema. QUICK retains TaskSpecs
 and typed rejections, skipping admission, fingerprints, review, deduplication
 and grading. It records declared images or locks without building environments.
@@ -296,7 +300,7 @@ Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
 Docker daemon.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
-`--base-url` overrides it. `--mode sample`, the default, is a test run that
+`--base-url` overrides it. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
 its own: it makes its own panel quality decision, converts every row of an
 accepted source, draws its control sample from all kept rows, and ends `gated`

@@ -11,7 +11,7 @@ From the repository root:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.quick \
+  -m experiments.post_training.task_curation.driver --mode quick --run \
   --source tasktrove-calendar --source tasktrove-math_prism \
   --output-root /tmp/task-curation-pass-1
 ```
@@ -22,10 +22,17 @@ review, grader execution, resource admission and deduplication. Outputs are
 `normalize/*.parquet`, `manifest.json` and `campaign.json`, with no admitted
 `final/` view. Failed sources are recorded while the rest continue.
 
+The driver requires `--mode quick`, `sample` or `full`. Omit `--run` to print a
+plan without downloading, converting or starting workers. QUICK requires named
+sources and preserves their request order, ignoring repeated names. SAMPLE/FULL
+select sources in catalog order; omitting `--source` selects the full catalog.
+QUICK needs no review model, controller, worker image or coordinator settings.
+
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
 are cached under `~/.cache/marin` (`--download-cache` overrides this).
 `--input-root PATH` uses already staged files from the declared revision;
-`--input NAME PATH` overrides an auxiliary input.
+`--input NAME PATH` overrides an auxiliary input. These local input options,
+`--output-root` and `--download-cache` are accepted only in QUICK mode.
 
 For a local fixture, replace `--input-root` with
 `--input-file LOGICAL_PATH LOCAL_FILE`, repeated as needed. The logical path must

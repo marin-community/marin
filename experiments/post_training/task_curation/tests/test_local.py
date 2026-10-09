@@ -19,9 +19,8 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
-from experiments.post_training.task_curation.datasets.tasktrove import calendar
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline
-from experiments.post_training.task_curation.quick import run_local_sources
+from experiments.post_training.task_curation.local import run_local_sources
+from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_pipelines
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
@@ -35,27 +34,19 @@ def convert_local_answer(row, context):
 
 @pytest.fixture
 def local_source():
-    source = calendar.sources()[0]
+    source = all_pipelines()["tasktrove-calendar"]
     return replace(
         source,
-        pipeline=replace(
-            all_pipelines()[source.name],
-            source=HfSource("fixture/questions", "a" * 40, ("rows.parquet",), SourceFormat.PARQUET),
-            convert=convert_local_answer,
-        ),
+        source=HfSource("fixture/questions", "a" * 40, ("rows.parquet",), SourceFormat.PARQUET),
+        convert=convert_local_answer,
     )
 
 
 def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     source = local_source
-    missing = replace(
-        source,
-        pipeline=replace(
-            source.pipeline, name="missing", source=replace(source.pipeline.source, files=("missing.parquet",))
-        ),
-    )
+    missing = replace(source, name="missing", source=replace(source.source, files=("missing.parquet",)))
     input_root = tmp_path / "input"
-    staged = input_root / source.pipeline.source.files[0]
+    staged = input_root / source.source.files[0]
     staged.parent.mkdir(parents=True)
     pq.write_table(pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), staged)
     output = tmp_path / "output"
@@ -81,7 +72,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     grader = cast(VerifyitGrader, task.grader)
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
     environment = cast(EnvironmentRequirements, grader.environment)
-    assert environment.packages_lock == str(source.pipeline.grader.lock.resolve())
+    assert environment.packages_lock == str(source.grader.lock.resolve())
 
 
 def answer_from_auxiliary(row, context):
@@ -106,16 +97,13 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     auxiliary = remote / "fixture/answers" / revision
     auxiliary.mkdir(parents=True)
     (auxiliary / "answer.txt").write_text("two")
-    source = calendar.sources()[0]
+    source = all_pipelines()["tasktrove-calendar"]
     source = replace(
         source,
-        pipeline=replace(
-            all_pipelines()[source.name],
-            source=HfSource("fixture/questions", revision, ("rows.jsonl",), SourceFormat.JSONL),
-            inputs={"answers": HfSource("fixture/answers", revision, ("answer.txt",), SourceFormat.JSONL)},
-            convert=answer_from_auxiliary,
-            grader=None,
-        ),
+        source=HfSource("fixture/questions", revision, ("rows.jsonl",), SourceFormat.JSONL),
+        inputs={"answers": HfSource("fixture/answers", revision, ("answer.txt",), SourceFormat.JSONL)},
+        convert=answer_from_auxiliary,
+        grader=None,
     )
     plan_download = pipeline_module.plan_download
 
@@ -161,10 +149,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     updated = remote / "fixture/questions" / next_revision
     updated.mkdir(parents=True)
     (updated / "rows.jsonl").write_text('{"prompt": "The next pinned question"}\n')
-    pipeline = cast(RlDataPipeline, source.pipeline)
-    source = replace(
-        source, pipeline=replace(pipeline, source=replace(cast(HfSource, pipeline.source), revision=next_revision))
-    )
+    source = replace(source, source=replace(cast(HfSource, source.source), revision=next_revision))
     next_output = tmp_path / "next"
     run_local_sources({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
     next_task = converted_task(next_output, source.name)
@@ -174,7 +159,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
 
 def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes(local_source, tmp_path):
     source = local_source
-    logical_path = source.pipeline.source.files[0]
+    logical_path = source.source.files[0]
     local_file = tmp_path / "different-name.parquet"
     pq.write_table(
         pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), local_file

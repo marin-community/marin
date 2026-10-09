@@ -6,6 +6,8 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from iris.cluster.client.job_info import JobInfo, set_job_info
@@ -17,6 +19,7 @@ from shellbox.image import RegistryImage
 from shellbox.machine import HostImage, NetworkPolicy
 from taskcompendium.convert.environment import grading_environment
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
+from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import (
@@ -54,6 +57,7 @@ def catalog(monkeypatch):
 
 def arguments(tmp_path) -> list[str]:
     options = {
+        "--mode": "sample",
         "--review-mode": "chat",
         "--model-revision": "fixture-revision",
         "--review-cache": str(tmp_path / "cache"),
@@ -153,3 +157,57 @@ def test_iris_backend_inside_a_job_uses_the_job_controller(tmp_path, catalog, ir
     assert job_controller_url() == CONTROLLER_URL
     result = CliRunner().invoke(main, iris_arguments(tmp_path))
     assert result.exit_code == 0, result.output
+
+
+def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):
+    monkeypatch.delenv("GLM_BULK_TOKEN", raising=False)
+    output, cache = tmp_path / "output", tmp_path / "downloads"
+    options = {
+        "--mode": "quick",
+        "--output-root": str(output),
+        "--download-cache": str(cache),
+        "--max-workers": "1",
+    }
+    args = [item for pair in options.items() for item in pair]
+    args += ["--source", "math500", "--source", "aime24", "--source", "math500"]
+    runner = CliRunner()
+    result = runner.invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert [source["name"] for source in json.loads(result.output)["sources"]] == ["math500", "aime24"]
+    assert not output.exists()
+    assert not cache.exists()
+
+    staged = tmp_path / "input"
+    (staged / "data").mkdir(parents=True)
+    (staged / "test.jsonl").write_text('{"problem": "Two plus two?", "answer": "4"}\n')
+    pq.write_table(
+        pa.Table.from_pylist([{"problem": "One plus one?", "answer": "2"}]), staged / "data/train-0000.parquet"
+    )
+    result = runner.invoke(main, [*args, "--input-root", str(staged), "--run"])
+    assert result.exit_code == 0, result.output
+    report = json.loads((output / "campaign.json").read_text())
+    assert [source["name"] for source in report["sources"]] == ["math500", "aime24"]
+    assert report["counts"] == {"completed": 2}
+    for name, source_row in (("math500", "test.jsonl:0"), ("aime24", "data/train-0000.parquet:0")):
+        rows = [row for shard in (output / name / "normalize").glob("*.parquet") for row in load_parquet(str(shard))]
+        assert [row["source_row"] for row in rows] == [source_row]
+
+
+@pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root", "--download-cache"])
+def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, option):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    file = inputs / "fixture.jsonl"
+    file.write_text('{"prompt": "fixture"}\n')
+    values = {
+        "--input-root": [str(inputs)],
+        "--input-file": ["fixture.jsonl", str(file)],
+        "--input": ["answers", str(inputs)],
+        "--output-root": [str(tmp_path / "output")],
+        "--download-cache": [str(tmp_path / "downloads")],
+    }
+    result = CliRunner().invoke(main, [*arguments(tmp_path), option, *values[option]])
+    assert result.exit_code == 2
+    assert not (tmp_path / "report.json").exists()
+    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "downloads").exists()
