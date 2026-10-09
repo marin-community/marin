@@ -4,6 +4,7 @@
 import json
 import shutil
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -90,6 +91,8 @@ def test_iris_schedules_each_grader_image_on_the_controller_without_network():
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
+    # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
+    monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
     environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
     (artifact,) = run(environment_artifact(environment, REPOSITORY))
     built = []
