@@ -30,8 +30,9 @@ from verifyit.spec import PytestSpec, ScriptSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import WORKSPACE, repository_build_task
 from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
+    PYTEST_REPORT_PLUGIN,
+    pytest_selection,
     repository_test_ids,
-    uncollectable,
 )
 
 CONFIG_JSON = "tests/config.json"
@@ -268,25 +269,12 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
 
     if not fail_to_pass:
         return Rejected(ConvertStatus.TOO_FEW_CASES, "config.json has no FAIL_TO_PASS tests")
-    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
-    if foreign:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}"
-        )
-    retained = [node_id for node_id in pass_to_pass if not uncollectable(node_id)]
-    node_ids = [*fail_to_pass, *retained]
-    files = {node_id.split("::", 1)[0] for node_id in node_ids}
-    manifest = {
-        line.strip()
-        for path in (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS)
-        for line in (task.get_text(path) or "").splitlines()
-        if line.strip()
-    }
-    uncovered = sorted(files - manifest)
-    if uncovered:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"graded test files missing from trusted manifest: {uncovered[:5]}"
-        )
+    selection = pytest_selection(
+        fail_to_pass, pass_to_pass, (task.get_text(path) for path in (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS))
+    )
+    if isinstance(selection, ImportRejection):
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, selection.detail)
+    node_ids = [*selection.must_pass, *selection.must_not_break]
     non_pytest = [node_id for node_id in node_ids if not _is_pytest_node_id(node_id)]
     if non_pytest:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"not pytest node ids: {non_pytest[:3]}")
@@ -306,9 +294,9 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     python, python_setup = _python_command(conda_lines)
 
     spec = PytestSpec(
-        paths=tuple(sorted(files)),
-        must_pass=tuple(fail_to_pass),
-        must_not_break=tuple(retained),
+        paths=selection.files,
+        must_pass=selection.must_pass,
+        must_not_break=selection.must_not_break,
         setup=python_setup + trusted_setup(trusted_commit),
         protected_paths_files=(TRUSTED_TEST_PATHS.removeprefix("tests/"), TRUSTED_PATCH_PATHS.removeprefix("tests/")),
         python=python,
@@ -350,7 +338,8 @@ def convert_swe_rebench_task(row: RawRow, _context: ConversionContext) -> Normal
         conda_lines = _conda_activation(files.text(TEST_SH))
         grader_setup += "\n" + "\n".join(conda_lines) + "\n"
         grader_setup += (
-            "pip install --no-cache-dir pytest-json-report || pip3 install --no-cache-dir pytest-json-report\n"
+            f"pip install --no-cache-dir {PYTEST_REPORT_PLUGIN} || "
+            f"pip3 install --no-cache-dir {PYTEST_REPORT_PLUGIN}\n"
         )
         _fail_to_pass, pass_to_pass = _fail_and_pass_to_pass(json.loads(files.text(CONFIG_JSON)))
         if tuple(pass_to_pass) != converted.spec.must_not_break:
