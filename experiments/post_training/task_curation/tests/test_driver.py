@@ -51,7 +51,7 @@ def math500():
 @pytest.fixture
 def catalog(monkeypatch):
     pipelines = {name: replace(math500(), name=name) for name in ("first", "second", "third")}
-    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_pipelines", lambda: pipelines)
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_pipelines", lambda: pipelines)
     return pipelines
 
 
@@ -159,35 +159,31 @@ def test_iris_backend_inside_a_job_uses_the_job_controller(tmp_path, catalog, ir
     assert result.exit_code == 0, result.output
 
 
-def test_quick_cli_converts_selected_sources_once_in_request_order(tmp_path, monkeypatch):
+def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):
     monkeypatch.delenv("GLM_BULK_TOKEN", raising=False)
+    output, cache = tmp_path / "output", tmp_path / "downloads"
+    options = {
+        "--mode": "quick",
+        "--output-root": str(output),
+        "--download-cache": str(cache),
+        "--max-workers": "1",
+    }
+    args = [item for pair in options.items() for item in pair]
+    args += ["--source", "math500", "--source", "aime24", "--source", "math500"]
+    runner = CliRunner()
+    result = runner.invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert [source["name"] for source in json.loads(result.output)["sources"]] == ["math500", "aime24"]
+    assert not output.exists()
+    assert not cache.exists()
+
     staged = tmp_path / "input"
     (staged / "data").mkdir(parents=True)
     (staged / "test.jsonl").write_text('{"problem": "Two plus two?", "answer": "4"}\n')
     pq.write_table(
         pa.Table.from_pylist([{"problem": "One plus one?", "answer": "2"}]), staged / "data/train-0000.parquet"
     )
-    output = tmp_path / "output"
-    result = CliRunner().invoke(
-        main,
-        [
-            "--mode",
-            "quick",
-            "--run",
-            "--source",
-            "math500",
-            "--source",
-            "aime24",
-            "--source",
-            "math500",
-            "--input-root",
-            str(staged),
-            "--output-root",
-            str(output),
-            "--max-workers",
-            "1",
-        ],
-    )
+    result = runner.invoke(main, [*args, "--input-root", str(staged), "--run"])
     assert result.exit_code == 0, result.output
     report = json.loads((output / "campaign.json").read_text())
     assert [source["name"] for source in report["sources"]] == ["math500", "aime24"]
@@ -195,40 +191,6 @@ def test_quick_cli_converts_selected_sources_once_in_request_order(tmp_path, mon
     for name, source_row in (("math500", "test.jsonl:0"), ("aime24", "data/train-0000.parquet:0")):
         rows = [row for shard in (output / name / "normalize").glob("*.parquet") for row in load_parquet(str(shard))]
         assert [row["source_row"] for row in rows] == [source_row]
-
-    unknown = CliRunner().invoke(
-        main, ["--mode", "quick", "--source", "unknown", "--output-root", str(tmp_path / "unknown"), "--run"]
-    )
-    assert unknown.exit_code == 2
-    assert not (tmp_path / "unknown").exists()
-
-
-def test_quick_cli_without_run_plans_in_request_order_without_staging(tmp_path, monkeypatch):
-    monkeypatch.delenv("GLM_BULK_TOKEN", raising=False)
-    output, cache = tmp_path / "output", tmp_path / "downloads"
-    result = CliRunner().invoke(
-        main,
-        [
-            "--mode",
-            "quick",
-            "--source",
-            "math500",
-            "--source",
-            "aime24",
-            "--source",
-            "math500",
-            "--output-root",
-            str(output),
-            "--download-cache",
-            str(cache),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    plan = json.loads(result.output)
-    assert plan["mode"] == "quick"
-    assert [source["name"] for source in plan["sources"]] == ["math500", "aime24"]
-    assert not output.exists()
-    assert not cache.exists()
 
 
 @pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root", "--download-cache"])

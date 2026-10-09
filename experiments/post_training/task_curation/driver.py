@@ -33,8 +33,8 @@ from taskcompendium.runtime.local import LocalGraderMachines
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.local import run_local_sources
-from experiments.post_training.task_curation.pipeline import download_identity, source_step
-from experiments.post_training.task_curation.sources import selected_pipelines
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, download_identity, source_step
+from experiments.post_training.task_curation.sources import all_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
 IRIS_SCHEDULING_TIMEOUT = 600
@@ -146,6 +146,15 @@ def _controller_url(backend: VerificationBackend, controller_url: str | None) ->
     if job_url is None:
         raise click.UsageError("--verification-backend iris outside an Iris job requires --controller-url")
     return job_url
+
+
+def _selected_pipelines(sources: tuple[str, ...]) -> dict[str, RlDataPipeline]:
+    """The named catalog sources in catalog order, or the whole catalog when none is named."""
+    catalog = all_pipelines()
+    unknown = set(sources) - catalog.keys()
+    if unknown:
+        raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
+    return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
 
 
 def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_concurrency: int) -> Reviewer:
@@ -293,10 +302,7 @@ def main(
     download_cache: Path | None,
     do_run: bool,
 ) -> None:
-    try:
-        pipelines = selected_pipelines(sources)
-    except ValueError as error:
-        raise click.UsageError(str(error)) from error
+    pipelines = _selected_pipelines(sources)
     processing_mode = SourceProcessingMode(mode)
     if processing_mode == SourceProcessingMode.QUICK:
         if not sources:
@@ -310,28 +316,24 @@ def main(
         download_cache = download_cache if download_cache is not None else Path.home() / ".cache/marin"
         max_workers = max_workers if max_workers is not None else QUICK_MAX_WORKERS
         if not do_run:
-            click.echo(
-                json.dumps(
+            plan = {
+                "mode": processing_mode,
+                "sources": [
                     {
-                        "mode": processing_mode,
-                        "sources": [
-                            {
-                                "name": pipeline.name,
-                                "source": download_identity(pipeline.source),
-                                "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
-                            }
-                            for pipeline in pipelines.values()
-                        ],
-                        "input_root": str(input_root) if input_root is not None else None,
-                        "input_files": {name: str(path) for name, path in local_files},
-                        "inputs": inputs,
-                        "output_root": str(output_root),
-                        "download_cache": str(download_cache),
-                        "max_workers": max_workers,
-                    },
-                    indent=2,
-                )
-            )
+                        "name": pipeline.name,
+                        "source": download_identity(pipeline.source),
+                        "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
+                    }
+                    for pipeline in pipelines.values()
+                ],
+                "input_root": str(input_root) if input_root is not None else None,
+                "input_files": {name: str(path) for name, path in local_files},
+                "inputs": inputs,
+                "output_root": str(output_root),
+                "download_cache": str(download_cache),
+                "max_workers": max_workers,
+            }
+            click.echo(json.dumps(plan, indent=2))
             return
         run_local_sources(
             pipelines,

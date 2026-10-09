@@ -3,8 +3,6 @@
 
 """The RL data catalog: every dataset declaration, keyed by name."""
 
-from collections.abc import Sequence
-
 from experiments.post_training.task_curation.datasets import unconverted
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
@@ -67,12 +65,3 @@ def all_pipelines() -> dict[str, RlDataPipeline]:
     if len(set(names)) != len(names):
         raise ValueError("Duplicate RL pipeline names")
     return {pipeline.name: pipeline for pipeline in pipelines}
-
-
-def selected_pipelines(names: Sequence[str]) -> dict[str, RlDataPipeline]:
-    """Select runnable declarations in catalog order; an empty selection includes all."""
-    catalog = all_pipelines()
-    unknown = set(names) - catalog.keys()
-    if unknown:
-        raise ValueError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not names or name in names}

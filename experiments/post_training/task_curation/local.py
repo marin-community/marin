@@ -52,25 +52,6 @@ def stage_local_download(download: ArtifactStep[Artifact], cache_root: Path) -> 
     return step.output_path
 
 
-def stage_local_inputs(
-    pipeline: RlDataPipeline,
-    cache_root: Path,
-    campaign: CampaignRuntime,
-    *,
-    source_input: str | None,
-    inputs: Mapping[str, str],
-) -> tuple[str, dict[str, str]]:
-    """Stage declared pins unless a primary root or auxiliary override is supplied."""
-    primary, auxiliary = source_downloads(pipeline, campaign)
-    if source_input is None:
-        source_input = stage_local_download(primary, cache_root)
-    staged_inputs = dict(inputs)
-    for name, download in auxiliary.items():
-        if name not in staged_inputs:
-            staged_inputs[name] = stage_local_download(download, cache_root)
-    return source_input, staged_inputs
-
-
 def run_local_sources(
     sources: Mapping[str, RlDataPipeline],
     input_root: Path | None,
@@ -128,9 +109,13 @@ def run_local_sources(
                     source_input = str(input_root)
                 else:
                     source_input = None
-                source_input, staged_inputs = stage_local_inputs(
-                    pipeline, download_cache, campaign, source_input=source_input, inputs=inputs
-                )
+                primary, auxiliary = source_downloads(pipeline, campaign)
+                if source_input is None:
+                    source_input = stage_local_download(primary, download_cache)
+                staged_inputs = dict(inputs)
+                for input_name, download in auxiliary.items():
+                    if input_name not in staged_inputs:
+                        staged_inputs[input_name] = stage_local_download(download, download_cache)
                 logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
                 shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
                 conversion_context = context

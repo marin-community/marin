@@ -266,15 +266,15 @@ def run_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
-    QUICK records the declared grader lock without building or running it.
-    SAMPLE and FULL require a matching config and the campaign's resolved grader.
+    Quick conversion records the declared grader lock without building or running it.
+    Sample and full runs require the campaign's review configuration and resolved grader.
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
         raise ValueError(f"Missing staged auxiliary inputs for {pipeline.name}: {sorted(missing)}")
-    if config is not None and mode == SourceProcessingMode.QUICK:
-        raise ValueError("QUICK conversion does not take review or verification settings")
     if mode == SourceProcessingMode.QUICK:
+        if config is not None:
+            raise ValueError("QUICK conversion does not take review or verification settings")
         if grader_environment is None and pipeline.grader is not None:
             environment = pipeline.grader
             if environment.image is not None:
