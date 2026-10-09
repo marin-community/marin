@@ -32,7 +32,6 @@ from zephyr.dataset import Dataset
 import taskcompendium
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
-from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
@@ -44,10 +43,9 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.stages import (
-    ACCEPTED_SHARD_TEMPLATE,
     AUDIT_INPUT_PATTERN,
-    AUDIT_SHARD_TEMPLATE,
-    manifest_counts,
+    combine_manifest_counts,
+    write_filtered_shard,
 )
 from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
@@ -571,9 +569,9 @@ def _write_report(
     return report
 
 
-def _gate_rows(run: _VerificationRun, decision: SourceReport, results: list[SampleResult]) -> None:
-    """Rewrite every audit row with its source gate, then export the accepted rows."""
-    execute_phase(
+def _gate_rows(run: _VerificationRun, decision: SourceReport, results: list[SampleResult]) -> dict[str, Any]:
+    """Write the gated audit and accepted rows, counting both in the same shard pass."""
+    result = execute_phase(
         run.context,
         Dataset.from_files(run.inputs)
         .load_parquet()
@@ -584,19 +582,11 @@ def _gate_rows(run: _VerificationRun, decision: SourceReport, results: list[Samp
                 results={result.task_id: sample_result_checks(result) for result in results},
             )
         )
-        .write_parquet(str(run.output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA),
+        .map_shard(partial(write_filtered_shard, output=run.output)),
         telemetry=run.telemetry,
         operation="row_gate",
     )
-    execute_phase(
-        run.context,
-        Dataset.from_files(str(run.output / AUDIT_INPUT_PATTERN))
-        .load_parquet()
-        .filter(is_accepted)
-        .write_parquet(str(run.output / ACCEPTED_SHARD_TEMPLATE), schema=TASK_SCHEMA),
-        telemetry=run.telemetry,
-        operation="accepted",
-    )
+    return combine_manifest_counts(result.results)
 
 
 def _write_manifest(run: _VerificationRun, counts: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
@@ -640,6 +630,5 @@ def verify_source(
         results = [item.result for item in verified]
         decision = source_verification_report(sample, results, policy)
         report = _write_report(run, suite, decision, verified)
-        _gate_rows(run, decision, results)
-        counts = manifest_counts(output, context, telemetry=telemetry)
+        counts = _gate_rows(run, decision, results)
     return _write_manifest(run, counts, report)

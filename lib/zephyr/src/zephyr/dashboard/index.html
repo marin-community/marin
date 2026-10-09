@@ -165,6 +165,24 @@ function startDashboard() {
     select.value = choices.some(([value]) => value === selected) ? selected : choices[0]?.[0] || '';
   }
 
+  function replaceContent(parent, ...children) {
+    const active = parent.contains(document.activeElement) ? document.activeElement : null;
+    const label = active?.getAttribute('aria-label');
+    const id = active?.id;
+    const value = active?.value;
+    const scroll = window.scrollY;
+    parent.replaceChildren(...children);
+    if (id || label) {
+      const selector = id ? `#${CSS.escape(id)}` : `[aria-label="${CSS.escape(label)}"]`;
+      const replacement = parent.querySelector(selector);
+      if (replacement) {
+        if (value !== undefined) replacement.value = value;
+        replacement.focus({ preventScroll: true });
+      }
+    }
+    if (window.scrollY !== scroll) window.scrollTo({ top: scroll, behavior: 'instant' });
+  }
+
   function taskLink(taskId, label) {
     const jobId = taskId.slice(0, taskId.lastIndexOf('/'));
     const link = element('a', label);
@@ -296,11 +314,16 @@ function startDashboard() {
     return bar;
   }
 
+  function stageProgress(status) {
+    const completed = status.node_statuses.filter((node) => node.state === 'succeeded').length;
+    return `${completed}/${status.node_statuses.length} stages complete`;
+  }
+
   function summary(status) {
     const active = status.worker_states.find((worker) => worker.state === 'active')?.count || 0;
     const elapsed = status.started_at_ms ? `${number(((status.finished_at_ms || Date.now()) - status.started_at_ms) / 1000)} s` : '—';
     const values = [
-      ['Current stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
+      ['Pipeline', stageProgress(status)], ['Current stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
       ['Workers', `${active}/${status.expected_workers}`], ['CPU', `${number(status.resources.cpu_cores)} cores`],
       ['Memory', bytes(status.resources.memory_bytes)], ['Elapsed', elapsed],
       ['In flight / queued', `${status.in_flight_shards} / ${status.queued_shards}`], ['Retries', status.retries],
@@ -331,19 +354,30 @@ function startDashboard() {
 
   function renderFleet(pipelines) {
     const content = byId('content');
-    const heading = element('div');
-    heading.className = 'section-heading';
+    let heading = content.querySelector('#fleet-heading');
+    let list = content.querySelector('.pipeline-list');
+    if (!list) {
+      heading = element('div');
+      heading.id = 'fleet-heading';
+      heading.className = 'section-heading';
+      list = element('div');
+      list.className = 'pipeline-list';
+      content.replaceChildren(heading, list);
+    }
+    heading.replaceChildren();
     const title = element('div');
     title.append(element('span', 'ALL PIPELINES'), element('h2', `${pipelines.length} pipeline${pipelines.length === 1 ? '' : 's'}`));
     title.firstChild.className = 'eyebrow';
     const counts = new Map();
     for (const item of pipelines) counts.set(item.status.phase, (counts.get(item.status.phase) || 0) + 1);
     heading.append(title, element('p', [...counts].map(([phase, count]) => `${count} ${phaseLabel(phase)}`).join(' · ')));
-    const list = element('div');
-    list.className = 'pipeline-list';
-    for (const item of pipelines) {
-      const card = element('a');
+    const cards = new Map([...list.querySelectorAll('.pipeline-card')].map((card) => [card.dataset.executionId, card]));
+    for (const [index, item] of pipelines.entries()) {
+      const card = cards.get(item.status.execution_id) || element('a');
+      cards.delete(item.status.execution_id);
       card.className = 'pipeline-card';
+      card.dataset.executionId = item.status.execution_id;
+      card.replaceChildren();
       const url = new URL(location.href);
       url.searchParams.set('execution_id', item.status.execution_id);
       url.hash = 'overview';
@@ -358,7 +392,7 @@ function startDashboard() {
       const name = element('div');
       name.append(element('h3', item.status.execution_id));
       if (item.plan.pipeline_name) name.append(element('p', item.plan.pipeline_name));
-      name.append(element('p', `${item.status.current_stage || 'No active stage'} · ${item.status.completed_shards}/${item.status.total_shards} current-stage shards`));
+      name.append(element('p', `${stageProgress(item.status)} · ${item.status.current_stage || 'No active stage'}`));
       name.lastChild.className = 'muted';
       head.append(name, badge(item.status.phase));
       card.append(head, pipelineBar(item.plan, item.status));
@@ -368,10 +402,15 @@ function startDashboard() {
         note.className = 'muted';
         card.append(note);
       }
-      list.append(card);
+      if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
     }
-    if (!pipelines.length) list.append(element('p', 'No pipelines are currently held by this coordinator. Completed executions disappear after the driver releases them.'));
-    content.replaceChildren(heading, list);
+    for (const card of cards.values()) card.remove();
+    list.querySelector('.empty-pipelines')?.remove();
+    if (!pipelines.length) {
+      const empty = element('p', 'No pipelines have been submitted to this coordinator.');
+      empty.className = 'empty-pipelines';
+      list.append(empty);
+    }
   }
 
   function chart(points, field, title, format) {
@@ -451,7 +490,9 @@ function startDashboard() {
     back.type = 'button';
     back.onclick = () => selectPipeline('');
     const panel = element('section');
+    panel.id = 'pipeline-detail';
     panel.className = 'panel';
+    panel.dataset.executionId = status.execution_id;
     const head = element('div');
     head.className = 'card-heading';
     const name = element('div');
@@ -467,6 +508,14 @@ function startDashboard() {
       key.append(part);
     }
     panel.append(key);
+    const previousPanel = byId('pipeline-detail');
+    if (previousPanel?.dataset.executionId === status.execution_id) {
+      previousPanel.replaceChildren(...panel.childNodes);
+      [...previousPanel.querySelectorAll('.stage-flow')].forEach((flow, index) => { flow.scrollLeft = scrollPositions[index] || 0; });
+      byId('failure').textContent = status.fatal_error;
+      byId('failure').hidden = !status.fatal_error;
+      return;
+    }
     const shardPanel = element('section');
     shardPanel.className = 'panel';
     shardPanel.append(element('h2', 'Current-stage shards'));
@@ -512,6 +561,7 @@ function startDashboard() {
     for (const shard of page.shards) {
       const tile = element('button');
       tile.type = 'button';
+      tile.id = `shard-${shard.index}`;
       tile.className = `shard-tile ${shard.state}`;
       tile.title = `Shard ${shard.index}: ${shard.state}`;
       tile.setAttribute('aria-label', tile.title);
@@ -539,10 +589,12 @@ function startDashboard() {
     if (page.total > shardPageSize) {
       const previous = element('button', 'Previous');
       previous.type = 'button';
+      previous.setAttribute('aria-label', 'Previous shard page');
       previous.disabled = shardOffset === 0;
       previous.onclick = () => { shardOffset = Math.max(0, shardOffset - shardPageSize); void refresh(); };
       const next = element('button', 'Next');
       next.type = 'button';
+      next.setAttribute('aria-label', 'Next shard page');
       next.disabled = shardOffset + page.shards.length >= page.total;
       next.onclick = () => { shardOffset += shardPageSize; void refresh(); };
       const jump = element('input');
@@ -553,6 +605,7 @@ function startDashboard() {
       jump.setAttribute('aria-label', 'Shard number');
       const go = element('button', 'Go');
       go.type = 'button';
+      go.setAttribute('aria-label', 'Go to shard');
       go.onclick = () => {
         const index = Number(jump.value);
         if (!jump.value || !Number.isInteger(index) || index < 0 || index >= page.total) return;
@@ -561,7 +614,7 @@ function startDashboard() {
       };
       controls.append(previous, next, jump, go);
     }
-    area.replaceChildren(range, grid, detail, key, controls);
+    replaceContent(area, range, grid, detail, key, controls);
   }
 
   function renderPage(data) {
@@ -578,7 +631,7 @@ function startDashboard() {
         worker.task_id ? taskLink(worker.task_id, 'Open task') : '—',
       ]);
     }
-    byId('content').replaceChildren(table(headers, rows));
+    replaceContent(byId('content'), table(headers, rows));
     const count = rows.length;
     byId('range').textContent = `${count ? offset + 1 : 0}–${offset + count} of ${data.total}`;
     byId('previous').disabled = offset === 0;
@@ -599,15 +652,9 @@ function startDashboard() {
       const overview = await get('overview');
       if (current !== request) return;
       const selected = overview.pipelines.find((item) => item.status.execution_id === executionId);
-      if (executionId && !selected) {
-        executionId = '';
-        const url = new URL(location.href);
-        url.searchParams.delete('execution_id');
-        history.replaceState(null, '', url);
-      }
-      byId('counters-link').hidden = !selected;
-      byId('filters').hidden = byId('pager').hidden = !sortFields[view] || (view === 'counters' && !selected);
-      byId('phase').textContent = selected ? `${selected.plan.pipeline_name || executionId} · ${phaseLabel(selected.status.phase)}` : `${overview.pipelines.length} pipelines held by this coordinator`;
+      byId('counters-link').hidden = !selected || selected.archived;
+      byId('filters').hidden = byId('pager').hidden = !sortFields[view] || (view === 'counters' && (!selected || selected.archived));
+      byId('phase').textContent = selected ? `${selected.plan.pipeline_name || executionId} · ${phaseLabel(selected.status.phase)}` : `${overview.pipelines.length} pipelines · ${overview.pipelines.filter((item) => ['running', 'waiting_for_workers'].includes(item.status.phase)).length} active`;
       const coordinatorTask = selected?.status.coordinator_task_id || overview.pipelines[0]?.status.coordinator_task_id;
       byId('coordinator').hidden = !coordinatorTask;
       if (coordinatorTask) byId('coordinator').href = taskLink(coordinatorTask, '').href;
@@ -629,18 +676,29 @@ function startDashboard() {
             },
             (error) => {
               if (current !== request) return;
-              renderMetrics({ points: [], warning: current.signal.aborted ? 'Metrics request timed out.' : `Metrics unavailable: ${error.message}` });
+              const previous = metricCache?.executionId === executionId ? metricCache.data : { points: [] };
+              renderMetrics({ ...previous, warning: current.signal.aborted ? 'Metrics request timed out.' : `Metrics unavailable: ${error.message}` });
             },
           );
-          const shardsRequest = get('shards', { execution_id: executionId, offset: shardOffset, limit: shardPageSize }).then(
-            (page) => { if (current === request) renderShards(page); },
-            (error) => { if (current === request) byId('shard-area').textContent = `Shard status unavailable: ${error.message}`; },
-          );
+          let shardsRequest;
+          if (selected.archived) {
+            byId('shard-area').replaceChildren(element('p', 'Finished execution: shard details were released; the summary and Finelog metrics remain available.'));
+            shardsRequest = Promise.resolve();
+          } else {
+            shardsRequest = get('shards', { execution_id: executionId, offset: shardOffset, limit: shardPageSize }).then(
+              (page) => { if (current === request) renderShards(page); },
+              (error) => { if (current === request) byId('shard-area').textContent = `Shard status unavailable: ${error.message}`; },
+            );
+          }
           await Promise.all([metricsRequest, shardsRequest]);
         }
-        else renderFleet(overview.pipelines);
-      } else if (view === 'counters' && !selected) {
-        byId('content').replaceChildren(element('p', 'Choose a pipeline from Overview to inspect its counters.'));
+        else if (executionId) {
+          const back = element('button', '← All pipelines');
+          back.onclick = () => selectPipeline('');
+          byId('content').replaceChildren(back, element('p', 'This execution is no longer retained by the coordinator.'));
+        } else renderFleet(overview.pipelines);
+      } else if (view === 'counters' && (!selected || selected.archived)) {
+        byId('content').replaceChildren(element('p', selected?.archived ? 'Counters were released when this execution finished. Its metrics remain available in Overview.' : 'Choose a pipeline from Overview to inspect its counters.'));
       } else {
         const query = view === 'workers' ? {} : { execution_id: executionId };
         Object.assign(query, {
@@ -658,9 +716,7 @@ function startDashboard() {
       if (current !== request) return;
       byId('error').textContent = current.signal.aborted ? 'The request timed out. Select Refresh to try again.' : error.message;
       byId('error').hidden = false;
-      byId('content').replaceChildren();
-      byId('phase').textContent = 'Data unavailable';
-      byId('failure').hidden = true;
+      byId('phase').textContent = 'Refresh failed; showing the last snapshot';
     } finally {
       clearTimeout(timeout);
       if (current === request) {
