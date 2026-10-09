@@ -538,7 +538,7 @@ def project_by_name(name: str) -> ExternalProject:
 
 
 def validate_marinskyrl_environment(project: ExternalProject) -> None:
-    """Check installed metadata that uv's rigging override replaces during resolution."""
+    """Check the frozen launcher's installed dependency metadata."""
     with tempfile.TemporaryDirectory(prefix="marinskyrl-lock-") as temporary_directory:
         directory = Path(temporary_directory)
         for name in ("pyproject.toml", "uv.lock"):
