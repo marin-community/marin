@@ -988,6 +988,41 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
     yield counts
 
 
+def write_conversion(
+    rows: Dataset[ConvertedRow],
+    context: ZephyrContext,
+    output_path: str,
+    *,
+    telemetry: PhaseTelemetry | None = None,
+) -> ConversionResult:
+    """Write unreviewed converted rows and typed rejections, returning paths and counts.
+
+    One execution evaluates the supplied rows and writes ``normalize/`` and
+    ``manifest.json``. Other evidence may already exist in the output directory;
+    existing conversion outputs are rejected to prevent mixing shards on rerun.
+    """
+    output = StoragePath(output_path)
+    if (output / "normalize").exists() or (output / "manifest.json").exists():
+        raise FileExistsError(f"Conversion output already exists: {output_path}")
+    started = time.monotonic()
+    dataset = rows.map(converted_columns).map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
+    counts: Counter[str] = Counter()
+    for shard_counts in execute_phase(context, dataset, telemetry=telemetry, operation="conversion").results:
+        counts.update(shard_counts)
+    result = ConversionResult(
+        normalized_path=str(output / "normalize"),
+        manifest_path=str(output / "manifest.json"),
+        input_rows=counts["input_rows"],
+        converted_rows=counts["converted_rows"],
+        rejections={
+            key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
+        },
+        elapsed_seconds=time.monotonic() - started,
+    )
+    _write_json(output / "manifest.json", {**asdict(result), "reviewed": False, "verified": False})
+    return result
+
+
 def _run_quick(
     recipe: SourceRecipe,
     context: ZephyrContext,
@@ -1006,26 +1041,12 @@ def _run_quick(
     output = StoragePath(output_path)
     if output.exists():
         raise FileExistsError(f"Conversion output already exists: {output_path}")
-    started = time.monotonic()
-    dataset = (
+    result = write_conversion(
         conversion_stage(
             _raw_dataset(source_input, recipe, source_overrides, parquet_shard_bytes=parquet_shard_bytes), recipe
-        )
-        .map(converted_columns)
-        .map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
-    )
-    counts: Counter[str] = Counter()
-    for shard_counts in context.execute(dataset).results:
-        counts.update(shard_counts)
-    result = ConversionResult(
-        normalized_path=str(output / "normalize"),
-        manifest_path=str(output / "manifest.json"),
-        input_rows=counts["input_rows"],
-        converted_rows=counts["converted_rows"],
-        rejections={
-            key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
-        },
-        elapsed_seconds=time.monotonic() - started,
+        ),
+        context,
+        output_path,
     )
     (output / "manifest.json").write_text(
         json.dumps(

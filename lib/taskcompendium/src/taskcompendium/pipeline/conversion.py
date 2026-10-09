@@ -4,7 +4,7 @@
 """Mechanical row conversion shared by quick, sampled, and full curation."""
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pydantic import ValidationError
@@ -12,7 +12,9 @@ from zephyr import counters
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
+    Converter,
     ImportFailureKind,
     ImportRejection,
     NormalizationChange,
@@ -36,14 +38,14 @@ def row_task_id(recipe: SourceRecipe, source: Source) -> str:
     return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
 
 
-def convert_row(row: RawRow, recipe: SourceRecipe) -> NormalizedTask | ImportRejection:
+def convert_row(row: RawRow, convert: Converter, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Convert one source row, retaining rewrites and enforcing its supplied identity.
 
     Resource admission and content fingerprints belong to the reviewed pipeline,
     so mechanical conversion can call this without performing those checks.
     """
     try:
-        result = recipe.convert(row, conversion_context(recipe))
+        result = convert(row, context)
     except ValidationError as error:
         return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
     if isinstance(result, ImportRejection):
@@ -67,9 +69,28 @@ class ConvertedRow:
 def convert_record(record: dict[str, Any], recipe: SourceRecipe) -> ConvertedRow:
     source = row_source(recipe, record["locator"])
     raw = RawRow(row_task_id(recipe, source), source, record["data"])
-    return ConvertedRow(
-        raw, record["data"], record.get("original_path", record["data"].get("path")), convert_row(raw, recipe)
-    )
+    converted = convert_raw_row(raw, recipe.convert, conversion_context(recipe))
+    return replace(converted, original_path=record.get("original_path", converted.original_path))
+
+
+def convert_raw_row(row: RawRow, convert: Converter, context: ConversionContext) -> ConvertedRow:
+    """Convert a caller-owned row and retain its identity, payload, rewrites and rejection.
+
+    The caller supplies decoded data and source provenance. No ingestion, review,
+    resource admission, deduplication, mechanical checks or grader controls run.
+    """
+    metrics = counters.current_stage()
+    started = time.monotonic()
+    try:
+        result = convert_row(row, convert, context)
+    finally:
+        metrics.update_counter("source/normalize/seconds", time.monotonic() - started)
+        metrics.update_counter("source/normalize/attempts", 1)
+    metrics.update_counter("source/normalize/completed_rows", 1)
+    metrics.update_counter("source/normalize/task_rows", int(isinstance(result, NormalizedTask)))
+    if isinstance(result, ImportRejection):
+        metrics.update_counter(f"source/normalize/{result.kind.value}", 1)
+    return ConvertedRow(row, dict(row.data), row.data.get("path"), result)
 
 
 def convert_source_row(record: dict[str, Any], recipe: SourceRecipe) -> ConvertedRow:
@@ -82,16 +103,7 @@ def convert_source_row(record: dict[str, Any], recipe: SourceRecipe) -> Converte
         metrics.update_counter("source/decode/seconds", time.monotonic() - started)
         metrics.update_counter("source/decode/attempts", 1)
     metrics.update_counter("source/decode/completed_rows", 1)
-    started = time.monotonic()
-    try:
-        converted = convert_record(decoded, recipe)
-    finally:
-        metrics.update_counter("source/normalize/seconds", time.monotonic() - started)
-        metrics.update_counter("source/normalize/attempts", 1)
-    metrics.update_counter("source/normalize/completed_rows", 1)
-    metrics.update_counter("source/normalize/task_rows", int(isinstance(converted.result, NormalizedTask)))
-    if isinstance(converted.result, ImportRejection):
-        metrics.update_counter(f"source/normalize/{converted.result.kind.value}", 1)
+    converted = convert_record(decoded, recipe)
     return ConvertedRow(converted.raw, record["data"], converted.original_path, converted.result)
 
 
