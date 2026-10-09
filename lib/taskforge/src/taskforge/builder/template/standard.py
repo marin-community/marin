@@ -82,13 +82,11 @@ from taskforge.spec.controls import (
     shell_turn,
     validate_controls,
 )
-from taskforge.spec.draft import ANSWER_PATH, file, grading_environment, machine, session
+from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, file, grading_environment, machine, session
 
 WORKDIR = "/workspace"
 WORKSPACE = "workspace"
 """Solver-visible files live under this directory, relative to the machine root."""
-TESTS_DIR = "/tests"
-"""Where RolloutEngine installs a grader's private files in its verifier machine."""
 GRADER_PROGRAM = "grade.py"
 GRADER_TIMEOUT = 300.0
 VERIFIER_TIMEOUT = GRADER_TIMEOUT + 120.0
@@ -222,7 +220,7 @@ class DockerfileDraft(BaseModel):
     """Submit the task image: a Dockerfile and the build-context files it copies."""
 
     dockerfile: str = Field(
-        description="Dockerfile content; WORKDIR /workspace; the image provides sh, setsid and python3."
+        description=f"Dockerfile content; WORKDIR {WORKDIR}; the image provides sh, setsid and python3."
     )
     context_files: list[FileDraft] = Field(description="Other build-context files, paths relative to the context root.")
 
@@ -325,8 +323,10 @@ def machine_facts(environment: Environment) -> str:
 
 def grader_contract(requirements: EnvironmentRequirements) -> str:
     if requirements.docker_image is None:
-        return SCRIPT_CONTRACT.format(tests=TESTS_DIR, script=GRADER_PROGRAM, answer=ANSWER_PATH)
-    return CONTAINER_CONTRACT.format(tests=TESTS_DIR, script=GRADER_PROGRAM, workdir=WORKDIR, answer=ANSWER_PATH)
+        return SCRIPT_CONTRACT.format(tests=GRADER_RESOURCE_ROOT, script=GRADER_PROGRAM, answer=ANSWER_PATH)
+    return CONTAINER_CONTRACT.format(
+        tests=GRADER_RESOURCE_ROOT, script=GRADER_PROGRAM, workdir=WORKDIR, answer=ANSWER_PATH
+    )
 
 
 def task_messages(b: Build, request: str, guidance: str) -> list[Message]:
@@ -413,7 +413,7 @@ async def requirements(b: Build, made: Fixtures, guidance: str) -> EnvironmentRe
     if b.proposal.header.environment is not Environment.CONTAINER:
         return b.spec.requirements(image=None, workdir=WORKDIR)
     request = (
-        "Write the task image: a Dockerfile (WORKDIR /workspace, no network at run time) and any build-context "
+        f"Write the task image: a Dockerfile (WORKDIR {WORKDIR}, no network at run time) and any build-context "
         f"files it copies. {DOCKER_IMAGE_REQUIREMENTS} The image also provides python3: the grader runs in a "
         "fresh container from it. The solver-visible files below are installed by the task, not the image.\n\n"
         f"{files_text(made.agent_files, '/')}"
@@ -449,7 +449,7 @@ def grader_package(b: Build, draft: GraderDraft, made: Fixtures, task_machine: E
             draft.script, {}, environment=environment, answer_path=ANSWER_PATH, timeout=GRADER_TIMEOUT, files=private
         )
     return b.spec.script_grader(
-        ("python3", f"{TESTS_DIR}/{GRADER_PROGRAM}"),
+        ("python3", f"{GRADER_RESOURCE_ROOT}/{GRADER_PROGRAM}"),
         StdoutReward(),
         environment=environment,
         answer_path=ANSWER_PATH,
