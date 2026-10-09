@@ -157,14 +157,22 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     if task.answer_type == AnswerType.TEXT:
         if answer_path is None:
             raise UnsupportedHarborTask("Text grader has no answer-file destination")
-        rewrites = [change for change in row["normalization_changes"] if change["field"] == "instruction"]
-        if (
-            len(rewrites) != 1
-            or rewrites[0]["replacement"].strip() != prompt.strip()
-            or answer_path not in rewrites[0]["original"]
-        ):
-            raise UnsupportedHarborTask("Text delivery requires a recorded original instruction naming the answer file")
-        prompt = rewrites[0]["original"]
+        if grader.environment is None:
+            prompt += (
+                f"\n\nWrite your final answer to `{answer_path}`. "
+                "The contents of this file are graded as your final response."
+            )
+        else:
+            rewrites = [change for change in row["normalization_changes"] if change["field"] == "instruction"]
+            if (
+                len(rewrites) != 1
+                or rewrites[0]["replacement"].strip() != prompt.strip()
+                or answer_path not in rewrites[0]["original"]
+            ):
+                raise UnsupportedHarborTask(
+                    "Text delivery requires a recorded original instruction naming the answer file"
+                )
+            prompt = rewrites[0]["original"]
     files["instruction.md"] = prompt.encode()
     public = (*task.resources.all, *task.resources.worker)
     dockerfile = f"FROM {environment.docker_image or BASE_IMAGE}\n"

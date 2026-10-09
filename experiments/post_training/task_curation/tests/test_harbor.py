@@ -196,7 +196,9 @@ def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, 
     }
     record = harbor_record(row, grader_image=GRADER_IMAGE, family=source.info.family)
     files = archive_files(record.task_binary)
-    assert files["instruction.md"].decode() == prompt
+    instruction = files["instruction.md"].decode()
+    assert instruction.startswith(converted.task.context.events[0].content)
+    assert "/app/answer.txt" in instruction
     assert not any(path.startswith("environment/files/") for path in files)
     for name, data in files.items():
         path = tmp_path / name
