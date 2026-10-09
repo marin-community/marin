@@ -6,7 +6,8 @@
 numpy==2.3.5
 pandas==2.2.2
 scipy==1.17.0
-# TaskTrove math scorers parse LaTeX with sympy, which needs the 4.11 ANTLR runtime.
+# TaskTrove math uses verifyit's symbolic comparator in the grader sandbox.
+math-verify==0.9.0
 sympy==1.13.3
 antlr4-python3-runtime==4.11.0
 rdkit==2025.9.3

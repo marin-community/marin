@@ -28,7 +28,7 @@ ARCHIVE_GRADERS = [
     ("tasktrove-math_prism", "math_prism"),
     ("tasktrove-calendar", "calendar"),
 ]
-"""A source using each archived scorer revision, and the fixture archive it is graded on."""
+"""Math and script graders, and the fixture archives they are graded on."""
 
 TYPER_PACKAGE = {
     "/app/funk_lines/__init__.py": b'__version__ = "0.1.0"\n',
@@ -79,12 +79,10 @@ def test_archive_grader_passes_its_golden(machines, name, fixture):
     assert statuses == {"golden": CheckStatus.PASS}, report
 
 
-# The gym scorer is absent: its runner writes reward 0 before scoring and the scorer turns any exception into 0,
-# so only its golden control shows that the image runs it.
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "name, fixture, module",
-    [("tasktrove-math_prism", "math_prism", "sympy"), ("tasktrove-calendar", "calendar", "json")],
+    [("tasktrove-calendar", "calendar", "json")],
 )
 def test_archive_grader_reports_an_unimportable_dependency_as_a_grading_failure(machines, name, fixture, module):
     task = without_module(fixture_task(name, fixture), module)

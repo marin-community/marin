@@ -107,6 +107,14 @@ A task's grader is one of four kinds:
 - `NoGrader` records a source evaluator this repository cannot run, with the
   source contract. Its rows never reach `final/`.
 
+TaskTrove math uses verifyit's `math` mode in the grader sandbox. It compares the
+last boxed answer, falling back to the last nonempty line, with the archive's
+typed reference; tuples and lists use ordered member comparison. Archived
+scorer and runner code stays hidden as source evidence and is never executed on
+model answers. Parsing and unit handling follow verifyit; source scorer parity
+is not guaranteed. Archived oracle scripts still run in a sandbox to produce
+golden control answers when present.
+
 A source whose scorer is upstream code grades with a script. The script is a
 `<name>_grade.py` file next to the declaration, and the upstream scorer is
 vendored under `datasets/<family>/scorers/`, a directory listed in the
