@@ -531,9 +531,7 @@ async def _trials(item: _Item, state: ItemState) -> None:
         )
     if not state.adversaries_run:
         # No adversary role runs: no per-role counts, and the context digest is "" as for an empty context.
-        item.log.append(
-            state.round, EventKind.ADVERSARIES_RUN, state.task_digest, roles="0", submissions="0", context_digest=""
-        )
+        item.log.append(state.round, EventKind.ADVERSARIES_RUN, state.task_digest, context_digest="")
 
 
 def retry_wait(backoff: RetryBackoff, retry: int) -> float:

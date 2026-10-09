@@ -2,8 +2,8 @@
 
 Taskforge turns task ideas into validated TaskCompendium `TaskSpec`s. A proposal source writes
 task proposals, a builder program turns each proposal into a `TaskSpec` with fixed controls,
-validation runs solver trials on RolloutEngine, and review accepts, repairs, retries or rejects
-the task by its solve rate.
+validation runs solver trials on RolloutEngine, and review accepts, retries or rejects the task by
+its solve rate. Review's repairs are refused here: `LoopPolicy` requires every repair budget to be 0.
 
 This is the end-to-end skeleton: every stage runs, on ShellSim machines, with the models supplied
 by the caller. The follow-up layers fill each stage in without moving a module or
