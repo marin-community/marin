@@ -106,9 +106,7 @@ def regrade(cell: dict, benchmark: str) -> dict:
             "trial_id": int(row["trial_id"]) if benchmark == "aime24" else None,
             "candidate_answer": row["extracted"] or "",
             "reference_answer": (
-                json.loads(row["doc"])["answer"]
-                if benchmark == "math500"
-                else json.loads(row["doc"])["expected_answer"]
+                json.loads(row["doc"])["answer"] if benchmark == "math500" else json.loads(row["doc"])["expected_answer"]
             ),
             "prior_correct": bool(row["metrics"]["accuracy"]),
             "corrected_correct": bool(correct),

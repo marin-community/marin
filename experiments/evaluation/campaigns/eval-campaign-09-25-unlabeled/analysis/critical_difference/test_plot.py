@@ -10,7 +10,9 @@ from pathlib import Path
 
 
 def test_corrected_replay_cell_uses_trial_rewards_for_uncertainty(monkeypatch) -> None:
-    spec = importlib.util.spec_from_file_location("campaign_critical_difference_plot", Path(__file__).with_name("plot.py"))
+    spec = importlib.util.spec_from_file_location(
+        "campaign_critical_difference_plot", Path(__file__).with_name("plot.py")
+    )
     assert spec is not None and spec.loader is not None
     plot = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = plot

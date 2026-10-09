@@ -25,7 +25,7 @@ from marin.inference.serve import local_inference
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from ..olympiadbench_judge.regrade import JUDGE_EXTRA_BODY, Source, source_examples
+from ..olympiadbench_judge.regrade import JUDGE_EXTRA_BODY, Source, source_examples  # noqa: TID252
 
 LOGGER = logging.getLogger(__name__)
 EVALCHEMY_COMMIT = "958cdb8019b7a4c8432fe85eb9572538ceb75950"
@@ -123,8 +123,11 @@ def read_sources(path: Path) -> list[Source]:
     """Select the sealed OlympiadBench cells from the frozen tracker manifest."""
     rows = yaml.safe_load(path.read_text())["models"]
     sources = [
-        Source(row["model"], float(row["benchmarks"]["olympiadbench"]["tracker_score"]),
-               row["benchmarks"]["olympiadbench"]["source"])
+        Source(
+            row["model"],
+            float(row["benchmarks"]["olympiadbench"]["tracker_score"]),
+            row["benchmarks"]["olympiadbench"]["source"],
+        )
         for row in rows
     ]
     if len(sources) != 21 or len({source.model for source in sources}) != 21:
@@ -235,7 +238,9 @@ def main() -> None:
                 "judge_config": args.judge_config.read_text(),
                 "prior_prefix": args.prior_prefix,
                 "judge_request_extra_body": JUDGE_EXTRA_BODY,
-                "cached_verdict_rule": "Reuse an exact prior LLM label for unchanged question, references, and candidate.",
+                "cached_verdict_rule": (
+                    "Reuse an exact prior LLM label for unchanged question, references, and candidate."
+                ),
             },
         )
 
