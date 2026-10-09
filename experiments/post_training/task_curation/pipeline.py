@@ -11,6 +11,7 @@ into one cached ``data/rl/<name>-<hash>`` artifact produced by
 """
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -224,6 +225,15 @@ class RlDataPipeline:
             )
         if result.status == SourceStatus.INCOMPLETE:
             raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
+        review_manifest = json.loads((StoragePath(result.review_path) / "manifest.json").read_text())
+        manifest = json.loads(StoragePath(result.manifest_path).read_text())
+        telemetry = json.loads(StoragePath(manifest["telemetry"]).read_text())
+        stages = ["download", "normalize"]
+        if review_manifest["rubric"] is not None:
+            stages.append("review")
+        if any(phase["phase"] == "verification" for phase in telemetry["phases"]):
+            stages.append("verify")
+        stages.append("final")
         return PipelineResult(
             result.status,
             {"normalize": result.normalize_path, "final": result.final_path},
@@ -233,7 +243,7 @@ class RlDataPipeline:
                 "verify": result.verify_path,
                 "manifest": result.manifest_path,
             },
-            ("download", "normalize", "review", "verify", "final"),
+            tuple(stages),
         )
 
 

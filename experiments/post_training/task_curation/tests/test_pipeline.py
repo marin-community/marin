@@ -3,6 +3,7 @@
 
 import hashlib
 import importlib.util
+import json
 import re
 import sys
 import threading
@@ -11,6 +12,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
@@ -22,6 +25,8 @@ from taskcompendium.pipeline.source_processing import SourcePipelineConfig, Sour
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+from zephyr.context import ZephyrContext
+from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -32,8 +37,10 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
+from experiments.post_training.task_curation.invocation import PipelineRun
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
+    HfSource,
     RlDataPipeline,
     UrlSource,
     download_source,
@@ -257,6 +264,41 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     pipeline = math500()
     selected = replace(pipeline.source, select=lambda row, context: True)
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
+
+
+def test_standard_result_omits_skipped_review_and_verification_stages(tmp_path, fixture_converter, config):
+    _, convert = fixture_converter
+    primary = tmp_path / "source"
+    primary.mkdir()
+    (primary / "rows.jsonl").write_text('{"prompt": "Two plus two?", "answer": "4"}\n')
+    pipeline = replace(
+        math500(),
+        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        rubric=None,
+        controls=None,
+        grader=None,
+        config=replace(config, execution=AuditExecution(), machines=None),
+    )
+    client = LocalClient()
+    try:
+        with (
+            set_current_client(client),
+            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+        ):
+            result = pipeline(
+                pipeline,
+                PipelineRun(SourceProcessingMode.SAMPLE, context, str(tmp_path / "output"), str(primary)),
+            )
+        assert result.stages == ("download", "normalize", "final")
+        rows = [row for shard in (tmp_path / "output/final").glob("*.parquet") for row in load_parquet(str(shard))]
+        assert [row["source_row"] for row in rows] == ["rows.jsonl:0"]
+        review = json.loads((StoragePath(result.evidence["review"]) / "report.json").read_text())
+        verification = json.loads((StoragePath(result.evidence["verify"]) / "report.json").read_text())
+        assert review["status"] == "unreviewed"
+        assert verification["status"] == "skipped"
+    finally:
+        client.shutdown()
 
 
 @pytest.fixture

@@ -36,12 +36,12 @@ from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.pipeline import environment_requirements
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.tests.custom_pipeline import number_source
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
     install_fake_build_tools,
     tracked_lock,
 )
-from experiments.post_training.task_curation.tests.test_campaign import number_source
 
 PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 CONTROLLER_URL = "http://controller.invalid"

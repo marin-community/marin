@@ -15,7 +15,7 @@ from experiments.post_training.task_curation.export_catalog import catalog_docum
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
 from experiments.post_training.task_curation.sources import standard_pipelines
-from experiments.post_training.task_curation.tests.test_campaign import number_source
+from experiments.post_training.task_curation.tests.custom_pipeline import number_source
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
