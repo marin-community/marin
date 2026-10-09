@@ -789,7 +789,12 @@ class LmDataConfig:
     prior_context_phases: list[ContextPhaseConfig] = field(default_factory=list)
     """Earlier context phases of the run, oldest first, each at a different sequence length than the next. When
     set, each source resumes at the start of its next shuffle window after its true position at the last phase's
-    ``end_step``. Batch-size changes within one context length belong in the trainer's ``BatchSchedule``, not here."""
+    ``end_step``. Batch-size changes within one context length belong in the trainer's ``BatchSchedule``, not here.
+
+    The offsets assume what this config cannot check: every phase used the same trainer seed (which keys the shuffle
+    and the mixture) and listed its sources in the same order (which assigns each source's shuffle key and mixture
+    slots), and the current launch restores the checkpoint at the last ``end_step``. Restoring an earlier step
+    re-reads data."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
