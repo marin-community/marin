@@ -69,6 +69,7 @@ test = [
     "pytest-timeout",
     "marin-verifyit[math,reasoning-gym,schema]",
     "marin-taskcompendium[pipeline]",
+    "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
 ]

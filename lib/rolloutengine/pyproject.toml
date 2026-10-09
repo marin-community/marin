@@ -48,4 +48,4 @@ known-first-party = ["rolloutengine"]
 disable-project-excludes-heuristics = true
 project-includes = ["src"]
 search-path = ["src"]
-python-interpreter = ".venv/bin/python"
+python-interpreter = "../../.venv/bin/python"
