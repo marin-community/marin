@@ -24,6 +24,15 @@ from verifyit.modes.extract import extract_boxed
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+AIME_VERIFIER = SourceReference(
+    "aime",
+    "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+    ),
+)
+
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
 ASDIV_REVISION = "883f90a9a65bf00304ba8f37423910fe743abc47"
@@ -300,14 +309,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -327,14 +329,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -355,14 +350,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -382,14 +370,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -409,14 +390,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -463,14 +437,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -490,14 +457,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -514,14 +474,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -541,14 +494,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -568,14 +514,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -593,14 +532,7 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            verifier=SourceReference(
-                "aime",
-                "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-                ),
-            ),
+            verifier=AIME_VERIFIER,
         ),
     ),
 )

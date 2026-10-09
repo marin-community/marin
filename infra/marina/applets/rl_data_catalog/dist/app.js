@@ -92,8 +92,7 @@ function render() {
   $("rows").replaceChildren(fragment);$("empty").hidden=rows.length > 0 || state.sources.length === 0;
   const excluded = state.sources.filter(row=>row.status === "Excluded").length;
   $("result-count").textContent=`${number.format(rows.length)} of ${number.format(state.sources.length)} entries · ${excluded} excluded sources${$("excluded").checked ? " included" : " hidden"} · bad quality ${$("show-bad").checked ? "included" : "hidden"}`;
-  const errors=state.refreshes.filter(item=>item.error);
-  $("metric-status").replaceChildren(node("span",isPublicView ? "Saved snapshot" : state.refreshing ? "Checking…" : state.error || errors.length ? "Needs attention" : state.refreshes.length > 0 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
+  $("metric-status").replaceChildren(node("span",isPublicView ? "Saved snapshot" : state.refreshing ? "Checking…" : state.error ? "Needs attention" : state.refreshes.length > 0 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
   const checked=state.refreshes.map(item=>item.checked_at).filter(Boolean).sort()[0];
   $("checked-at").textContent=checked ? `Last checked ${new Date(checked).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} · ${date(checked)}` : "No successful sync yet";
 }
@@ -124,7 +123,7 @@ async function refresh(force=false) {
     const response=await fetch(`api/refresh${force ? "?force=true" : ""}`,{method:"POST"});if(!response.ok)throw new Error(`Refresh failed (${response.status})`);
     const result=await response.json();await load();
     if(result.busy) {$("sync-banner").textContent=result.message;setTimeout(async()=>{try{await load();}catch(error){showError(error);}},2500);}
-    else {const errors=state.refreshes.filter(item=>item.error);if(errors.length){$("sync-banner").classList.add("warning");$("sync-banner").textContent=errors.map(item=>`${item.origin}: ${item.error}. Keeping the last successful snapshot.`).join(" ");}else {$("sync-banner").textContent=state.refreshes.map(item=>`${item.origin} ${item.revision.slice(0,8)}`).join("  ·  ")+"  ·  Packaged task-curation catalog loaded.";}}
+    else {$("sync-banner").textContent=state.refreshes.map(item=>`${item.origin} ${item.revision.slice(0,8)}`).join("  ·  ")+"  ·  Packaged task-curation catalog loaded.";}
   }catch(error){showError(error);}finally{state.refreshing=false;$("refresh").disabled=false;render();}
 }
 function showError(error){state.error=true;$("sync-banner").className="sync-banner warning";$("sync-banner").textContent=isPublicView ? `${error.message}. Reload this page to retry.` : `${error.message}. Saved sources remain available; retry with Refresh sources.`;$("metric-status").textContent="Needs attention";}

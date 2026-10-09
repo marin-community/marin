@@ -30,6 +30,15 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, I
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+PREFERENCE_VERIFIER = SourceReference(
+    "preference",
+    "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+    ),
+)
+
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
 HH_TURN = re.compile(r"\n\n(Human|Assistant):")
@@ -54,14 +63,7 @@ KTO_COMPONENTS = {
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     "kto_component_intel_orca": (
@@ -76,14 +78,7 @@ KTO_COMPONENTS = {
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     "kto_component_ultrafeedback": (
@@ -98,14 +93,7 @@ KTO_COMPONENTS = {
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
 }
@@ -182,14 +170,7 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     HhSubset(
@@ -206,14 +187,7 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     HhSubset(
@@ -230,14 +204,7 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     HhSubset(
@@ -254,14 +221,7 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=SourceReference(
-                "preference",
-                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-                ),
-            ),
+            verifier=PREFERENCE_VERIFIER,
         ),
     ),
 )
