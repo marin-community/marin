@@ -303,6 +303,9 @@ class Qwen3Config(LlamaConfig):
     reference_checkpoint: str = "Qwen/Qwen3-0.6B"
     use_sliding_window: bool = False
     sliding_window: int = 4096  # Qwen-3 uses sliding window by default
+    parallax: bool = False
+    """Parallax attention in every layer (``levanter.layers.attention.ParallaxAttention``)."""
+    parallax_rope: bool = True
 
     @property  # type: ignore[override]
     def model_type(self):  # noqa: D401
@@ -373,7 +376,9 @@ class Qwen3Config(LlamaConfig):
 
     def attention_config(self) -> AttentionConfig:  # type: ignore[override]
         cfg = super().attention_config()
-        return dataclasses.replace(cfg, qk_norm=self.norm_config)
+        return dataclasses.replace(
+            cfg, qk_norm=self.norm_config, parallax=self.parallax, parallax_rope=self.parallax_rope
+        )
 
 
 # =====================

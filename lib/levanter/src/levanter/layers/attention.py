@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
 import inspect
 import logging
@@ -53,6 +54,7 @@ else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.pallas.parallax import parallax_attention
 from .attention_mask import AttentionMask, materialize_mask
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
@@ -1176,6 +1178,9 @@ class AttentionConfig:
         sliding_window: Optional sliding window size for attention masks.
         scaling_factor: Optional scaling factor for attention scores. If None, defaults to 1/sqrt(head_size)
         qk_norm: Optional configuration for QK normalization. If None, no normalization is applied.
+        parallax: Use Parallax attention (arXiv 2605.29157, :class:`ParallaxAttention`): causal attention plus an
+            extra probe projection ``r`` with the KV covariance correction.
+        parallax_rope: Apply the rotary embedding to Parallax's probe ``r`` as well (the paper's best setting).
     """
 
     Embed: Axis
@@ -1194,6 +1199,8 @@ class AttentionConfig:
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
     gated: Literal["none", "headwise", "elementwise"] = "none"
+    parallax: bool = False
+    parallax_rope: bool = True
 
     def __post_init__(self):
         assert (
@@ -1271,6 +1278,8 @@ class Attention(eqx.Module):
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "Attention":
+        if config.parallax:
+            return ParallaxAttention.init(config, key=key)
         if config.gated != "none":
             return GatedAttention.init(config, key=key)
 
@@ -1444,6 +1453,111 @@ class Attention(eqx.Module):
             k = self.rot_embs(k, pos_ids).astype(k.dtype)
 
         return q, k, v
+
+
+class ParallaxAttention(Attention):
+    """Parallax attention (arXiv 2605.29157): softmax attention minus the attention-weighted key-value covariance
+    probed by ``r = W_R x`` per query head, ``o_i = sum_j p_ij v_j (1 + E_p[s_i]) - sum_j p_ij s_ij v_j`` with
+    ``s_ij = r_i . k_j``.
+
+    As in the paper: ``W_R`` has the query projection's head layout, ``r`` gets the QK-norm (RMSNorm) and, with
+    ``parallax_rope``, the rotary embedding. The queries, keys and values are those of :class:`Attention` (built from
+    the same key, so a Parallax model's other weights match the Transformer's at init). Causal masks only; the
+    kernel is :func:`levanter.kernels.pallas.parallax.parallax_attention` (Pallas Triton, GPU).
+    """
+
+    r_proj: Optional[hnn.Linear] = None  # always set by init(); default for dataclass ordering
+    r_norm: Optional[LayerNormBase] = None
+
+    @staticmethod
+    def init(config: AttentionConfig, *, key) -> "ParallaxAttention":
+        base = Attention.init(dataclasses.replace(config, parallax=False), key=key)
+        r_proj = hnn.Linear.init(
+            In=config.Embed,
+            Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
+            key=jrandom.fold_in(key, 0x5052),
+            use_bias=False,
+            out_first=True,
+        )
+        r_norm = config.qk_norm.build(config.HeadSize) if config.qk_norm is not None else None
+        return ParallaxAttention(
+            config,
+            base.q_proj,
+            base.k_proj,
+            base.v_proj,
+            base.o_proj,
+            base.q_norm,
+            base.k_norm,
+            base.rot_embs,
+            r_proj=r_proj,
+            r_norm=r_norm,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: NamedArray,
+        mask: Optional[NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: NamedArray | None = None,
+    ) -> NamedArray:
+        if not isinstance(mask, AttentionMask) or not mask.is_causal or mask.sliding_window is not None:
+            raise ValueError("ParallaxAttention supports causal AttentionMasks without a sliding window")
+        if mask.explicit_mask is not None or mask.causal_offset is not None:
+            raise ValueError("ParallaxAttention does not support explicit masks or causal offsets")
+        assert self.r_proj is not None
+        key_proj, key_o = maybe_rng_split(key, 2)
+        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
+        r = self.r_proj(x)
+        if self.r_norm is not None:
+            r = self.r_norm(r)
+        if self.rot_embs is not None and self.config.parallax_rope:
+            if pos_ids is None:
+                pos_ids = hax.arange(x.resolve_axis("position"))
+            r = self.rot_embs(r, pos_ids).astype(r.dtype)
+        segment_ids = None if mask.segment_ids is None else mask.segment_ids[0]
+        scale = (
+            self.config.scaling_factor
+            if self.config.scaling_factor is not None
+            else 1.0 / math.sqrt(self.config.HeadSize.size)
+        )
+        out = _parallax_named(
+            q.astype(x.dtype), r.astype(x.dtype), k.astype(x.dtype), v.astype(x.dtype), segment_ids, scale
+        )
+        out = out.flatten_axes(("kv_head", "q_heads_per_group"), "heads").astype(x.dtype)
+        return self.o_proj(out, key=key_o)
+
+
+def _parallax_named(q, r, k, v, segment_ids, scale: float) -> NamedArray:
+    """Parallax over ``[..., position, kv_head, q_heads_per_group, head_size]`` NamedArrays, one call per shard."""
+
+    def local(q, r, k, v, segment_ids):
+        qa = q.rearrange((..., "position", "kv_head", "q_heads_per_group", "head_size"))
+        ra = r.rearrange(qa.axes)
+        ka = k.rearrange((..., "position", "kv_head", "head_size"))
+        va = v.rearrange(ka.axes)
+        batch_axes = qa.axes[:-4]
+        batch = math.prod(ax.size for ax in batch_axes)
+        seq, kv_heads, group, head = (ax.size for ax in qa.axes[-4:])
+        seg = None
+        if segment_ids is not None:
+            seg = segment_ids.broadcast_to((*batch_axes, qa.resolve_axis("position"))).array.reshape(batch, seq)
+            seg = seg.astype(jnp.int32)
+        out = parallax_attention(
+            qa.array.reshape(batch, seq, kv_heads * group, head),
+            ra.array.reshape(batch, seq, kv_heads * group, head),
+            ka.array.reshape(batch, seq, kv_heads, head),
+            va.array.reshape(batch, seq, kv_heads, head),
+            seg,
+            sm_scale=scale,
+            implementation="pallas_gpu" if jax.default_backend() == "gpu" else "reference",
+        )
+        return hax.named(out.reshape(qa.array.shape), qa.axes)
+
+    if haliax.partitioning.current_thread_local_mapping() is None:  # no mesh: one device
+        return local(q, r, k, v, segment_ids)
+    return shard_map(local)(q, r, k, v, segment_ids)
 
 
 class GatedAttention(Attention):
