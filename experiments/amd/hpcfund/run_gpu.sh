@@ -7,9 +7,14 @@
 # README.md in this directory has the venv recipe and known issues.
 cd "$SLURM_SUBMIT_DIR" || exit 1
 
+# The cluster loads the rocm/7.2.0 module by default. Its LD_LIBRARY_PATH takes precedence over the RUNPATH of
+# the ROCm 10 JAX plugin, which would then load the ROCm 7.2 HIP runtime, hipBLASLt, rocBLAS, RCCL and MIOpen.
+module unload rocm
+
 export PYTHONUNBUFFERED=1
 
-# Command buffers (HIP graphs) corrupt memory on this ROCm stack: NaN gradients and segfaults after a few steps.
+# Command buffers (HIP graphs) break training a few steps in: the hipBLASLt grouped GEMM behind XLA's ragged_dot
+# faults when XLA replays a recorded graph. Triton ragged_dot avoids the fault but runs the June model 45% slower.
 # A later --xla_gpu_enable_command_buffer=... in the caller's XLA_FLAGS overrides this.
 export XLA_FLAGS="--xla_gpu_enable_command_buffer= $XLA_FLAGS"
 
