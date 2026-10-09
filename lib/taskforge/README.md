@@ -24,6 +24,7 @@ src/taskforge/
   validate/   trials, the failure classifier, control replay, evidence aggregation, solver and
               adversary trials, calibration, attempt files as resumable evidence
   review/     the Decision contract and the rules that derive it from validation evidence
+  loop/       the per-item program, its policy, and the event log that item status is derived from
 scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
 ```
@@ -32,7 +33,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review -> loop
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
@@ -41,9 +42,10 @@ modules, each of which keeps its types beside the code that checks their invaria
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
 `ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `builder.run` (`TaskDraft`,
 `load_draft`, `item_id_for`), `builder.author` (`BuildProgram`, `Revision`), `validate.outcome`,
-`validate.evidence`, `validate.calibration` (`CalibrationSummary`, `Finding`) and `review.decision`
-(`Decision`). `tests/test_imports.py` parses every module and fails on an import that points right
-in the order, or on a package the order does not name.
+`validate.evidence`, `validate.calibration` (`CalibrationSummary`, `Finding`), `review.decision`
+(`Decision`), `loop.events` (`EventKind`, `ItemState`) and `loop.policy` (`LoopPolicy`).
+`tests/test_imports.py` parses every module and fails on an import that points right in the order,
+or on a package the order does not name.
 
 ## Seams
 
@@ -116,7 +118,8 @@ in the order, or on a package the order does not name.
   `no_factory`, `no_image_builder`, `scheduling_timeout` or `host_unreachable`, even when the
   program wrapped it; it is never a `BuildFailure`, and the caller does not charge it to the
   program. `builder.infrastructure.HOST_REJECTIONS` names the causes that hold for as long as the
-  host is unchanged (`no_factory`, `no_image_builder`).
+  host is unchanged (`no_factory`, `no_image_builder`); the loop abandons such an item without
+  retrying.
 - `validate.trials.run_trials(lowered, plan, settings, model)`: runs k trials of a
   `LoweredTaskSpec` through `ShellboxRolloutEngine`. `TrialPlan.deadlines` (`total_turn_timeout`,
   `attempt_timeout`) and `EngineSettings` (turn, command, tool-turn, model-turn and cleanup limits)
@@ -172,6 +175,45 @@ in the order, or on a package the order does not name.
   `RepairBrief` holds the `findings` the author must fix, the `notes` (noted adversary passes from
   `CalibrationSummary.notes`) it shows as information, and the rendered `failure`;
   `review.rules.render_brief(findings, notes)` builds it.
+- `loop.policy.LoopPolicy`: every bound of a run (proposals per idea, idea re-proposals, triage
+  repairs, build revisions, review repairs, validation retries, build host-failure retries
+  (`max_build_retries`) and their shared backoff, the output-token
+  budget, the `band_rules`, the `ValidationPolicy`), with no defaults. `band_rules` is a
+  `review.rules.BandRules`: per band kind a `BandRule(repairs, then: BandChoice)` that review's
+  `decide` applies, so the consumer chooses whether a task still outside the band is accepted or
+  rejected. The `ValidationPolicy`'s `adversary_submissions` and `adversary_repair_submissions` reach
+  validation and calibration through it. `loop.policy.POLICY` reads and writes it as the
+  run's `policy.json`; a missing or unknown key is an error at any depth.
+- `loop.events`: `record_event(ledger, item_id, round, kind, seq, input_hash, **attrs)` writes one
+  `EntryKind.EVENT` row with `attrs["seq"]` and `attrs["schema"] = EVENT_SCHEMA`.
+  `derive_state(entries) -> ItemState` folds a proposal item's events (phase, round, digests,
+  counters, `Terminal`); `derive_idea_state` folds an idea's; `item_tokens_out` sums the item's
+  `LLM_CALL` output tokens outside validation trials (steps `solver/...` and `adversary/...`;
+  `is_trial_step(step)` requires the `/`, so a build step named `solver` still counts). A build the machine host failed is a `BUILD_INFRASTRUCTURE` event
+  (`cause`, an `InfrastructureCause`); `build_host_failures(entries) -> Counter[InfrastructureCause]`
+  counts an item's over every launch, and an `ABANDONED` terminal carries `causes`
+  (`cause:count` pairs) for the retries it spent. `ADVERSARIES_RUN` counts per role the graded
+  trials, the passing ones, their verifier submissions and their `SHORTCUT` claims
+  (`<role>_graded`, `<role>_passes`, `<role>_submissions`, `<role>_claimed`) and records
+  `context_digest`, the sha256 of the consumer's adversary context (`""` without one). `DECIDED`
+  names the kinds of the noted adversary passes in `notes`; an accept also carries `band` (a
+  `review.decision.BandOutcome`) and the synthesis pass rate (`solved`, `graded`, `solve_rate`), and
+  its `TERMINAL` reason is `calibrated` or `accepted outside the band: <band>`. `ItemState.band_repairs`
+  counts the review repairs each band kind has triggered.
+- `loop.program.run_idea(idea_id, idea, policy, services) -> tuple[TaskProposal, ...]` and
+  `run_item(proposal, origin, policy, services) -> Terminal`: one idea's proposals, and one proposal
+  carried to `ACCEPTED`, `REJECTED`, `ABANDONED` or `FAILED`. `origin` is a `loop.events.ProposalOrigin`
+  (`GENERATED` for a proposal from a `run_idea` batch, `SUPPLIED` for one handed to the loop
+  directly), recorded on `OPENED`. `LoopServices[IdeaT]` holds what a run's items share, including
+  the `slots` semaphore that bounds model- and sandbox-bound phases across items, `rollout_models`,
+  the `validate.solver.ModelFactory` each solver trial's model comes from, `adversary_context` (a
+  `validate.adversary.AdversaryContext`: the consumer's section of the adversary brief for an item's
+  proposal, `""` for none; adversary trials run their agent loop on `client`), and `describe_idea:
+  Callable[[IdeaT], Mapping[str, object]]`, the JSON record `run_idea` writes once to
+  `items/idea--<id>/idea.json`. `run_idea` keeps each batch under
+  `items/idea--<id>/batches/<reproposal>/`: `plan/{request,completions}.json` and
+  `slots/<slot>/{request,completions}.json` with `repair_error.txt` or `failure.txt`, completions in
+  the shape of the author's `completions.json`. Both resume from the run root's event logs.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -329,6 +371,47 @@ an accepted summary carries them, and a repair's `invalidate` and a rejection's 
 the findings alone. `invalidate` names
 the steps whose roles the findings condemn, so a model-driven step the author left unchanged is
 resampled rather than replayed from the step cache.
+
+An item's status is derived from its event log, never stored. Each phase boundary appends one
+`EntryKind.EVENT` row through the run's ledger, into the item's own JSONL file beside its spans and,
+under Iris, into the Finelog mirror. Large payloads stay in the item directory (proposals,
+`verdict.json`, programs, drafts, attempt files, `calibration.json`, `decision.json`) and events name
+them by digest. A per-item contiguous `seq` and a schema version are the only guards against a second
+writer and against an enum rename silently changing what an old log means; `derive_state` raises on
+either. A relaunch re-runs only the sub-phase that lacks its completion event: build steps are
+memoized, settled trials load from their attempt files, and review is pure. A log opened under a
+different `policy.json` is refused.
+
+The loop keeps a run's bounds separate because their costs differ: a build revision is one author
+call, a review repair is a whole validation round. A build failure, or any exception the builder
+program raises, goes back to the author as a revision. A
+`builder.infrastructure.BuildInfrastructureFailure` (no factory for the machine backend, no image
+builder, a scheduling timeout, an unreachable host) is the machine host's failure, not the program's: it spends no
+revision and the author never sees it. The loop records `BUILD_INFRASTRUCTURE` with the cause,
+waits out the retry backoff without holding a slot and rebuilds the same program; a host failure
+after `max_build_retries` rebuilds ends the item `ABANDONED` with its cause counts, and the next
+launch rebuilds the same program with a fresh count. A missing factory or image builder is
+deterministic on the host (a laptop without Docker stays without Docker), so it abandons the item at once (`retries_used=0`,
+`abandon=true`): retrying would spend the backoff ladder for nothing. It is not a `HOST` rejection,
+because `REJECTED` is final and a run root moved to a host with the factory must still build the
+item; `ABANDONED` is re-entered on the next launch. A host failure never ends an item `REJECTED` or
+`FAILED`. `GlmUnavailable` (the endpoint's failure) propagates
+and records `FAILED`. A
+repair whose rebuild produces the same task digest counts as a failed revision whose failure text is
+the brief again, so the author cannot spend the repair budget returning the same program. The
+output-token budget sums the item's `LLM_CALL` entries (triage, authoring, build steps) and is
+checked before each authoring. Validation trials record their model calls too, under steps
+`solver/<index>` and `adversary/<role>/<index>`, but the budget leaves them out
+(`loop.events.UNBUDGETED_TRIALS`): `k`, `adversary_k`, the verifier submission budget and the
+deadlines bound them instead. The
+exclusion keys on the `<kind>/` prefix, since a build step records its calls under its bare function
+name, which cannot contain `/`. A `Retry` waits out the backoff without holding a slot; spent
+retries end the item `ABANDONED`, never rejected, and the next launch re-enters it at the control
+replay with a fresh retry budget. An unhandled exception records `FAILED` and propagates to the queue. A triage verdict is final for its
+proposal digest within a run. Review's band choice reaches the loop as `LoopPolicy.band_rules` and
+the loop records where an accepted task fell (`DECIDED.band`, the pass rate, and the `TERMINAL`
+reason), so a log tells a calibrated acceptance from a consumer's acceptance outside the band
+without opening `decision.json`.
 
 ## Testing
 
