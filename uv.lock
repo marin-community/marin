@@ -6871,7 +6871,7 @@ requires-dist = [
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.46.dev33324331711" },
     { name = "marin-finestore", editable = "lib/finestore" },
-    { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
+    { name = "marin-iris-native", specifier = ">=0.1.11.dev37977873285" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
@@ -6927,14 +6927,14 @@ test = [
 
 [[package]]
 name = "marin-iris-native"
-version = "0.1.6.dev31131847556"
+version = "0.1.11.dev37977873285"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/18/6f/56a218fb6e50eda550ee63cb6d29002f435b705b98cb174e8f0235f3a792/marin_iris_native-0.1.6.dev31131847556.tar.gz", hash = "sha256:a1293b6e39b2b45a856e1f422bd4f00cd27485f205c030e6dcfa8d539a889568", size = 39046, upload-time = "2026-08-07T00:12:12.973Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/9d/69454bdbe67f20cc3b0234900ee77a7a7aac54614805cbf9f8a3ab2e611b/marin_iris_native-0.1.11.dev37977873285.tar.gz", hash = "sha256:7bdacad87d9700c7e09574a650a3f2942829c99987fb3aa056b267ba5cc5f5c3", size = 39332, upload-time = "2026-10-09T19:10:47.117Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/f9/eb005d6fba97e8e16fdb793dad10ef188a3c0a7fce288a7f7b39bb06511e/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8cdb5298301d2538b8ca24882f74ec6836b9022c8ead0343978d049dd450a47e", size = 3551136, upload-time = "2026-08-07T00:12:06.839Z" },
-    { url = "https://files.pythonhosted.org/packages/5c/39/efc31afa16a341b3950fe6bf311d5ece9ef680939f4f599f87322e838958/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e07e4ebb3252751ee3029b07a7b8c3eca6e6c94f9c6fa3248e3f9d24b29f0925", size = 3348691, upload-time = "2026-08-07T00:12:08.475Z" },
-    { url = "https://files.pythonhosted.org/packages/7f/0d/ffa8b4c0b420eb7cd3863d684e8ec6612d0f0cfe2f72116c73d4bf2b0ba5/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e6dfd2cf6df70254a1259c9656b6ad381a481d8c0aff491629d334d018f9be1c", size = 3489782, upload-time = "2026-08-07T00:12:09.95Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/bd/d39e7be34c825ddbb4a7c798349e5062b47ebc50e2a67455c6b960146aca/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3a36ff1eea43e97c290df9a6ed4ec5deba78cadd962a138264b4fe1f7b4bf18a", size = 3682246, upload-time = "2026-08-07T00:12:11.498Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/49/b819e34e7c92f700f1ac99565d2cff59cf20c279639a8f4fcd3b77113bed/marin_iris_native-0.1.11.dev37977873285-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1d672b314a1d245cfb9bb9f604726b18143ba57f0ac9a2f1d1a37bae02436185", size = 3542873, upload-time = "2026-10-09T19:10:38.67Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/3d/803a5764c6527be43af4c50ff65e6506a98105dbcc173f53bca75c559dc9/marin_iris_native-0.1.11.dev37977873285-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:f15923195011d5b754ff1279b85f643e227a93ea9e9581ad479e06d67cfc67e4", size = 3359458, upload-time = "2026-10-09T19:10:40.641Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/77/3d0918d00777ddade44c33ccdcd9418bb1d071cd072e4e3f6ab673e21ea8/marin_iris_native-0.1.11.dev37977873285-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ba86c1e8f8069910b4c4f5106062563dc40f083914ffb4c619714e8b90f77141", size = 3489280, upload-time = "2026-10-09T19:10:42.868Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/a3/79c6e98d54bdf4c7082cf1a36df06ccdf2cc2d655e2be3ec8e7960f1c04b/marin_iris_native-0.1.11.dev37977873285-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7076cd5d67440ae38b654888a5d9d6cb23abf0b0ae063743eac10e0b1dff81e1", size = 3684710, upload-time = "2026-10-09T19:10:45.309Z" },
 ]
 
 [[package]]
