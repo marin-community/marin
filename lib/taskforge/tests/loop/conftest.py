@@ -5,8 +5,9 @@
 
 The author is the real ``builder.author.author`` against the ``fake_glm`` router, which serves scripted
 ``submit_build_program`` calls; the builder programs it returns make no model call and build a ShellSim
-task whose host-run script grader gives full credit only to ``ANSWER = 42`` (a lenient program's grader
-to any ``ANSWER = <int>``). Validation runs on ShellSim through RolloutEngine. The adversary is the real agent
+task whose Python grader, run in a verifier machine on the ShellSim-backed fixture image factory, gives
+full credit only to ``ANSWER = 42`` (a lenient program's grader to any ``ANSWER = <int>``). Validation runs
+on ShellSim through RolloutEngine. The adversary is the real agent
 loop against the same router: ``adversary_turns`` queues its turns after the author's, and every
 ``submit`` it makes is graded by the task's real verifier. ``Loop`` assembles a run root and its
 ``LoopServices`` for one test.
