@@ -193,6 +193,7 @@ antlr4-python3-runtime==4.11.0 \
     # via
     #   --override (workspace)
     #   -r grader.in
+    #   latex2sympy2-extended
 anyio==4.15.1 \
     --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101 \
     --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
@@ -1180,6 +1181,10 @@ langdetect==1.0.9 \
     # via
     #   -r grader.in
     #   verifiable-instructions
+latex2sympy2-extended==1.11.0 \
+    --hash=sha256:9695657c81b50abba2636638638618db59f4663ed2a4a12d62cef74a40e28fec \
+    --hash=sha256:aebb77d52ce269e25028e4bea89ddb14d242ba36bcf7b636496fb5fd9728d234
+    # via math-verify
 locket==1.0.0 \
     --hash=sha256:5c0d4c052a8bbbf750e056a8e65ccd309086f4f0f18a2eac306a8dfa4112a632 \
     --hash=sha256:b6c819a722f7b6bd955b80781788e4a66a55628b858d347536b7e81325a3a5e3
@@ -1351,6 +1356,10 @@ markupsafe==3.0.4 \
 marshmallow==4.3.1 \
     --hash=sha256:e65accfbe277546df92ed7996a678c90e063e9a7c2a2f5e03f7d0b90e3768c42 \
     --hash=sha256:fb6b8048af08d4ab061610d5b7d3696a7e4c95337dbda880edb9f95812cabc20
+    # via -r grader.in
+math-verify==0.9.0 \
+    --hash=sha256:3703e7c4885354027fa84409d762a596a2906d1fd4deb78361876bd905a76194 \
+    --hash=sha256:45ac6c61344ba056b9e99a660a4bc8d044ed408f730aed68c60435aa5eec4645
     # via -r grader.in
 matplotlib==3.11.2 \
     --hash=sha256:01dc8eaaab5a9fce9ff615eca82345728f289e4715b186ee10c6d85272fc26bb \
@@ -2818,6 +2827,7 @@ sympy==1.13.3 \
     --hash=sha256:b27fd2c6530e0ab39e275fc9b683895367e51d5da91baa8d3d64db2565fec4d9
     # via
     #   -r grader.in
+    #   latex2sympy2-extended
     #   reasoning-gym
 tabulate==0.9.0 \
     --hash=sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c \

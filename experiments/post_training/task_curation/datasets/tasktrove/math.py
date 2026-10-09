@@ -1,15 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove math sources, graded by each archive's own SymPy scorer with the grader packages.
+"""TaskTrove math sources, graded by verifyit's math mode in the grader sandbox.
 
-An archive ships the scorer (``tests/verifier.py``), its runner (``tests/test.sh``) and the typed
-reference (``tests/verifier_data.json``). Only scorer and runner revisions seen before are
-accepted; the runner runs as archived with the grader packages (``GRADER_PACKAGES``), which pin
-the SymPy and ANTLR versions the scorers parse LaTeX with. The gym scorer turns any exception, a
-missing package included, into reward 0, so the golden control is what shows the environment runs it. The
-solver gets a conversation task: the prompt's answer-file delivery is rewritten to ask for the
-answer in the reply, which the runtime writes to ``/app/answer.txt`` for the scorer.
+Known archive scorer/runner revisions identify the supported typed references. Their code is
+kept as source evidence; it is never run on model text. Verifyit extracts the last boxed answer
+or nonempty line and compares it symbolically. This does not preserve every source parsing rule.
+The solver returns its answer in the reply. Archived oracle scripts still supply golden controls.
 """
 
 import hashlib
@@ -18,7 +15,8 @@ from dataclasses import dataclass
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import ANSWER_PATH, SOLVE_SH, archive_files, archive_script_grader
+from taskcompendium.convert.tasktrove import ANSWER_PATH, SOLVE_SH, archive_files
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -40,7 +38,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from verifyit.spec import MathType
+from verifyit.spec import MathSpec, MathType
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
@@ -55,7 +53,6 @@ SCORER_RUNNERS = {
     ),
 }
 """SHA-256 of each known ``tests/verifier.py`` mapped to the SHA-256 of the ``tests/test.sh`` that runs it."""
-GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
 REWRITE_REASON = "Replace the source's answer-file delivery with an answer in the assistant response"
 
 SUBMISSION = "\n## Submitting the answer\n"
@@ -86,8 +83,9 @@ MATH_CRITERIA = """Require a complete mathematical problem, supplied givens, not
 Check hidden reference consistency; difficulty alone is not a defect and a failed control does not prove the problem
 is bad.
 
-The source's SymPy scorer and typed reference are hidden from the solver. Assess its exact extraction, typed
-comparison and error behavior; distinguish content quality from grading readiness."""
+The typed reference and archived scorer are hidden from the solver. Verifyit's math mode grades the last boxed
+answer or nonempty line in a sandbox; the archived scorer is evidence only. Assess symbolic equivalence and
+ordered sequence answers under this comparator; distinguish content quality from grading readiness."""
 
 GYM_RUBRIC = f"""
 {MATH_CRITERIA}
@@ -124,8 +122,8 @@ contradictory assumptions, or a hidden key inconsistent with a demonstrated solu
 Independently verify short calculations. For long proofs, assess whether the problem is well posed; difficulty and
 inability to solve immediately are not defects. Do not invent a reference conflict.
 
-Assess the source's SymPy scorer and typed key together. Scalar, equation, interval, set, and ordered sequence
-distinctions matter, as do answer extraction and the source's unit handling.
+Assess the typed key under verifyit's symbolic math comparator. Scalar, equation, interval, set, and ordered
+sequence distinctions matter. Check answer extraction and unit handling under verifyit.
 """
 
 
@@ -151,7 +149,7 @@ class MathConverter:
         if not isinstance(expected, str) or not expected.strip():
             return unsupported("unsupported_answer_contract", "A nonempty typed math reference is required")
         try:
-            MathType(data.get("answer_type"))
+            math_type = MathType(data.get("answer_type"))
         except ValueError as error:
             return unsupported("unsupported_answer_contract", str(error))
         prompt = instruction
@@ -160,29 +158,33 @@ class MathConverter:
         prompt = replace_phrases(prompt, self.phrases).strip()
         if not prompt:
             return source_defect("missing_instruction", "The instruction has no problem before its delivery section")
-        grader = archive_script_grader(
-            row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=ANSWER_PATH
+        # Both source sequence types compare members in order. Math-verify can interpret a
+        # parenthesized tuple as an interval, so use verifyit's ordered-member comparator.
+        if math_type is MathType.TUPLE:
+            math_type = MathType.LIST
+        package = verifyit_package(
+            MathSpec(expected=expected, math_type=math_type),
+            resources=(
+                inline_resource("source/verifier.py", scorer),
+                inline_resource("verifier_data.json", files["tests/verifier_data.json"]),
+                inline_resource("source/test.sh", runner),
+            ),
+            environment=required_grader_environment(context),
         )
-        if isinstance(grader, ImportRejection):
-            return grader
         task = TaskSpec(
             id=row.id,
             source=row.source,
             context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
             environment_requirements=EnvironmentRequirements(),
             resources=ResourceGroups(
-                verifier=(
-                    inline_resource("verifier.py", scorer),
-                    inline_resource("verifier_data.json", files["tests/verifier_data.json"]),
-                    inline_resource("test.sh", runner),
-                ),
+                verifier=package.resources,
                 oracle=tuple(
                     inline_resource(path, content) for path, content in files.items() if path.startswith("solution/")
                 ),
             ),
             answer_type=AnswerType.TEXT,
             answer_format=PlainText(),
-            grader=grader,
+            grader=package.grader,
         )
         return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 

@@ -30,6 +30,9 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
+from verifyit.candidate import grade_candidate
+from verifyit.execution.worker import call_bounded
+from verifyit.grade import Status
 from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar as calendar_sources
@@ -260,7 +263,7 @@ ROWS: dict[str, dict] = {
 }
 
 GRADER_MODES = {
-    **{name: "script" for name in PIPELINES if name.startswith("tasktrove-math_")},
+    **{name: "math" for name in PIPELINES if name.startswith("tasktrove-math_")},
     **{f"tasktrove-{name}": "judge" for name in ("codereview", "glaive_code", "safety", "stack_overflow")},
     **{f"tasktrove-{name}": "judge" for name in ("superuser", "tezos", "unix", "wizard_orca")},
     "knowledge-openqa": "judge",
@@ -330,14 +333,14 @@ def test_rows_become_conversation_tasks_with_the_source_grader(name):
         ("tasktrove-math_gym", MATH_GYM, None),
     ],
 )
-def test_math_ships_the_archived_scorer_and_its_oracle(name, files, golden):
+def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(name, files, golden):
     task = task_of(name, tasktrove_row(files))
     grader = task.grader
-    assert isinstance(grader, ScriptGrader)
+    assert isinstance(grader, VerifyitGrader)
     assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
     verifier = verifier_files(task)
-    assert verifier["verifier.py"] == files["tests/verifier.py"]
-    assert verifier["test.sh"] == files["tests/test.sh"]
+    assert verifier["source/verifier.py"] == files["tests/verifier.py"]
+    assert verifier["source/test.sh"] == files["tests/test.sh"]
     assert verifier["verifier_data.json"] == files["tests/verifier_data.json"]
     oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
     assert oracle == {path: content for path, content in files.items() if path.startswith("solution/")}
@@ -350,6 +353,53 @@ def test_math_ships_the_archived_scorer_and_its_oracle(name, files, golden):
         assert control.event.content == rf"\boxed{{{expected}}}"
     else:
         assert control == golden
+    spec = verifyit_spec(grader)
+    expected = json.loads(files["tests/verifier_data.json"])["expected_answer"]
+    assert grade_candidate(spec, rf"\boxed{{{expected}}}", verifier).reward == 1.0
+    assert grade_candidate(spec, r"\boxed{-123456789}", verifier).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "answer_type,expected,correct,incorrect",
+    [
+        ("scalar", r"\frac{1}{2}", "0.5", "2"),
+        ("equation", "x=2", "2=x", "x=3"),
+        ("interval", r"(2,\infty)", "x>2", "x>=2"),
+        ("set", r"\{1,2\}", r"\{2,1\}", r"\{1,3\}"),
+        ("tuple", "(2,1)", "(2,1)", "(1,2)"),
+        ("list", "[2,1]", "[2,1]", "[1,2]"),
+    ],
+)
+def test_math_grades_equivalence_and_preserves_sequence_order(answer_type, expected, correct, incorrect):
+    data = json.dumps({"answer_type": answer_type, "expected_answer": expected}).encode()
+    task = task_of("tasktrove-math_gym", tasktrove_row({**MATH_GYM, "tests/verifier_data.json": data}))
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
+    resources = verifier_files(task)
+    assert grade_candidate(spec, "Reasoning\n" + rf"\boxed{{{correct}}}", resources).reward == 1.0
+    assert grade_candidate(spec, rf"\boxed{{{incorrect}}}", resources).reward == 0.0
+    assert grade_candidate(spec, "", resources).reward == 0.0
+
+
+@pytest.mark.parametrize("name", ["tasktrove-math_gym", "tasktrove-math_prism"])
+@pytest.mark.parametrize(
+    "expression",
+    ['__import__("pathlib").Path("{path}").touch()', 'open("{path}", "w").write("executed")'],
+)
+def test_math_does_not_execute_python_in_model_answers(tmp_path, name, expression):
+    marker = tmp_path / "executed"
+    task = task_of(name, ROWS[name])
+    assert isinstance(task.grader, VerifyitGrader)
+    # Bound the probe so a parser regression cannot hang the test worker.
+    result = call_bounded(
+        grade_candidate,
+        verifyit_spec(task.grader),
+        rf"\boxed{{{expression.format(path=marker)}}}",
+        verifier_files(task),
+        timeout=15,
+    )
+    assert not marker.exists()
+    assert (result.status, result.reward) == (Status.SCORED, 0.0)
 
 
 @pytest.mark.parametrize(
