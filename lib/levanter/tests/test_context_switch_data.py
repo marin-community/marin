@@ -16,8 +16,8 @@ from levanter.data.text.datasets import (
     BlockShuffleConfig,
     DatasetComponent,
     LmDataConfig,
-    MixturePhase,
-    PriorDataPhase,
+    ContextPhase,
+    ContextPhaseConfig,
     skip_to_window_offsets,
 )
 from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
@@ -87,8 +87,8 @@ def switch_reads():
         datasets=new_sources,
         token_counts=TOKENS,
         phases=[
-            MixturePhase(start_step=0, seq_len=OLD_SEQ, batch_schedule=BatchSchedule(OLD_BATCH), weights=old_stages),
-            MixturePhase(
+            ContextPhase(start_step=0, seq_len=OLD_SEQ, batch_schedule=BatchSchedule(OLD_BATCH), weights=old_stages),
+            ContextPhase(
                 start_step=SWITCH_STEP, seq_len=NEW_SEQ, batch_schedule=BatchSchedule(NEW_BATCH), weights=new_stages
             ),
         ],
@@ -119,13 +119,13 @@ def test_context_switch_resumes_each_source_at_its_next_shuffle_window(switch_re
     assert following_window_tokens <= set(after)
 
 
-def _phase(start_step: int, seq_len: int, batch_size: int, weights: dict[str, float]) -> MixturePhase:
-    return MixturePhase(
+def _phase(start_step: int, seq_len: int, batch_size: int, weights: dict[str, float]) -> ContextPhase:
+    return ContextPhase(
         start_step=start_step, seq_len=seq_len, batch_schedule=BatchSchedule(batch_size), weights=[(0, weights)]
     )
 
 
-def _offsets(phases: list[MixturePhase], token_counts: dict[str, int]) -> dict[str, int]:
+def _offsets(phases: list[ContextPhase], token_counts: dict[str, int]) -> dict[str, int]:
     return skip_to_window_offsets(
         datasets=_sources(phases[-1].seq_len, token_counts),
         token_counts=token_counts,
@@ -236,14 +236,14 @@ def _tokens(config: LmDataConfig, seq_len: int, batch_size: int, start: int, sto
     return {int(token) for example in batch for token in np.asarray(example.tokens.array)}
 
 
-def test_lm_data_config_prior_phase_resumes_without_repeating_tokens(tmp_path):
+def test_lm_data_config_prior_context_phase_resumes_without_repeating_tokens(tmp_path):
     old = _cached_config(tmp_path, OLD_SEQ, stage_step=4)
     before = _tokens(old, OLD_SEQ, OLD_BATCH, 0, SWITCH_STEP * OLD_BATCH)
     naive = _cached_config(tmp_path, NEW_SEQ, stage_step=8)
     resumed = dataclasses.replace(
         naive,
-        prior_phases=[
-            PriorDataPhase(
+        prior_context_phases=[
+            ContextPhaseConfig(
                 end_step=SWITCH_STEP,
                 seq_len=OLD_SEQ,
                 batch_size=OLD_BATCH,

@@ -613,7 +613,7 @@ DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(
 
 
 @dataclass(frozen=True)
-class PriorDataPhase:
+class ContextPhaseConfig:
     """An earlier stretch of a run, trained at another sequence length, that the current config continues.
 
     The run trained with these settings until ``end_step``. When training resumes at a new sequence length,
@@ -631,8 +631,8 @@ class PriorDataPhase:
 
 
 @dataclass(frozen=True)
-class MixturePhase:
-    """A phase of the mixture for ``skip_to_window_offsets``, with stages in sequence indices."""
+class ContextPhase:
+    """One context phase of the run, with its batch schedule and stages in sequence indices."""
 
     start_step: int
     seq_len: int
@@ -644,7 +644,7 @@ def skip_to_window_offsets(
     *,
     datasets: Mapping[str, AsyncDataset],
     token_counts: Mapping[str, int],
-    phases: Sequence[MixturePhase],
+    phases: Sequence[ContextPhase],
     block_size: int,
     window_tokens: int,
     key: PRNGKeyArray,
@@ -669,13 +669,13 @@ def skip_to_window_offsets(
         active = {name for _, weights in phase.weights for name, weight in weights.items() if weight > 0}
         if active != set(datasets):
             raise ValueError(
-                f"Every data phase must draw from the same sources; {sorted(active)} != {sorted(datasets)}"
+                f"Every context phase must draw from the same sources; {sorted(active)} != {sorted(datasets)}"
             )
     offsets = {name: 0 for name in datasets}
     previous = phases[0]
     for phase in phases[1:]:
         if phase.start_step <= previous.start_step:
-            raise ValueError("Data phases must start at increasing steps")
+            raise ValueError("Context phases must start at increasing steps")
         for seq_len in (previous.seq_len, phase.seq_len):
             if window_tokens % seq_len:
                 raise ValueError(f"Sequence length {seq_len} must divide the {window_tokens}-token shuffle window")
@@ -782,9 +782,10 @@ class LmDataConfig:
     dataset ordering for the split. Only relevant when num_validation_sequences
     is set.
     """
-    prior_phases: list[PriorDataPhase] = field(default_factory=list)
-    """Earlier phases of the run at other sequence lengths, oldest first. When set, each source resumes at
-    the start of its next shuffle window after its true position at the last phase's ``end_step``."""
+    prior_context_phases: list[ContextPhaseConfig] = field(default_factory=list)
+    """Earlier context phases of the run, oldest first, each at a different sequence length than the next. When
+    set, each source resumes at the start of its next shuffle window after its true position at the last phase's
+    ``end_step``. Batch-size changes within one context length belong in the trainer's ``BatchSchedule``, not here."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -807,18 +808,20 @@ class LmDataConfig:
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
-        if self.prior_phases:
+        if self.prior_context_phases:
             if not isinstance(self.shuffle, BlockShuffleConfig):
-                raise ValueError("prior_phases require a block shuffle")
+                raise ValueError("prior_context_phases require a block shuffle")
             if self.stop_strategy != StopStrategy.RESTART_STRATEGY:
-                raise ValueError("prior_phases require the restart stop strategy")
+                raise ValueError("prior_context_phases require the restart stop strategy")
             if self.max_train_batches is not None or self.num_validation_sequences is not None:
-                raise ValueError("prior_phases cannot be combined with max_train_batches or num_validation_sequences")
+                raise ValueError(
+                    "prior_context_phases cannot be combined with max_train_batches or num_validation_sequences"
+                )
             if self.experiment_budget != self.target_budget:
-                raise ValueError("prior_phases cannot be combined with simulated epoching")
-            end_steps = [phase.end_step for phase in self.prior_phases]
+                raise ValueError("prior_context_phases cannot be combined with simulated epoching")
+            end_steps = [phase.end_step for phase in self.prior_context_phases]
             if end_steps != sorted(set(end_steps)) or end_steps[0] <= 0:
-                raise ValueError(f"prior_phases must end at increasing positive steps, got {end_steps}")
+                raise ValueError(f"prior_context_phases must end at increasing positive steps, got {end_steps}")
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -912,7 +915,7 @@ class LmDataConfig:
         *,
         key: PRNGKeyArray,
     ) -> MixtureDataset[GrugLmExample]:
-        """Return the training mixture, with each source's start offset when ``prior_phases`` is set."""
+        """Return the training mixture, with each source's start offset when ``prior_context_phases`` is set."""
         mix_key, shuffle_key = jax.random.split(key)
         weights = self.train_weights
         if isinstance(weights, list):
@@ -920,8 +923,8 @@ class LmDataConfig:
         initial_batch_size = batch_schedule.batch_size_at_step(0)
         datasets, doc_caches = self._train_sets_and_caches(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
         start_offsets = (
-            self._prior_phase_offsets(datasets, doc_caches, Pos.size, batch_schedule, weights, mix_key)
-            if self.prior_phases
+            self._prior_context_phase_offsets(datasets, doc_caches, Pos.size, batch_schedule, weights, mix_key)
+            if self.prior_context_phases
             else None
         )
         return MixtureDataset(
@@ -933,7 +936,7 @@ class LmDataConfig:
             start_offsets=start_offsets,
         )
 
-    def _prior_phase_offsets(
+    def _prior_context_phase_offsets(
         self,
         datasets: Mapping[str, AsyncDataset[GrugLmExample]],
         doc_caches: Mapping[str, TreeCache[dict]],
@@ -942,27 +945,27 @@ class LmDataConfig:
         weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None,
         mix_key: PRNGKeyArray,
     ) -> dict[str, int]:
-        window_tokens = self._prior_phase_window_tokens(datasets, seq_len)
+        window_tokens = self._context_phase_window_tokens(datasets, seq_len)
         token_counts = {
             name: blocking_wait(doc_caches[name].async_flat_field_length("input_ids")) for name in datasets
         }
         if weights is None:
-            raise ValueError("prior_phases require train_weights")
+            raise ValueError("prior_context_phases require train_weights")
         current_weights = [(0, weights)] if isinstance(weights, dict) else weights
         phases = [
-            MixturePhase(
-                start_step=0 if i == 0 else self.prior_phases[i - 1].end_step,
+            ContextPhase(
+                start_step=0 if i == 0 else self.prior_context_phases[i - 1].end_step,
                 seq_len=phase.seq_len,
                 batch_schedule=BatchSchedule(phase.batch_size),
                 weights=rescale_mixture_schedule_for_batch_schedule(
                     phase.train_weights, BatchSchedule(phase.batch_size)
                 ),
             )
-            for i, phase in enumerate(self.prior_phases)
+            for i, phase in enumerate(self.prior_context_phases)
         ]
         phases.append(
-            MixturePhase(
-                start_step=self.prior_phases[-1].end_step,
+            ContextPhase(
+                start_step=self.prior_context_phases[-1].end_step,
                 seq_len=seq_len,
                 batch_schedule=batch_schedule,
                 weights=current_weights,
@@ -977,18 +980,18 @@ class LmDataConfig:
             key=mix_key,
         )
 
-    def _prior_phase_window_tokens(self, datasets: Mapping[str, AsyncDataset[GrugLmExample]], seq_len: int) -> int:
+    def _context_phase_window_tokens(self, datasets: Mapping[str, AsyncDataset[GrugLmExample]], seq_len: int) -> int:
         """Return the shuffle window size in tokens after checking that every phase can continue the reads."""
         shuffle = self.shuffle
         assert isinstance(shuffle, BlockShuffleConfig)
         block_tokens = shuffle.io_block_size * seq_len
-        for phase in self.prior_phases:
+        for phase in self.prior_context_phases:
             same_blocks = phase.shuffle.io_block_size * phase.seq_len == block_tokens
             if not same_blocks or (phase.shuffle.window_blocks, phase.shuffle.perm_type) != (
                 shuffle.window_blocks,
                 shuffle.perm_type,
             ):
-                raise ValueError(f"Prior phase {phase} must shuffle the same token-sized blocks and windows")
+                raise ValueError(f"Context phase {phase} must shuffle the same token-sized blocks and windows")
         for name in datasets:
             component = self.components[name]
             if (
@@ -996,7 +999,7 @@ class LmDataConfig:
                 or not isinstance(component.format, TextLmDatasetFormat)
                 or _effective_pack(component)
             ):
-                raise ValueError(f"prior_phases need unpacked text-stream components; {name} is not one")
+                raise ValueError(f"prior_context_phases need unpacked text-stream components; {name} is not one")
         return block_tokens * shuffle.window_blocks
 
     def train_sets(
@@ -1006,8 +1009,10 @@ class LmDataConfig:
         initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
-        if self.prior_phases:
-            raise ValueError("prior_phases need per-source start offsets; build training data with train_mixture")
+        if self.prior_context_phases:
+            raise ValueError(
+                "prior_context_phases need per-source start offsets; build training data with train_mixture"
+            )
         datasets, _ = self._train_sets_and_caches(Pos, initial_batch_size=initial_batch_size, key=key)
         return datasets
 
