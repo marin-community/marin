@@ -8,6 +8,7 @@ FAIL_TO_PASS and PASS_TO_PASS tests. No committed image covers those per-task re
 record the source grader's files and terms under a ``NoGrader`` and never reach the final export.
 """
 
+
 from taskcompendium.convert.executable import swe_task
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -15,6 +16,7 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WORKSPACE = "/testbed"
 
@@ -45,21 +47,71 @@ def convert_repository_task(row: RawRow, _context: ConversionContext) -> TaskSpe
     return swe_task(row, workspace=WORKSPACE)
 
 
-def repository_pipeline(name: str, config: str, rubric: str) -> RlDataPipeline:
-    return RlDataPipeline(
-        name=f"tasktrove-{name}",
-        source=tasktrove_source(config),
-        convert=convert_repository_task,
-        version="1",
-        environment=ShellSim(),
-        intended_use=IntendedUse.TRAIN,
-        rubric=rubric,
-        atlas_id=f"Task Trove:{config}",
+def repository_source(name: str, config: str, rubric: str, info: SourceInfo) -> RlDataSource:
+    return RlDataSource(
+        info=info,
+        pipeline=RlDataPipeline(
+            name=f"tasktrove-{name}",
+            source=tasktrove_source(config),
+            convert=convert_repository_task,
+            version="1",
+            environment=ShellSim(),
+            intended_use=IntendedUse.TRAIN,
+            rubric=rubric,
+        ),
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        repository_pipeline("swe_rebench", "DCAgent__swe_rebench_v2_patched_oracle-v2", SWE_REBENCH_RUBRIC),
-        repository_pipeline("swesmith", "laion__swesmith-oracle-filtered-v2", SWESMITH_RUBRIC),
+        repository_source(
+            "swe_rebench",
+            "DCAgent__swe_rebench_v2_patched_oracle-v2",
+            SWE_REBENCH_RUBRIC,
+            info=SourceInfo(
+                id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
+                origin="Task Trove",
+                family="swe-repo",
+                tags=(
+                    "agentic",
+                    "multi-turn",
+                    "language:python",
+                    "language:go",
+                    "language:rust",
+                    "language:java",
+                    "language:julia",
+                    "language:kotlin",
+                    "language:swift",
+                    "language:dart",
+                    "language:c",
+                    "language:scala",
+                    "language:php",
+                    "language:csharp",
+                    "language:elixir",
+                    "language:lua",
+                    "language:cpp",
+                    "language:ocaml",
+                ),
+                count=18319,
+                notes=(
+                    "Real repos, hidden FAIL_TO_PASS, git gate, trusted-test restore. Bake the verify-"
+                    "time installs into the image."
+                ),
+            ),
+        ),
+        repository_source(
+            "swesmith",
+            "laion__swesmith-oracle-filtered-v2",
+            SWESMITH_RUBRIC,
+            info=SourceInfo(
+                id="Task Trove:laion__swesmith-oracle-filtered-v2",
+                title="laion/swesmith-oracle-filtered-v2",
+                origin="Task Trove",
+                family="swe-repo",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=12927,
+                notes="Real repo tests. Strip the oracle patch from tests/config.json at conversion.",
+            ),
+        ),
     ]

@@ -9,6 +9,7 @@ run the source's ``solution/solve.sh`` oracle when the archive ships one, and ot
 submission.
 """
 
+
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
     solve_script,
@@ -30,6 +31,7 @@ from experiments.post_training.task_curation.datasets.environments import COMPIL
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
@@ -142,32 +144,89 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     )
 
 
-def stdio_pipeline(name: str, config: str, convert: Converter, rubric: str) -> RlDataPipeline:
-    return RlDataPipeline(
-        name=f"tasktrove-{name}",
-        source=tasktrove_source(config),
-        convert=convert,
-        version="1",
-        environment=AGENT_IMAGE,
-        intended_use=IntendedUse.TRAIN,
-        rubric=rubric,
-        controls=EXECUTABLE_CONTROLS,
-        atlas_id=f"Task Trove:{config}",
-        grader=COMPILER_GRADER_PACKAGES,
+def stdio_source(name: str, config: str, convert: Converter, rubric: str, info: SourceInfo) -> RlDataSource:
+    return RlDataSource(
+        info=info,
+        pipeline=RlDataPipeline(
+            name=f"tasktrove-{name}",
+            source=tasktrove_source(config),
+            convert=convert,
+            version="1",
+            environment=AGENT_IMAGE,
+            intended_use=IntendedUse.TRAIN,
+            rubric=rubric,
+            controls=EXECUTABLE_CONTROLS,
+            grader=COMPILER_GRADER_PACKAGES,
+        ),
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        stdio_pipeline(
-            "code_contests", "DCAgent__code-contests-noblock", convert_code_contests_task, CODE_CONTESTS_RUBRIC
+        stdio_source(
+            "code_contests",
+            "DCAgent__code-contests-noblock",
+            convert_code_contests_task,
+            CODE_CONTESTS_RUBRIC,
+            info=SourceInfo(
+                id="Task Trove:DCAgent__code-contests-noblock",
+                title="DCAgent/code-contests-noblock",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=8728,
+                notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+            ),
         ),
-        stdio_pipeline("codeforces", "laion__codeforces-v3", convert_codeforces_task, CODEFORCES_RUBRIC),
-        stdio_pipeline(
+        stdio_source(
+            "codeforces",
+            "laion__codeforces-v3",
+            convert_codeforces_task,
+            CODEFORCES_RUBRIC,
+            info=SourceInfo(
+                id="Task Trove:laion__codeforces-v3",
+                title="laion/codeforces-v3",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
+                notes=(
+                    "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
+                    "credit for not crashing)."
+                ),
+            ),
+        ),
+        stdio_source(
             "competitive_coding",
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
+                title="laion/nemotron-gym-competitive-coding-v2",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=15713,
+                notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
+            ),
         ),
-        stdio_pipeline("taco", "laion__exp_rpt_taco-v2", convert_taco_task, TACO_RUBRIC),
+        stdio_source(
+            "taco",
+            "laion__exp_rpt_taco-v2",
+            convert_taco_task,
+            TACO_RUBRIC,
+            info=SourceInfo(
+                id="Task Trove:laion__exp_rpt_taco-v2",
+                title="laion/exp_rpt_taco-v2",
+                origin="Task Trove",
+                family="stdin-stdout",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
+                notes=(
+                    "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
+                    "aware compare where the prompt promises one."
+                ),
+            ),
+        ),
     ]

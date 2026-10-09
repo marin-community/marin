@@ -25,6 +25,7 @@ from verifyit.spec import Constraint, SchemaFormat
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SHELL_PREAMBLE = "You are running in a shell-based sandbox."
 PREAMBLE_SEPARATOR = "\n---\n"
@@ -202,27 +203,50 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-ifeval",
-            source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
-            convert=convert_ifeval,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=IFEVAL_RUBRIC,
-            atlas_id="Task Trove:laion__nemotron-gym-instruction-following-v3",
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-instruction-following-v3",
+                title="laion/nemotron-gym-instruction-following-v3",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=46391,
+                notes=(
+                    "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
+                    "(vacuous pass) at conversion."
+                ),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-ifeval",
+                source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
+                convert=convert_ifeval,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=IFEVAL_RUBRIC,
+            ),
         ),
-        RlDataPipeline(
-            name="tasktrove-structured",
-            source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
-            convert=convert_structured,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=STRUCTURED_RUBRIC,
-            controls=Controls(),
-            atlas_id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
+                title="laion/nemotron-gym-instruction-following-structured-v3",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=9437,
+                notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-structured",
+                source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
+                convert=convert_structured,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=STRUCTURED_RUBRIC,
+                controls=Controls(),
+            ),
         ),
     ]

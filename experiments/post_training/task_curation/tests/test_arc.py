@@ -19,7 +19,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {pipeline.name: pipeline for pipeline in arc.pipelines()}
+PIPELINES = {source.name: source.pipeline for source in arc.sources() if source.pipeline is not None}
 # The Nemotron Ultra declarations that use convert_ultra_arc name the grader packages.
 ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]

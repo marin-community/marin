@@ -39,6 +39,7 @@ from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -165,17 +166,30 @@ def structured_witness(task: TaskSpec) -> Reply | None:
     return None
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-structured_outputs",
-            source=tasktrove_source(CONFIG),
-            convert=convert_structured_outputs,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=STRUCTURED_OUTPUTS_RUBRIC,
-            controls=Controls(golden=structured_witness),
-            atlas_id=f"Task Trove:{CONFIG}",
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
+                title="laion/nemotron-gym-structured-outputs-v4",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=53870,
+                notes=(
+                    "Keep JSON/YAML/TOML rows (full jsonschema validation); drop XML and CSV rows, which "
+                    "only check key presence."
+                ),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-structured_outputs",
+                source=tasktrove_source(CONFIG),
+                convert=convert_structured_outputs,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=STRUCTURED_OUTPUTS_RUBRIC,
+                controls=Controls(golden=structured_witness),
+            ),
         )
     ]

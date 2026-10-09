@@ -176,7 +176,6 @@ class RlDataPipeline:
     rubric: str | None = None
     controls: Controls | None = None
     inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
-    atlas_id: str | None = None
     grader: Environment | None = None
     ships: tuple[Path, ...] = ()
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES

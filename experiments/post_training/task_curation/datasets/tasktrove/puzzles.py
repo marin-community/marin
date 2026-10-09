@@ -18,8 +18,12 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import ANSWER_FILE_DELIVERY, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import (
+    ANSWER_FILE_DELIVERY,
+    tasktrove_source,
+)
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list", "number", "coords"})
 MATH_ANSWER_TYPES = frozenset({"number", "coords"})
@@ -65,17 +69,30 @@ def convert_puzzle(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-puzzles",
-            source=tasktrove_source("laion__all-puzzles-v2"),
-            convert=convert_puzzle,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=RUBRIC,
-            controls=Controls(golden=reference_reply),
-            atlas_id="Task Trove:laion__all-puzzles-v2",
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__all-puzzles-v2",
+                title="laion/all-puzzles-v2",
+                origin="Task Trove",
+                family="math-answer",
+                tags=("agentic", "multi-turn"),
+                count=6926,
+                notes=(
+                    "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
+                    "fine under the new grader."
+                ),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-puzzles",
+                source=tasktrove_source("laion__all-puzzles-v2"),
+                convert=convert_puzzle,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=RUBRIC,
+                controls=Controls(golden=reference_reply),
+            ),
         )
     ]

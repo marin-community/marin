@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
 TRANSDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-transductive-v3"
@@ -231,32 +232,52 @@ TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden, memory_mb=GRADER_MEMORY_M
 ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, memory_mb=GRADER_MEMORY_MB)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-arc_inductive",
-            source=tasktrove_source(INDUCTIVE_CONFIG),
-            convert=convert_tasktrove_inductive,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=TASKTROVE_INDUCTIVE_RUBRIC,
-            controls=TASKTROVE_CONTROLS,
-            atlas_id=f"Task Trove:{INDUCTIVE_CONFIG}",
-            grader=GRADER_PACKAGES,
-            ships=ARC_SHIPS,
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
+                title="laion/nemotron-gym-arc-agi-python-inductive-v2",
+                origin="Task Trove",
+                family="arc-agi",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
+                notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-arc_inductive",
+                source=tasktrove_source(INDUCTIVE_CONFIG),
+                convert=convert_tasktrove_inductive,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=TASKTROVE_INDUCTIVE_RUBRIC,
+                controls=TASKTROVE_CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=ARC_SHIPS,
+            ),
         ),
-        RlDataPipeline(
-            name="tasktrove-arc_transductive",
-            source=tasktrove_source(TRANSDUCTIVE_CONFIG),
-            convert=convert_tasktrove_transductive,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
-            controls=TASKTROVE_CONTROLS,
-            atlas_id=f"Task Trove:{TRANSDUCTIVE_CONFIG}",
-            grader=GRADER_PACKAGES,
-            ships=ARC_SHIPS,
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
+                title="laion/nemotron-gym-arc-agi-transductive-v3",
+                origin="Task Trove",
+                family="arc-agi",
+                tags=("agentic", "multi-turn"),
+                count=10000,
+                notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-arc_transductive",
+                source=tasktrove_source(TRANSDUCTIVE_CONFIG),
+                convert=convert_tasktrove_transductive,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
+                controls=TASKTROVE_CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=ARC_SHIPS,
+            ),
         ),
     ]

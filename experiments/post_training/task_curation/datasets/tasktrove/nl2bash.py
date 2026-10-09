@@ -9,6 +9,7 @@ recorded output as an order-insensitive multiset of normalized lines. The oracle
 source's ``solution/solve.sh``.
 """
 
+
 from taskcompendium.convert.executable import solve_script, tasktrove_archive_task
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bash
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -19,6 +20,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
@@ -52,18 +54,28 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-nl2bash",
-            source=tasktrove_source(CONFIG),
-            convert=convert_nl2bash_task,
-            version="1",
-            environment=AGENT_IMAGE,
-            intended_use=IntendedUse.TRAIN,
-            rubric=NL2BASH_RUBRIC,
-            controls=Controls(golden=solve_script),
-            atlas_id=f"Task Trove:{CONFIG}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                origin="Task Trove",
+                family="shell-cmd",
+                tags=("agentic", "multi-turn", "language:bash"),
+                count=1498,
+                notes="Semantic output comparison against an oracle command run in the same sandbox.",
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-nl2bash",
+                source=tasktrove_source(CONFIG),
+                convert=convert_nl2bash_task,
+                version="1",
+                environment=AGENT_IMAGE,
+                intended_use=IntendedUse.TRAIN,
+                rubric=NL2BASH_RUBRIC,
+                controls=Controls(golden=solve_script),
+                grader=GRADER_PACKAGES,
+            ),
         )
     ]

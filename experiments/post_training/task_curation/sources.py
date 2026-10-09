@@ -3,6 +3,7 @@
 
 """The RL data catalog: every dataset declaration, keyed by name."""
 
+from experiments.post_training.task_curation.datasets import unconverted
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
@@ -24,31 +25,43 @@ from experiments.post_training.task_curation.datasets.tasktrove import qa as tas
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.pipeline import RlDataPipeline
+from experiments.post_training.task_curation.source import RlDataSource
+
+
+def all_sources() -> dict[str, RlDataSource]:
+    sources = [
+        *skyrl_math.sources(),
+        *skyrl_code.sources(),
+        *skyrl_ifeval.sources(),
+        *skyrl_mcq.sources(),
+        *skyrl_preference.sources(),
+        *tasktrove_code.sources(),
+        *tasktrove_python_tests.sources(),
+        *tasktrove_nl2bash.sources(),
+        *tasktrove_structured_outputs.sources(),
+        *tasktrove_repositories.sources(),
+        *tasktrove_math.sources(),
+        *tasktrove_judged.sources(),
+        *tasktrove_qa.sources(),
+        *tasktrove_calendar.sources(),
+        *tasktrove_instructions.sources(),
+        *tasktrove_multichallenge.sources(),
+        *tasktrove_puzzles.sources(),
+        *arc.sources(),
+        *reasoning_gym.sources(),
+        *nemotron_ultra.sources(),
+        *unconverted.sources(),
+    ]
+    identifiers = [source.info.id for source in sources]
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("Duplicate RL source identifiers")
+    return {source.info.id: source for source in sources}
 
 
 def all_pipelines() -> dict[str, RlDataPipeline]:
-    pipelines = [
-        *skyrl_math.pipelines(),
-        *skyrl_code.pipelines(),
-        *skyrl_ifeval.pipelines(),
-        *skyrl_mcq.pipelines(),
-        *skyrl_preference.pipelines(),
-        *tasktrove_code.pipelines(),
-        *tasktrove_python_tests.pipelines(),
-        *tasktrove_nl2bash.pipelines(),
-        *tasktrove_structured_outputs.pipelines(),
-        *tasktrove_repositories.pipelines(),
-        *tasktrove_math.pipelines(),
-        *tasktrove_judged.pipelines(),
-        *tasktrove_qa.pipelines(),
-        *tasktrove_calendar.pipelines(),
-        *tasktrove_instructions.pipelines(),
-        *tasktrove_multichallenge.pipelines(),
-        *tasktrove_puzzles.pipelines(),
-        *arc.pipelines(),
-        *reasoning_gym.pipelines(),
-        *nemotron_ultra.pipelines(),
-    ]
+    """Runnable conversion recipes from the authoritative source registry."""
+    pipelines = [source.pipeline for source in all_sources().values() if source.pipeline is not None]
     names = [pipeline.name for pipeline in pipelines]
-    assert len(set(names)) == len(names), sorted(name for name in names if names.count(name) > 1)
+    if len(set(names)) != len(names):
+        raise ValueError("Duplicate RL pipeline names")
     return {pipeline.name: pipeline for pipeline in pipelines}

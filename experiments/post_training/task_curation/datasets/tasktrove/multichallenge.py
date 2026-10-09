@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"
@@ -83,17 +84,30 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-multichallenge",
-            source=tasktrove_source(CONFIG),
-            convert=convert_multichallenge,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=RUBRIC,
-            atlas_id=f"Task Trove:{CONFIG}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
+                title="laion/nemotron-gym-multichallenge-advanced-v4",
+                origin="Task Trove",
+                family="llm-judge-freeform",
+                tags=("agentic", "multi-turn"),
+                count=1068,
+                notes=(
+                    "Multi-turn with four factual or formatting criteria per task. The converter "
+                    "preserves the source's explicit positive or negated pass condition."
+                ),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-multichallenge",
+                source=tasktrove_source(CONFIG),
+                convert=convert_multichallenge,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=RUBRIC,
+                grader=GRADER_PACKAGES,
+            ),
         )
     ]

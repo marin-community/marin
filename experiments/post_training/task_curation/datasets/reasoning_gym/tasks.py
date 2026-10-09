@@ -56,8 +56,12 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import ANSWER_FILE_DELIVERY, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import (
+    ANSWER_FILE_DELIVERY,
+    tasktrove_source,
+)
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -343,36 +347,62 @@ GENERATED_CONTROLS = Controls(golden=generated_golden)
 TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="reasoning_gym_generated",
-            source=UrlSource(
-                GENERATOR_URL,
-                GENERATOR_SHA256,
-                GENERATOR_ARCHIVE,
-                SourceFormat.GENERATED,
-                parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:reasoning_gym",
+                title="open-thought/reasoning-gym",
+                origin="MarinSkyRL",
+                family="reasoning-gym",
+                tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
+                verifier=SourceReference(
+                    "reasoning_gym",
+                    "c4daad3876de66d27fa1a5c6405269165f4ccfc5bd85e4fc65108a802f8d6109",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/reasoning_gym"
+                    ),
+                ),
             ),
-            convert=convert_generated,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=GENERATED_RUBRIC,
-            controls=GENERATED_CONTROLS,
-            atlas_id="MarinSkyRL:reasoning_gym",
-            grader=GRADER_PACKAGES,
+            pipeline=RlDataPipeline(
+                name="reasoning_gym_generated",
+                source=UrlSource(
+                    GENERATOR_URL,
+                    GENERATOR_SHA256,
+                    GENERATOR_ARCHIVE,
+                    SourceFormat.GENERATED,
+                    parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
+                ),
+                convert=convert_generated,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=GENERATED_RUBRIC,
+                controls=GENERATED_CONTROLS,
+                grader=GRADER_PACKAGES,
+            ),
         ),
-        RlDataPipeline(
-            name="tasktrove-reasoning-gym",
-            source=tasktrove_source(TASKTROVE_CONFIG),
-            convert=convert_tasktrove,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=TASKTROVE_RUBRIC,
-            controls=TASKTROVE_CONTROLS,
-            atlas_id=f"Task Trove:{TASKTROVE_CONFIG}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
+                title="laion/nemotron-gym-reasoning-gym-v2",
+                origin="Task Trove",
+                family="reasoning-gym",
+                tags=("agentic", "multi-turn"),
+                count=14259,
+                notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-reasoning-gym",
+                source=tasktrove_source(TASKTROVE_CONFIG),
+                convert=convert_tasktrove,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=TASKTROVE_RUBRIC,
+                controls=TASKTROVE_CONTROLS,
+                grader=GRADER_PACKAGES,
+            ),
         ),
     ]

@@ -15,7 +15,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -28,6 +28,16 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+
+PREFERENCE_VERIFIER = SourceReference(
+    "preference",
+    "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+    ),
+)
 
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
@@ -41,9 +51,51 @@ PARENT_REVISION = "f8869fc91bde5c71a104667292addcbbfd15985d"
 PARENT_INPUT = "parent"
 TRAIN_FILE = "data/train-00000-of-00001.parquet"
 KTO_COMPONENTS = {
-    "kto_component_capybara": "argilla/distilabel-capybara-dpo-7k-binarized",
-    "kto_component_intel_orca": "argilla/distilabel-intel-orca-dpo-pairs",
-    "kto_component_ultrafeedback": "argilla/ultrafeedback-binarized-preferences-cleaned",
+    "kto_component_capybara": (
+        "argilla/distilabel-capybara-dpo-7k-binarized",
+        SourceInfo(
+            id="MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+            title="argilla/distilabel-capybara-dpo-7k-binarized · KTO",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
+    "kto_component_intel_orca": (
+        "argilla/distilabel-intel-orca-dpo-pairs",
+        SourceInfo(
+            id="MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+            title="argilla/distilabel-intel-orca-dpo-pairs · KTO",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "single-turn", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
+    "kto_component_ultrafeedback": (
+        "argilla/ultrafeedback-binarized-preferences-cleaned",
+        SourceInfo(
+            id="MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+            title="argilla/ultrafeedback-binarized-preferences-cleaned · KTO",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "single-turn", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
 }
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_MESSAGE_BYTES = 1024 * 1024
@@ -100,13 +152,78 @@ class HhSubset:
     name: str
     config: str
     rubric: str
+    info: SourceInfo = field(kw_only=True)
 
 
 HH_SUBSETS = (
-    HhSubset("hh_harmless_base", "harmless-base", HH_HARMLESS_BASE_RUBRIC),
-    HhSubset("hh_helpful_base", "helpful-base", HH_HELPFUL_BASE_RUBRIC),
-    HhSubset("hh_helpful_online", "helpful-online", HH_HELPFUL_ONLINE_RUBRIC),
-    HhSubset("hh_helpful_rejection_sampled", "helpful-rejection-sampled", HH_HELPFUL_REJECTION_SAMPLED_RUBRIC),
+    HhSubset(
+        "hh_harmless_base",
+        "harmless-base",
+        HH_HARMLESS_BASE_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:hh_rlhf/harmless-base",
+            title="Anthropic/hh-rlhf · harmless-base",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
+    HhSubset(
+        "hh_helpful_base",
+        "helpful-base",
+        HH_HELPFUL_BASE_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:hh_rlhf/helpful-base",
+            title="Anthropic/hh-rlhf · helpful-base",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
+    HhSubset(
+        "hh_helpful_online",
+        "helpful-online",
+        HH_HELPFUL_ONLINE_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:hh_rlhf/helpful-online",
+            title="Anthropic/hh-rlhf · helpful-online",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
+    HhSubset(
+        "hh_helpful_rejection_sampled",
+        "helpful-rejection-sampled",
+        HH_HELPFUL_REJECTION_SAMPLED_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:hh_rlhf/helpful-rejection-sampled",
+            title="Anthropic/hh-rlhf · helpful-rejection-sampled",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
+            ),
+            verifier=PREFERENCE_VERIFIER,
+        ),
+    ),
 )
 
 
@@ -185,7 +302,7 @@ def kto_component_rows(path: StoragePath, context: ConversionContext) -> Iterato
     parent, with no unmatched or ambiguous KTO row; otherwise the reader raises before yielding.
     """
     parent = context.inputs[PARENT_INPUT] / TRAIN_FILE
-    components = set(KTO_COMPONENTS.values())
+    components = {component for component, _metadata in KTO_COMPONENTS.values()}
     with TemporaryDirectory() as directory, sqlite3.connect(directory + "/join.sqlite") as connection:
         connection.execute("PRAGMA cache_size = -4096")
         connection.execute("PRAGMA temp_store = FILE")
@@ -263,39 +380,43 @@ def convert_kto_component(row: RawRow, _context: ConversionContext) -> TaskSpec 
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     hh = [
-        RlDataPipeline(
-            name=subset.name,
-            source=HfSource(HH_REPO, HH_REVISION, (f"{subset.config}/train.jsonl.gz",), SourceFormat.JSONL),
-            convert=convert_hh,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=subset.rubric,
-            atlas_id=f"MarinSkyRL:hh_rlhf/{subset.config}",
+        RlDataSource(
+            info=subset.info,
+            pipeline=RlDataPipeline(
+                name=subset.name,
+                source=HfSource(HH_REPO, HH_REVISION, (f"{subset.config}/train.jsonl.gz",), SourceFormat.JSONL),
+                convert=convert_hh,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=subset.rubric,
+            ),
         )
         for subset in HH_SUBSETS
     ]
     kto = [
-        RlDataPipeline(
-            name=name,
-            source=HfSource(
-                KTO_REPO,
-                KTO_REVISION,
-                (TRAIN_FILE,),
-                SourceFormat.PARQUET,
-                select=KtoComponent(component),
-                read=kto_component_rows,
+        RlDataSource(
+            info=info,
+            pipeline=RlDataPipeline(
+                name=name,
+                source=HfSource(
+                    KTO_REPO,
+                    KTO_REVISION,
+                    (TRAIN_FILE,),
+                    SourceFormat.PARQUET,
+                    select=KtoComponent(component),
+                    read=kto_component_rows,
+                ),
+                convert=convert_kto_component,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=KTO_COMPONENT_RUBRIC,
+                inputs={PARENT_INPUT: HfSource(PARENT_REPO, PARENT_REVISION, (TRAIN_FILE,), SourceFormat.PARQUET)},
             ),
-            convert=convert_kto_component,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=KTO_COMPONENT_RUBRIC,
-            inputs={PARENT_INPUT: HfSource(PARENT_REPO, PARENT_REVISION, (TRAIN_FILE,), SourceFormat.PARQUET)},
-            atlas_id=f"MarinSkyRL:kto_mix/{component}",
         )
-        for name, component in KTO_COMPONENTS.items()
+        for name, (component, info) in KTO_COMPONENTS.items()
     ]
     return [*hh, *kto]

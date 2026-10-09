@@ -35,7 +35,10 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 PIPELINES = {
-    pipeline.name: pipeline for module in (math, code, ifeval, mcq, preference) for pipeline in module.pipelines()
+    source.name: source.pipeline
+    for module in (math, code, ifeval, mcq, preference)
+    for source in module.sources()
+    if source.pipeline is not None
 }
 
 SUM_TESTS = {"inputs": ["1 2\n"], "outputs": ["3\n"]}
@@ -202,7 +205,7 @@ ROWS: dict[str, dict] = {
     "hh_helpful_base": HH_ROW,
     "hh_helpful_online": HH_ROW,
     "hh_helpful_rejection_sampled": HH_ROW,
-    **{name: kto_row(component) for name, component in preference.KTO_COMPONENTS.items()},
+    **{name: kto_row(component) for name, (component, _metadata) in preference.KTO_COMPONENTS.items()},
 }
 
 # A correct and an incorrect final reply for every source graded in process.
@@ -327,7 +330,7 @@ def test_preference_task_hides_candidates_and_has_no_grader(name):
         return
     assert (contract["kind"], contract["preferred"]) == ("binary", True)
     evidence = json.loads(verifier_file(task, EVIDENCE_PATH))
-    assert evidence["kto_component_provenance"]["component"] == preference.KTO_COMPONENTS[name]
+    assert evidence["kto_component_provenance"]["component"] == preference.KTO_COMPONENTS[name][0]
 
 
 REJECTIONS = [
@@ -466,7 +469,7 @@ def staged_component_rows(tmp_path, parent: list[dict], kto: list[dict], name: s
     )
 
 
-COMPONENTS = list(preference.KTO_COMPONENTS.values())
+COMPONENTS = [component for component, _metadata in preference.KTO_COMPONENTS.values()]
 
 
 def test_kto_component_rows_keep_history_labels_order_and_duplicates(tmp_path):

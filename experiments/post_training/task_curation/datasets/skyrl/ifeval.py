@@ -28,6 +28,16 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+
+IFEVAL_VERIFIER = SourceReference(
+    "ifeval",
+    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
+    ),
+)
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -175,42 +185,60 @@ def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | I
 CONTROLS = Controls()
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="nemotron_if",
-            source=HfSource(
-                "nvidia/Llama-Nemotron-Post-Training-Dataset",
-                "ab2a40d258a6a4d9d4c277d702aeea445081766c",
-                ("RL/instruction_following/instruction_following.jsonl",),
-                SourceFormat.JSONL,
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:nemotron_if",
+                title="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
+                origin="MarinSkyRL",
+                family="instruction-following",
+                tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
+                verifier=IFEVAL_VERIFIER,
             ),
-            convert=convert_nemotron_if,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=RUBRIC,
-            controls=CONTROLS,
-            grader=GRADER_PACKAGES,
-            ships=(SCORERS,),
-            atlas_id="MarinSkyRL:nemotron_if",
+            pipeline=RlDataPipeline(
+                name="nemotron_if",
+                source=HfSource(
+                    "nvidia/Llama-Nemotron-Post-Training-Dataset",
+                    "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+                    ("RL/instruction_following/instruction_following.jsonl",),
+                    SourceFormat.JSONL,
+                ),
+                convert=convert_nemotron_if,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=RUBRIC,
+                controls=CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=(SCORERS,),
+            ),
         ),
-        RlDataPipeline(
-            name="rlvr_ifeval",
-            source=HfSource(
-                "allenai/RLVR-IFeval",
-                "47c03c73621c4aab2b824b7818681117d662770e",
-                ("data/train-00000-of-00001.parquet",),
-                SourceFormat.PARQUET,
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:rlvr_ifeval",
+                title="allenai/RLVR-IFeval",
+                origin="MarinSkyRL",
+                family="instruction-following",
+                tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
+                verifier=IFEVAL_VERIFIER,
             ),
-            convert=convert_rlvr_ifeval,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=RUBRIC,
-            controls=CONTROLS,
-            grader=GRADER_PACKAGES,
-            ships=(SCORERS,),
-            atlas_id="MarinSkyRL:rlvr_ifeval",
+            pipeline=RlDataPipeline(
+                name="rlvr_ifeval",
+                source=HfSource(
+                    "allenai/RLVR-IFeval",
+                    "47c03c73621c4aab2b824b7818681117d662770e",
+                    ("data/train-00000-of-00001.parquet",),
+                    SourceFormat.PARQUET,
+                ),
+                convert=convert_rlvr_ifeval,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=RUBRIC,
+                controls=CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=(SCORERS,),
+            ),
         ),
     ]

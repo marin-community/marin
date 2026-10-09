@@ -1,16 +1,16 @@
 # Task curation
 
 Task curation turns pinned RL datasets into TaskSpec parquet files. Each dataset
-is declared once as an `RlDataPipeline` under
+is declared once as an `RlDataSource` under
 [`experiments/post_training/task_curation/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md),
 and the catalog
 [`sources.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py)
 lists every declaration:
 
 ```python
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.sources import all_sources
 
-pipelines = all_pipelines()  # name -> RlDataPipeline
+sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
 
 Building the catalog performs no downloads, inference or job submission.
@@ -23,7 +23,8 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
-| `experiments/post_training/task_curation/sources.py` | The catalog, `all_pipelines()` |
+| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
+| `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
@@ -37,7 +38,31 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataPipeline` has these fields:
+An `RlDataSource` has `info`, `review` and an optional `pipeline`.
+`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
+search tags, notes and an optional input-row count. A `SourceReference` groups a
+name, revision and URL for the verifier or an inventory-only dataset. Runnable
+sources derive dataset identity from `pipeline.source`, with no second dataset
+definition. `DataSourceReview` records an authored grade, evidence URL, date and
+the dataset/verifier revisions it covers. Its default is unrated. Executed
+reviews and difficulty measurements remain in the Atlas database.
+
+The applet build exports this registry to `dist/catalog.json`:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog \
+  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+```
+
+The exporter alone maps Python declarations to Atlas fields. Dataset links and
+**Input rows** describe the same pinned conversion input, before conversion or
+curation. Unknown counts remain unknown. A changed dataset or verifier revision
+makes reviews covering a different revision stale while preserving their history.
+See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews, and the
+[experiment README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
+for offline count regeneration.
+
+The `RlDataPipeline` recipe has these fields:
 
 | Field | Meaning |
 |---|---|
@@ -50,7 +75,6 @@ An `RlDataPipeline` has these fields:
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
 | `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
-| `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
 | `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |

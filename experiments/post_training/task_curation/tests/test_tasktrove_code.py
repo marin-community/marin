@@ -35,9 +35,10 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 PIPELINES = {
-    pipeline.name: pipeline
+    source.name: source.pipeline
     for module in (code, python_tests, nl2bash, structured_outputs, repositories)
-    for pipeline in module.pipelines()
+    for source in module.sources()
+    if source.pipeline is not None
 }
 
 CODENET = (Path(__file__).parent / "fixtures/codenet.tar.gz").read_bytes()

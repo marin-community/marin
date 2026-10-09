@@ -40,6 +40,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
@@ -150,23 +151,54 @@ def calendar_golden(task: TaskSpec) -> Reply | None:
     return None if witness is None else answer_reply(task, witness)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     sources = (
-        ("tasktrove-calendar", "laion__nemotron-gym-agent-calendar-v2", CALENDAR_RUBRIC),
-        ("tasktrove-if_calendar", "laion__nemotron-gym-instruction-following-calendar-v3", IF_CALENDAR_RUBRIC),
+        (
+            "tasktrove-calendar",
+            "laion__nemotron-gym-agent-calendar-v2",
+            CALENDAR_RUBRIC,
+            SourceInfo(
+                id="Task Trove:laion__nemotron-gym-agent-calendar-v2",
+                title="laion/nemotron-gym-agent-calendar-v2",
+                origin="Task Trove",
+                family="tool-use",
+                tags=("agentic", "multi-turn"),
+                count=2699,
+                notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
+            ),
+        ),
+        (
+            "tasktrove-if_calendar",
+            "laion__nemotron-gym-instruction-following-calendar-v3",
+            IF_CALENDAR_RUBRIC,
+            SourceInfo(
+                id="Task Trove:laion__nemotron-gym-instruction-following-calendar-v3",
+                title="laion/nemotron-gym-instruction-following-calendar-v3",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=5673,
+                notes=(
+                    "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "
+                    "agent-calendar-v2."
+                ),
+            ),
+        ),
     )
     return [
-        RlDataPipeline(
-            name=name,
-            source=tasktrove_source(config),
-            convert=convert_calendar,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=rubric,
-            controls=Controls(golden=calendar_golden),
-            atlas_id=f"Task Trove:{config}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            info=info,
+            pipeline=RlDataPipeline(
+                name=name,
+                source=tasktrove_source(config),
+                convert=convert_calendar,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=rubric,
+                controls=Controls(golden=calendar_golden),
+                grader=GRADER_PACKAGES,
+            ),
         )
-        for name, config, rubric in sources
+        for name, config, rubric, info in sources
     ]

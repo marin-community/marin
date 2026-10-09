@@ -24,7 +24,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {pipeline.name: pipeline for pipeline in declarations.pipelines()}
+PIPELINES = {source.name: source.pipeline for source in declarations.sources() if source.pipeline is not None}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
 TASKTROVE_INSTRUCTION = "Solve x + 8 = 50. Write ONLY your final answer to **`/app/answer.txt`**"
 TASKTROVE_ENTRY = {"question": "Solve x + 8 = 50.", "answer": "42", "metadata": {"source_dataset": "simple_equations"}}

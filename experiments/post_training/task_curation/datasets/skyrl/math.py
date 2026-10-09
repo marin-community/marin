@@ -10,7 +10,7 @@ and numeric answers use the numeric comparator, which the structural checks alre
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
@@ -22,6 +22,16 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+
+AIME_VERIFIER = SourceReference(
+    "aime",
+    "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+    ),
+)
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -269,7 +279,7 @@ def convert_svamp(row: RawRow, _context: ConversionContext) -> TaskSpec | Import
 
 @dataclass(frozen=True)
 class MathSource:
-    """One SkyRL math source; ``controls=None`` for numeric answers the structural checks cover."""
+    ("One SkyRL math source; ``controls=None`` for numeric answers the structural checks " "cover.")
 
     name: str
     source: HfSource | UrlSource
@@ -277,6 +287,7 @@ class MathSource:
     intended_use: IntendedUse
     rubric: str
     controls: Controls | None = MATH_CONTROLS
+    info: SourceInfo = field(kw_only=True)
 
 
 SOURCES = (
@@ -292,6 +303,14 @@ SOURCES = (
         IntendedUse.EVAL,
         AIME24_RUBRIC,
         controls=None,
+        info=SourceInfo(
+            id="MarinSkyRL:aime24",
+            title="HuggingFaceH4/aime_2024",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "aime_1983_2024",
@@ -304,6 +323,14 @@ SOURCES = (
         convert_aime_1983_2024,
         IntendedUse.EVAL,
         AIME_1983_2024_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:aime_1983_2024",
+            title="di-zhang-fdu/AIME_1983_2024",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "asdiv",
@@ -317,6 +344,14 @@ SOURCES = (
         convert_asdiv,
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:asdiv",
+            title="chaochun/nlu-asdiv-dataset",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "dapo_math",
@@ -329,6 +364,14 @@ SOURCES = (
         convert_dapo_math,
         IntendedUse.TRAIN,
         DAPO_MATH_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:dapo_math",
+            title="BytedTsinghua-SIA/DAPO-Math-17k",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "deepscaler",
@@ -341,6 +384,14 @@ SOURCES = (
         convert_deepscaler,
         IntendedUse.TRAIN,
         DEEPSCALER_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:deepscaler",
+            title="agentica-org/DeepScaleR-Preview-Dataset",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "gsm8k",
@@ -353,6 +404,21 @@ SOURCES = (
         convert_gsm8k,
         IntendedUse.TRAIN,
         GSM8K_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:gsm8k",
+            title="openai/gsm8k",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/gsm8k"),
+            verifier=SourceReference(
+                "gsm8k",
+                "60e40a6f794fad7e9527298d901ff35a7dc57f2e3d061661f386fbbea24293bc",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/gsm8k"
+                ),
+            ),
+        ),
     ),
     MathSource(
         "hardmath",
@@ -365,6 +431,14 @@ SOURCES = (
         convert_hardmath,
         IntendedUse.TRAIN,
         HARDMATH_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:hardmath",
+            title="pafitis/HARDMath_processed_training",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "hendrycks_math",
@@ -377,6 +451,14 @@ SOURCES = (
         convert_hendrycks_math,
         IntendedUse.TRAIN,
         HENDRYCKS_MATH_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:hendrycks_math",
+            title="EleutherAI/hendrycks_math",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "math500",
@@ -386,6 +468,14 @@ SOURCES = (
         convert_math500,
         IntendedUse.EVAL,
         MATH500_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:math500",
+            title="HuggingFaceH4/MATH-500",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "numina_math",
@@ -398,6 +488,14 @@ SOURCES = (
         convert_numina_math,
         IntendedUse.TRAIN,
         NUMINA_MATH_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:numina_math",
+            title="AI-MO/NuminaMath-CoT",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "rlvr_math",
@@ -410,6 +508,14 @@ SOURCES = (
         convert_rlvr_math,
         IntendedUse.TRAIN,
         RLVR_MATH_RUBRIC,
+        info=SourceInfo(
+            id="MarinSkyRL:rlvr_math",
+            title="allenai/RLVR-MATH",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
     MathSource(
         "svamp",
@@ -420,23 +526,33 @@ SOURCES = (
         IntendedUse.TRAIN,
         SVAMP_RUBRIC,
         controls=None,
+        info=SourceInfo(
+            id="MarinSkyRL:svamp",
+            title="ChilleD/SVAMP",
+            origin="MarinSkyRL",
+            family="math-answer",
+            tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
+            verifier=AIME_VERIFIER,
+        ),
     ),
 )
 
 
-def math_pipeline(source: MathSource) -> RlDataPipeline:
-    return RlDataPipeline(
-        name=source.name,
-        source=source.source,
-        convert=source.convert,
-        version="1",
-        environment=ShellSim(),
-        intended_use=source.intended_use,
-        rubric=source.rubric,
-        controls=source.controls,
-        atlas_id=f"MarinSkyRL:{source.name}",
+def math_source(source: MathSource) -> RlDataSource:
+    return RlDataSource(
+        info=source.info,
+        pipeline=RlDataPipeline(
+            name=source.name,
+            source=source.source,
+            convert=source.convert,
+            version="1",
+            environment=ShellSim(),
+            intended_use=source.intended_use,
+            rubric=source.rubric,
+            controls=source.controls,
+        ),
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
-    return [math_pipeline(source) for source in SOURCES]
+def sources() -> list[RlDataSource]:
+    return [math_source(source) for source in SOURCES]

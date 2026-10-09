@@ -5,14 +5,81 @@ dataset is declared once, in [datasets/](datasets/README.md), and listed in the
 catalog [sources.py](sources.py):
 
 ```python
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.sources import all_sources
 
-pipelines = all_pipelines()  # name -> RlDataPipeline
+sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
+
+## Atlas export
+
+Build the Atlas input from the same declarations without downloading data or
+running converters:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog \
+  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+```
+
+The output is `infra/marina/applets/rl_data_catalog/dist/catalog.json`, ignored
+by Git. Edit the Python declarations, not this generated file. The applet build
+runs the command automatically and bundles the JSON. **Refresh sources** reads
+that packaged catalog; publishing a rebuilt applet makes source edits visible.
+See [Adding a dataset](datasets/README.md#adding-a-dataset) for the edit-to-export
+checklist and [RL Data Atlas](../../../docs/references/rl-data-atlas.md) for publishing.
 
 ## Declaring a dataset
 
-A declaration is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
+An `RlDataSource` ([source.py](source.py)) combines source information, an optional
+review and a conversion recipe:
+
+```python
+RlDataSource(
+    info=SourceInfo(
+        id="MarinSkyRL:math500", title="MATH-500", origin="MarinSkyRL",
+        family="math-answer", tags=("rlvr", "single-turn", "benchmark"),
+    ),
+    pipeline=math500_pipeline,
+    review=DataSourceReview(),
+)
+```
+
+`info.id` preserves Atlas review links; `info.title` is a display label, while
+`source.name` identifies the pipeline. `family` groups related tasks. Free-form
+tags describe task type, interaction, benchmark or excluded status, licenses,
+and source-specific search aliases. `SourceReference(name, revision, url)`
+identifies a verifier, or the dataset of an inventory entry without a pipeline.
+Runnable sources define their dataset only in `pipeline.source`.
+
+`info.count` counts selected input rows at that dataset revision, before
+conversion or curation. Use `None` when the pinned population is unknown.
+The Atlas shows **Input rows** beside links to the same pinned conversion input.
+TaskTrove archive counts therefore refer to `open-thoughts/TaskTrove`, rather
+than counts of successful conversions in a different release. Revisions covered
+by authored or saved reviews are compared with these displayed dataset and
+verifier revisions; a mismatch hides the rating but preserves review history.
+
+Reproduce whole-file counts from a local Hugging Face download with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.count_inputs \
+  --snapshot /path/to/tasktrove/repo \
+  --revision 02923004846e4e73862c20962f823a6d05100e7a \
+  --files '*/tasks.parquet'
+```
+
+This verifies each file's HF download commit metadata and reads parquet footers
+without network access or data-page reads. Sum only the files selected by the
+recipe. A row selector requires a complete count of that selection; do not use
+whole-file or QUICK sample counts. Reset or recount counts whenever the input
+pin or selection changes. The Nemotron blend counts retain the complete pinned
+selection audit, including SWE-Gym membership; card estimates are omitted.
+
+A review remains unrated until an assessment is supplied. Executed reviews and
+difficulty measurements remain in the Atlas database. Sources without a recipe
+remain in [datasets/unconverted.py](datasets/unconverted.py).
+`all_pipelines()` projects runnable recipes for the campaign driver.
+
+A conversion recipe is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
 
 ```python
 RlDataPipeline(
@@ -24,7 +91,6 @@ RlDataPipeline(
     intended_use=IntendedUse.EVAL,
     rubric=MATH500_RUBRIC,               # optional model review; one criterion per paragraph
     controls=MATH_CONTROLS,              # optional grader verification
-    atlas_id="MarinSkyRL:math500",       # join key into atlas_catalog.json
     grader=None,                         # GRADER_PACKAGES, or another Environment, when a grade script needs packages
     ships=(),                            # directories whose files the converter packages into tasks
     resource_budget_bytes=1_000_000,     # tasks carrying more resource bytes are deferred
@@ -82,7 +148,7 @@ RlDataPipeline(
 
 To add a dataset, copy the closest declaration, set its source, converter,
 environment and rubric, add a fixture row to the family test's `ROWS`, and add
-the module's `pipelines()` to [sources.py](sources.py).
+the module's `sources()` to [sources.py](sources.py).
 
 ## Outputs
 

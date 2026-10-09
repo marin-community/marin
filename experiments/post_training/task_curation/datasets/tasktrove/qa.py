@@ -26,6 +26,7 @@ from verifyit.spec import JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 MCQA_REWRITE_REASON = "Replace the source's answer-file wrapper with a request for one option letter"
@@ -176,35 +177,80 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
     return rewritten_task(task, original=instruction, reason=MCQA_REWRITE_REASON)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     openqa = (
-        ("knowledge-openqa", "laion__nemotron-gym-knowledge-openqa-v4"),
-        ("science-openqa", "laion__nemotron-gym-science-so-openq-v3"),
+        (
+            "knowledge-openqa",
+            "laion__nemotron-gym-knowledge-openqa-v4",
+            SourceInfo(
+                id="Task Trove:laion__nemotron-gym-knowledge-openqa-v4",
+                title="laion/nemotron-gym-knowledge-openqa-v4",
+                origin="Task Trove",
+                family="qa-short-answer",
+                tags=("agentic", "multi-turn"),
+                count=122357,
+                notes=(
+                    "Exact gate then reference-based judge. Reference answers are real; needs the judge "
+                    "in the new grader."
+                ),
+            ),
+        ),
+        (
+            "science-openqa",
+            "laion__nemotron-gym-science-so-openq-v3",
+            SourceInfo(
+                id="Task Trove:laion__nemotron-gym-science-so-openq-v3",
+                title="laion/nemotron-gym-science-so-openq-v3",
+                origin="Task Trove",
+                family="llm-judge-freeform",
+                tags=("agentic", "multi-turn"),
+                count=150644,
+                notes=(
+                    "Reference answer plus judge. Move the reference out of the criterion text into a "
+                    "data field at conversion."
+                ),
+            ),
+        ),
     )
     return [
         *(
-            RlDataPipeline(
-                name=name,
-                source=tasktrove_source(config),
-                convert=convert_openqa,
+            RlDataSource(
+                info=info,
+                pipeline=RlDataPipeline(
+                    name=name,
+                    source=tasktrove_source(config),
+                    convert=convert_openqa,
+                    version="1",
+                    environment=ShellSim(),
+                    intended_use=IntendedUse.TRAIN,
+                    rubric=OPENQA_RUBRIC,
+                    grader=GRADER_PACKAGES,
+                ),
+            )
+            for name, config, info in openqa
+        ),
+        RlDataSource(
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
+                title="laion/nemotron-gym-knowledge-mcqa-v2",
+                origin="Task Trove",
+                family="qa-short-answer",
+                tags=("agentic", "multi-turn"),
+                count=616888,
+                notes=(
+                    "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
+                    "and subsample hard: 617k rows is a third of the corpus."
+                ),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-knowledge_mcqa",
+                source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
+                convert=convert_knowledge_mcqa,
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
-                rubric=OPENQA_RUBRIC,
-                atlas_id=f"Task Trove:{config}",
-                grader=GRADER_PACKAGES,
-            )
-            for name, config in openqa
-        ),
-        RlDataPipeline(
-            name="tasktrove-knowledge_mcqa",
-            source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
-            convert=convert_knowledge_mcqa,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=KNOWLEDGE_MCQA_RUBRIC,
-            controls=Controls(golden=reference_reply),
-            atlas_id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
+                rubric=KNOWLEDGE_MCQA_RUBRIC,
+                controls=Controls(golden=reference_reply),
+            ),
         ),
     ]

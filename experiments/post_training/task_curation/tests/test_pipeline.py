@@ -59,7 +59,9 @@ def convert(row, _context):
 
 
 def math500():
-    return next(pipeline for pipeline in skyrl_math.pipelines() if pipeline.name == "math500")
+    return next(
+        source.pipeline for source in skyrl_math.sources() if source.name == "math500" and source.pipeline is not None
+    )
 
 
 def machines(backend: VerificationBackend) -> GradingMachines:

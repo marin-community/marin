@@ -11,7 +11,7 @@ The solver returns its answer in the reply. Archived oracle scripts still supply
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
@@ -43,6 +43,7 @@ from verifyit.spec import MathSpec, MathType
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -213,39 +214,105 @@ class MathSource:
     config: str
     convert: MathConverter
     rubric: str
+    info: SourceInfo = field(kw_only=True)
 
 
 SOURCES = (
-    MathSource("tasktrove-math_gym", "laion__nemotron-gym-math-v5", convert_tasktrove_math, GYM_RUBRIC),
+    MathSource(
+        "tasktrove-math_gym",
+        "laion__nemotron-gym-math-v5",
+        convert_tasktrove_math,
+        GYM_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-math-v5",
+            title="laion/nemotron-gym-math-v5",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=4096,
+            notes=(
+                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
+            ),
+        ),
+    ),
     MathSource(
         "tasktrove-math_openreasoning",
         "laion__nemotron-gym-math-openmathreasoning-v2",
         convert_openreasoning,
         OPENREASONING_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-math-openmathreasoning-v2",
+            title="laion/nemotron-gym-math-openmathreasoning-v2",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=42636,
+            notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
+        ),
     ),
     MathSource(
-        "tasktrove-math_oracle", "SankalpKJ__nemotron-math-oracle-filtered-v2", convert_tasktrove_math, ORACLE_RUBRIC
+        "tasktrove-math_oracle",
+        "SankalpKJ__nemotron-math-oracle-filtered-v2",
+        convert_tasktrove_math,
+        ORACLE_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2",
+            title="SankalpKJ/nemotron-math-oracle-filtered-v2",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=57777,
+            notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
+        ),
     ),
-    MathSource("tasktrove-math_prism", "laion__nemo-prism-math-v3", convert_tasktrove_math, PRISM_RUBRIC),
     MathSource(
-        "tasktrove-math_stack", "laion__nemotron-gym-math-stack-overflow-v3", convert_tasktrove_math, STACK_RUBRIC
+        "tasktrove-math_prism",
+        "laion__nemo-prism-math-v3",
+        convert_tasktrove_math,
+        PRISM_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__nemo-prism-math-v3",
+            title="laion/nemo-prism-math-v3",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=2404,
+            notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
+        ),
+    ),
+    MathSource(
+        "tasktrove-math_stack",
+        "laion__nemotron-gym-math-stack-overflow-v3",
+        convert_tasktrove_math,
+        STACK_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-math-stack-overflow-v3",
+            title="laion/nemotron-gym-math-stack-overflow-v3",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=110730,
+            notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
+        ),
     ),
 )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name=source.name,
-            source=tasktrove_source(source.config),
-            convert=source.convert,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=source.rubric,
-            controls=MATH_CONTROLS,
-            atlas_id=f"Task Trove:{source.config}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            info=source.info,
+            pipeline=RlDataPipeline(
+                name=source.name,
+                source=tasktrove_source(source.config),
+                convert=source.convert,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=source.rubric,
+                controls=MATH_CONTROLS,
+                grader=GRADER_PACKAGES,
+            ),
         )
         for source in SOURCES
     ]

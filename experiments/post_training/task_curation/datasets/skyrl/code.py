@@ -31,6 +31,16 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+
+LCB_VERIFIER = SourceReference(
+    "lcb",
+    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+    ),
+)
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -283,76 +293,119 @@ def reference_solution(task: TaskSpec) -> Reply | None:
 CONTROLS = Controls(golden=reference_solution, memory_mb=CODE_GRADER_MEMORY_MB)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="apps",
-            source=HfSource(
-                "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:apps",
+                title="codeparrot/apps",
+                origin="MarinSkyRL",
+                family="competitive-programming",
+                tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
+                verifier=LCB_VERIFIER,
             ),
-            convert=convert_apps,
-            version="2",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=APPS_RUBRIC,
-            controls=CONTROLS,
-            grader=GRADER_PACKAGES,
-            ships=(SCORERS,),
-            atlas_id="MarinSkyRL:apps",
+            pipeline=RlDataPipeline(
+                name="apps",
+                source=HfSource(
+                    "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
+                ),
+                convert=convert_apps,
+                version="2",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=APPS_RUBRIC,
+                controls=CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=(SCORERS,),
+            ),
         ),
-        RlDataPipeline(
-            name="eurus2_code",
-            source=HfSource(
-                "PRIME-RL/Eurus-2-RL-Data",
-                "9776b13264b5aaa0b16495fcf086a0a8d86fd655",
-                ("train.parquet",),
-                SourceFormat.PARQUET,
-                select=is_code_row,
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:eurus2_code",
+                title="PRIME-RL/Eurus-2-RL-Data · code",
+                origin="MarinSkyRL",
+                family="competitive-programming",
+                tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
+                verifier=LCB_VERIFIER,
             ),
-            convert=convert_eurus2_code,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=EURUS2_CODE_RUBRIC,
-            controls=CONTROLS,
-            grader=GRADER_PACKAGES,
-            ships=(SCORERS,),
-            atlas_id="MarinSkyRL:eurus2_code",
+            pipeline=RlDataPipeline(
+                name="eurus2_code",
+                source=HfSource(
+                    "PRIME-RL/Eurus-2-RL-Data",
+                    "9776b13264b5aaa0b16495fcf086a0a8d86fd655",
+                    ("train.parquet",),
+                    SourceFormat.PARQUET,
+                    select=is_code_row,
+                ),
+                convert=convert_eurus2_code,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=EURUS2_CODE_RUBRIC,
+                controls=CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=(SCORERS,),
+            ),
         ),
-        RlDataPipeline(
-            name="verifiable_code",
-            source=HfSource(
-                "open-r1/verifiable-coding-problems-python",
-                "b761a24a95fa03289a231d2d31c183636ffb9833",
-                ("data/train-*.parquet",),
-                SourceFormat.PARQUET,
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:verifiable_code",
+                title="open-r1/verifiable-coding-problems-python",
+                origin="MarinSkyRL",
+                family="competitive-programming",
+                tags=("rlvr", "single-turn", "gym/lcb"),
+                verifier=LCB_VERIFIER,
             ),
-            convert=convert_verifiable_code,
-            version="2",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=VERIFIABLE_CODE_RUBRIC,
-            controls=CONTROLS,
-            grader=GRADER_PACKAGES,
-            ships=(SCORERS,),
-            atlas_id="MarinSkyRL:verifiable_code",
+            pipeline=RlDataPipeline(
+                name="verifiable_code",
+                source=HfSource(
+                    "open-r1/verifiable-coding-problems-python",
+                    "b761a24a95fa03289a231d2d31c183636ffb9833",
+                    ("data/train-*.parquet",),
+                    SourceFormat.PARQUET,
+                ),
+                convert=convert_verifiable_code,
+                version="2",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=VERIFIABLE_CODE_RUBRIC,
+                controls=CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=(SCORERS,),
+            ),
         ),
-        RlDataPipeline(
-            name="gretel_text_to_sql",
-            source=HfSource(
-                "gretelai/synthetic_text_to_sql",
-                "740ab236e64503fba51be1101df7a1be83bf455d",
-                ("synthetic_text_to_sql_train.snappy.parquet",),
-                SourceFormat.PARQUET,
+        RlDataSource(
+            info=SourceInfo(
+                id="MarinSkyRL:gretel_text_to_sql",
+                title="gretelai/synthetic_text_to_sql",
+                origin="MarinSkyRL",
+                family="text-to-sql",
+                tags=("rlvr", "single-turn", "license:apache-2.0", "gym/text_to_sql"),
+                verifier=SourceReference(
+                    "text_to_sql",
+                    "1d8cec1db5f4d68cb643344f8c777f73d197656040652ff2c7a588dd88ce7ed5",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/text_to_sql"
+                    ),
+                ),
             ),
-            convert=convert_gretel_text_to_sql,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
-            controls=CONTROLS,
-            grader=GRADER_PACKAGES,
-            ships=(SCORERS,),
-            atlas_id="MarinSkyRL:gretel_text_to_sql",
+            pipeline=RlDataPipeline(
+                name="gretel_text_to_sql",
+                source=HfSource(
+                    "gretelai/synthetic_text_to_sql",
+                    "740ab236e64503fba51be1101df7a1be83bf455d",
+                    ("synthetic_text_to_sql_train.snappy.parquet",),
+                    SourceFormat.PARQUET,
+                ),
+                convert=convert_gretel_text_to_sql,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
+                controls=CONTROLS,
+                grader=GRADER_PACKAGES,
+                ships=(SCORERS,),
+            ),
         ),
     ]

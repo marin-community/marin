@@ -12,7 +12,7 @@ sources have no controls and their kept rows are admitted without them.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
@@ -28,6 +28,7 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
@@ -176,34 +177,165 @@ class JudgedSource:
     name: str
     config: str
     rubric: str
+    info: SourceInfo = field(kw_only=True)
 
 
 SOURCES = (
-    JudgedSource("tasktrove-codereview", "laion__stackexchange-codereview-sandboxes-verified-v2", CODEREVIEW_RUBRIC),
-    JudgedSource("tasktrove-glaive_code", "laion__glaive-code-assistant-sandboxes-verified-v2", GLAIVE_CODE_RUBRIC),
-    JudgedSource("tasktrove-safety", "laion__nemotron-gym-safety-v3", SAFETY_RUBRIC),
     JudgedSource(
-        "tasktrove-stack_overflow", "laion__stackexchange-overflow-sandboxes-verified-v2", STACK_OVERFLOW_RUBRIC
+        "tasktrove-codereview",
+        "laion__stackexchange-codereview-sandboxes-verified-v2",
+        CODEREVIEW_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2",
+            title="laion/stackexchange-codereview-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only code review with a four-criterion rubric and no reference; the rubric "
+                "ships under tests/, which the agent never sees. Kept as rubric-only (tag no-"
+                "reference)."
+            ),
+        ),
     ),
-    JudgedSource("tasktrove-superuser", "laion__stackexchange-superuser-sandboxes-verified-v2", SUPERUSER_RUBRIC),
-    JudgedSource("tasktrove-tezos", "laion__stackexchange-tezos-sandboxes-verified-v2", TEZOS_RUBRIC),
-    JudgedSource("tasktrove-unix", "laion__stackexchange-unix-sandboxes-verified-v2", UNIX_RUBRIC),
-    JudgedSource("tasktrove-wizard_orca", "laion__wizardlm-orca-v4", WIZARD_ORCA_RUBRIC),
+    JudgedSource(
+        "tasktrove-glaive_code",
+        "laion__glaive-code-assistant-sandboxes-verified-v2",
+        GLAIVE_CODE_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
+            title="laion/glaive-code-assistant-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
+                "rubric-only (tag no-reference)."
+            ),
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-safety",
+        "laion__nemotron-gym-safety-v3",
+        SAFETY_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-safety-v3",
+            title="laion/nemotron-gym-safety-v3",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=89066,
+            notes=(
+                "Judge-only against a two-line safety principle, no reference. Kept as rubric-only "
+                "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
+                "ones, help with the benign ones)."
+            ),
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-stack_overflow",
+        "laion__stackexchange-overflow-sandboxes-verified-v2",
+        STACK_OVERFLOW_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
+            title="laion/stackexchange-overflow-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
+                "rubric-only (tag no-reference)."
+            ),
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-superuser",
+        "laion__stackexchange-superuser-sandboxes-verified-v2",
+        SUPERUSER_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2",
+            title="laion/stackexchange-superuser-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
+                "only (tag no-reference)."
+            ),
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-tezos",
+        "laion__stackexchange-tezos-sandboxes-verified-v2",
+        TEZOS_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
+            title="laion/stackexchange-tezos-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
+                "fall to the dedup step. Kept as rubric-only (tag no-reference)."
+            ),
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-unix",
+        "laion__stackexchange-unix-sandboxes-verified-v2",
+        UNIX_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
+            title="laion/stackexchange-unix-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
+                "only (tag no-reference)."
+            ),
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-wizard_orca",
+        "laion__wizardlm-orca-v4",
+        WIZARD_ORCA_RUBRIC,
+        info=SourceInfo(
+            id="Task Trove:laion__wizardlm-orca-v4",
+            title="laion/wizardlm-orca-v4",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
+            notes=(
+                "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
+                "as rubric-only (tag no-reference)."
+            ),
+        ),
+    ),
 )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name=source.name,
-            source=tasktrove_source(source.config),
-            convert=convert_judged,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=source.rubric,
-            atlas_id=f"Task Trove:{source.config}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            info=source.info,
+            pipeline=RlDataPipeline(
+                name=source.name,
+                source=tasktrove_source(source.config),
+                convert=convert_judged,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=source.rubric,
+                grader=GRADER_PACKAGES,
+            ),
         )
         for source in SOURCES
     ]
