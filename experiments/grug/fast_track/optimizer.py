@@ -1611,6 +1611,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Decoupled weight decay (annealed like ``gate_router_weight_decay``) on the zero-centered norm gains'
     ``gamma`` (``zero_centered_gains``), pulling each gain toward 1."""
     attn_res_query_lr_scale: float = 0.1
+    attn_res_query_warmup: float | None = None
+    """Warmup (fraction or steps) of the AttnRes pseudo-query groups' Adam LR (None: the shared Adam warmup)."""
     attn_res_token_query_lr_mult: float = 1.0
     """Extra LR multiplier for the token-embedding AttnRes query table (``attn_res_token_query``), on top of
     ``attn_res_query_lr_scale``."""
@@ -1916,9 +1918,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             else None
         )
 
-        def optimizer(learning_rate, adam_lr, upper_qk_mult=None, post_blend=None):
+        def optimizer(learning_rate, adam_lr, upper_qk_mult=None, post_blend=None, attn_res_query_lr=None):
             default_switch = int(self.bimaxwell_start_frac * num_train_steps) if self.muon_bimaxwell else None
             scheduled_blend = post_blend  # the injected ``muon_post_blend_start_frac`` ramp, or None
+            query_lr = adam_lr if attn_res_query_lr is None else attn_res_query_lr
 
             def muonh_transform_at(
                 lr,
@@ -2088,9 +2091,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     f"adam_{category}": adam_transform_at(adam_lr, beta1)
                     for category, beta1 in self._adam_category_beta1().items()
                 },
-                "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
+                "attn_res_query": plain_adam_at(query_lr * self.attn_res_query_lr_scale),
                 "attn_res_token_query": plain_adam_at(
-                    adam_lr * self.attn_res_query_lr_scale * self.attn_res_token_query_lr_mult
+                    query_lr * self.attn_res_query_lr_scale * self.attn_res_token_query_lr_mult
                 ),
                 "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult, 1),
                 "kda_beta_adam": adam_transform_at(adam_lr * self.kda_beta_adam_lr_mult),
@@ -2239,6 +2242,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 int(self.upper_qk_slow_frac * num_train_steps),
                 max(1, int(self.upper_qk_ramp_frac * num_train_steps)),
             )
+        if self.attn_res_query_warmup is not None:
+            query_config = dataclasses.replace(self, warmup=self.attn_res_query_warmup)
+            schedules["attn_res_query_lr"] = query_config.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         if self.muon_post_blend_start_frac is not None:
             start = int(self.muon_post_blend_start_frac * num_train_steps)
             peak = self.muon_post_blend
