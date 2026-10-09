@@ -28,7 +28,7 @@ from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unsh
 from levanter.kernels.pallas.parallax import parallax_attention
 from levanter.sharding import partition_spec_of
 
-AttentionImplementation = Literal["gpu_fa4_cute", "reference"]
+AttentionImplementation = Literal["gpu_fa4_cute", "gpu_pallas_fa4", "reference"]
 # "fsdp" shards every weight's input dimension over the data axis; "replicated" keeps a full copy per device (plain
 # data parallelism: no per-layer all-gathers, one gradient all-reduce), which suits a 0.5B model on one node.
 ParamSharding = Literal["fsdp", "replicated"]

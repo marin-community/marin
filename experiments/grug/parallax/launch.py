@@ -75,6 +75,7 @@ def qwen3_0p6b(arm: str, param_sharding: ParamSharding = "fsdp") -> GrugModelCon
         head_dim=128,
         max_seq_len=SEQ_LEN,
         parallax=arm == "parallax",
+        attention_implementation="gpu_pallas_fa4",  # Pallas forward + FA4 backward; ~2x faster forward than FA4
         param_sharding=param_sharding,
     )
 

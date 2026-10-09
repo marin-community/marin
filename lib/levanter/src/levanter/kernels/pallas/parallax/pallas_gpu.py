@@ -113,6 +113,40 @@ def _forward_kernel(q_ref, r_ref, k_ref, v_ref, seg_ref, o_ref, barv_ref, m_ref,
     bart_ref[...] = bart
 
 
+def _softmax_forward_kernel(q_ref, k_ref, v_ref, seg_ref, o_ref, lse_ref, *, scale, bq, bk):
+    """``_forward_kernel`` without the probe branch: causal softmax attention and its natural-log row LSE."""
+    start_q = pl.program_id(0)
+    head_dim = q_ref.shape[-1]
+    q = q_ref[...]
+    q_idx = start_q * bq + jnp.arange(bq)
+    q_seg = None if seg_ref is None else seg_ref[pl.ds(start_q * bq, bq)]
+    qk_scale = scale * _LOG2E
+
+    def body(start_k, carry):
+        m, d1, o1 = carry
+        k_slice = pl.ds(start_k * bk, bk)
+        k = k_ref[k_slice, :]
+        v = v_ref[k_slice, :]
+        qk = plgpu.dot(q, k.T).astype(jnp.float32) * qk_scale
+        k_seg = None if seg_ref is None else seg_ref[k_slice]
+        qk = jnp.where(_mask(q_idx, start_k * bk + jnp.arange(bk), q_seg, k_seg), qk, _MASK_VALUE)
+        m_new = jnp.maximum(m, jnp.max(qk, axis=-1))
+        alpha = jnp.exp2(m - m_new)
+        w = jnp.exp2(qk - m_new[:, None])
+        d1 = alpha * d1 + jnp.sum(w, axis=-1)
+        o1 = alpha[:, None] * o1 + plgpu.dot(w.astype(v.dtype), v).astype(jnp.float32)
+        return m_new, d1, o1
+
+    init = (
+        jnp.full((bq,), -jnp.inf, jnp.float32),
+        jnp.zeros((bq,), jnp.float32),
+        jnp.zeros((bq, head_dim), jnp.float32),
+    )
+    m, d1, o1 = lax.fori_loop(0, lax.div(bq * (start_q + 1) + bk - 1, bk), body, init)
+    o_ref[...] = (o1 / d1[:, None]).astype(o_ref.dtype)
+    lse_ref[...] = (m + jnp.log2(d1)) / _LOG2E
+
+
 def _preprocess_kernel(o_ref, barv_ref, do_ref, tau_ref, beta_ref):
     do = do_ref[...].astype(jnp.float32)
     tau_ref[...] = jnp.sum(o_ref[...].astype(jnp.float32) * do, axis=-1)
@@ -276,6 +310,32 @@ def parallax_forward(q, r, k, v, segment_ids, *, scale: float, block_sizes: Bloc
         interpret=interpret,
         name="parallax_forward",
     )(q, r, k, v, segment_ids)
+
+
+def softmax_forward(
+    q, k, v, segment_ids, *, scale: float, block_q: int, block_k: int, num_warps: int, interpret: bool
+):
+    """Causal (same-segment) softmax attention ``(o, lse)``; ``lse`` is ``[B, H, L]`` fp32 natural-log
+    ``log sum_j exp(scale q.k_j)``, the FlashAttention backward's residual."""
+    _check(q, k, BlockSizes(block_q=block_q, block_k=block_k))
+    batch, seq, heads, head_dim = q.shape
+    reps = heads // k.shape[2]
+    row_block = pl.BlockSpec((None, block_q, None, head_dim), lambda i, b, h: (b, i, h, 0))
+    kv_full = pl.BlockSpec((None, seq, None, head_dim), lambda i, b, h: (b, 0, h // reps, 0))
+    seg_spec = None if segment_ids is None else pl.BlockSpec((None, seq), lambda i, b, h: (b, 0))
+    return pl.pallas_call(
+        functools.partial(_softmax_forward_kernel, scale=scale, bq=block_q, bk=block_k),
+        grid=(seq // block_q, batch, heads),
+        in_specs=[row_block, kv_full, kv_full, seg_spec],
+        out_specs=[row_block, pl.BlockSpec((None, None, block_q), lambda i, b, h: (b, h, i))],
+        out_shape=[
+            jax.ShapeDtypeStruct(q.shape, q.dtype),
+            jax.ShapeDtypeStruct((batch, heads, seq), jnp.float32),
+        ],
+        compiler_params=plgpu.CompilerParams(num_warps=num_warps, num_stages=2),
+        interpret=interpret,
+        name="softmax_forward",
+    )(q, k, v, segment_ids)
 
 
 def parallax_backward(

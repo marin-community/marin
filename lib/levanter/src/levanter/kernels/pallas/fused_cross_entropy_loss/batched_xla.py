@@ -524,6 +524,13 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
+_MIN_STREAMING_BACKWARD_V_BLOCK = 2048
+
+
+def _next_power_of_two(n: int) -> int:
+    return 1 << (n - 1).bit_length()
+
+
 def _custom_backward_v_block_size(
     x: Float[Array, "B H"],
     w: Float[Array, "H V"],
@@ -532,9 +539,11 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
-    if block_sizes is not None:
-        return block_sizes.v_block_size
-    return BlockSizes.get_default().v_block_size
+    requested = (block_sizes or BlockSizes.get_default()).v_block_size
+    # The forward tile is capped by the Triton kernel's shared-memory budget (64 wide at hidden 1024), but the
+    # streaming backward runs plain XLA GEMMs and re-adds the full grad_x once per vocab block, so a small block
+    # costs one hidden-sized HBM pass per 64 vocab columns.
+    return max(requested, min(_MIN_STREAMING_BACKWARD_V_BLOCK, _next_power_of_two(w.shape[1])))
 
 
 @partial(jax.jit, static_argnames=["b_block_size", "logit_soft_cap", "precision"])
