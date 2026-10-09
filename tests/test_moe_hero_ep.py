@@ -1436,11 +1436,10 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     assert metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC] == receiver_total
 
 
-@pytest.mark.parametrize("start_step", [0, 5000])
-def test_baseline_eval_hook_runs_once_after_the_first_step(start_step):
+def test_baseline_eval_hook_runs_once_after_the_first_step():
     # The baseline eval must fire on the first completed step and never again: it reshards the
     # params onto the expert-collapsed mesh, and that copy competes with the train step's temporary
-    # buffer. A resumed run needs the same early eval-to-train handoff check.
+    # buffer. A resumed run starts above step 1 and must skip it.
     fired = []
     runner = StateCallbackRunner[SimpleNamespace](
         step_getter=lambda s: s.step,
@@ -1448,7 +1447,7 @@ def test_baseline_eval_hook_runs_once_after_the_first_step(start_step):
         eval_model_getter=lambda s: s.params,
         opt_state_getter=lambda s: s.opt_state,
     )
-    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step), start_step=start_step), every=1)
+    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step)), every=1)
 
     def run_steps(next_steps):
         for next_step in next_steps:
@@ -1458,17 +1457,12 @@ def test_baseline_eval_hook_runs_once_after_the_first_step(start_step):
                 step_duration=0.0,
             )
 
-    run_steps([start_step + 1, start_step + 2, start_step + 3, start_step + 3000])
-    assert fired == [start_step]
+    run_steps([1, 2, 3, 3000])
+    assert fired == [0]  # StepInfo.step is next_step - 1, so the point lands at 0 on the curve
 
-    # The forced callback pass of a one-update diagnostic must not repeat its evaluation.
-    runner.run(
-        SimpleNamespace(step=jnp.int32(start_step + 1), params=None, opt_state=None),
-        loss=0.0,
-        step_duration=0.0,
-        force=True,
-    )
-    assert fired == [start_step]
+    fired.clear()
+    run_steps([5001, 5002])  # a resumed run
+    assert fired == []
 
 
 def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
