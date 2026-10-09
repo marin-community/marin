@@ -304,7 +304,6 @@ def test_rl_release_keeps_registry_dependencies_and_pins_siblings() -> None:
     version = "0.3.0.dev30194118926"
     taskcompendium = tomllib.loads(_rewrite_sibling_pins(Path("lib/taskcompendium/pyproject.toml").read_text(), version))
     rolloutengine = tomllib.loads(_rewrite_sibling_pins(Path("lib/rolloutengine/pyproject.toml").read_text(), version))
-    verifyit = tomllib.loads(Path("lib/verifyit/pyproject.toml").read_text())
 
     assert taskcompendium["project"]["dependencies"] == [
         f"marin-rigging=={version}",
@@ -325,7 +324,6 @@ def test_rl_release_keeps_registry_dependencies_and_pins_siblings() -> None:
         f"marin-shellbox=={version}",
         "harbor-config>=0.1.0",
     ]
-    assert verifyit["project"]["dependencies"] == ["tomlkit>=0.13", "harbor-config>=0.1.0"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])

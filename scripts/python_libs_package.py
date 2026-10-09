@@ -127,7 +127,7 @@ _SIBLING_ITEM_RE = re.compile(
 
 
 def _rewrite_sibling_pins(text: str, version: str) -> str:
-    """Pin every sibling marin-* package in dependency list items to ==<version>."""
+    """Pin every sibling package in dependency list items to ==<version>."""
     return _SIBLING_ITEM_RE.sub(
         lambda m: f'{m.group("indent")}"{m.group("name")}{m.group("extras") or ""}=={version}"{m.group("tail")}',
         text,
@@ -260,7 +260,7 @@ def vendor_version() -> str:
 
 
 def build_wheels(version: str) -> None:
-    """Build all marin-* wheels + sdists into DIST_DIR with `version` patched in."""
+    """Build all library wheels and sdists into DIST_DIR with `version` patched in."""
     _check_tool("uv", "https://docs.astral.sh/uv/")
 
     if DIST_DIR.exists():
