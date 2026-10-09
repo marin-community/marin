@@ -164,7 +164,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
         trainer["callbacks"].append({"type": "hf_model_save", "save_steps": 4, "save_on_train_end": True})
     generator = recipe["generator"]
     generator.update(
-        model_loading="stream",
+        model_loading="stage_local",
         use_conversation_multi_turn=True,
         eval_n_samples_per_prompt=1,
         eval_sampling_params={"temperature": 1.0, "top_p": 1.0, "logprobs": None},
