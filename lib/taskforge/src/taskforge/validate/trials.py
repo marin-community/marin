@@ -156,6 +156,21 @@ class Deadlines:
 
 
 @dataclass(frozen=True)
+class RetryBackoff:
+    """The wait between a trial's attempts, as data: ``rigging.timing.ExponentialBackoff``'s constructor
+    arguments, so a policy holding it digests and serializes them."""
+
+    initial: float
+    maximum: float
+    factor: float
+    jitter: float
+
+    def schedule(self) -> ExponentialBackoff:
+        """A fresh ``ExponentialBackoff`` with these arguments."""
+        return ExponentialBackoff(initial=self.initial, maximum=self.maximum, factor=self.factor, jitter=self.jitter)
+
+
+@dataclass(frozen=True)
 class TrialPlan:
     """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
     are recorded.
@@ -237,13 +252,14 @@ def task_digest(lowered: LoweredTaskSpec) -> str:
 
 def _refuse(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, outcome: Ungraded) -> Ungraded:
     """Record ``outcome`` as the only attempt of a trial that is not started."""
-    with _attempt_span(lowered, plan, trial, plan.first_attempt) as fields:
-        _record(fields, outcome, plan, trial, plan.first_attempt)
+    with attempt_span(lowered, plan, trial, plan.first_attempt) as fields:
+        record_attempt(fields, outcome, plan, trial, plan.first_attempt, outcome_json(outcome))
     return outcome
 
 
 @contextmanager
-def _attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
+def attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
+    """The ``TRIAL`` ledger span of one attempt: step ``<kind>/<trial>/<attempt>``, ``input_hash`` the task digest."""
     with span(
         plan.ledger,
         EntryKind.TRIAL,
@@ -258,17 +274,23 @@ def _attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt
 async def _attempt(
     engine: ShellboxRolloutEngine, lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int
 ) -> Outcome:
-    with _attempt_span(lowered, plan, trial, attempt) as fields:
+    with attempt_span(lowered, plan, trial, attempt) as fields:
         try:
             result: RolloutData | Exception = await engine.run(lowered)
         except Exception as error:
             result = error
         outcome = trial_outcome(result, lowered.task)
-        _record(fields, outcome, plan, trial, attempt)
+        record_attempt(fields, outcome, plan, trial, attempt, outcome_json(outcome))
     return outcome
 
 
-def _record(fields: SpanFields, outcome: Outcome, plan: TrialPlan, trial: str, attempt: int) -> None:
+def record_attempt(
+    fields: SpanFields, outcome: Outcome, plan: TrialPlan, trial: str, attempt: int, payload: bytes
+) -> None:
+    """Fill the attempt's span from ``outcome`` and write ``payload`` as its attempt file.
+
+    ``payload`` is ``outcome_json(outcome)``, or a record that extends it (an adversary attempt's).
+    """
     fields.attrs = _attributes(outcome)
     rollout = outcome.rollout
     if rollout is not None and rollout.steps:
@@ -277,7 +299,6 @@ def _record(fields: SpanFields, outcome: Outcome, plan: TrialPlan, trial: str, a
         fields.finish_reason = rollout.stop_reason
     if isinstance(outcome, Ungraded):
         fields.cause = str(outcome.cause)
-    payload = outcome_json(outcome)
     fields.output_hash = sha256_hex(payload)
     write_evidence(plan.evidence_dir / str(plan.kind) / trial / f"attempt-{attempt}.json", payload)
 
