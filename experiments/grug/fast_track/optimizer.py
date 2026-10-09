@@ -570,7 +570,9 @@ LATENT_PROJ_UPDATES = ("muonh", "frozen", "stiefel")
 _LATENT_PROJ = re.compile(r"(?:^|\.)w_latent_(down|up)$")
 _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask|embed2_sign_table)$|\.attn_prev\.")
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
-_MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk", "muonh_qk"})
+_MUONH_GROUPS = frozenset(
+    {"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk", "muonh_qk", "muonh_shared"}
+)
 _HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
 # Learned RMSNorm gains (``RMSNorm.weight``): the pre-norms, and every ``*_norm`` inside the blocks and heads.
 _NORM_GAIN = re.compile(r"(?:^|\.)(rms_attn|rms_mlp|[a-z0-9_]*norm)\.weight$")
@@ -1612,6 +1614,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonh_qk_momentum: float | None = None
     """MuonH momentum for the query/key projections (None: ``momentum``)."""
     muonh_qk_scope: QkScope = QkScope.ALL
+    muonh_shared_lr_mult: float = 1.0
+    """MuonH LR multiplier for the shared experts (``_OKLS_FAMILIES['shared']``)."""
+    muonh_shared_momentum: float | None = None
+    """MuonH momentum for the shared experts (None: ``momentum``)."""
     """The projections the two ``muonh_qk_*`` knobs cover."""
     muonh_routed_momentum: float | None = None
     muon_truncate_family: str | None = None
@@ -2077,6 +2083,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh_qk": muonh_transform_at(
                     learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
                 ),
+                "muonh_shared": muonh_transform_at(
+                    learning_rate * self.muonh_shared_lr_mult, 6, momentum=self.muonh_shared_momentum
+                ),
                 "muonh_routed": self._routed_transform(
                     muonh_transform_at(
                         learning_rate * self.muonh_routed_lr_mult,
@@ -2297,6 +2306,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     return "muon_free"
                 if self.upper_qk_lr_mult != 1.0 and _SOFTMAX_QK.search(path_lower):
                     return "upper_qk"
+                shared_own_group = self.muonh_shared_lr_mult != 1.0 or self.muonh_shared_momentum is not None
+                if shared_own_group and _OKLS_FAMILIES["shared"].search(path_lower):
+                    return "muonh_shared"
                 qk_own_group = self.muonh_qk_lr_mult != 1.0 or self.muonh_qk_momentum is not None
                 qk_pattern = _MLA_QK_PROJECTIONS if self.muonh_qk_scope == QkScope.MLA else _QK_PROJECTIONS
                 if qk_own_group and qk_pattern.search(path_lower):
