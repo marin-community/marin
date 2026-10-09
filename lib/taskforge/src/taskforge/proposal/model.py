@@ -155,9 +155,9 @@ def source_text(ref: SourceRef) -> str:
     return f"{{kind: {ref.kind}, ref: {_quoted(ref.ref)}, hash: {_quoted(ref.hash)}}}"
 
 
-def render(p: TaskProposal) -> str:
-    """Return the canonical text of ``p``."""
-    h = p.header
+def render(proposal: TaskProposal) -> str:
+    """Return the canonical text of ``proposal``."""
+    h = proposal.header
     lines = [
         FRONT_MATTER_DELIMITER,
         f"id: {_quoted(h.id)}",
@@ -173,7 +173,7 @@ def render(p: TaskProposal) -> str:
         f"null_reason: {'null' if h.null_reason is None else _quoted(h.null_reason)}",
         FRONT_MATTER_DELIMITER,
     ]
-    return "\n".join(lines) + "\n" + _canonical_body(p.body)
+    return "\n".join(lines) + "\n" + _canonical_body(proposal.body)
 
 
 def _canonical_body(body: str) -> str:
