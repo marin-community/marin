@@ -61,7 +61,7 @@ from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
-from experiments.grug.fast_track import attention_rows_probe
+from experiments.grug.fast_track import attention_rows_probe, trace_capture
 from experiments.grug.fast_track.activations import polynorm, polynorm_over_input
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
@@ -972,7 +972,6 @@ class GrugModelConfig:
     mla_key_offset_channels: tuple[int, ...] = ()
     """Per MLA head, how many leading key channels come from the previous token (``mla_key_offset``). Empty: half."""
     mla_shared_match_dim: int = 0
-    """M > 0: one shared match space per layer, ``m = kv_latent W_match``, used as ``mla_match_append`` says."""
     mla_match_append: MatchAppend = MatchAppend.OFF
     mla_value_lookahead: bool = False
     mla_lookahead_self: bool = False
@@ -1015,7 +1014,6 @@ class GrugModelConfig:
     mla_far_key_half: str = ""
     mla_far_key_window: int = 128
     mla_value_norm: str = "none"
-    """Tied-value RMSNorm: ``none``, ``rms`` or ``learned``."""
     """No KV latent: MLA keys / values project the normed attention input directly."""
     """With ``mla_shared_kv``: the one cached vector is both key and value."""
     """MLA keys and values are one head each (MQA), broadcast to every query head."""
@@ -1137,16 +1135,9 @@ class GrugModelConfig:
     nitp_layer: int = 1
     """0-indexed layer whose output stream (the plain sum of the AttnRes sources) is the NITP target (~20% depth)."""
     kda_push_buckets: int = 0
-    """'Push' decay for KDA (0 disables it): M delta-rule states, each decaying at its own learned,
-    reader-independent per-channel rate; the writing token splits its write across them
-    (``beta * pi_m``), so a write chooses its own half-life. The read sums the M states."""
     kda_push_mode: str = "pure"
-    """``pure``: the buckets' static decays replace the reader decay. ``hybrid``: each bucket decays at
-    the reader decay plus its own static rate."""
     kda_push_weights: str = "softmax"
-    """How a token splits its write over the buckets: ``softmax`` (sums to 1) or ``sigmoid`` (independent)."""
     kda_push_decay_range: tuple[float, float] = (0.02, 0.5)
-    """Initial per-token log-decay magnitudes |g| of the slowest / fastest bucket (log-spaced between)."""
     kda_no_decay_layers: tuple[int, ...] = ()
     """KDA layers (0-indexed model layers) run without decay (g = 0: the state never forgets)."""
     kda_no_beta_layers: tuple[int, ...] = ()
@@ -2977,6 +2968,13 @@ class CausalSelfAttention(eqx.Module):
             if fox_key_bias is not None or second_qk is not None:
                 raise ValueError("forward_probe attention supports MLA without FoX or differential attention")
             stats[ATTN_PROBE_STAT] = _probe_attention(q, k, mask, rel_bias, _FORWARD_PROBE.attn_queries)
+        if trace_capture.TRACE and self.cfg.mla:
+            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
+            offset = self.cfg.mla_key_offset and not self.cfg.mla_lag_groups
+            shifted = shifted_channels(q.shape[2], q.shape[3], self.cfg.mla_key_offset_channels) if offset else 0.0
+            top_i, top_f = trace_capture.attention_topk(q, k, rel_bias, seg, shifted, _BATCH_AXES)
+            stats[f"{_LAYER_KNOB_PREFIX}trace_topk_idx"] = top_i
+            stats[f"{_LAYER_KNOB_PREFIX}trace_topk_fields"] = top_f
         if attention_rows_probe.ROWS_PROBE is not None and self.cfg.mla:
             rows, positions = attention_rows_probe.ROWS_PROBE
             stats[ATTN_ROWS_STAT] = attention_rows_probe.probe_attention_rows(q, k, mask, rel_bias, rows, positions)
@@ -6763,6 +6761,12 @@ def _attn_res_layer(
     mlp_out = _sublayer_dropout(cfg, mlp_out, noise_key, _MLP_DROPOUT_SALT)
     if cfg.layer_output_stats:
         router_stats = {**router_stats, **_branch_output_stats(attn_out, mlp_out)}
+    if trace_capture.TRACE:
+        router_stats = {
+            **router_stats,
+            f"{_LAYER_KNOB_PREFIX}trace_attn_out": attn_out,
+            f"{_LAYER_KNOB_PREFIX}trace_mlp_out": mlp_out,
+        }
     spot = _probe_spot()
     if spot is not None:
         router_stats = {
@@ -8242,6 +8246,10 @@ class Transformer(eqx.Module):
             entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
             if spot is not None:
                 probe_logs[f"{PROBE_STAT}final_mixed"] = _at_spot(mixed, spot)
+            if trace_capture.TRACE:
+                probe_logs[f"{PROBE_STAT}trace_final_sources"] = jnp.stack([*blocks, partial])
+                probe_logs[f"{PROBE_STAT}trace_final_weights"] = jnp.asarray(weights)
+                probe_logs[f"{PROBE_STAT}trace_final_mixed"] = mixed
             return mixed, _gate_z(logits), max_weight, entropy
 
         def merge_passes(per_pass_stats):

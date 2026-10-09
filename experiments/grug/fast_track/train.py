@@ -127,6 +127,7 @@ from experiments.grug.fast_track.optimizer import (
 )
 from experiments.grug.fast_track.snr_probe import SnrProbe
 from experiments.grug.fast_track.stiefel import _msign
+from experiments.grug.fast_track.trace_probe import trace_stats, trace_term_names
 from experiments.grug.fast_track.weight_attribution import AttributionWriter, leaf_name, per_layer_sum, rails_by_name
 from experiments.grug.fast_track.weight_diagnostics import gain_stats, matrix_stats
 
@@ -333,6 +334,9 @@ class GrugTrainerConfig:
     # the ``lm_head_extra_dim`` slice (``model.logit_decomp_stats``) on held-out sequences to this npz.
     logit_decomp_path: str | None = None
     logit_decomp_sequences: int = 64
+    # ``trace_probe.trace_stats`` on held-out sequences to this npz.
+    trace_probe_path: str | None = None
+    trace_probe_sequences: int = 48
     # After training, write the MLA layers' full softmax rows for queries at fixed in-document positions
     # (``ATTN_PROBE_DISTANCES``) of held-out sequences to this npz (``_attn_distance_dump``).
     attn_distance_path: str | None = None
@@ -2032,6 +2036,60 @@ def _logit_decomp_dump(config: "GrugRunConfig", params: Transformer, qb_betas: j
             )
 
 
+def _trace_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
+    """Write ``trace_probe.trace_stats`` for fixed held-out sequences to ``path`` (process 0): ``tokens`` /
+    ``segments`` ``[N, S]``, each sequence's validation ``set_names``, the ``term_names`` and every trace array."""
+    params = _apply_qb_betas(params, qb_betas)
+    mp = config.trainer.trainer.mp
+    count = config.trainer.trace_probe_sequences
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _routing_dump_sequences, config.data, seq_len=config.model.max_seq_len, num_sequences=count
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    batch = jax.device_count()
+
+    def global_batch(host: np.ndarray) -> jax.Array:
+        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
+
+    @jax.jit
+    def trace(params, ids, segs):
+        return trace_stats(_cast_to_compute(mp, params), ids, segs)
+
+    parts: list[dict[str, np.ndarray]] = []
+    with set_mesh(mesh):
+        for start in range(0, len(tokens), batch):
+            ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
+            out = trace(params, ids, segs)
+            parts.append({k: np.asarray(multihost_utils.process_allgather(v, tiled=True)) for k, v in out.items()})
+    if jax.process_index() != 0:
+        return
+    merged: dict[str, np.ndarray] = {}
+    for key in parts[0]:
+        if key.startswith("check_"):
+            merged[key] = np.max(np.stack([p[key] for p in parts]))
+            logger.info("trace_probe %s = %.3g", key, float(merged[key]))
+            continue
+        # Routing arrays are [L, T, K] with T = batch * seq; the rest lead with the batch.
+        axis = 1 if key.startswith("routing_") else 0
+        value = np.concatenate([p[key] for p in parts], axis=axis)
+        merged[key] = value.astype(np.float16) if value.dtype == np.float32 else value
+    sets = config.data.validation_sets(Axis("position", config.model.max_seq_len))
+    names = sorted(sets)
+    lengths = {name: len(sets[name].as_sync_dataset()) for name in names}
+    picks = [name for index in range(max(lengths.values())) for name in names if index < lengths[name]][:count]
+    num_extra = merged["dla_target"].shape[-1] - 2 * config.model.num_layers - 2
+    with fsspec.open(path, "wb") as f:
+        np.savez(
+            f,
+            tokens=tokens,
+            segments=segments,
+            set_names=np.asarray(picks),
+            term_names=np.asarray(trace_term_names(params, num_extra)),
+            **merged,
+        )
+
+
 def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
     """Probe every softmax-attention query head of a non-AttnRes model (dense or MoE, with its QB routing biases
     ``qb_betas``) on fixed held-out sequences and write
@@ -3024,6 +3082,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if config.trainer.attn_distance_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _attn_distance_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.attn_distance_path)
+            if config.trainer.trace_probe_path is not None:
+                probed = state.ema_params if state.ema_params is not None else state.params
+                _trace_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.trace_probe_path)
             if config.trainer.logit_decomp_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _logit_decomp_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.logit_decomp_path)
