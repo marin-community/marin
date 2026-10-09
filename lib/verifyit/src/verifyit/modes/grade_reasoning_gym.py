@@ -23,7 +23,6 @@ from verifyit.json_objects import unique_object
 from verifyit.spec import EmptyOutputPolicy, ReasoningGymSpec
 
 CANDIDATE_DETAIL_CHARS = 200
-ARC_GRID_DATASETS = frozenset({"arc_agi", "rearc"})
 
 
 def load_entry(path: Path) -> dict:
@@ -109,10 +108,11 @@ def _grade_candidate(
     if candidate is None or (not candidate.strip() and policy is EmptyOutputPolicy.ZERO):
         return scored(0.0, reason="no_output")
     answer = candidate.strip()
-    if spec.dataset in ARC_GRID_DATASETS:
-        metadata = entry["metadata"]
-        # Both ARC scorers compare parse_board's tuple grid directly with this output.
-        entry = {**entry, "metadata": {**metadata, "output": tuple(tuple(row) for row in metadata["output"])}}
+    metadata = entry["metadata"]
+    output = metadata.get("output")
+    if isinstance(output, list) and all(isinstance(row, list) for row in output):
+        # JSON turns tuple grids into lists, while the grid scorers parse replies into tuples.
+        entry = {**entry, "metadata": {**metadata, "output": tuple(tuple(row) for row in output)}}
     score = score_answer(answer, entry)
     if isinstance(score, bool) or not isinstance(score, int | float):
         raise TypeError(f"reasoning-gym scorer for {spec.dataset} returned {type(score).__name__}")
