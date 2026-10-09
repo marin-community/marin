@@ -18,7 +18,7 @@ test = [
     "pytest>=8.3",
     "pytest-asyncio",
     "pytest-timeout",
-    "marin-shellbox[shellsim]",
+    "marin-shellbox[daytona,shellsim]",
     # Only the Harbor task importer tests need its schema; published wheels do not.
     "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
 ]
