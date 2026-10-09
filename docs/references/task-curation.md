@@ -197,77 +197,45 @@ are admitted like rows of in-process graders.
 
 ## Conversion modes
 
-`pipeline.run_curation(source.pipeline, mode=..., context=..., source_input=...,
-output_path=..., inputs=...)` accepts a source's conversion declaration, staged
-input paths and an entered Zephyr context. `SAMPLE` and `FULL` also take a
-matching `SourcePipelineConfig` and resolved grader environment. The local CLI
-and reviewed campaign artifacts use this entry point.
+The local CLI and reviewed campaign artifacts call `pipeline.run_curation` with
+an entered Zephyr context and staged inputs:
 
-Every mode uses the same mechanical conversion stage and normalized parquet
-schema. FULL converts its bounded panel first, then reuses those conversions
-when the quality gate allows expansion. Resource admission, fingerprints and
-checks run downstream. `original_path` retains the archive identity before
-source decoding can remove it.
+```python
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
-Quick mode converts every selected row and preserves explicit converter
-rejections. It skips resource admission, review, deduplication, content
-fingerprints and grader execution. It records declared grader images or local
-dependency locks without building environments. Its parquet output is
-unreviewed and unverified, with no admitted `final/` view.
+from experiments.post_training.task_curation.pipeline import run_curation
+from experiments.post_training.task_curation.sources import all_sources
 
-The local CLI downloads pinned sources by default. `--input-file LOGICAL_PATH
-LOCAL_FILE` selects explicit local files without changing the declared logical
-path or global row indices. The manifest records the physical path and its
-SHA-256 alongside the upstream source revision. This override is distinct from
-`--input-root`, which uses an existing tree of staged files.
-
-SWEsmith and SWE-rebench repository tasks carry unresolved `DockerBuildContext`
-recipes for both actor and verifier. The actor recipe retains the source
-environment, adds the legacy dependency fixes and installs the bundled verifier.
-Public setup instructions remain work for the actor. The canonical ScriptGrader
-runs in a fresh machine, so its separate recipe also prepares that public setup
-when declared. It receives the complete `/testbed` submission and restores
-trusted tests before grading. Original configuration patches and solution
-scripts remain oracle resources.
-
-The TaskTrove Harbor export uses the legacy shared environment for these SWE
-tasks. It retains the actor recipe and runs the verifier against the actor's
-workspace, including dependencies installed during the task. It does not build
-the canonical fresh grader recipe or transfer the repository to another
-container. Export writes build inputs without building or running images.
-Canonical runtime entry points still reject unresolved contexts; execution
-requires a resolver to replace each recipe with an image digest. Mutable source
-tags and build-time downloads are not made reproducible by preserving a recipe.
-
-For Python SWE-rebench tasks, the Verifyit pytest spec restores trusted paths
-and applies the hidden test patch during grading. Retained non-Python tasks use
-the source parser with exit-code-only credit removed and its parser runtime
-prepared in the image. JavaScript/TypeScript exclusions and unsupported Python
-test contracts remain explicit conversion rejections.
-
-TaskTrove declarations also retain the manually reviewed source/path defects
-in `datasets/tasktrove/source_defects.py`. QUICK rejects these known defective
-rows without rerunning expensive validation. This preserves those individual
-decisions; QUICK still skips release-wide deduplication and dynamic checks.
-Non-SWE exports currently use curation environments, so their conversion counts
-alone do not establish legacy environment, grader, or filtering parity.
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' \
-  python -m experiments.post_training.task_curation.quick \
-  --source tasktrove-calendar \
-  --output-root /tmp/task-curation-pass-1
+source = next(source for source in all_sources().values() if source.name == "tasktrove-calendar")
+assert source.pipeline is not None
+result = run_curation(
+    source.pipeline,
+    mode=SourceProcessingMode.QUICK,
+    context=context,
+    source_input="/tmp/tasktrove",
+    output_path="/tmp/calendar-quick",
+    inputs={},
+)
 ```
 
-The command downloads the declared pinned primary and auxiliary files into a
-reusable local cache (`--download-cache`, default `~/.cache/marin`). Override
-the primary download with `--input-root`, or an auxiliary input with
-`--input NAME PATH`, using bytes from the declared revision. Choose a fresh output
-root for each pass. The local command retains TaskSpecs and rejections under `normalize/`,
-counts and elapsed time in `manifest.json`, and source outcomes in
-`campaign.json`. Failed sources do not stop the remaining conversions. See the
-[local conversion loop](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#local-conversion-loop)
-for auxiliary inputs and comparison guidance.
+All modes share mechanical conversion and the normalized parquet schema.
+`original_path` retains archive identity before decoding. QUICK preserves every
+selected row as a TaskSpec or typed rejection, including known TaskTrove defects.
+It skips resource admission, content fingerprints, review, deduplication and
+grader checks, producing no admitted `final/` view. Declared images and local
+locks are recorded without building or executing environments; sources with only
+PyPI pins require an explicitly resolved grader environment.
+
+SAMPLE and FULL also take `config=SourcePipelineConfig(...)` with the same
+`mode`, and `grader_environment=EnvironmentRequirements(...)` resolved by the
+campaign. FULL reviews a bounded panel and reuses its conversions when
+the quality gate allows expansion; admission and checks follow conversion.
+See [Source procedure](#source-procedure) for these reviewed stages.
+
+The campaign README owns the runnable
+[local commands and input overrides](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#local-conversion-loop),
+[Harbor compatibility and runtime limits](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#harbor-compatibility-view),
+and [pinned content comparison](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#full-tasktrove-content-comparison).
 
 ## Source procedure
 

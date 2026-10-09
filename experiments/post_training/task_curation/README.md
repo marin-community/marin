@@ -258,39 +258,9 @@ Choose a fresh output root for each pass; existing source outputs are refused.
 Failures are recorded in `campaign.json` while the remaining sources continue;
 the command exits unsuccessfully if any source failed.
 
-The local CLI and reviewed campaign artifacts call
-`pipeline.run_curation(source.pipeline, mode=..., context=..., source_input=...,
-output_path=..., inputs=...)`. The source comes from `all_sources()`; its
-`pipeline` holds the converter and source declaration. For example, with an
-entered Zephyr context and staged files:
-
-```python
-from taskcompendium.pipeline.source_processing import SourceProcessingMode
-
-from experiments.post_training.task_curation.pipeline import run_curation
-from experiments.post_training.task_curation.sources import all_sources
-
-source = next(source for source in all_sources().values() if source.name == "tasktrove-calendar")
-assert source.pipeline is not None
-result = run_curation(
-    source.pipeline,
-    mode=SourceProcessingMode.QUICK,
-    context=context,
-    source_input="/tmp/tasktrove",
-    output_path="/tmp/calendar-quick",
-    inputs={},
-)
-```
-
-`SAMPLE` and `FULL` also require a matching `SourcePipelineConfig` and resolved
-grader environment. All modes use the same mechanical conversion stage and
-normalized parquet schema. FULL reviews a bounded panel first, then reuses its
-conversions while converting the remaining rows when the quality gate permits.
-Resource admission, fingerprints, deduplication and grader checks follow conversion.
-QUICK writes the converted rows and returns before those stages. It needs no
-review config or model credentials, and records a declared grader image or
-local dependency lock without building or executing the environment. Sources
-that declare only PyPI pins need an explicit resolved grader environment.
+The local CLI and reviewed campaigns share `pipeline.run_curation`. See
+[Conversion modes](../../../docs/references/task-curation.md#conversion-modes)
+for the programmatic API and SAMPLE/FULL behavior.
 
 To replace a declared file with a local fixture, pass
 `--input-file calendar/tasks.parquet /tmp/calendar-fixture.parquet` instead
@@ -301,10 +271,9 @@ run identifies the substituted bytes separately from its upstream revision.
 No primary-source download runs for this invocation. Auxiliary inputs still use
 `--input` overrides or their pinned download cache.
 
-Compare row counts by source and retain the rejection categories. Quick counts
-can exceed the published TaskTrove release because that release also removes
-duplicates, applies reviewed defects and routes some MCQA rows away from RL.
-`original_path` preserves TaskTrove's archive key for later comparisons.
+Retain rejection categories when comparing counts. QUICK skips release-wide
+deduplication and routing policies, so its counts can exceed a published release.
+`original_path` preserves TaskTrove's archive key for content comparison.
 
 ### Harbor compatibility view
 
@@ -326,8 +295,8 @@ task dispatch configuration. It identifies those bytes; it does not resolve
 mutable image tags or certify a successful build. The artifact fingerprint also
 includes the exporter, candidate wrapper, bundled verifier code and the selected
 source's name, Atlas ID and family. Pass the selected `RlDataSource` explicitly;
-planning does not open the normalized artifact. Bump its version when that
-recipe or its normalized input changes.
+planning does not open the normalized artifact. Bump the export step's `version`
+when its recipe or normalized input changes.
 
 `TaskTroveDataSource` requires an explicit `relative_path`. The curation smoke
 graph supplies `tasks.parquet` and binds the export as its data dependency:
@@ -340,75 +309,67 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   --grader-image '<registry/image>@sha256:<digest>'
 ```
 
-This prints the graph without exporting, building images or launching training.
-For execution, the adopted input must be accessible to the coordinator. QUICK
-inputs retain their conversion-only status; exporting them adds no runtime
-verification. The smoke graph does not construct the legacy TaskTrove pipeline.
-Harbor lowering retains the legacy exclusion for reference answers of at least
-12 characters already present in the public instruction, after normalizing case and
-whitespace. It records these as `gold_leak` lowering rejections; QUICK retains
-the mechanically converted rows. This static check executes no grader.
+This adopts `--normalized-source` under the supplied artifact name and version
+and prints the graph. Add `--run` to execute; the input must be accessible to the
+coordinator. The graph does not construct the legacy TaskTrove pipeline.
 
-The source name in the QUICK manifest selects the registry declaration, which
-supplies the exported family and source ID. Reusable lowering and comparison live
-in `taskcompendium.harbor`; this entrypoint owns registry selection and artifact
-binding. For tasks without a verifier build recipe, the verifier base image is
-an explicit runtime input. It must contain the dependencies required by the
-task's grader package lock. Export emits `tests/Dockerfile` from that pinned base and copies
-the private tests into `/tests`; native Harbor builds this separate verifier
-environment when the task runs. Export itself does not build or run images.
-Its manifest records that builds, dependency parity, and runtime behavior remain
-unverified. Current verifyit code is bundled under the hidden `tests/` directory.
-The exporter supports file submissions graded by verifyit, an archived Harbor
-`test.sh` emitting `reward.txt`, or the canonical `python3 /tests/grade.py` script
-contract used by ARC. For that script contract, a successful command must end
-its stdout with a finite numeric reward; failed commands and invalid rewards
-remain grading errors. Text tasks retain their canonical TaskSpec
-prompt and gain a file-delivery instruction using the grader's declared answer
-path. Export does not need the archived instruction or its delivery filename.
+The QUICK manifest selects the registry declaration for the exported family and
+source ID. Each task retains its original archive path and TaskSpec ID.
+Normalization rejections remain in the manifest; unsupported lowering contracts
+produce explicit rejections. Harbor's native configuration model parses each
+`task.toml`. The static `gold_leak` check rejects parsed reference answers of at
+least 12 characters present in the public instruction after case and whitespace
+normalization. It executes no grader.
 
-SWEsmith and SWE-rebench are the first compatibility cohort. Their repository
-state tasks retain the source actor recipe and run the archived grader in
-Harbor's shared environment, matching the original repository execution model.
-They can omit `--grader-image`; no repository copy enters a
-second verifier image. Other directory or artifact-transfer contracts remain
-explicit export rejections.
+Conversion retains original environment recipes and available oracle files as
+private provenance. Export prefers `environment_requirements.docker_build`,
+then the retained `environment/Dockerfile` in oracle resources, then
+`environment_requirements.docker_image`. The recipe adapter removes
+legacy rewardkit/litellm installs and replaces old puzzle and reasoning-gym grader
+installs with Verifyit, preserving Python test setup. The experiment binding
+supplies the bundled Verifyit package; `--verifyit-package-root` selects another
+package directory. Build identity covers the adapter, package metadata and runtime
+code. Agent build inputs exclude hidden tests and solutions; oracle files are
+stored in `solution_binary`.
 
-Conversion retains original environment recipes and available oracle files as private
-provenance. Harbor export prefers an explicitly corrected build context, then
-the retained TaskTrove recipe, then the canonical actor image. Its TaskTrove
-recipe adapter removes legacy rewardkit/litellm installs and replaces old puzzle
-and reasoning-gym grader installs with Verifyit, while preserving Python test
-setup. It bundles the current Verifyit source package, supplied explicitly by
-the experiment binding; the CLI accepts `--verifyit-package-root` to select it.
-Build identity includes the adapter and package metadata as well as runtime code.
+SWEsmith, SWE-rebench, Code Contests and TACO use Harbor's shared environment:
+the verifier runs against the actor workspace, retaining installed dependencies.
+They can omit `--grader-image`; export neither builds the canonical fresh grader
+recipe nor transfers the repository to another container. Other directory or
+artifact-transfer contracts are rejected. Canonical SWE ScriptGraders retain
+fresh-machine semantics: they receive `/testbed`, prepare declared public setup
+and restore trusted tests. Python SWE-rebench graders apply the hidden test patch;
+non-Python graders use the source parser with exit-code-only credit removed.
+JavaScript/TypeScript and unsupported Python test contracts remain excluded.
 
-These actor recipes do not establish full execution parity. Most non-repository
-sources use a separate verifier image, so actor-installed dependencies
-and changes outside declared submission files do not transfer to that grader.
-Code Contests and TACO use their declared shared build, as do the repository
-sources. No container builds or grading runs are implied by a successful export.
+Other supported tasks use a separate verifier. `--grader-image` must pin a base
+containing the grader's dependencies.
+Export emits `tests/Dockerfile` and bundles current Verifyit and private tests in
+`/tests`. Native Harbor builds that image at execution. The verifier receives only
+declared submission files: actor-installed dependencies and changes elsewhere
+do not transfer.
 
-In-process exact, math, JSON-schema, MCQ, IFEval, XML-element, and CSV-column
-graders also run in the supplied verifier image after export. The complete
-answer file is passed to the same candidate grader used in process. An MCQ
-answer file contains the bare option letter requested by the TaskSpec. Reference answers
-and schema files remain private verifier resources. Other contracts produce
-explicit rejection records. Rejections from normalization remain in the export
-manifest.
+File graders support Verifyit, archived `test.sh` scripts writing `reward.txt`,
+and ARC's `python3 /tests/grade.py` contract. The ARC command must succeed and end
+stdout with a finite numeric reward; failure remains a grading error. Text tasks
+keep the canonical prompt and add delivery to the grader's declared answer path.
+In-process exact, math, JSON-schema, MCQ, IFEval, XML and CSV graders use Verifyit's
+[candidate-file entry point](../../../lib/verifyit/README.md#candidate-scoring),
+passing the entire answer file to the canonical candidate grader. MCQ files
+contain the bare option letter; references and schemas remain private.
 
-Each task keeps its source, original archive path, and TaskSpec ID. Agent build
-inputs contain only public resources. Separate verifiers receive the declared
-output files; shared repository verifiers run against the agent workspace.
-Oracle files are stored in `solution_binary`. Generated
-`task.toml` files are parsed with Harbor's native configuration model.
+Export builds no images and runs no graders. Its manifest leaves build success,
+dependency parity and runtime behavior unverified. Preserving recipes does not
+pin mutable base tags or build-time downloads. For canonical execution,
+[unresolved build contexts](../../../lib/taskcompendium/README.md#environment-requirements)
+require resolution before machine creation.
 
 ### Full TaskTrove content comparison
 
 Compare all retained TaskTrove sources with a pinned legacy converter:
 
 ```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' \
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.tasktrove.compare \
   --normalized-root /tmp/curation-quick \
   --baseline-repository . \
@@ -424,8 +385,9 @@ older manifests that lack staging paths. Each normalized
 source directory contains `manifest.json` and `normalize/*.parquet` from QUICK conversion. Repeat
 `--normalized-root` to combine campaigns; later roots override earlier ones for
 the same source. Repeat `--source` to restrict a run. Without it, the command
-requires inputs for every retained TaskTrove source, including the OpenQA sources.
-The output directory must be new.
+requires inputs for every `all_sources()` entry whose pipeline reads
+`open-thoughts/TaskTrove`, including the OpenQA sources. The output directory must
+be new.
 
 The reference process loads the pinned TaskTrove pipeline, TaskCompendium and
 Verifyit code from Git. Its file writer uses gzip level 1 instead of level 9;

@@ -128,16 +128,16 @@ count actor and grader contexts separately, including duplicated bytes.
 
 QUICK can retain recipes without executing them. A preserved recipe does not
 make mutable base tags or build-time downloads reproducible. Before execution,
-an external resolver must replace the context with a digest-pinned image and
-declare supported backends. Generic execution runtimes and SAMPLE/FULL controls reject
+the caller must build the context, replace it with a digest-pinned image and
+declare supported backends; TaskCompendium supplies no build resolver. Generic execution runtimes and SAMPLE/FULL controls reject
 unresolved contexts before selecting or creating machines. Local and ShellSim
 backends cannot be declared for a Docker build context.
 
-The [Harbor exporter](src/taskcompendium/harbor/export.py)
-preserves the actor build context and uses Harbor's shared verifier environment
-for supported TaskTrove repository tasks. Other supported tasks use separate
-verifier environments. Export writes build inputs without building images or
-running containers. Native Harbor build import remains unsupported.
+The [Harbor exporter](src/taskcompendium/harbor/export.py) writes build inputs
+without executing them. See the campaign's
+[Harbor compatibility contract](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)
+for shared and separate verifier behavior. The Harbor-to-TaskSpec importer
+requires a prebuilt image; it cannot import Dockerfile-based Harbor tasks.
 
 ## Resource mounts
 
