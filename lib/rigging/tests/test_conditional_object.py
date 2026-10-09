@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from threading import Event
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,6 +32,53 @@ def test_local_conditional_object_rejects_stale_version(tmp_path):
     with pytest.raises(ConditionalWriteError):
         second.write(b"three", expected_version=stale.version)
     assert conditional_object(path).read().data == b"two"
+
+
+@pytest.mark.parametrize("competing_creator", [False, True])
+def test_local_conditional_create_publishes_complete_object(tmp_path, monkeypatch, competing_creator):
+    path = str(tmp_path / "HEAD")
+    first = conditional_object(path)
+    second = conditional_object(path)
+    opened, resume = Event(), Event()
+    real_open = open
+
+    def pause_before_first_write(filename, mode):
+        handle = real_open(filename, mode)
+        if mode in ("a+b", "xb") and not opened.is_set():
+            opened.set()
+            assert resume.wait(10)
+        return handle
+
+    monkeypatch.setattr("rigging.filesystem.conditional_object.open", pause_before_first_write, raising=False)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        writer = pool.submit(first.write, b"first", expected_version=None)
+        assert opened.wait(10)
+        try:
+            # An unfinished first write must not expose an empty object to a reader.
+            assert second.read() is None
+            assert second.version() is None
+            if competing_creator:
+                second.write(b"winner", expected_version=None)
+        finally:
+            resume.set()
+        if competing_creator:
+            with pytest.raises(ConditionalWriteError):
+                writer.result()
+        else:
+            writer.result()
+    result = second.read()
+    assert result is not None
+    assert result.data == (b"winner" if competing_creator else b"first")
+
+
+def test_local_conditional_update_does_not_recreate_missing_object(tmp_path):
+    path = tmp_path / "HEAD"
+    obj = conditional_object(str(path))
+    version = obj.write(b"original", expected_version=None)
+    path.unlink()
+    with pytest.raises(ConditionalWriteError):
+        obj.write(b"stale", expected_version=version)
+    assert obj.read() is None
 
 
 def test_conditional_object_rejects_backend_without_compare_and_swap():
