@@ -38,6 +38,7 @@ from verifyit.spec import PytestSpec, ScriptSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import WORKSPACE, repository_build_task
 from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
+    ensure_pytest_json_report,
     pytest_selection,
     python_command,
     repository_test_ids,
@@ -273,7 +274,7 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=task.text(DOCKERFILE).rstrip("\n") + f"\nCOPY --from={UV_IMAGE} /uv /usr/local/bin/uv\n",
+        dockerfile=ensure_pytest_json_report(task.text(DOCKERFILE), conda_lines),
         tags=("code", "swe", "swe-repo", "python", "patched"),
         language="python",
         data_files=data_files,

@@ -28,6 +28,7 @@ from verifyit.spec import Spec, render_spec
 WORKSPACE = "/testbed"
 VERIFYIT_PACKAGE = Path(__file__).resolve().parents[5] / "lib/verifyit"
 VERIFYIT_CONTEXT = "taskcompendium-verifyit"
+PUBLIC_CONTEXT = "taskcompendium-public"
 PUBLIC_SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 REPOSITORY_SETUP = "taskcompendium-repository-setup.sh"
 VERIFYIT_INSTALL = (
@@ -83,10 +84,7 @@ def repository_build_task(
         for resource in task.resources.oracle
         if resource.path.startswith("environment/")
     )
-    if any(
-        resource.path.startswith((VERIFYIT_CONTEXT, "taskcompendium-public", REPOSITORY_SETUP))
-        for resource in context_files
-    ):
+    if any(resource.path.startswith((VERIFYIT_CONTEXT, PUBLIC_CONTEXT, REPOSITORY_SETUP)) for resource in context_files):
         return unsupported("build_context_collision", "Source context occupies the bundled verifier path")
     actor_build = DockerBuildContext(files=(*context_files, *verifyit_build_files()))
     # Canonical ScriptGrader uses a fresh machine. Its dependencies must be prepared without
@@ -97,9 +95,9 @@ def repository_build_task(
     if instruction.startswith(PUBLIC_SETUP_PREFIX) and end:
         grader_dockerfile = dockerfile
         if task.resources.worker:
-            grader_dockerfile += "COPY taskcompendium-public/ /\n"
+            grader_dockerfile += f"COPY {PUBLIC_CONTEXT}/ /\n"
             grader_files.extend(
-                resource.model_copy(update={"path": "taskcompendium-public/" + resource.path})
+                resource.model_copy(update={"path": PUBLIC_CONTEXT + "/" + resource.path})
                 for resource in task.resources.worker
             )
         grader_dockerfile += (

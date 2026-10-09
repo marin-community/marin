@@ -109,6 +109,7 @@ class HarborRecord:
 TASKS_SCHEMA = arrow_schema(HarborRecord)
 IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
 VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
+VERIFIER_RESOURCES_PATH = "tests/taskcompendium-resources.json"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
 GRADER_STDOUT_PATH = "/logs/verifier/taskcompendium-stdout.txt"
 REPOSITORY_WORKSPACE = "/testbed"
@@ -259,14 +260,12 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
         if task.answer_type != AnswerType.TEXT or answer_path is None:
             raise UnsupportedHarborTask("In-process graders require a plain-text answer file")
-        files["tests/taskcompendium-resources.json"] = json.dumps(
-            [resource.path for resource in task.resources.verifier]
-        ).encode()
+        files[VERIFIER_RESOURCES_PATH] = json.dumps([resource.path for resource in task.resources.verifier]).encode()
         files[TEST_SH] = (
             "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
             f"exec python3 -m verifyit.candidate_file --spec /{VERIFIER_SPEC_PATH} "
             f"--answer {shlex.quote(answer_path)} --workspace {shlex.quote(DEFAULT_WORKSPACE)} "
-            "--logs-dir /logs/verifier --resources-manifest /tests/taskcompendium-resources.json\n"
+            f"--logs-dir /logs/verifier --resources-manifest /{VERIFIER_RESOURCES_PATH}\n"
         ).encode()
     elif grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")

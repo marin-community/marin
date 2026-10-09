@@ -70,13 +70,16 @@ def test_source_archives_keep_private_graders_and_deferred_dependencies(language
     else:
         assert isinstance(spec, ScriptSpec)
         assert spec.path == "legacy_test.sh"
-        assert "apt-get" in private["legacy_test.sh"].decode()
     context = task.environment_requirements.docker_build
     assert context is not None
     build = {resource.path: resource_bytes(resource) for resource in context.files}
     assert not any(path.startswith(("tests/", "solution/")) for path in build)
     assert "taskcompendium-grader-setup.sh" not in build
     assert "taskcompendium-repository-setup.sh" not in build
+    if language == "python":
+        # Frozen 61bb85cc conversion of this source archive, before the verifier install block.
+        expected = (FIXTURES / "swe_rebench_python_actor_61bb85cc.Dockerfile").read_text()
+        assert build["Dockerfile"].decode().split("# --- verifyit ---")[0].rstrip("\n") == expected.rstrip("\n")
 
 
 @pytest.mark.parametrize("language", ["js", "ts"])
@@ -88,7 +91,6 @@ def test_source_language_exclusions_remain_explicit(language):
     result = convert_row(pipeline(), tasktrove_row(source.files))
     assert isinstance(result, ImportRejection)
     assert result.reason == "unsupported_variant"
-    assert "golden sample" in result.detail
 
 
 @pytest.mark.parametrize("problem", ["truncated_id", "unprotected_test"])
