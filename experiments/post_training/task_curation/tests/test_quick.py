@@ -17,9 +17,10 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
-from experiments.post_training.task_curation.datasets.tasktrove import calendar
+from experiments.post_training.task_curation.datasets.tasktrove import calendar, code
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.quick import run_local_sources
+from experiments.post_training.task_curation.tests.conversion import tasktrove_row
 
 
 def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp_path: Path):
@@ -61,6 +62,51 @@ def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp
     assert source.pipeline.grader is not None and source.pipeline.grader.lock is not None
     assert task.grader.environment.packages_lock == str(source.pipeline.grader.lock.resolve())
     assert task.grader.answer_path == "/app/answer.txt"
+
+
+def test_quick_retains_reviewed_defects_and_sample_only_rejections(tmp_path):
+    source = next(source for source in code.sources() if source.name == "tasktrove-competitive_coding")
+    assert source.pipeline is not None
+    prompt = "Read two integers and print their sum. Write `/app/solution.py`."
+    files = {
+        "instruction.md": prompt.encode(),
+        "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /app\n",
+        "tests/verifier_data.json": json.dumps({"inputs": ["3 4\n"], "outputs": ["7\n"]}).encode(),
+    }
+    rows = [
+        tasktrove_row(files, path="comp-coding-dd2a13b32896.tar.gz"),
+        tasktrove_row(files, path="hidden-case"),
+        # This path is rejected only in code-contests, not in this source.
+        tasktrove_row(files, path="code_contests-4395"),
+        tasktrove_row({**files, "instruction.md": (prompt + "\nExample: 3 4 gives 7.").encode()}, path="sample-only"),
+    ]
+    staged = tmp_path / "input" / source.pipeline.source.files[0]
+    staged.parent.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows), staged)
+    output = tmp_path / "output"
+    run_local_sources(
+        {source.name: source},
+        tmp_path / "input",
+        output,
+        inputs={},
+        max_workers=1,
+        download_cache=tmp_path / "downloads",
+    )
+    records = {
+        row["original_path"]: row
+        for shard in (output / source.name / "normalize").glob("*.parquet")
+        for row in load_parquet(str(shard))
+    }
+    assert set(records) == {row["path"] for row in rows}
+    assert records["hidden-case"]["task_json"]
+    assert records["code_contests-4395"]["task_json"]
+    for path, reason in (
+        ("comp-coding-dd2a13b32896.tar.gz", "reviewed_defect"),
+        ("sample-only", "gold_in_instruction"),
+    ):
+        assert records[path]["task_json"] is None
+        assert records[path]["normalization_kind"] == "source_defect"
+        assert records[path]["normalization_reason"] == reason
 
 
 def answer_from_auxiliary(row, context):

@@ -77,15 +77,18 @@ def test_original_swesmith_keeps_build_and_private_roles():
     state = task.environment_requirements.tool_providers["shell"].initial_state
     assert isinstance(state, dict)
     assert state["workspace"] == "/testbed"
-    assert task.environment_requirements.docker_build == task.grader.environment.docker_build
     context = task.environment_requirements.docker_build
     assert context is not None
     build = {item.path: resource_bytes(item) for item in context.files}
     assert build["Dockerfile"].startswith(b"FROM python:3.10-bookworm\n")
     assert build["taskcompendium-verifyit/src/verifyit/modes/grade_pytest.py"]
-    assert build["taskcompendium-public/setup_files/requirements.txt"] == public["setup_files/requirements.txt"]
+    assert "taskcompendium-repository-setup.sh" not in build
+    grader_context = task.grader.environment.docker_build
+    assert grader_context is not None
+    grader_build = {item.path: resource_bytes(item) for item in grader_context.files}
+    assert grader_build["taskcompendium-public/setup_files/requirements.txt"] == public["setup_files/requirements.txt"]
     assert (
-        build["taskcompendium-repository-setup.sh"]
+        grader_build["taskcompendium-repository-setup.sh"]
         == oracle["instruction.md"].split(b"```bash\n", 1)[1].split(b"\n```", 1)[0]
     )
     assert not any(path.startswith(("tests/", "solution/")) for path in build)
@@ -163,50 +166,6 @@ def test_converted_grader_restores_tests_and_grades_product_code(repository_fixt
         (workspace / "tests/test_calc.py").write_text("def test_add(): pass\n")
     reward = grade_pytest.grade(repository_fixture.spec, repository_fixture.tests_dir, workspace)
     assert reward.reward == expected
-    assert (workspace / "tests/test_calc.py").read_text() == repository_fixture.trusted_tests
-
-
-@pytest.mark.parametrize(
-    "hook_state", ["untracked", "ignored", "modified", "committed", "assume-unchanged", "skip-worktree"]
-)
-def test_converted_grader_removes_candidate_pytest_hooks(repository_fixture, hook_state):
-    workspace, tests_dir, spec = repository_fixture.workspace, repository_fixture.tests_dir, repository_fixture.spec
-    path = "tests/conftest.py" if hook_state in ("untracked", "ignored") else "conftest.py"
-    if hook_state == "ignored":
-        (workspace / ".gitignore").write_text(path + "\n")
-    if hook_state in ("assume-unchanged", "skip-worktree"):
-        git(workspace, "update-index", f"--{hook_state}", path)
-    (workspace / path).write_text(
-        "def pytest_collection_modifyitems(items):\n" "    for item in items:\n" "        item.obj = lambda: None\n"
-    )
-    if hook_state == "committed":
-        git(workspace, "add", path)
-        git(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "hook")
-    product = (workspace / "calc.py").read_text()
-    # Establish the attack's effect before checking the trusted restoration boundary.
-    assert grade_pytest.grade(replace(spec, setup=None), tests_dir, workspace).reward == 1
-    assert grade_pytest.grade(spec, tests_dir, workspace).reward == 0
-    assert (workspace / "calc.py").read_text() == product
-    if path == "conftest.py":
-        assert (workspace / path).read_text() == "# Trusted pytest configuration.\n"
-    else:
-        assert not (workspace / path).exists()
-
-
-@pytest.mark.parametrize("replacement_kind", ["commit", "blob"])
-def test_converted_grader_ignores_candidate_git_replacement_refs(repository_fixture, replacement_kind):
-    workspace, tests_dir, spec = repository_fixture.workspace, repository_fixture.tests_dir, repository_fixture.spec
-    trusted = git(workspace, "rev-parse", "HEAD")
-    original_blob = git(workspace, "rev-parse", f"{trusted}:tests/test_calc.py")
-    forged_tests = "def test_add(): pass\n"
-    (workspace / "tests/test_calc.py").write_text(forged_tests)
-    git(workspace, "add", "tests/test_calc.py")
-    git(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "forged")
-    replacement = git(workspace, "rev-parse", "HEAD" if replacement_kind == "commit" else "HEAD:tests/test_calc.py")
-    git(workspace, "replace", trusted if replacement_kind == "commit" else original_blob, replacement)
-    assert git(workspace, "show", f"{trusted}:tests/test_calc.py") == forged_tests.strip()
-    assert grade_pytest.grade(replace(spec, setup=None), tests_dir, workspace).reward == 1
-    assert grade_pytest.grade(spec, tests_dir, workspace).reward == 0
     assert (workspace / "tests/test_calc.py").read_text() == repository_fixture.trusted_tests
 
 

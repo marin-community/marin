@@ -15,7 +15,7 @@ import click
 import pyarrow.parquet as pq
 from harbor_config.models.task.config import TaskConfig
 
-from experiments.post_training.task_curation.harbor import TASKS_SCHEMA
+from taskcompendium.harbor.export import TASKS_SCHEMA
 
 
 def compare_harbor(

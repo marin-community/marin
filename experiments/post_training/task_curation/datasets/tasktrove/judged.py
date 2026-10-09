@@ -26,7 +26,7 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -329,7 +329,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name=source.name,
                 source=tasktrove_source(source.config),
-                convert=convert_judged,
+                convert=TaskTroveConverter(source.config, convert_judged),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

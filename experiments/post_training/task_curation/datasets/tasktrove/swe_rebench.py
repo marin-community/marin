@@ -38,10 +38,10 @@ from verifyit.spec import PytestSpec, ScriptSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import WORKSPACE, repository_build_task
 from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
-    PYTEST_REPORT_PLUGIN,
     pytest_selection,
     python_command,
     repository_test_ids,
+    restore_setup,
 )
 
 CONFIG_JSON = "tests/config.json"
@@ -116,27 +116,6 @@ _PATCH_INVOCATION_RE = re.compile(
 )
 _REPO_DIR_RE = re.compile(r'REPO_DIR\s*=\s*"([^"]+)"')
 _CONDA_LINE_RE = re.compile(r"^[ \t]*(?:source\s+\S*conda\S*\S*|conda activate\s+\S+)[ \t]*$", re.MULTILINE)
-BOOTSTRAP_START = "# Some base images have minimal apt available;"
-BOOTSTRAP_END = "# Restore hidden-test paths from the immutable base"
-
-
-def trusted_setup(commit: str) -> str:
-    """Run the source's complete test-control restoration before applying its private patch."""
-    return (
-        "set -euo pipefail\n"
-        'bash "$VERIFYIT_TESTS_DIR/install_trusted_test_paths.sh" '
-        f'"$VERIFYIT_WORKSPACE" {commit} "$VERIFYIT_TESTS_DIR/trusted_test_paths.txt"\n'
-        'bash "$VERIFYIT_TESTS_DIR/install_trusted_test_paths.sh" '
-        f'"$VERIFYIT_WORKSPACE" {commit} "$VERIFYIT_TESTS_DIR/trusted_patch_paths.txt" '
-        '"$VERIFYIT_TESTS_DIR/test_patch.diff"\n'
-    )
-
-
-def grader_bootstrap(test_sh: str) -> str:
-    """The source's package bootstrap, moved from verification into its deferred image build."""
-    _before, start, rest = test_sh.partition(BOOTSTRAP_START)
-    body, end, _after = rest.partition(BOOTSTRAP_END)
-    return start + body if start and end else ""
 
 
 def _is_pytest_node_id(node_id: str) -> bool:
@@ -187,9 +166,6 @@ def _legacy_script_task(
         return Rejected(ConvertStatus.NULL_GRADER, "tests/test_patch.diff is empty")
     if _LEGACY_GRADER_BLOCK not in test_sh:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh has an unknown grader bootstrap")
-    bootstrap = grader_bootstrap(test_sh)
-    if not bootstrap:
-        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh has an unknown package bootstrap")
 
     test_state = task.text(TEST_STATE)
     expected_blocks = (_FAIL_OPEN_BLOCK, _EXIT_CODE_READER, _TEST_STATE_CALL)
@@ -197,7 +173,6 @@ def _legacy_script_task(
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test_state.py has an unknown fail-open implementation")
 
     normalized_test_sh = test_sh.replace(_LEGACY_GRADER_BLOCK, _NORMALIZED_GRADER_BLOCK)
-    normalized_test_sh = normalized_test_sh.replace(bootstrap, "")
     normalized_test_sh = normalized_test_sh.replace(_SOURCE_REWARD_PATH, _NORMALIZED_REWARD_PATH)
     normalized_test_sh = normalized_test_sh.replace(_SOURCE_TEST_OUTPUT_PATH, _NORMALIZED_TEST_OUTPUT_PATH)
     normalized_test_sh = normalized_test_sh.replace("echo $? > /logs/test_exit_code.txt\n", "")
@@ -285,14 +260,12 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         paths=selection.files,
         must_pass=selection.must_pass,
         must_not_break=selection.must_not_break,
-        setup=python_setup + trusted_setup(trusted_commit),
+        setup=python_setup + restore_setup(trusted_commit, (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS), patch=TEST_PATCH),
         protected_paths_files=(TRUSTED_TEST_PATHS.removeprefix("tests/"), TRUSTED_PATCH_PATHS.removeprefix("tests/")),
         python=python,
         workspace=workspace,
     )
     data_files = {
-        "tests/install_trusted_test_paths.sh": task.files["tests/install_trusted_test_paths.sh"],
-        "tests/install_trusted_test_patch.sh": task.files["tests/install_trusted_test_patch.sh"],
         TEST_PATCH: test_patch.encode(),
         TRUSTED_TEST_PATHS: task.files.get(TRUSTED_TEST_PATHS, b""),
         TRUSTED_PATCH_PATHS: task.files.get(TRUSTED_PATCH_PATHS, b""),
@@ -319,16 +292,8 @@ def convert_swe_rebench_task(row: RawRow, _context: ConversionContext) -> Normal
     if isinstance(converted, ImportRejection):
         return converted
     files = archive_files(row.data)
-    grader_setup = grader_bootstrap(files.text(TEST_SH))
     changes = []
     if isinstance(converted.spec, PytestSpec):
-        # Public setup can create the repository's interpreter; install its plugin afterward.
-        conda_lines = _conda_activation(files.text(TEST_SH))
-        grader_setup += "\n" + "\n".join(conda_lines) + "\n"
-        grader_setup += (
-            f"pip install --no-cache-dir {PYTEST_REPORT_PLUGIN} || "
-            f"pip3 install --no-cache-dir {PYTEST_REPORT_PLUGIN}\n"
-        )
         _fail_to_pass, pass_to_pass = _fail_and_pass_to_pass(json.loads(files.text(CONFIG_JSON)))
         if tuple(pass_to_pass) != converted.spec.must_not_break:
             changes.append(
@@ -363,5 +328,4 @@ def convert_swe_rebench_task(row: RawRow, _context: ConversionContext) -> Normal
         ),
         tags=converted.tags,
         changes=tuple(changes),
-        grader_setup=grader_setup,
     )

@@ -16,7 +16,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, required_grader_en
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
@@ -69,7 +69,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
-                convert=convert_nl2bash_task,
+                convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),
                 version="1",
                 environment=AGENT_IMAGE,
                 intended_use=IntendedUse.TRAIN,

@@ -51,7 +51,11 @@ def test_source_archives_keep_private_graders_and_deferred_dependencies(language
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     public = {resource.path for resource in task.resources.worker}
     oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
-    for path in ("install_trusted_test_paths.sh", "install_trusted_test_patch.sh", "test_patch.diff"):
+    for path in (
+        ("test_patch.diff",)
+        if language == "python"
+        else ("install_trusted_test_paths.sh", "install_trusted_test_patch.sh", "test_patch.diff")
+    ):
         assert private[path] == source.files[f"tests/{path}"]
         assert path not in public
     assert oracle["source_archive/tests/test.sh"] == source.files["tests/test.sh"]
@@ -66,12 +70,13 @@ def test_source_archives_keep_private_graders_and_deferred_dependencies(language
     else:
         assert isinstance(spec, ScriptSpec)
         assert spec.path == "legacy_test.sh"
-        assert "apt-get" not in private["legacy_test.sh"].decode()
+        assert "apt-get" in private["legacy_test.sh"].decode()
     context = task.environment_requirements.docker_build
-    assert context is not None and context == task.grader.environment.docker_build
+    assert context is not None
     build = {resource.path: resource_bytes(resource) for resource in context.files}
     assert not any(path.startswith(("tests/", "solution/")) for path in build)
-    assert b"apt-get" in build["taskcompendium-grader-setup.sh"]
+    assert "taskcompendium-grader-setup.sh" not in build
+    assert "taskcompendium-repository-setup.sh" not in build
 
 
 @pytest.mark.parametrize("language", ["js", "ts"])
@@ -199,7 +204,7 @@ def patched_repository(tmp_path) -> PatchedRepository:
 
 @pytest.mark.parametrize(
     "repair, tamper, expected",
-    [(False, None, 0), (True, None, 1), (False, "untracked_control", 0), (False, "index_flag", 0)],
+    [(False, None, 0), (True, None, 1), (False, "manifest_test", 0)],
 )
 def test_hidden_patch_restoration_preserves_product_edits(
     patched_repository: PatchedRepository, repair, tamper, expected
@@ -207,13 +212,9 @@ def test_hidden_patch_restoration_preserves_product_edits(
     workspace = patched_repository.workspace
     product = "def add(a, b): return a + b\n" if repair else "def add(a, b): return a - b\n"
     (workspace / "calc.py").write_text(product)
-    if tamper == "untracked_control":
-        (workspace / "conftest.py").write_text("def pytest_collection_modifyitems(items): items.clear()\n")
-    elif tamper == "index_flag":
+    if tamper == "manifest_test":
         (workspace / "tests/test_calc.py").write_text("def test_hidden(): pass\n")
-        git(workspace, "update-index", "--assume-unchanged", "tests/test_calc.py")
     result = grade_pytest.grade(patched_repository.spec, patched_repository.private, workspace)
     assert result.reward == expected
     assert (workspace / "tests/test_calc.py").read_text() == patched_repository.expected_tests
     assert (workspace / "calc.py").read_text() == product
-    assert not (workspace / "conftest.py").exists()

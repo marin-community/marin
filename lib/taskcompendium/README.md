@@ -133,10 +133,11 @@ declare supported backends. Generic execution runtimes and SAMPLE/FULL controls 
 unresolved contexts before selecting or creating machines. Local and ShellSim
 backends cannot be declared for a Docker build context.
 
-The [Harbor exporter](../../experiments/post_training/task_curation/harbor.py)
-packages separate actor and verifier build contexts for supported repository
-tasks. Export writes the build inputs without building images or running
-containers. Native Harbor build import remains unsupported.
+The [Harbor exporter](src/taskcompendium/harbor/export.py)
+preserves the actor build context and uses Harbor's shared verifier environment
+for supported TaskTrove repository tasks. Other supported tasks use separate
+verifier environments. Export writes build inputs without building images or
+running containers. Native Harbor build import remains unsupported.
 
 ## Resource mounts
 

@@ -20,6 +20,7 @@ from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
+    TaskTroveConverter,
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
@@ -87,7 +88,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-puzzles",
                 source=tasktrove_source("laion__all-puzzles-v2"),
-                convert=convert_puzzle,
+                convert=TaskTroveConverter("laion__all-puzzles-v2", convert_puzzle),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

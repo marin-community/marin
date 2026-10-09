@@ -37,7 +37,7 @@ from taskcompendium.pipeline.models import (
 )
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -184,7 +184,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-structured_outputs",
                 source=tasktrove_source(CONFIG),
-                convert=convert_structured_outputs,
+                convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

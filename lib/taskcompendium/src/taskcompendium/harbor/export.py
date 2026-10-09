@@ -7,24 +7,35 @@ import gzip
 import hashlib
 import io
 import json
+import re
 import shlex
 import tarfile
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import cache
-from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
-import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
 from harbor_config.models.task.config import TaskConfig
 from rigging.filesystem.storage_path import StoragePath
+from verifyit.spec import (
+    DEFAULT_WORKSPACE,
+    GotestSpec,
+    JunitSpec,
+    PytestSpec,
+    ScriptSpec,
+    mode_of,
+    parse_spec,
+    render_spec,
+)
+
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.convert.tasktrove import TEST_SH
 from taskcompendium.models import (
+    DOCKER_IMAGE_PATTERN,
     AnswerType,
     ArtifactKind,
     FileReward,
@@ -41,17 +52,38 @@ from taskcompendium.models import (
 from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
 from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
 from taskcompendium.runtime.resources import resource_bytes
-from verifyit.spec import render_spec
 
-from experiments.post_training.task_curation.environment import PINNED_IMAGE
-from experiments.post_training.task_curation.harbor_export_contract import (
-    MANIFEST_FILENAME,
-    TASKS_FILENAME,
-    HarborSourceMetadata,
-    VerifierPayloadIdentity,
-)
-from experiments.post_training.task_curation.images.build import BASE_IMAGE
-from experiments.post_training.task_curation.sources import all_sources
+TASKS_FILENAME = "tasks.parquet"
+MANIFEST_FILENAME = "manifest.json"
+
+
+@dataclass(frozen=True)
+class HarborSourceMetadata:
+    name: str
+    source_id: str
+    family: str
+
+
+@dataclass
+class VerifierPayloadIdentity:
+    """Identify emitted verifier files, recipes and dispatch configuration without building them."""
+
+    _payloads: set[str] = field(default_factory=set, init=False)
+
+    def add(self, task_binary: bytes) -> None:
+        files = []
+        with tarfile.open(fileobj=io.BytesIO(task_binary), mode="r:*") as archive:
+            for member in archive:
+                if not member.isfile() or not (member.name.startswith("tests/") or member.name == "task.toml"):
+                    continue
+                content = archive.extractfile(member)
+                assert content is not None
+                files.append((member.name, member.mode, hashlib.sha256(content.read()).hexdigest()))
+        self._payloads.add(hashlib.sha256(json.dumps(sorted(files)).encode()).hexdigest())
+
+    @property
+    def ref(self) -> str:
+        return "sha256:" + hashlib.sha256(json.dumps(sorted(self._payloads)).encode()).hexdigest()
 
 
 class UnsupportedHarborTask(ValueError):
@@ -80,6 +112,7 @@ VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
 GRADER_STDOUT_PATH = "/logs/verifier/taskcompendium-stdout.txt"
 REPOSITORY_WORKSPACE = "/testbed"
+LEGACY_REPOSITORY_AGENT_TIMEOUT = 900.0
 HARBOR_SCRIPT_ARGV = ("bash", f"/{TEST_SH}")
 
 
@@ -138,6 +171,7 @@ def _validate_harbor_task(task: TaskSpec) -> None:
             or artifact.missing != MissingArtifactPolicy.ERROR
             or grader.answer_path is not None
             or environment.docker_build is None
+            or grader.environment is None
             or grader.environment.docker_build is None
         ):
             raise UnsupportedHarborTask(
@@ -167,18 +201,7 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     files, modes = {}, {}
-    if repository_state:
-        assert isinstance(grader, ScriptGrader) and grader.environment.docker_build is not None
-        for resource in grader.environment.docker_build.files:
-            name = "tests/" + resource.path
-            files[name] = resource_bytes(resource)
-            if resource.mode:
-                modes[name] = resource.mode
-        # Build the source recipe and install private grader files in that image.
-        files["tests/Dockerfile"] += (
-            f"\nCOPY . /tests\nRUN rm -rf {REPOSITORY_WORKSPACE} && mkdir -p {REPOSITORY_WORKSPACE}\n"
-        ).encode()
-    else:
+    if not repository_state:
         if grader_image is None:
             raise ValueError("This task requires an explicit digest-pinned verifier base image")
         # Separate Harbor verifiers own their tests; native execution skips uploading them.
@@ -198,7 +221,7 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
             f"/{VERIFIER_SPEC_PATH}\n"
         ).encode()
         mode = grader.mode
-        timeout = float(grader.parameters.get("timeout", 600))
+        timeout = spec.timeout if isinstance(spec, (GotestSpec, JunitSpec, PytestSpec, ScriptSpec)) else 600.0
         grader_env = {}
         grader_cwd = "/"
     elif isinstance(grader, ScriptGrader):
@@ -236,14 +259,14 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
         if task.answer_type != AnswerType.TEXT or answer_path is None:
             raise UnsupportedHarborTask("In-process graders require a plain-text answer file")
-        files["tests/grade_candidate.py"] = Path(__file__).with_name("harbor_candidate.py").read_bytes()
         files["tests/taskcompendium-resources.json"] = json.dumps(
             [resource.path for resource in task.resources.verifier]
         ).encode()
         files[TEST_SH] = (
             "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
-            f"exec python3 /tests/grade_candidate.py /{VERIFIER_SPEC_PATH} "
-            f"{shlex.quote(answer_path)}\n"
+            f"exec python3 -m verifyit.candidate_file --spec /{VERIFIER_SPEC_PATH} "
+            f"--answer {shlex.quote(answer_path)} --workspace {shlex.quote(DEFAULT_WORKSPACE)} "
+            "--logs-dir /logs/verifier --resources-manifest /tests/taskcompendium-resources.json\n"
         ).encode()
     elif grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
@@ -258,9 +281,25 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
     )
 
 
-def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str) -> HarborRecord:
-    """Export supported file-delivery contracts with separate agent and verifier environments."""
-    if grader_image is not None and PINNED_IMAGE.fullmatch(grader_image) is None:
+def _validate_repository_dockerfile(files: dict[str, bytes]) -> None:
+    """Retain the old TaskTrove static environment exclusions without building an image."""
+    dockerfile = files["environment/Dockerfile"].decode()
+    if "# --- verifyit ---" not in dockerfile:
+        raise UnsupportedHarborTask("tool install block missing")
+    for line in dockerfile.splitlines():
+        if re.search(r"rewardkit|litellm", line, re.IGNORECASE):
+            raise UnsupportedHarborTask(f"old grader dependency: {line.strip()[:120]}")
+        if line.lower().startswith("copy ") and " tests/" in f" {line}":
+            source = line.split()[1]
+            if source not in files and not any(path.startswith(source.rstrip("/") + "/") for path in files):
+                raise UnsupportedHarborTask(f"COPY of a file not in the task: {source}")
+
+
+def harbor_record(
+    row: dict[str, Any], *, grader_image: str | None, family: str, fallback_actor_image: str
+) -> HarborRecord:
+    """Export file graders separately and legacy repository graders in the actor environment."""
+    if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])
     _validate_harbor_task(task)
@@ -268,6 +307,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     verifier = _verifier_program(task, grader_image)
+    assert isinstance(grader, (ScriptGrader, VerifyitGrader))
     files, modes = verifier.files, verifier.modes
     answer_path = verifier.answer_path
     prompt = cast(TextMessage, task.context.events[0]).content
@@ -279,9 +319,15 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
             "The contents of this file are graded as your final response."
         )
     files["instruction.md"] = prompt.encode()
-    public = (*task.resources.all, *task.resources.worker)
+    public = () if repository_state else (*task.resources.all, *task.resources.worker)
     if environment.docker_build is not None:
         for resource in environment.docker_build.files:
+            if (
+                repository_state
+                and resource.path != "Dockerfile"
+                and not resource.path.startswith("taskcompendium-verifyit/")
+            ):
+                continue
             name = "environment/" + resource.path
             files[name] = resource_bytes(resource)
             if resource.mode:
@@ -290,7 +336,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         if not dockerfile.endswith("\n"):
             dockerfile += "\n"
     else:
-        dockerfile = f"FROM {environment.docker_image or BASE_IMAGE}\n"
+        dockerfile = f"FROM {environment.docker_image or fallback_actor_image}\n"
     if public:
         dockerfile += "COPY files/ /\n"
     for resource in public:
@@ -312,27 +358,33 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
             modes[name] = resource.mode
     if TEST_SH not in files:
         raise UnsupportedHarborTask("Script grader has no test.sh resource")
+    language = ""
+    mode = verifier.mode
     if repository_state:
+        if VERIFIER_SPEC_PATH not in files or "swe-repo" not in task.tags:
+            raise UnsupportedHarborTask("Shared repository lowering requires a legacy SWE verifier spec")
+        spec = parse_spec(files[VERIFIER_SPEC_PATH].decode())
+        if isinstance(spec, PytestSpec) and {"swe-repo"}.issubset(task.tags):
+            language = "python"
+        elif isinstance(spec, ScriptSpec) and {"swe-repo", "patched", "script-fallback"}.issubset(task.tags):
+            language = json.loads(files["tests/config.json"])["language"]
+        else:
+            raise UnsupportedHarborTask(
+                "Shared repository lowering requires the legacy SWE pytest or patched script contract"
+            )
+        mode = mode_of(spec)
         if "tests/verifier.toml" in files:
             raise UnsupportedHarborTask("Repository verifier spec uses Harbor's reserved entrypoint")
-        # Native artifact collection is best-effort. An absent repository must not
-        # fall back to a fresh empty build workspace or reach the trusted grader.
-        files[TEST_SH] = (
-            f"#!/bin/bash\nset -euo pipefail\ntest -d {REPOSITORY_WORKSPACE}/.git\n".encode() + files[TEST_SH]
-        )
+        # Shared Harbor execution retains the actor's installed dependencies and workspace.
+        # This is the legacy TaskTrove execution policy, not ScriptGrader's fresh-machine policy.
+        files[TEST_SH] = f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
+        _validate_repository_dockerfile(files)
     outputs = list(task.output_paths)
-    if repository_state:
-        outputs.append(REPOSITORY_WORKSPACE)
     if answer_path:
         outputs.append(answer_path)
     # Harbor uploads submissions before running test.sh. Do not restore initial
     # copies of files the agent edits, including when the agent deleted a file.
-    grader_public = [
-        resource
-        for resource in public
-        if "/" + resource.path not in outputs
-        and not (repository_state and PurePosixPath("/" + resource.path).is_relative_to(REPOSITORY_WORKSPACE))
-    ]
+    grader_public = [] if repository_state else [resource for resource in public if "/" + resource.path not in outputs]
     if grader_public:
         for resource in grader_public:
             files["tests/public/" + resource.path] = resource_bytes(resource)
@@ -366,15 +418,14 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
     }
     if repository_state:
-        # Keep agent-written convention logs separate from the captured checkout.
-        config["artifacts"].insert(
-            0,
-            {
-                "source": "/logs/artifacts",
-                "destination": "taskcompendium-convention",
-                "exclude": ["./taskcompendium-convention", f".{REPOSITORY_WORKSPACE}"],
-            },
-        )
+        assert isinstance(grader, ScriptGrader)
+        assert grader.environment is not None
+        config["verifier"]["environment_mode"] = "shared"
+        config["verifier"].pop("environment")
+        config["artifacts"] = []
+        config["agent"] = {"timeout_sec": LEGACY_REPOSITORY_AGENT_TIMEOUT}
+        config["verifier"]["env"] = {**grader.environment.environment_variables, **verifier.env}
+        metadata["execution_policy"] = "tasktrove_shared_repository"
     if environment.working_directory is not None:
         config["environment"]["workdir"] = environment.working_directory
     files["task.toml"] = tomlkit.dumps(config).encode()
@@ -392,9 +443,9 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         family=family,
         template_id=template,
         converter="taskcompendium",
-        mode=verifier.mode,
+        mode=mode,
         dockerfile_id=hashlib.sha256(dockerfile.encode()).hexdigest()[:12],
-        language="",
+        language=language,
         tags=list(task.tags),
         has_solution=bool(solution),
         task_binary=archive_bytes(files, modes),
@@ -403,7 +454,12 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
 
 
 def export_harbor(
-    input_root: StoragePath, output_root: StoragePath, *, grader_image: str | None, source: HarborSourceMetadata
+    input_root: StoragePath,
+    output_root: StoragePath,
+    *,
+    grader_image: str | None,
+    source: HarborSourceMetadata,
+    fallback_actor_image: str,
 ) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
     manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
@@ -432,7 +488,12 @@ def export_harbor(
                         reason = row["normalization_reason"] if row["task_json"] is None else None
                         if row["task_json"] is not None:
                             try:
-                                record = harbor_record(row, grader_image=grader_image, family=source.family)
+                                record = harbor_record(
+                                    row,
+                                    grader_image=grader_image,
+                                    family=source.family,
+                                    fallback_actor_image=fallback_actor_image,
+                                )
                             except UnsupportedHarborTask as error:
                                 reason = str(error)
                             else:
@@ -451,36 +512,12 @@ def export_harbor(
         "rejections": rejected,
         "grader_base_image": grader_image,
         "verify_tool_ref": verifier_identity.ref,
-        "verifier_build_required": True,
+        "environment_build_required": True,
         "source": source.name,
-        "atlas_id": source.atlas_id,
+        "source_id": source.source_id,
         "harbor_config_validated": True,
         "runtime_verified": False,
         "limitation": "Builds and execution have not run; base-image dependencies and source recipes remain unverified.",
     }
     (output_root / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
-
-
-@click.command(help=__doc__)
-@click.option("--input-root", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
-@click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
-@click.option(
-    "--grader-image",
-    help="Pinned verifier base for tasks without their own build recipe; Harbor builds private tests on top.",
-)
-def main(input_root: Path, output_root: Path, grader_image: str | None) -> None:
-    manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
-    sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
-    source = sources[manifest["source"]]
-    result = export_harbor(
-        StoragePath(str(input_root)),
-        StoragePath(str(output_root)),
-        grader_image=grader_image,
-        source=HarborSourceMetadata(source.name, source.info.id, source.info.family),
-    )
-    click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))
-
-
-if __name__ == "__main__":
-    main()

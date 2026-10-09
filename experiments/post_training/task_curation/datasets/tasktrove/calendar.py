@@ -38,7 +38,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -191,7 +191,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name=name,
                 source=tasktrove_source(config),
-                convert=convert_calendar,
+                convert=TaskTroveConverter(config, convert_calendar),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

@@ -3,9 +3,14 @@
 
 """TaskTrove sources: archived Harbor tasks from the original ``open-thoughts/TaskTrove`` release."""
 
-from taskcompendium.convert.tasktrove import TASKS_FILE, unpack_task_binary
-from taskcompendium.pipeline.inputs import SourceFormat
+from dataclasses import dataclass
 
+from taskcompendium.convert.tasktrove import TASKS_FILE, unpack_task_binary
+from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
+
+from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
 from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
@@ -16,6 +21,20 @@ ANSWER_FILE_DELIVERY = (
     ("The verifier reads that file", "The verifier reads the assistant response"),
 )
 """The answer-file wording of the Nemotron Gym puzzle archives, and its reply-based replacement."""
+
+
+@dataclass(frozen=True)
+class TaskTroveConverter:
+    """Retain reviewed source defects as explicit conversion outcomes."""
+
+    config: str
+    convert: Converter
+
+    def __call__(self, row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
+        reason = SOURCE_DEFECTS.get((self.config, row.data["path"]))
+        if reason is not None:
+            return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="reviewed_defect", detail=reason)
+        return self.convert(row, context)
 
 
 def tasktrove_source(config: str) -> HfSource:

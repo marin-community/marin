@@ -21,14 +21,14 @@ from taskcompendium.convert.tasktrove_code_contests import convert_code_contests
 from taskcompendium.convert.tasktrove_codeforces import convert_codeforces
 from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, ConvertFn, ConvertStatus, Rejected
 from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
-from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files
+from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files, hidden_case_rejection
 from taskcompendium.convert.tasktrove_taco import convert_taco
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -79,8 +79,8 @@ The source grades exact line output with trailing whitespace normalized and requ
 
 Flag tasks needing a special judge, numerical tolerance, or multiple valid outputs that exact grading rejects.
 
-Public examples are legitimate cases. A sample-only set limits coverage; it does not by itself show leaked
-gold or a defective task. Report coverage separately from content quality.
+Public examples can supplement hidden cases. Reject sample-only sets: printing the disclosed outputs
+must not pass the task.
 
 Missing oracle controls imply verification uncertainty, not an automatically bad programming problem.
 """
@@ -125,13 +125,18 @@ def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.NULL_GRADER, "At least one aligned input/output case is required")
     if not all(isinstance(value, str) for value in [*inputs, *outputs]):
         return Rejected(ConvertStatus.NULL_GRADER, "Inputs and outputs must be strings")
+    cases = case_files(inputs, outputs)
+    instruction = task.text(INSTRUCTION)
+    rejection = hidden_case_rejection(cases, instruction)
+    if rejection is not None:
+        return rejection
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
+        instruction=instruction,
         spec=StdioSpec(command=SOLUTION_COMMAND, compare=Compare.EXACT),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "nemotron"),
         language="python",
-        data_files=case_files(inputs, outputs),
+        data_files=cases,
     )
 
 
@@ -150,7 +155,7 @@ def stdio_source(name: str, config: str, convert: Converter, rubric: str, info: 
         pipeline=RlDataPipeline(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
-            convert=convert,
+            convert=TaskTroveConverter(config, convert),
             version="1",
             environment=AGENT_IMAGE,
             intended_use=IntendedUse.TRAIN,

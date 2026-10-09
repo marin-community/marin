@@ -30,72 +30,48 @@ TRUSTED_INVOCATION = re.compile(
 )
 SWESMITH_REPOSITORY = re.compile(r"https://github\.com/swesmith/(?P<repo>[^\s/]+)")
 RESTORE_TESTS = """set -euo pipefail
-export GIT_CONFIG_GLOBAL=/dev/null
-export GIT_CONFIG_NOSYSTEM=1
-export GIT_NO_REPLACE_OBJECTS=1
 ws="$VERIFYIT_WORKSPACE"
 cd "$ws"
-trusted_git() {
-    command git -c safe.directory="$ws" -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
-}
-trusted_git cat-file -e TRUSTED_SHA^{commit}
+git -c safe.directory="$ws" cat-file -e TRUSTED_SHA^{commit}
 restore_path() {
     path="$1"
-    case "$path" in
-        ""|/*|.|..|../*|*/..|*/../*) exit 1 ;;
-    esac
-    trusted_git clean -ffdx -- "$path"
+    git -c safe.directory="$ws" clean -ffdx -- "$path" >/dev/null 2>&1 || true
     rm -rf -- "$path"
-    if trusted_git cat-file -e TRUSTED_SHA:"$path" 2>/dev/null; then
-        trusted_git archive --format=tar TRUSTED_SHA -- "$path" | tar -xf - -C "$ws"
-    elif [ -n "FALLBACK_SHA" ] && trusted_git cat-file -e FALLBACK_SHA:"$path" 2>/dev/null; then
-        trusted_git archive --format=tar FALLBACK_SHA -- "$path" | tar -xf - -C "$ws"
+    if git -c safe.directory="$ws" cat-file -e TRUSTED_SHA:"$path" 2>/dev/null; then
+        git -c safe.directory="$ws" archive --format=tar TRUSTED_SHA -- "$path" | tar -xf - -C "$ws"
+    elif [ -n "FALLBACK_SHA" ] && git -c safe.directory="$ws" cat-file -e FALLBACK_SHA:"$path" 2>/dev/null; then
+        git -c safe.directory="$ws" archive --format=tar FALLBACK_SHA -- "$path" | tar -xf - -C "$ws"
     fi
 }
-is_test_control_path() {
-    path="$1"
-    basename=${path##*/}
-    case "/$path/" in
-        */test/*|*/tests/*|*/testing/*|*/test-data/*|*/testdata/*|*/spec/*|*/specs/*|*/__tests__/*) return 0 ;;
-    esac
-    case "$basename" in
-        conftest.py|pytest.ini|tox.ini|.coveragerc|jest.config.*|vitest.config.*|test_*|*_test.*|*.test.*|*.spec.*)
-            return 0 ;;
-    esac
-    return 1
-}
-# Match the source installer: candidate hooks outside the manifest can alter collection and grading.
-while IFS= read -r -d '' path; do
-    if is_test_control_path "$path"; then
-        restore_path "$path"
-    fi
-done < <(
-    {
-        trusted_git diff --name-only -z TRUSTED_SHA
-        trusted_git ls-files --others --exclude-standard -z
-        trusted_git ls-files --others --ignored --exclude-standard -z
-    } | sort -zu
-)
-# Index flags can hide modified hooks from ordinary diff discovery.
-while IFS= read -r -d '' record; do
-    flag=${record%% *}
-    path=${record#? }
-    case "$flag" in
-        [a-z]|S)
-            if is_test_control_path "$path"; then
-                restore_path "$path"
-            fi ;;
-    esac
-done < <(trusted_git ls-files -v -z)
 restore_manifest() {
     while IFS= read -r path || [ -n "$path" ]; do
         [ -z "$path" ] && continue
+        case "$path" in
+            ""|/*|.|..|../*|*/..|*/../*) exit 1 ;;
+        esac
         restore_path "$path"
     done < "$1"
 }
-restore_manifest "$VERIFYIT_TESTS_DIR/trusted_test_paths.txt"
-
+RESTORE_MANIFESTS
+APPLY_PATCH
 """
+
+
+def restore_setup(trusted: str, manifests: tuple[str, ...], fallback: str = "", patch: str = "") -> str:
+    manifest_commands = "\n".join(
+        f'restore_manifest "$VERIFYIT_TESTS_DIR/{PurePosixPath(path).name}"' for path in manifests
+    )
+    patch_command = (
+        f'git -c safe.directory="$ws" apply --whitespace=nowarn "$VERIFYIT_TESTS_DIR/{PurePosixPath(patch).name}"'
+        if patch
+        else ""
+    )
+    return (
+        RESTORE_TESTS.replace("TRUSTED_SHA", trusted)
+        .replace("FALLBACK_SHA", fallback)
+        .replace("RESTORE_MANIFESTS", manifest_commands)
+        .replace("APPLY_PATCH", patch_command)
+    )
 
 
 def repository_test_ids(value: object) -> tuple[str, ...]:
@@ -166,7 +142,7 @@ def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
         paths=selection.files,
         must_pass=selection.must_pass,
         must_not_break=selection.must_not_break,
-        setup=RESTORE_TESTS.replace("TRUSTED_SHA", match["trusted"]).replace("FALLBACK_SHA", match["fallback"] or ""),
+        setup=restore_setup(match["trusted"], (f"tests/{TRUSTED_PATHS}",), match["fallback"] or ""),
         protected_paths_files=(TRUSTED_PATHS,),
         workspace=WORKSPACE,
     )

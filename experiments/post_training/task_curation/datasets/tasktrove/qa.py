@@ -24,7 +24,7 @@ from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -235,7 +235,7 @@ def sources() -> list[RlDataSource]:
                 pipeline=RlDataPipeline(
                     name=name,
                     source=tasktrove_source(config),
-                    convert=convert_openqa,
+                    convert=TaskTroveConverter(config, convert_openqa),
                     version="2",
                     environment=ShellSim(),
                     intended_use=IntendedUse.TRAIN,
@@ -261,7 +261,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
-                convert=convert_knowledge_mcqa,
+                convert=TaskTroveConverter("laion__nemotron-gym-knowledge-mcqa-v2", convert_knowledge_mcqa),
                 version="2",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

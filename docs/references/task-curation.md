@@ -208,21 +208,36 @@ fingerprints and grader execution. It records declared grader images or local
 dependency locks without building environments. Its parquet output is
 unreviewed and unverified, with no admitted `final/` view.
 
-SWE-smith and SWE-rebench repository tasks carry an unresolved `DockerBuildContext` in both
-actor and verifier requirements. The context preserves source files and adds
-the public dependency setup and bundled verifier package. Conversion does not
-build the image or claim that mutable upstream tags are reproducible. Runtime
-entry points reject unresolved contexts before selecting a machine; execution
-requires a later resolver to replace each recipe with a real image digest.
-The repository submission is the complete `/testbed` directory, with trusted
-tests restored privately before grading. Original configuration patches and
-solution scripts remain oracle resources.
+SWEsmith and SWE-rebench repository tasks carry unresolved `DockerBuildContext`
+recipes for both actor and verifier. The actor recipe retains the source
+environment, adds the legacy dependency fixes and installs the bundled verifier.
+Public setup instructions remain work for the actor. The canonical ScriptGrader
+runs in a fresh machine, so its separate recipe also prepares that public setup
+when declared. It receives the complete `/testbed` submission and restores
+trusted tests before grading. Original configuration patches and solution
+scripts remain oracle resources.
 
-SWE-rebench preserves its private trusted-test installers and applies the hidden
-test patch before grading. Python tasks use pytest; retained non-Python tasks
-use the source parser with exit-code-only credit removed. Package installation
-moves into the deferred image build. The source's JavaScript/TypeScript exclusions
-and unsupported Python test contracts remain explicit conversion rejections.
+The TaskTrove Harbor export uses the legacy shared environment for these SWE
+tasks. It retains the actor recipe and runs the verifier against the actor's
+workspace, including dependencies installed during the task. It does not build
+the canonical fresh grader recipe or transfer the repository to another
+container. Export writes build inputs without building or running images.
+Canonical runtime entry points still reject unresolved contexts; execution
+requires a resolver to replace each recipe with an image digest. Mutable source
+tags and build-time downloads are not made reproducible by preserving a recipe.
+
+For Python SWE-rebench tasks, the Verifyit pytest spec restores trusted paths
+and applies the hidden test patch during grading. Retained non-Python tasks use
+the source parser with exit-code-only credit removed and its parser runtime
+prepared in the image. JavaScript/TypeScript exclusions and unsupported Python
+test contracts remain explicit conversion rejections.
+
+TaskTrove declarations also retain the manually reviewed source/path defects
+in `datasets/tasktrove/source_defects.py`. QUICK rejects these known defective
+rows without rerunning expensive validation. This preserves those individual
+decisions; QUICK still skips release-wide deduplication and dynamic checks.
+Non-SWE exports currently use curation environments, so their conversion counts
+alone do not establish legacy environment, grader, or filtering parity.
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' \

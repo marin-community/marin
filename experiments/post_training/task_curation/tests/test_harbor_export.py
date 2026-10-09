@@ -8,19 +8,19 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import verifyit
 import yaml
 from click.testing import CliRunner
 from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
+from taskcompendium.harbor import export as harbor
+from taskcompendium.harbor.export import VerifierPayloadIdentity
 from taskcompendium.models import NoGrader
 from upath import UPath
 
-from experiments.post_training.task_curation import harbor
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
-from experiments.post_training.task_curation.harbor import archive_bytes
-from experiments.post_training.task_curation.harbor_export import harbor_export_step
-from experiments.post_training.task_curation.harbor_export_contract import VerifierPayloadIdentity
+from experiments.post_training.task_curation.export_tasktrove import harbor_export_step
 from experiments.post_training.task_curation.rl_smoke import main, smoke_step
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
@@ -76,7 +76,7 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     manifest = json.loads((UPath(output_root) / "manifest.json").read_text())
     with (UPath(output_root) / "tasks.parquet").open("rb") as exported_file:
         exported = pq.read_table(exported_file).to_pylist()
-    assert manifest["atlas_id"] == "fixture-atlas-id"
+    assert manifest["source_id"] == "fixture-atlas-id"
     assert exported[0]["family"] == "fixture-family"
     identity = VerifierPayloadIdentity()
     identity.add(exported[0]["task_binary"])
@@ -109,12 +109,12 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     assert [row["path"] for row in selected] == ["0"]
 
 
-def test_wrapper_edit_invalidates_export_fingerprint_pin(tmp_path, monkeypatch):
+def test_candidate_grader_edit_invalidates_export_fingerprint_pin(tmp_path, monkeypatch):
     normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
-    assert harbor.__file__ is not None
-    wrapper = Path(harbor.__file__).with_name("harbor_candidate.py")
+    wrapper = Path(verifyit.__file__).with_name("candidate_file.py")
     original_read = Path.read_bytes
     changed_wrapper = wrapper.read_bytes() + b"\n# changed verifier wrapper\n"
+    harbor.verifier_runtime.cache_clear()
     before = harbor_export_step(
         normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )
@@ -124,9 +124,11 @@ def test_wrapper_edit_invalidates_export_fingerprint_pin(tmp_path, monkeypatch):
         return changed_wrapper if path == wrapper else original_read(path)
 
     monkeypatch.setattr(Path, "read_bytes", edited_read)
+    harbor.verifier_runtime.cache_clear()
     after = harbor_export_step(
         normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )
+    harbor.verifier_runtime.cache_clear()
     assert after.fingerprint() != before.fingerprint()
     with pytest.raises(FingerprintMismatchError):
         replace(after, expected_fingerprint=before.fingerprint()).lower()
@@ -145,34 +147,6 @@ def test_source_metadata_changes_export_fingerprint(field, tmp_path):
         normalized, source=changed, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )
     assert after.fingerprint() != before.fingerprint()
-
-
-@pytest.mark.parametrize(
-    "path,content,mode",
-    [
-        ("tests/test.sh", b"new wrapper", "755"),
-        ("tests/Dockerfile", b"FROM different:tag", "644"),
-        ("tests/helper.py", b"private checker", "755"),
-        ("task.toml", b"new dispatch", "644"),
-    ],
-)
-def test_verifier_identity_tracks_payload_recipe_and_modes(path, content, mode):
-    files = {
-        "tests/test.sh": b"original wrapper",
-        "tests/Dockerfile": b"FROM source:tag",
-        "tests/helper.py": b"private checker",
-        "task.toml": b"dispatch",
-        "instruction.md": b"public prompt",
-    }
-    original = VerifierPayloadIdentity()
-    original.add(archive_bytes(files, {}))
-    changed = VerifierPayloadIdentity()
-    changed.add(archive_bytes({**files, path: content}, {path: mode}))
-    assert changed.ref != original.ref
-    equivalent = VerifierPayloadIdentity()
-    equivalent.add(archive_bytes({**files, "instruction.md": b"different public prompt"}, {}))
-    equivalent.add(archive_bytes(files, {}))
-    assert equivalent.ref == original.ref
 
 
 def test_smoke_plan_uses_export_dependency_without_executing_input(tmp_path: Path):

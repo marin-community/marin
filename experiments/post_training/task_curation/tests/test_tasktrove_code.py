@@ -228,6 +228,15 @@ def test_row_converts_to_declared_grader(name):
             ImportFailureKind.SOURCE_DEFECT,
             "null_grader",
         ),
+        (
+            "tasktrove-competitive_coding",
+            archive(
+                f"{SUM_PROMPT}\n\nExamples: `3 4` and `-5 3`.",
+                {"tests/verifier_data.json": json.dumps(SUM_CASES).encode()},
+            ),
+            ImportFailureKind.SOURCE_DEFECT,
+            "gold_in_instruction",
+        ),
         ("tasktrove-e2egit", archive(SUM_PROMPT, {}), ImportFailureKind.UNSUPPORTED, "unsupported_variant"),
         (
             "tasktrove-pymethods",

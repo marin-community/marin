@@ -221,7 +221,12 @@ rebuilt without repeating identical inference.
 
 Quick mode downloads each selected source's pinned files and converts every row into TaskSpec parquet.
 It skips model review, grader controls, resource admission, mechanical checks
-and deduplication. Explicit converter rejections remain. The output includes every
+and deduplication. Explicit converter rejections remain. TaskTrove declarations also
+retain the manually reviewed source/path exclusions in
+[`source_defects.py`](datasets/tasktrove/source_defects.py) as `source_defect`
+rejections; QUICK records these rows rather than dropping them before conversion.
+Competitive-coding tasks whose only grading inputs are public examples remain rejected.
+The output includes every
 input row in `normalize/`, with either `task_json` or a typed rejection, and
 counts and elapsed time in `manifest.json`. It has no admitted `final/` view.
 
@@ -273,7 +278,7 @@ Lower QUICK output to Task Trove's 12-column parquet format:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.harbor \
+  -m experiments.post_training.task_curation.export_tasktrove \
   --input-root /tmp/curation-quick/tasktrove-calendar \
   --output-root /tmp/curation-harbor/calendar \
   --grader-image '<registry/image>@sha256:<digest>'
@@ -307,9 +312,11 @@ inputs retain their conversion-only status; exporting them adds no runtime
 verification. The smoke graph does not construct the legacy TaskTrove pipeline.
 
 The source name in the QUICK manifest selects the registry declaration, which
-supplies the exported family and Atlas ID. For tasks without a verifier build
-recipe, the verifier base image is an explicit runtime input. It must contain the dependencies required by the task's grader
-package lock. Export emits `tests/Dockerfile` from that pinned base and copies
+supplies the exported family and source ID. Reusable lowering and comparison live
+in `taskcompendium.harbor`; this entrypoint owns registry selection and artifact
+binding. For tasks without a verifier build recipe, the verifier base image is
+an explicit runtime input. It must contain the dependencies required by the
+task's grader package lock. Export emits `tests/Dockerfile` from that pinned base and copies
 the private tests into `/tests`; native Harbor builds this separate verifier
 environment when the task runs. Export itself does not build or run images.
 Its manifest records that builds, dependency parity, and runtime behavior remain
@@ -322,12 +329,16 @@ remain grading errors. Text tasks retain their canonical TaskSpec
 prompt and gain a file-delivery instruction using the grader's declared answer
 path. Export does not need the archived instruction or its delivery filename.
 
-Repository state tasks with declared actor and verifier build contexts carry
-both recipes into the export and can omit `--grader-image`. Their complete
-`/testbed` repository is transferred into the separate verifier before trusted
-test restoration. Initial public files never overwrite that captured tree, and
-a missing repository fails before grading. Other directory or artifact-transfer
-contracts remain explicit export rejections.
+SWEsmith and SWE-rebench are the first compatibility cohort. Their repository
+state tasks retain the source actor recipe and run the archived grader in
+Harbor's shared environment, matching the original repository execution model.
+They can omit `--grader-image`; no repository copy enters a
+second verifier image. Other directory or artifact-transfer contracts remain
+explicit export rejections.
+
+Non-repository sources currently use curation actor images and a separate
+verifier image. Their TaskSpec export does not establish environment, grader,
+or filtering parity with the legacy TaskTrove conversion.
 
 In-process exact, math, JSON-schema, MCQ, IFEval, XML-element, and CSV-column
 graders also run in the supplied verifier image after export. The complete
@@ -337,9 +348,10 @@ and schema files remain private verifier resources. Other contracts produce
 explicit rejection records. Rejections from normalization remain in the export
 manifest.
 
-Each task keeps its source, original archive path, and TaskSpec ID. The agent image
-contains only public resources; the verifier runs separately and receives the
-declared output files. Oracle files are stored in `solution_binary`. Generated
+Each task keeps its source, original archive path, and TaskSpec ID. Agent build
+inputs contain only public resources. Separate verifiers receive the declared
+output files; shared repository verifiers run against the agent workspace.
+Oracle files are stored in `solution_binary`. Generated
 `task.toml` files are parsed with Harbor's native configuration model.
 
 Compare the output with a downloaded, pinned release manifest:
@@ -350,7 +362,7 @@ and pass that same commit to `--golden-revision`.
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.compare_harbor \
+  -m taskcompendium.harbor.compare \
   --tasks /tmp/curation-harbor/calendar/tasks.parquet \
   --source laion__nemotron-gym-agent-calendar-v2 \
   --golden-manifest /path/to/tasktrove-manifest.json \

@@ -24,7 +24,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import (
     VERIFYIT_PACKAGE,
     WORKSPACE,
@@ -119,7 +119,7 @@ def repository_source(
         pipeline=RlDataPipeline(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
-            convert=convert,
+            convert=TaskTroveConverter(config, convert),
             version=version,
             ships=ships,
             environment=ShellSim(),
@@ -136,7 +136,7 @@ def sources() -> list[RlDataSource]:
             "DCAgent__swe_rebench_v2_patched_oracle-v2",
             SWE_REBENCH_RUBRIC,
             convert=convert_swe_rebench_task,
-            version="2",
+            version="3",
             ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
@@ -175,7 +175,7 @@ def sources() -> list[RlDataSource]:
             "laion__swesmith-oracle-filtered-v2",
             SWESMITH_RUBRIC,
             convert=convert_swesmith_task,
-            version="3",
+            version="4",
             ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:laion__swesmith-oracle-filtered-v2",

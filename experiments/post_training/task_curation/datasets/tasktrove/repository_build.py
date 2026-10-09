@@ -3,11 +3,12 @@
 
 """Deferred repository images and private workspace graders."""
 
+import re
 from functools import cache
 from pathlib import Path
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH_REWARD, TaskFiles
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH_REWARD, UV_IMAGE, TaskFiles
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -29,11 +30,15 @@ VERIFYIT_PACKAGE = Path(__file__).resolve().parents[5] / "lib/verifyit"
 VERIFYIT_CONTEXT = "taskcompendium-verifyit"
 PUBLIC_SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 REPOSITORY_SETUP = "taskcompendium-repository-setup.sh"
-GRADER_SETUP = "taskcompendium-grader-setup.sh"
-VERIFYIT_INSTALL = f"""
+VERIFYIT_INSTALL = (
+    "# --- verifyit ---\n"
+    "RUN command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git"
+    " && rm -rf /var/lib/apt/lists/*)\n"
+    f"""COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
 COPY {VERIFYIT_CONTEXT}/ /opt/taskcompendium-verifyit/
-RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python 3.12 /opt/taskcompendium-verifyit
+RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python ">=3.11" /opt/taskcompendium-verifyit
 """
+)
 VERIFIER_SPEC = "taskcompendium-verifier.toml"
 VERIFYIT_SCRIPT = f"#!/bin/bash\nset -euo pipefail\nexec verifyit /tests/{VERIFIER_SPEC}\n".encode()
 
@@ -58,25 +63,11 @@ def repository_build_task(
     verifier: tuple[TaskResource, ...],
     tags: tuple[str, ...],
     changes: tuple[NormalizationChange, ...] = (),
-    grader_setup: str = "",
 ) -> NormalizedTask | ImportRejection:
-    """Carry public setup into an unresolved image and grade a private copy of the workspace."""
-    instruction = files.text("instruction.md")
-    if not instruction.startswith(PUBLIC_SETUP_PREFIX):
-        return unsupported("unsupported_repository_setup", "Expected the source's explicit Environment Setup bash block")
-    setup, end, _ = instruction.removeprefix(PUBLIC_SETUP_PREFIX).partition("\n```")
-    if not end:
-        return unsupported("unsupported_repository_setup", "Environment Setup bash block is not closed")
+    """Keep the legacy actor recipe and declare a fresh workspace grading environment."""
     original_dockerfile = files.text(DOCKERFILE)
-    dockerfile += VERIFYIT_INSTALL
-    if task.resources.worker:
-        dockerfile += "COPY taskcompendium-public/ /\n"
-    dockerfile += (
-        f"COPY {REPOSITORY_SETUP} /opt/{REPOSITORY_SETUP}\n"
-        f"RUN bash -e /opt/{REPOSITORY_SETUP} && rm -rf {WORKSPACE} && mkdir -p {WORKSPACE}\n"
-    )
-    if grader_setup:
-        dockerfile += f"COPY {GRADER_SETUP} /opt/{GRADER_SETUP}\nRUN bash -e /opt/{GRADER_SETUP}\n"
+    body = re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in dockerfile.splitlines())).strip("\n")
+    dockerfile = body + "\n\n" + VERIFYIT_INSTALL
     # Original environment bytes stay with provenance; the edited recipe is an environment input.
     context_files = tuple(
         resource.model_copy(
@@ -93,25 +84,36 @@ def repository_build_task(
         if resource.path.startswith("environment/")
     )
     if any(
-        resource.path.startswith((VERIFYIT_CONTEXT, "taskcompendium-public", REPOSITORY_SETUP, GRADER_SETUP))
+        resource.path.startswith((VERIFYIT_CONTEXT, "taskcompendium-public", REPOSITORY_SETUP))
         for resource in context_files
     ):
         return unsupported("build_context_collision", "Source context occupies the bundled verifier path")
-    public_context = tuple(
-        resource.model_copy(update={"path": "taskcompendium-public/" + resource.path})
-        for resource in task.resources.worker
-    )
-    environment = EnvironmentRequirements(
-        docker_build=DockerBuildContext(
-            files=(
-                *context_files,
-                *verifyit_build_files(),
-                *public_context,
+    actor_build = DockerBuildContext(files=(*context_files, *verifyit_build_files()))
+    # Canonical ScriptGrader uses a fresh machine. Its dependencies must be prepared without
+    # changing the actor recipe that the legacy shared-environment exporter consumes.
+    instruction = files.text("instruction.md")
+    setup, end, _ = instruction.removeprefix(PUBLIC_SETUP_PREFIX).partition("\n```")
+    grader_files = list(actor_build.files)
+    if instruction.startswith(PUBLIC_SETUP_PREFIX) and end:
+        grader_dockerfile = dockerfile
+        if task.resources.worker:
+            grader_dockerfile += "COPY taskcompendium-public/ /\n"
+            grader_files.extend(
+                resource.model_copy(update={"path": "taskcompendium-public/" + resource.path})
+                for resource in task.resources.worker
+            )
+        grader_dockerfile += (
+            f"COPY {REPOSITORY_SETUP} /opt/{REPOSITORY_SETUP}\n"
+            f"RUN bash -e /opt/{REPOSITORY_SETUP} && rm -rf {WORKSPACE} && mkdir -p {WORKSPACE}\n"
+        )
+        grader_files = [resource for resource in grader_files if resource.path != "Dockerfile"]
+        grader_files.extend(
+            (
+                inline_resource("Dockerfile", grader_dockerfile.encode()),
                 inline_resource(REPOSITORY_SETUP, setup.encode()),
-                *((inline_resource(GRADER_SETUP, grader_setup.encode()),) if grader_setup else ()),
             )
         )
-    )
+    environment = EnvironmentRequirements(docker_build=DockerBuildContext(files=tuple(grader_files)))
     verifier = (
         *verifier,
         inline_resource(VERIFIER_SPEC, render_spec(spec).encode()),
@@ -134,7 +136,7 @@ def repository_build_task(
         task.model_copy(
             update={
                 "environment_requirements": task.environment_requirements.model_copy(
-                    update={"docker_build": environment.docker_build}
+                    update={"docker_build": actor_build}
                 ),
                 "answer_type": AnswerType.WORKSPACE_STATE,
                 "grader": grader,

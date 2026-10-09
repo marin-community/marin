@@ -23,7 +23,7 @@ from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -221,7 +221,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-ifeval",
                 source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
-                convert=convert_ifeval,
+                convert=TaskTroveConverter("laion__nemotron-gym-instruction-following-v3", convert_ifeval),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
@@ -241,7 +241,9 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-structured",
                 source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
-                convert=convert_structured,
+                convert=TaskTroveConverter(
+                    "laion__nemotron-gym-instruction-following-structured-v3", convert_structured
+                ),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
