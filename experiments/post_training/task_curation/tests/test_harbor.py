@@ -10,13 +10,15 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from taskcompendium.models import NoGrader
 from taskcompendium.pipeline.models import NormalizedTask
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
-from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, UnsupportedHarborTask, harbor_record
+from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, harbor_record, main
+from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tests.conversion import convert_row
 from experiments.post_training.tasktrove.publish import TASKS_SCHEMA as RELEASE_SCHEMA
 
@@ -37,11 +39,13 @@ def archive_files(blob: bytes) -> dict[str, bytes]:
 @pytest.fixture(params=[("calendar", calendar), ("math_prism", math), ("stack_pytest", python_tests)])
 def normalized_row(request) -> tuple[dict, NormalizedTask]:
     name, module = request.param
-    pipeline = next(pipeline for pipeline in module.pipelines() if pipeline.name == f"tasktrove-{name}")
+    source = next(source for source in module.sources() if source.name == f"tasktrove-{name}")
+    pipeline = source.pipeline
+    assert pipeline is not None
     source_path = f"{name}-original.tar.gz"
     converted = convert_row(pipeline, {"path": source_path, "task_binary": (FIXTURES / f"{name}.tar.gz").read_bytes()})
     assert isinstance(converted, NormalizedTask)
-    config = pipeline.atlas_id.removeprefix("Task Trove:")
+    config = source.metadata.name
     return {
         "task_id": converted.task.id,
         "task_json": converted.task.model_dump_json(),
@@ -98,8 +102,29 @@ def test_harbor_comparison_reports_population_difference_without_claiming_runtim
     assert report["harbor_configs_valid"] and report["oracle_solutions_separate"]
 
 
-def test_harbor_export_does_not_replace_unavailable_grader_with_passing_stub(normalized_row) -> None:
+def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
     row, converted = normalized_row
-    unavailable = converted.task.model_copy(update={"grader": NoGrader(reason="Needs source validation")})
-    with pytest.raises(UnsupportedHarborTask, match="Unsupported grader: none"):
-        harbor_record({**row, "task_json": unavailable.model_dump_json()}, grader_image=GRADER_IMAGE, family="fixture")
+    source = all_sources()["Task Trove:" + row["source_row"].split("/", 1)[0]]
+    unsupported = converted.task.model_copy(update={"grader": NoGrader(reason="Needs source validation")})
+    input_root, output_root = tmp_path / "input", tmp_path / "output"
+    normalized = input_root / "normalize"
+    normalized.mkdir(parents=True)
+    (input_root / "manifest.json").write_text(json.dumps({"source": source.name}))
+    pq.write_table(
+        pa.Table.from_pylist([row, {**row, "task_id": "unavailable", "task_json": unsupported.model_dump_json()}]),
+        normalized / "part-00000.parquet",
+    )
+    result = CliRunner().invoke(
+        main,
+        ["--input-root", str(input_root), "--output-root", str(output_root), "--grader-image", GRADER_IMAGE],
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads((output_root / "manifest.json").read_text())
+    assert (report["input_rows"], report["exported_rows"], report["rejected_rows"]) == (2, 1, 1)
+    assert report["rejections"] == [
+        {"task_id": "unavailable", "path": row["original_path"], "reason": "Unsupported grader: none"}
+    ]
+    exported = pq.read_table(output_root / "tasks.parquet").to_pylist()
+    assert len(exported) == 1
+    assert exported[0]["family"] == source.metadata.family
+    assert report["atlas_id"] == source.metadata.id

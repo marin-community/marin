@@ -191,8 +191,8 @@ rebuilt without repeating identical inference.
 ## Local conversion loop
 
 Quick mode converts every selected row from staged files into TaskSpec parquet.
-It skips model review, grader controls, mechanical checks and deduplication.
-Converter rejections and resource limits still apply. The output includes every
+It skips model review, grader controls, resource admission, mechanical checks
+and deduplication. Explicit converter rejections remain. The output includes every
 input row in `normalize/`, with either `task_json` or a typed rejection, and
 counts and elapsed time in `manifest.json`. It has no admitted `final/` view.
 
@@ -214,10 +214,11 @@ Choose a fresh output root for each pass; existing source outputs are refused.
 Failures are recorded in `campaign.json` while the remaining sources continue;
 the command exits unsuccessfully if any source failed.
 
-`pipeline.convert_source(source, mode=SourceProcessingMode.QUICK, ...)` is the
-shared entry point for staged data. `SAMPLE` and `FULL` use the same function
-with a matching `SourcePipelineConfig` and the resolved grader environment;
-reviewed campaign artifacts call it too. Quick mode needs no review config or
+`conversions.convert_source(source, mode=SourceProcessingMode.QUICK, ...)`
+accepts an `RlDataSource` from `all_sources()` and runs its bound conversion recipe.
+`SAMPLE` and `FULL` use the same function with a matching `SourcePipelineConfig`
+and the resolved grader environment. This entry point and reviewed campaign
+artifacts share the `pipeline.convert_pipeline` dispatcher. Quick mode needs no review config or
 credentials. It records a declared grader image or local dependency lock
 without building or executing the environment. Sources that declare only PyPI
 pins need an explicit resolved grader environment before quick conversion.
@@ -236,12 +237,13 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.harbor \
   --input-root /tmp/curation-quick/tasktrove-calendar \
   --output-root /tmp/curation-harbor/calendar \
-  --family scheduling \
   --grader-image '<registry/image>@sha256:<digest>'
 ```
 
-The verifier image is an explicit runtime input. It must contain the dependencies
-required by the task's grader package lock. Export does not build or run images;
+The source name in the QUICK manifest selects the registry declaration, which
+supplies the exported family and Atlas ID. The verifier image is an explicit
+runtime input. It must contain the dependencies required by the task's grader
+package lock. Export does not build or run images;
 its manifest records that dependency parity and runtime behavior remain
 unverified. Current verifyit code is bundled under the hidden `tests/` directory.
 The exporter supports plain-text answers with recorded original file-delivery

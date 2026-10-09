@@ -18,9 +18,9 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.writers import write_parquet_file
 
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
-from taskcompendium.pipeline.models import SourceRecipe
+from taskcompendium.pipeline.models import ImportRejection, RawRow, SourceRecipe
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_file_rows
-from taskcompendium.pipeline.transforms import normalize_row
+from taskcompendium.pipeline.transforms import convert_row, row_source, row_task_id
 
 CONVERSION_COLUMNS = (
     "task_id",
@@ -49,20 +49,23 @@ class ConversionResult:
 
 
 def _conversion_row(record: dict[str, Any], *, recipe: SourceRecipe) -> dict[str, Any]:
-    audit = normalize_row(record, recipe)["audit"]
-    rejection = audit["normalization_rejection"]
-    task = audit["normalized"]
+    source = row_source(recipe, record["locator"])
+    task_id = row_task_id(recipe, source)
+    result = convert_row(RawRow(task_id, source, record["data"]), recipe)
+    rejection = result if isinstance(result, ImportRejection) else None
     return {
-        "task_id": audit["task_id"],
-        "source_dataset": audit["source"]["dataset"],
-        "source_revision": audit["source"]["revision"],
-        "source_row": audit["source"]["row"],
+        "task_id": task_id,
+        "source_dataset": source.dataset,
+        "source_revision": source.revision,
+        "source_row": source.row,
         "original_path": record["data"].get("path"),
-        "task_json": json.dumps(task, ensure_ascii=False, allow_nan=False) if task is not None else None,
-        "normalization_kind": rejection["kind"] if rejection else None,
-        "normalization_reason": rejection["reason"] if rejection else None,
-        "normalization_detail": rejection["detail"] if rejection else None,
-        "normalization_changes": audit["normalization_changes"],
+        "task_json": None if isinstance(result, ImportRejection) else result.task.model_dump_json(),
+        "normalization_kind": rejection.kind.value if rejection else None,
+        "normalization_reason": rejection.reason if rejection else None,
+        "normalization_detail": rejection.detail if rejection else None,
+        "normalization_changes": (
+            [] if isinstance(result, ImportRejection) else [change.model_dump(mode="json") for change in result.changes]
+        ),
     }
 
 
@@ -90,7 +93,7 @@ def run_conversion(
 ) -> ConversionResult:
     """Convert every selected staged row, retaining tasks and typed conversion rejections.
 
-    Model review, deduplication, mechanical checks and grader controls do not run.
+    Model review, resource budgets, deduplication, mechanical checks and grader controls do not run.
     The output is unreviewed and has no production admission or ``final/`` view.
     Existing outputs are rejected so a failed rerun cannot mix old and new shards.
     """

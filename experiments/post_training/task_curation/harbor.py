@@ -37,6 +37,7 @@ from verifyit.spec import render_spec
 
 from experiments.post_training.task_curation.environment import PINNED_IMAGE
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
+from experiments.post_training.task_curation.sources import all_sources
 
 
 class UnsupportedHarborTask(ValueError):
@@ -233,8 +234,11 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     )
 
 
-def export_harbor(input_root: Path, output_root: Path, *, grader_image: str, family: str) -> dict[str, Any]:
+def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
+    manifest = json.loads((input_root / "manifest.json").read_text())
+    sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
+    source = sources[manifest["source"]]
     output_root.mkdir(parents=True, exist_ok=False)
     rejected = []
     input_count, exported_count = 0, 0
@@ -252,7 +256,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str, fam
                     reason = row["normalization_reason"] if row["task_json"] is None else None
                     if row["task_json"] is not None:
                         try:
-                            record = harbor_record(row, grader_image=grader_image, family=family)
+                            record = harbor_record(row, grader_image=grader_image, family=source.metadata.family)
                         except UnsupportedHarborTask as error:
                             reason = str(error)
                         else:
@@ -269,6 +273,8 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str, fam
         "by_source": dict(counts),
         "rejections": rejected,
         "grader_image": grader_image,
+        "source": source.name,
+        "atlas_id": source.metadata.id,
         "harbor_config_validated": True,
         "runtime_verified": False,
         "limitation": "The supplied verifier image's dependency parity with the source package lock is unverified.",
@@ -281,9 +287,8 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str, fam
 @click.option("--input-root", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
 @click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
 @click.option("--grader-image", required=True, help="Explicit digest-pinned verifier image; image builds are separate.")
-@click.option("--family", required=True)
-def main(input_root: Path, output_root: Path, grader_image: str, family: str) -> None:
-    result = export_harbor(input_root, output_root, grader_image=grader_image, family=family)
+def main(input_root: Path, output_root: Path, grader_image: str) -> None:
+    result = export_harbor(input_root, output_root, grader_image=grader_image)
     click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))
 
 

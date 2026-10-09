@@ -26,6 +26,7 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
+| `experiments/post_training/task_curation/conversions.py`, `quick.py` | Source-level mode dispatch and local mechanical conversion |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
@@ -73,7 +74,7 @@ The `RlDataPipeline` recipe has these fields:
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
-| `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
+| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
@@ -190,7 +191,36 @@ task the panel converts is judge-graded, verification samples nothing and
 records `skipped` with reason `judge grader; no control path yet`, and kept rows
 are admitted like rows of in-process graders.
 
+## Conversion modes
+
+`conversions.convert_source(source, mode=SourceProcessingMode.QUICK, ...)`
+accepts an `RlDataSource` from `all_sources()` and staged input paths on an
+entered Zephyr context. `SAMPLE` and `FULL` use the same entry point with a
+matching `SourcePipelineConfig` and resolved grader environment.
+
+Quick mode converts every selected row and preserves explicit converter
+rejections. It skips resource admission, review, deduplication, content
+fingerprints and grader execution. It records declared grader images or local
+dependency locks without building environments. Its parquet output is
+unreviewed and unverified, with no admitted `final/` view.
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' \
+  python -m experiments.post_training.task_curation.quick \
+  --source tasktrove-calendar --input-root /path/to/staged/tasktrove \
+  --output-root /tmp/task-curation-pass-1
+```
+
+Use staged bytes from the declared revision and a fresh output root for each
+pass. The local command retains TaskSpecs and rejections under `normalize/`,
+counts and elapsed time in `manifest.json`, and source outcomes in
+`campaign.json`. Failed sources do not stop the remaining conversions. See the
+[local conversion loop](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#local-conversion-loop)
+for auxiliary inputs and comparison guidance.
+
 ## Source procedure
+
+Sample and full modes run the reviewed procedure below.
 
 1. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).

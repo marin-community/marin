@@ -70,6 +70,24 @@ def _within_budget(task: TaskSpec, budget: int) -> TaskSpec | ImportRejection:
     )
 
 
+def convert_row(row: RawRow, recipe: SourceRecipe) -> NormalizedTask | ImportRejection:
+    """Convert one source row, retaining rewrites and enforcing its supplied identity.
+
+    Resource admission and content fingerprints belong to the reviewed pipeline,
+    so mechanical conversion can call this without performing those checks.
+    """
+    try:
+        result = recipe.convert(row, conversion_context(recipe))
+    except ValidationError as error:
+        return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
+    if isinstance(result, ImportRejection):
+        return result
+    normalized = result if isinstance(result, NormalizedTask) else NormalizedTask(result, ())
+    if normalized.task.id != row.id or normalized.task.source != row.source:
+        raise ValueError("A converter must retain its supplied task identity and source provenance")
+    return normalized
+
+
 def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
     source = row_source(recipe, record["locator"])
     task_id = row_task_id(recipe, source)
@@ -79,10 +97,7 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
         "raw_sha256": canonical_sha256(record["data"]),
         "data": record["data"],
     }
-    try:
-        result = recipe.convert(RawRow(task_id, source, record["data"]), conversion_context(recipe))
-    except ValidationError as error:
-        result = ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
+    result: TaskSpec | NormalizedTask | ImportRejection = convert_row(RawRow(task_id, source, record["data"]), recipe)
     audit = TaskAudit(
         task_id=task_id,
         source=source,
@@ -114,8 +129,6 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
             }
         )
     else:
-        if result.id != task_id or result.source != source:
-            raise ValueError("A converter must retain its supplied task identity and source provenance")
         audit = audit.model_copy(update={"normalized": result})
         public_key = deduplication_key(result)
         semantic_key = semantic_digest(result, include_reference=True)

@@ -9,17 +9,23 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ResourceGroups, TaskSpec
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.conversion import run_conversion
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, ReviewRubric, SourceRecipe
+from taskcompendium.pipeline.transforms import normalize_row
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 
 def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     if not row.data["answer"]:
         return source_defect("missing_answer", "The source has no answer")
-    return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
+    task = exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
+    assert isinstance(task, TaskSpec)
+    return task.model_copy(
+        update={"resources": ResourceGroups(worker=(inline_resource("context.txt", b"color context"),))}
+    )
 
 
 def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_controls(tmp_path: Path):
@@ -39,6 +45,7 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
         intended_use=IntendedUse.TRAIN,
         rubric=ReviewRubric(id="colors", version="1", criteria=("Check correctness",)),
         controls=Controls(golden=reference_reply),
+        resource_budget_bytes=1,
     )
     with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         result = run_conversion(recipe, context, str(source), str(tmp_path / "output"))
@@ -50,6 +57,9 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
     tasks = [TaskSpec.model_validate_json(row["task_json"]) for row in records if row["task_json"]]
     assert tasks[0].context == tasks[1].context
     assert tasks[0].id != tasks[1].id
+    assert resource_bytes(tasks[0].resources.worker[0]) == b"color context"
+    reviewed = normalize_row({"locator": "rows.jsonl:0", "data": rows[0]}, recipe)
+    assert reviewed["audit"]["normalization_rejection"]["reason"] == "resources_over_budget"
     assert records[2]["normalization_reason"] == "missing_answer"
     manifest = json.loads(Path(result.manifest_path).read_text())
     assert manifest["reviewed"] is False

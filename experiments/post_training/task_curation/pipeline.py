@@ -252,7 +252,7 @@ def source_recipe(
     )
 
 
-def convert_source(
+def convert_pipeline(
     pipeline: RlDataPipeline,
     *,
     mode: SourceProcessingMode,
@@ -458,7 +458,7 @@ def _run_source(
     if pipeline.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
-    result = convert_source(
+    result = convert_pipeline(
         pipeline,
         mode=config.mode,
         context=campaign.context,

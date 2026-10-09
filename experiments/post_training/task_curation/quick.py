@@ -11,22 +11,25 @@ from pathlib import Path
 import click
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import (
     CampaignFailed,
     CampaignStatus,
+    OutcomeStatus,
     SourceOutcome,
     campaign_report,
     error_chain,
 )
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, convert_source
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.conversions import convert_source
+from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.sources import all_sources
 
 
 def run_local_sources(
-    sources: Mapping[str, RlDataPipeline],
+    sources: Mapping[str, RlDataSource],
     input_root: Path,
     output_root: Path,
     *,
@@ -37,7 +40,7 @@ def run_local_sources(
     input_root, output_root = input_root.resolve(), output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     report_path = output_root / "campaign.json"
-    outcomes = {name: SourceOutcome(name, str(output_root / name), "queued") for name in sources}
+    outcomes = {name: SourceOutcome(name, str(output_root / name), OutcomeStatus.QUEUED) for name in sources}
 
     def report(status: CampaignStatus) -> None:
         report_path.write_text(
@@ -53,7 +56,7 @@ def run_local_sources(
         name="task-curation-quick",
     ) as context:
         for name, source in sources.items():
-            outcomes[name] = SourceOutcome(name, str(output_root / name), "running")
+            outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.RUNNING)
             report(CampaignStatus.RUNNING)
             try:
                 result = convert_source(
@@ -65,13 +68,13 @@ def run_local_sources(
                     inputs=inputs,
                 )
             except Exception as error:
-                outcomes[name] = SourceOutcome(name, str(output_root / name), "failed", error_chain(error))
+                outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.FAILED, error_chain(error))
                 click.echo(json.dumps(asdict(outcomes[name])), err=True)
             else:
-                outcomes[name] = SourceOutcome(name, str(output_root / name), "completed")
+                outcomes[name] = SourceOutcome(name, str(output_root / name), SourceStatus.COMPLETED)
                 click.echo(json.dumps({"source": name, **asdict(result)}))
             report(CampaignStatus.RUNNING)
-    failed = any(outcome.status == "failed" for outcome in outcomes.values())
+    failed = any(outcome.status == OutcomeStatus.FAILED for outcome in outcomes.values())
     report(CampaignStatus.FAILED if failed else CampaignStatus.COMPLETED)
     if failed:
         raise CampaignFailed(f"Quick conversion failed for some sources; see {report_path}")
@@ -91,7 +94,7 @@ def main(
     auxiliary: tuple[tuple[str, str], ...],
     max_workers: int,
 ) -> None:
-    catalog = all_pipelines()
+    catalog = {source.name: source for source in all_sources().values() if source.pipeline is not None}
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown sources: {', '.join(sorted(unknown))}")

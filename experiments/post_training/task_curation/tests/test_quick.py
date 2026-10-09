@@ -17,10 +17,16 @@ from experiments.post_training.task_curation.quick import run_local_sources
 
 
 def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp_path: Path):
-    source = calendar.pipelines()[0]
-    missing = replace(source, name="missing", source=replace(source.source, files=("missing.parquet",)))
+    source = calendar.sources()[0]
+    assert source.pipeline is not None
+    missing = replace(
+        source,
+        pipeline=replace(
+            source.pipeline, name="missing", source=replace(source.pipeline.source, files=("missing.parquet",))
+        ),
+    )
     input_root = tmp_path / "input"
-    staged = input_root / source.source.files[0]
+    staged = input_root / source.pipeline.source.files[0]
     staged.parent.mkdir(parents=True)
     blob = (Path(__file__).parent / "fixtures" / "calendar.tar.gz").read_bytes()
     pq.write_table(pa.Table.from_pylist([{"path": "calendar-fixture.tar.gz", "task_binary": blob}]), staged)
@@ -38,6 +44,6 @@ def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp
     assert records[0]["original_path"] == "calendar-fixture.tar.gz"
     task = TaskSpec.model_validate_json(records[0]["task_json"])
     assert isinstance(task.grader, ScriptGrader)
-    assert source.grader is not None and source.grader.lock is not None
-    assert task.grader.environment.packages_lock == str(source.grader.lock.resolve())
+    assert source.pipeline.grader is not None and source.pipeline.grader.lock is not None
+    assert task.grader.environment.packages_lock == str(source.pipeline.grader.lock.resolve())
     assert task.grader.answer_path == "/app/answer.txt"
