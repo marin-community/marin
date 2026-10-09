@@ -265,7 +265,7 @@ class Worker:
             self._token_provider = worker_token_provider(
                 self._config.controller_address,
                 self._config.auth_token,
-                self._cache_dir / "credentials" / "worker.jwt",
+                self._cache_dir,
             )
             interceptors = (BearerTokenInjector(self._token_provider, "authorization"),)
 

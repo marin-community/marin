@@ -42,7 +42,7 @@ def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
     if config.auth_token:
         interceptors = (
             BearerTokenInjector(
-                worker_token_provider(address, config.auth_token, Path(config.cache_dir) / "credentials" / "worker.jwt"),
+                worker_token_provider(address, config.auth_token, Path(config.cache_dir)),
                 "authorization",
             ),
         )

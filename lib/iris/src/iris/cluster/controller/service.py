@@ -175,7 +175,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.RenewWorkerTokenRequest,
         ctx: RequestContext,
     ) -> controller_pb2.Controller.RenewWorkerTokenResponse:
-        return workers.renew_worker_token(self._workers, request, ctx)
+        return workers.renew_worker_token(self._workers)
 
     def register(
         self,

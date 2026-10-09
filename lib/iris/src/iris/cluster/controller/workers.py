@@ -156,8 +156,6 @@ def _worker_health_status(
 
 def renew_worker_token(
     dependencies: WorkerDependencies,
-    request: controller_pb2.Controller.RenewWorkerTokenRequest,
-    context: RequestContext,
 ) -> controller_pb2.Controller.RenewWorkerTokenResponse:
     """Issue a fresh worker credential to an authenticated worker or admin."""
     authorize(AuthzAction.ACT_AS_WORKER)

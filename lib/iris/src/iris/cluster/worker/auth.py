@@ -13,7 +13,7 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 WORKER_TOKEN_REFRESH_MARGIN = 86400
 
 
-def worker_token_provider(controller_address: str, token: str, cache_path: Path) -> RefreshingTokenProvider:
+def worker_token_provider(controller_address: str, token: str, cache_dir: Path) -> RefreshingTokenProvider:
     def renew(current_token: str) -> str:
         # This exchange must use the current token directly, not recursively
         # invoke the provider which is waiting for the exchange to finish.
@@ -31,5 +31,5 @@ def worker_token_provider(controller_address: str, token: str, cache_path: Path)
         token,
         renew,
         refresh_margin=WORKER_TOKEN_REFRESH_MARGIN,
-        cache_path=cache_path,
+        cache_path=cache_dir / "credentials" / "worker.jwt",
     )

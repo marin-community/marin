@@ -924,8 +924,8 @@ def test_worker_renews_credential_before_endpoint_discovery(db, log_client, tmp_
         ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
             lambda: server.started, timeout=Duration.from_seconds(5)
         )
-        cache = tmp_path / "worker.jwt"
-        provider = worker_token_provider(address, bootstrap, cache)
+        cache = tmp_path / "credentials" / "worker.jwt"
+        provider = worker_token_provider(address, bootstrap, tmp_path)
         endpoint_client = EndpointServiceClientSync(
             address=address, interceptors=(BearerTokenInjector(provider, "authorization"),)
         )
@@ -941,6 +941,6 @@ def test_worker_renews_credential_before_endpoint_discovery(db, log_client, tmp_
         assert auth.verifier.verify(renewed).role == "worker"
         # A new process must reuse the renewed token rather than the old
         # bootstrap credential from the read-only worker configuration.
-        assert worker_token_provider(address, bootstrap, cache).get_token() == renewed
+        assert worker_token_provider(address, bootstrap, tmp_path).get_token() == renewed
     finally:
         threads.stop()
