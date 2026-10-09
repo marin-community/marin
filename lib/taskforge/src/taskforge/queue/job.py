@@ -1,0 +1,120 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The boundary between a run's configuration and the host it runs on.
+
+``run_job`` is the one entry point. It places the run root, copies the policy in, takes the machine
+factories for the host, builds the run's services, runs ``queue.run.run_queue`` and writes
+``summary.json``. The run's model (``RunModel``) comes from the caller: the client every build step
+calls, and the factory of each solver trial's rollout model. A run lives on a laptop; its ledger is
+the per-item JSONL files under the run root.
+"""
+
+import asyncio
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+from taskforge.atomic_file import write_atomic
+from taskforge.builder.sdk import BuildServices, ModelEndpoint
+from taskforge.builder.template import standard
+from taskforge.content_hash import pretty_json
+from taskforge.ledger.jsonl import JsonlLedger
+from taskforge.ledger.records import Ledger
+from taskforge.llm.policy import LLMPolicy
+from taskforge.loop.policy import POLICY
+from taskforge.loop.program import LEDGER_DIR, LoopServices
+from taskforge.proposal.source import ProposalSource
+from taskforge.queue.config import RunConfig
+from taskforge.queue.run import FailedItems, RunSummary, run_queue
+from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
+from taskforge.validate.solver import ModelFactory
+
+POLICY_FILE = "policy.json"
+SUMMARY_FILE = "summary.json"
+# Builders sample at the model maximum and continue on length; only validation rollouts may not continue.
+BUILD_POLICY = LLMPolicy()
+
+
+def run_root(config: RunConfig) -> Path:
+    """The run root on this host: ``config.root`` on a laptop.
+
+    Raises:
+        ValueError: the config names the Iris host.
+    """
+    if config.host is not MachineHost.LAPTOP:
+        raise ValueError(f"a {config.host} run root lives under $IRIS_OUTPUT_DIR; run_job runs on a laptop")
+    return config.root
+
+
+@dataclass(frozen=True)
+class RunInputs[IdeaT]:
+    """What a run takes beyond its config: its ideas, the source that proposes from them, and each idea's
+    record (``LoopServices.describe_idea``).
+
+    The capability layer supplies these for the capability catalog.
+    """
+
+    ideas: Mapping[str, IdeaT]
+    source: ProposalSource[IdeaT]
+    describe_idea: Callable[[IdeaT], Mapping[str, object]]
+
+
+type InputsFactory[IdeaT] = Callable[[ModelEndpoint, Path], RunInputs[IdeaT]]
+"""Builds a run's inputs from the run's model client and run root."""
+
+
+@dataclass(frozen=True)
+class RunModel:
+    """The run's model: the client every build step calls, and each solver trial's rollout model."""
+
+    client: ModelEndpoint
+    rollout_models: ModelFactory
+
+
+def prepare_root(config: RunConfig) -> Path:
+    """Place the run root on this host and copy the policy in."""
+    root = run_root(config)
+    root.mkdir(parents=True, exist_ok=True)
+    write_atomic(root / POLICY_FILE, POLICY.dump_json(config.policy, indent=2))
+    return root
+
+
+@asynccontextmanager
+async def loop_services[IdeaT](
+    config: RunConfig, model: RunModel, root: Path, ledger: Ledger, inputs: InputsFactory[IdeaT]
+) -> AsyncIterator[tuple[LoopServices[IdeaT], Mapping[str, IdeaT]]]:
+    """The run's ``LoopServices`` and ideas: the run's model, the host's factories, ``width`` slots.
+
+    Builders sample at ``BUILD_POLICY``.
+    """
+    factories = machine_factories(config.host, None, config.image_cache)
+    run_inputs = inputs(model.client, root)
+    services = LoopServices(
+        client=model.client,
+        source=run_inputs.source,
+        describe_idea=run_inputs.describe_idea,
+        template=standard,
+        build=BuildServices(
+            client=model.client, policy=BUILD_POLICY, host=config.host, factories=factories, ledger=ledger
+        ),
+        engine=config.engine.settings(factories, factory_capabilities(config.host)),
+        rollout_models=model.rollout_models,
+        ledger=ledger,
+        root=root,
+        slots=asyncio.Semaphore(config.width),
+    )
+    yield services, run_inputs.ideas
+
+
+async def run_job[IdeaT](
+    config: RunConfig, inputs: InputsFactory[IdeaT], failed: FailedItems, model: RunModel
+) -> RunSummary:
+    """Run ``config`` on this host to completion and write ``summary.json`` into the run root."""
+    root = prepare_root(config)
+    ledger = JsonlLedger(root / LEDGER_DIR)
+    async with loop_services(config, model, root, ledger, inputs) as (services, ideas):
+        summary = await run_queue(ideas, config.policy, services, failed)
+    write_atomic(root / SUMMARY_FILE, pretty_json({"run_id": config.run_id, **summary.summary_json()}).encode())
+    return summary

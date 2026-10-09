@@ -1,0 +1,41 @@
+{
+  "run_id": "capability-run-001",
+  "root": "/absolute/path/to/taskforge_run",
+  "host": "laptop",
+  "image_cache": "/absolute/path/to/taskforge_images",
+  "policy": {
+    "proposals_per_idea": 10,
+    "max_idea_reproposals": 1,
+    "max_build_revisions": 3,
+    "max_repairs": 2,
+    "max_validation_retries": 2,
+    "retry_backoff": {"initial": 60.0, "maximum": 900.0, "factor": 2.0, "jitter": 0.1},
+    "band_rules": {
+      "too_easy": {"repairs": 1, "then": "accept"},
+      "too_hard": {"repairs": 1, "then": "reject"}
+    },
+    "validation": {
+      "k": 8,
+      "band": {"min_solve_rate": 0.125, "max_solve_rate": 0.875},
+      "sampling": {
+        "max_tokens": 131072,
+        "reasoning_effort": "high",
+        "temperature": 0.7,
+        "stall_timeout": 600.0,
+        "max_continuations": 0
+      },
+      "deadlines": {"total_turn_timeout": 1800.0, "attempt_timeout": 2400.0},
+      "max_retries": 2,
+      "token_contract_retries": 2,
+      "retry_backoff": {"initial": 5.0, "maximum": 60.0, "factor": 2.0, "jitter": 0.1}
+    }
+  },
+  "engine": {
+    "max_turns": 40,
+    "command_timeout": 120.0,
+    "tool_turn_timeout": 240.0,
+    "model_turn_timeout": 1800.0,
+    "cleanup_timeout": 120.0
+  },
+  "width": 256
+}
