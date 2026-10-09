@@ -303,6 +303,7 @@ def _run_stage_with_ctx(
         shard_idx=task.shard_idx,
         scatter_op=scatter_op,
         total_shards=task.total_shards,
+        chunk_size=task.chunk_size,
     )
 
 

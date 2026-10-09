@@ -191,13 +191,14 @@ def _write_pickle_chunks(
     items: Iterator,
     source_shard: int,
     chunk_path_fn: Callable[[int], str],
+    chunk_size: int,
 ) -> ListShard:
     """Batch a plain item stream into pickle chunk files.
 
     Returns a ListShard containing PickleDiskChunk references.
     """
     chunks: list[Iterable] = []
-    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
+    for pidx, batch in enumerate(batchify(items, n=chunk_size)):
         chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
         chunks.append(chunk_ref)
         written = pidx + 1
@@ -219,6 +220,7 @@ def _write_stage_output(
     shard_idx: int,
     scatter_op: Scatter | None,
     total_shards: int,
+    chunk_size: int = INTERMEDIATE_CHUNK_SIZE,
 ) -> TaskResult:
     """Write stage output to disk.
 
@@ -255,7 +257,7 @@ def _write_stage_output(
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
 
-    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
+    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn, chunk_size))
 
 
 @dataclass
@@ -293,6 +295,7 @@ class ShardTask:
     cost: ZephyrTaskResources
     stage_name: str = "output"
     aux_shards: dict[int, ListShard] | None = None
+    chunk_size: int = INTERMEDIATE_CHUNK_SIZE
 
 
 class StageRunner(Protocol):

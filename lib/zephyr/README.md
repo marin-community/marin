@@ -38,7 +38,8 @@ Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_pa
 - `.filter(fn)` - filter items by function or expression
 - `.select(columna, columnb)` - select out the given columns
 - `.window(n)` - group into batches
-- `.reshard(n)` - redistribute across n shards
+- `.reshard(n, chunk_size=None)` - redistribute intermediate chunks across n shards;
+  set `chunk_size` to bound items per chunk before redistribution
 
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)

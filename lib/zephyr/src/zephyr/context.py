@@ -43,7 +43,7 @@ from zephyr.coordinator import (
     _try_read_coordinator_result,
 )
 from zephyr.dataset import Dataset
-from zephyr.plan import PhysicalPlan, compute_plan
+from zephyr.plan import PhysicalPlan, compute_plan, plan_nodes
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import (
     StageRunner,
@@ -518,7 +518,8 @@ class ZephyrContext:
             pool: _OwnedPool | None = None
             try:
                 self._upload_shared_data(execution_id)
-                needed_workers = math.ceil(plan.num_shards / tasks_per_worker)
+                max_shards = max(node.output_shards for node in plan_nodes(plan))
+                needed_workers = math.ceil(max_shards / tasks_per_worker)
                 pool = self._start_pool(
                     min(self._worker_limit(), needed_workers),
                     _IdleWorkerPolicy.DRAIN,

@@ -47,7 +47,13 @@ from zephyr.expr import Expr, referenced_columns
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
-from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
+from zephyr.writers import (
+    INTERMEDIATE_CHUNK_SIZE,
+    write_binary_file,
+    write_jsonl_file,
+    write_parquet_file,
+    write_vortex_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +296,7 @@ class PhysicalStage:
     operations: list[PhysicalOp] = field(default_factory=list)
     stage_type: StageType = StageType.MAP_WORKER
     output_shards: int | None = None
+    chunk_size: int = INTERMEDIATE_CHUNK_SIZE
 
     def stage_name(self, max_length: int | None = None) -> str:
         """Generate a descriptive name from operations.
@@ -533,7 +540,7 @@ class FusionState:
 
         self._set_stage_type(op)
 
-    def end_stage(self) -> None:
+    def end_stage(self, *, chunk_size: int = INTERMEDIATE_CHUNK_SIZE) -> None:
         """Flush pending ops and close current stage."""
         self.flush_pending()
         if self.current_ops:
@@ -542,6 +549,7 @@ class FusionState:
                     operations=self.current_ops[:],
                     stage_type=self.stage_type,
                     output_shards=self.output_shards,
+                    chunk_size=chunk_size,
                 )
             )
             self.current_ops = []
@@ -608,7 +616,14 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             state.add_op(Fold(fn=op.global_reducer))
 
         elif isinstance(op, ReshardOp):
-            state.end_stage()
+            if op.chunk_size is not None:
+                # A reshard directly after a source or another reshard still
+                # needs a worker stage to materialize chunks at the requested size.
+                if not state.current_ops and not state.pending_fusible:
+                    state.add_op(Map(fn=iter))
+                state.end_stage(chunk_size=op.chunk_size)
+            else:
+                state.end_stage()
             state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards)
             state.end_stage()
 

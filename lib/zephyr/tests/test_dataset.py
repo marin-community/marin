@@ -252,6 +252,31 @@ def test_reshard_noop(zephyr_ctx):
         Dataset.from_list(range(10)).reshard(0)
 
 
+@pytest.mark.parametrize("chunk_size,counts", [(1, [5, 4, 4]), (4, [5, 4, 4]), (20, [13, 0, 0])])
+def test_reshard_chunk_size_distributes_rows(zephyr_ctx, chunk_size, counts):
+    rows = [None, *range(11), None]
+
+    def collect_shard(items, info):
+        yield info.shard_idx, list(items)
+
+    ds = Dataset.from_list([rows]).flat_map(iter).reshard(3, chunk_size=chunk_size).map_shard(collect_shard)
+    shards = dict(zephyr_ctx.execute(ds).results)
+    assert [len(shards[i]) for i in range(3)] == counts
+    actual = [row for shard in shards.values() for row in shard]
+    assert actual.count(None) == 2
+    assert sorted(row for row in actual if row is not None) == list(range(11))
+
+
+def test_reshard_chunk_size_after_source_and_reshard(zephyr_ctx):
+    ds = Dataset.from_list(range(13)).reshard(1).reshard(3, chunk_size=4)
+    shards = zephyr_ctx.execute(ds.map_shard(lambda rows, _: [list(rows)])).results
+    assert sorted(len(shard) for shard in shards) == [4, 4, 5]
+    assert sorted(row for shard in shards for row in shard) == list(range(13))
+
+    direct = Dataset.from_list(range(13)).reshard(3, chunk_size=4)
+    assert sorted(zephyr_ctx.execute(direct).results) == list(range(13))
+
+
 def test_complex_pipeline(zephyr_ctx):
     """Test a more complex data processing pipeline."""
     ds = (

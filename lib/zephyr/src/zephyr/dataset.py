@@ -267,13 +267,10 @@ class MapShardOp:
 
 @dataclass
 class ReshardOp:
-    """Reshard operation - redistributes data across target number of shards.
-
-    This is best-effort. It merely re-arranges the set of chunks distributed across shards
-    as a metadata operation. It does not re-materialize the data.
-    """
+    """Redistribute chunks, optionally sizing the preceding stage's output chunks."""
 
     num_shards: int
+    chunk_size: int | None = None
 
     def __repr__(self):
         return f"ReshardOp(num_shards={self.num_shards})"
@@ -746,16 +743,25 @@ class Dataset(Generic[T]):
         """
         return cast("Dataset[R]", self._derive(MapShardOp(fn)))
 
-    def reshard(self, num_shards: int | None) -> "Dataset[T]":
+    def reshard(self, num_shards: int | None, *, chunk_size: int | None = None) -> "Dataset[T]":
         """Redistribute data across target number of shards (best-effort).
 
-        Changes parallelism for subsequent operations.
+        Distributes whole intermediate chunks round-robin. Set ``chunk_size``
+        to bound the preceding stage's output chunks when a few input shards
+        would otherwise leave subsequent workers idle. This materializes the
+        input once; it does not reread source files for each output shard.
+        Global row order is not preserved.
 
         Useful after operations that reduce parallelism (like filtering) or when
         starting with a small number of input files.
 
         Args:
             num_shards: Optional target number of shards, when None it's a no-op
+            chunk_size: Maximum items per intermediate chunk before redistribution.
+                None retains existing chunking (ordinary worker output uses
+                100,000 items per chunk). Smaller chunks allow finer
+                distribution but create more files. This counts dataset items,
+                so Arrow batches and lists each count as one item.
 
         Returns:
             New dataset with reshard operation appended or self if num_shards is None
@@ -766,14 +772,16 @@ class Dataset(Generic[T]):
             ...     .from_files("/input", "*.jsonl.gz")  # 3 files = 3 shards
             ...     .flat_map(load_jsonl)                 # Still 3 shards
             ...     .filter(lambda r: r["score"] > 0.9)  # Still 3 shards
-            ...     .reshard(num_shards=20)              # Redistribute to 20 shards
+            ...     .reshard(num_shards=20, chunk_size=1000)
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
             >>> output_files = ctx.execute(ds).results
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
-        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)]) if num_shards else self
+        if chunk_size is not None and chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        return Dataset(self.source, [*self.operations, ReshardOp(num_shards, chunk_size)]) if num_shards else self
 
     def write_jsonl(
         self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False
