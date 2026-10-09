@@ -172,6 +172,17 @@ def _truncate_bottom_directions(direction, m, frac: float):
     return out.astype(direction.dtype)
 
 
+def _blend_back(ortho: jax.Array | None, matrix: jax.Array | None, alpha: float) -> jax.Array | None:
+    """``(1 - alpha) ortho + alpha matrix ||ortho|| / ||matrix||`` per trailing matrix (``post_blend``)."""
+    if ortho is None or not hasattr(ortho, "ndim") or ortho.ndim < 2:
+        return ortho
+    o = ortho.astype(jnp.float32)
+    m = matrix.astype(jnp.float32)
+    o_norm = jnp.sqrt(jnp.sum(jnp.square(o), axis=(-2, -1), keepdims=True))
+    m_norm = jnp.sqrt(jnp.sum(jnp.square(m), axis=(-2, -1), keepdims=True))
+    return ((1.0 - alpha) * o + alpha * m * (o_norm / jnp.maximum(m_norm, 1e-12))).astype(ortho.dtype)
+
+
 def _grug_scale_with_muon(
     momentum=0.95,
     nesterov=True,
@@ -183,6 +194,7 @@ def _grug_scale_with_muon(
     top_shrink: float = 0.0,
     precond_beta2: float | None = None,
     truncate_frac: float = 0.0,
+    post_blend: float = 0.0,
 ):
     """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
 
@@ -194,7 +206,9 @@ def _grug_scale_with_muon(
     ``precond_beta2`` (Muon2, arXiv 2604.09967) divides the momentum elementwise by the root of a
     bias-corrected EMA of the squared gradient before Newton-Schulz; the state is then
     ``(ScaleByMuonState, count, second_moment)``. ``truncate_frac`` zeroes the weakest fraction of each
-    matrix's singular directions after Newton-Schulz (``_truncate_bottom_directions``).
+    matrix's singular directions after Newton-Schulz (``_truncate_bottom_directions``). ``post_blend`` mixes the
+    orthogonalized matrix ``U V^T`` with the matrix it came from, rescaled to the same Frobenius norm:
+    ``(1 - a) U V^T + a M ||U V^T|| / ||M||``, which gives the strong singular directions back some weight.
 
     With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
     each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
@@ -317,6 +331,10 @@ def _grug_scale_with_muon(
         if top_shrink:
             updates = jax.tree.map(
                 lambda o, m: _shrink_top_direction(o, m, top_shrink), updates, momentum_dirs, is_leaf=lambda x: x is None
+            )
+        if post_blend:
+            updates = jax.tree.map(
+                lambda o, m: _blend_back(o, m, post_blend), updates, momentum_dirs, is_leaf=lambda x: x is None
             )
         if truncate_frac:
             updates = jax.tree.map(

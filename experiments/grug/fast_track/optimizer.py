@@ -960,6 +960,7 @@ def scale_with_grug_muonh(
     top_shrink: float = 0.0,
     precond_beta2: float | None = None,
     truncate_frac: float = 0.0,
+    post_blend: float = 0.0,
     momentum_schedule=None,
     bimaxwell_switch_step: int | None = None,
     bimaxwell_rails: BiMaxwellRails = DEFAULT_RAILS,
@@ -1016,6 +1017,7 @@ def scale_with_grug_muonh(
         top_shrink=top_shrink,
         precond_beta2=precond_beta2,
         truncate_frac=truncate_frac,
+        post_blend=post_blend,
     )
     momentum_stage = (
         scale_by_muon_momentum(
@@ -1624,6 +1626,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Matrix type (``_TRUNCATE_FAMILIES``) whose MuonH updates drop their weakest ``muon_truncate_frac`` of
     singular directions (``_truncate_bottom_directions``). None: no truncation."""
     muon_truncate_frac: float = 0.0
+    muon_post_blend: float = 0.0
+    """MuonH: blend this fraction of the (norm-matched) pre-orthogonalization matrix back into the direction."""
+    muonh_routed_post_blend: float | None = None
+    """``muon_post_blend`` for the routed experts only (None: ``muon_post_blend``)."""
     eig_families: tuple[str, ...] = ()
     """Matrix types (``_TRUNCATE_FAMILIES``) whose MuonH direction is replaced by an eigenbasis variant
     (``eig_muon.scale_by_eig_direction``, mode ``eig_mode``), still taken as a hyperball step."""
@@ -1886,8 +1892,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 rails: BiMaxwellRails | None = None,
                 switch_step: int | None = None,
                 truncate_frac: float = 0.0,
+                post_blend: float | None = None,
             ):
                 momentum = self.momentum if momentum is None else momentum
+                post_blend = self.muon_post_blend if post_blend is None else post_blend
                 switch_step = default_switch if switch_step is None else switch_step
                 rails = self._base_rails() if rails is None else rails
                 components = []
@@ -1913,6 +1921,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         top_shrink=self.muon_top_shrink,
                         precond_beta2=self.muon_precond_beta2,
                         truncate_frac=truncate_frac,
+                        post_blend=post_blend,
                         retraction=self.muonh_retraction,
                         spectral_radius_c=self.spectral_radius_c,
                         momentum_schedule=momentum_schedule,
@@ -2092,6 +2101,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         3,
                         momentum=self.muonh_routed_momentum,
                         rails=self._routed_rails(),
+                        post_blend=self.muonh_routed_post_blend,
                         switch_step=self.muonh_routed_bimaxwell_start_step,
                     )
                 ),
@@ -2318,6 +2328,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 routed_own_group = (
                     self.muonh_routed_lr_mult != 1.0
                     or self.muonh_routed_momentum is not None
+                    or self.muonh_routed_post_blend is not None
                     or self.muonh_routed_consistency_beta2 is not None
                     or self.muonh_routed_cautious
                     or self.muonh_routed_slow_rate is not None
