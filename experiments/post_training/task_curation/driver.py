@@ -27,10 +27,10 @@ from taskcompendium.pipeline.source_processing import SourcePipelineConfig, Sour
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+from taskcompendium.runtime.local import LocalGraderMachines
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
-from experiments.post_training.task_curation.environment_runtime import LocalGraderMachines
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
 

@@ -1,47 +1,95 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run environments that declare ``Backend.LOCAL`` in bubblewrap sandboxes on the Zephyr worker.
+"""Build lock-only grading environments shared by curation and rollouts.
 
-A local environment carries the storage URL of its built hash lock (``packages_lock``). The worker
-builds a self-contained Python environment from it once (``build_python_environment``: a uv-managed
-CPython and a venv under one directory), with the NLTK data the environment's artifact names and the
-runtime packages (verifyit) on its import path, so graders find there what a built image gives them.
-The sandbox mounts that directory read-only and nothing else of the host beyond its system
-directories. Apt packages come from the worker image itself; ``placement`` in ``environment.py``
-sends an environment that needs others to a sandbox of an image built for it.
+Each runtime contains a managed CPython, locked packages, verifyit, and declared NLTK data.
+Bubblewrap mounts the built root read-only. System packages come from the host;
+environments needing other system packages require an image.
 """
 
 import fcntl
 import hashlib
+import json
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass
 from functools import cache, cached_property
 from pathlib import Path
 from typing import Any
 
-from marin.execution.fingerprint import canonical_json
+import verifyit
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.local.python_environment import PythonEnvironment, build_python_environment
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, NetworkPolicy
+
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
 
-from experiments.post_training.task_curation.environment import nltk_packages
-from experiments.post_training.task_curation.images.build import (
-    IDENTITY_CHARS,
-    LOCK_FILE,
-    PYTHON_VERSION,
-    RUNTIME_PACKAGES,
-    RUNTIME_PTH,
-    EnvironmentArtifact,
-    runtime_files,
-)
+RUNTIME_PACKAGES = (Path(verifyit.__file__).parent,)
+LOCK_FILE = "requirements.lock"
+RUNTIME_PTH = "task-curation-runtime.pth"
+IDENTITY_CHARS = 16
+REGULAR_MODE = "100644"
+EXECUTABLE_MODE = "100755"
+
+
+class ContextFile(BaseModel):
+    """A file in a package directory, by path relative to the directory, git-style mode and content digest."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    mode: str
+    sha256: str
+
+
+def context_paths(root: Path) -> list[Path]:
+    """Every file below ``root`` in path order, skipping bytecode caches."""
+    return sorted(path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
+
+
+def _file_mode(path: Path) -> str:
+    # Iris workspace bundles drop exec bits, so a consumer sees only these two modes.
+    return EXECUTABLE_MODE if path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) else REGULAR_MODE
+
+
+def context_files(root: Path) -> list[ContextFile]:
+    return [
+        ContextFile(
+            path=path.relative_to(root).as_posix(),
+            mode=_file_mode(path),
+            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+        for path in context_paths(root)
+    ]
+
+
+def runtime_files() -> dict[str, list[dict[str, str]]]:
+    """The files of every runtime package, by package name."""
+    return {package.name: [file.model_dump() for file in context_files(package)] for package in RUNTIME_PACKAGES}
+
+
+def nltk_packages(data: tuple[str, ...]) -> tuple[str, ...]:
+    """The NLTK packages named by an environment's data entries."""
+    return tuple(entry.removeprefix("nltk:") for entry in data)
+
+
+class LockEnvironment(BaseModel):
+    """Runtime fields from a curation environment artifact's result."""
+
+    lock_sha256: str
+    data: tuple[str, ...]
+
+
+class _EnvironmentRecord(BaseModel):
+    result: LockEnvironment
+
 
 LOCAL_PYTHON_VERSION = "3.12.12"
-"""The CPython the worker installs for local graders; the worker image's uv must be able to download it."""
-assert LOCAL_PYTHON_VERSION.startswith(f"{PYTHON_VERSION}.")
+"""The CPython installed for local graders; the host's uv must be able to download it."""
 
 COMPLETE_MARKER = ".complete"
 ENVIRONMENT_DIRECTORY = "env"
@@ -68,13 +116,14 @@ class LocalRuntime:
     def identity(self) -> str:
         """The SHA-256 of the lock, the data, the Python version and the runtime packages' files."""
         return hashlib.sha256(
-            canonical_json(
+            json.dumps(
                 {
                     "lock_sha256": self.lock_sha256,
                     "data": sorted(self.data),
                     "python": LOCAL_PYTHON_VERSION,
                     "runtime": runtime_files(),
-                }
+                },
+                sort_keys=True,
             ).encode()
         ).hexdigest()
 
@@ -139,18 +188,27 @@ class LocalRuntime:
 @cache
 def local_runtime(lock_url: str) -> LocalRuntime:
     """The runtime for a built lock, from the environment artifact the lock belongs to."""
-    built = EnvironmentArtifact.raw_load(str(StoragePath(lock_url).parent))
+    record = StoragePath(lock_url).parent / ".artifact.json"
+    built = _EnvironmentRecord.model_validate_json(record.read_text()).result
     return LocalRuntime(lock_url, built.lock_sha256, tuple(built.data))
 
 
 @cache
-def _local_factory(runtime: LocalRuntime) -> LocalMachineFactory:
-    return LocalMachineFactory(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
+def local_factory(runtime: LocalRuntime, base: LocalMachineFactory | None = None) -> LocalMachineFactory:
+    """Mount a built runtime while preserving the selected local factory's configuration."""
+    if base is None:
+        return LocalMachineFactory(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
+    return LocalMachineFactory(
+        read_only=(*base.read_only, runtime.root),
+        bin_dirs=(runtime.bin_dir, *base.bin_dirs),
+        bwrap=base.bwrap,
+        hash_seed=base.hash_seed,
+    )
 
 
 @dataclass(frozen=True)
 class LocalGraderMachines:
-    """Grading machines for environments that declare ``Backend.LOCAL``: subprocesses of this worker."""
+    """Grading machines for environments that declare ``Backend.LOCAL``."""
 
     def identity(self) -> dict[str, Any]:
         return {"backend": Backend.LOCAL.value, "python": LOCAL_PYTHON_VERSION}
@@ -158,9 +216,9 @@ class LocalGraderMachines:
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         """A bubblewrap sandbox with the environment's packages; ``memory_mb`` is not enforced."""
         if Backend.LOCAL not in environment.compatible_backends:
-            raise ValueError("Only environments that declare the local backend grade in the worker")
+            raise ValueError("Only environments that declare the local backend use a local grader")
         assert environment.packages_lock is not None
         runtime = local_runtime(environment.packages_lock)
         runtime.ensure_built()
         spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, env=runtime.variables)
-        return _local_factory(runtime), spec
+        return local_factory(runtime), spec

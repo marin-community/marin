@@ -52,7 +52,7 @@ async def _grade_rollout(
     return await grade_in_sandbox(
         task,
         attempt,
-        _AttemptMachineFactory(selection, factories, cleanup, resources),
+        _AttemptMachineFactory(selection, factories, cleanup, resources, grader.environment),
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=timeout,

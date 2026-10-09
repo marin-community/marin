@@ -59,7 +59,17 @@ The selected factory applies network and hardware settings and rejects settings 
 The engine does not change those settings to match a backend.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
-An environment without an image uses `ShellSimBuiltins` and requires a compatible factory.
+An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
+TaskCompendium reads the lock's digest and data entries from the adjacent curation `.artifact.json` result,
+then builds a managed CPython environment with the locked packages, verifyit, and declared NLTK data.
+The factory mounts the built root read-only and puts its Python on `PATH`; attempts share the built runtime
+but each gets a fresh sandbox. The selected factory's mounts, executable paths, bubblewrap binary, and hash seed remain in use.
+Building the runtime is included in the startup deadline and, for graders, the verifier deadline.
+The host needs `uv`, download access for an uncached build, and a working bubblewrap setup.
+Grader staging runs as root, so local grading requires a host process running as root.
+Local machines reject CPU, memory, storage, and GPU allocations; leave those fields unset and `gpus=0`.
+
+An environment with neither an image nor a lock uses `ShellSimBuiltins` and requires a compatible factory.
 The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
 An explicit `working_directory` overrides that selection.
 

@@ -5,6 +5,7 @@
 
 from collections.abc import Callable, Mapping
 
+from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.models import (
     AnswerType,
@@ -62,6 +63,9 @@ def validate_lowered_task(
             continue
         if selection.backend not in factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
+        if requirements.packages_lock is not None and requirements.docker_image is None:
+            if not isinstance(factories[selection.backend], LocalMachineFactory):
+                raise ValueError("Lock-only graders require a LocalMachineFactory")
         if requirements.docker_image is None and any(resource.mtime_ns is not None for resource in resources):
             raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
     if lowered.session.task_session != SHELLBOX_SESSION:
