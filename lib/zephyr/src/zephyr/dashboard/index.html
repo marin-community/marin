@@ -314,16 +314,18 @@ function startDashboard() {
     return bar;
   }
 
-  function stageProgress(status) {
-    const completed = status.node_statuses.filter((node) => node.state === 'succeeded').length;
-    return `${completed}/${status.node_statuses.length} stages complete`;
+  function stageProgress(plan, status) {
+    const stages = plan.nodes.filter((node) => node.stage_index >= 0);
+    const states = new Map(status.node_statuses.map((node) => [node.node_id, node.state]));
+    const completed = stages.filter((node) => states.get(node.node_id) === 'succeeded').length;
+    return `${completed}/${stages.length} stages complete`;
   }
 
-  function summary(status) {
+  function summary(plan, status) {
     const active = status.worker_states.find((worker) => worker.state === 'active')?.count || 0;
     const elapsed = status.started_at_ms ? `${number(((status.finished_at_ms || Date.now()) - status.started_at_ms) / 1000)} s` : '—';
     const values = [
-      ['Pipeline', stageProgress(status)], ['Current stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
+      ['Pipeline', stageProgress(plan, status)], ['Current stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
       ['Workers', `${active}/${status.expected_workers}`], ['CPU', `${number(status.resources.cpu_cores)} cores`],
       ['Memory', bytes(status.resources.memory_bytes)], ['Elapsed', elapsed],
       ['In flight / queued', `${status.in_flight_shards} / ${status.queued_shards}`], ['Retries', status.retries],
@@ -392,7 +394,7 @@ function startDashboard() {
       const name = element('div');
       name.append(element('h3', item.status.execution_id));
       if (item.plan.pipeline_name) name.append(element('p', item.plan.pipeline_name));
-      name.append(element('p', `${stageProgress(item.status)} · ${item.status.current_stage || 'No active stage'}`));
+      name.append(element('p', `${stageProgress(item.plan, item.status)} · ${item.status.current_stage || 'No active stage'}`));
       name.lastChild.className = 'muted';
       head.append(name, badge(item.status.phase));
       card.append(head, pipelineBar(item.plan, item.status));
@@ -499,7 +501,7 @@ function startDashboard() {
     name.append(element('h2', item.plan.pipeline_name || status.execution_id), element('p', status.execution_id));
     name.lastChild.className = 'muted';
     head.append(name, badge(status.phase));
-    panel.append(head, summary(status), element('h2', 'Pipeline stages'), stageFlow(item.plan, status));
+    panel.append(head, summary(item.plan, status), element('h2', 'Pipeline stages'), stageFlow(item.plan, status));
     const key = element('p');
     key.className = 'heatmap-key';
     for (const [label, className] of [['Complete', 'done'], ['Running', 'work'], ['Pending', 'wait']]) {
