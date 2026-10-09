@@ -22,7 +22,7 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. The other backends expose only the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. Docker, gVisor, Daytona, Iris, and local expose the machine API without a Harbor adapter or persistent Bash support.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
@@ -52,6 +52,12 @@ For a trusted private grader, `IrisMachineFactory(secret_env={"JUDGE_API_KEY":
 and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
+
+Docker stops the command's process group on a timeout or caller cancellation.
+A successful stop preserves the machine. A failed stop raises an infrastructure error and closes the machine.
+Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
+Before machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
+Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
@@ -167,6 +173,8 @@ try:
 finally:
     await machine.close()
 ```
+
+`HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`.
 
 - Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
 - Machines are independent, so a process may run any number of them at once.

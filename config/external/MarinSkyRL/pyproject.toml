@@ -8,6 +8,8 @@ dependencies = ["marinskyrl"]
 package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
+# Marin Git workspace rigging is 0.2.0; TaskCompendium needs a newer published release.
+override-dependencies = ["marin-rigging[secrets]>=0.2.139.dev37117265303"]
 
 [tool.uv.sources]
 # Keep the artifact capture fix on the existing runtime baseline.

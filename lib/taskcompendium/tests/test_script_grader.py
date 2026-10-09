@@ -122,6 +122,7 @@ def answered(task: TaskSpec, answer: str) -> GradingAttempt:
     )
 
 
+@pytest.mark.asyncio
 async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
     agent = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins(), workdir="/app"))
     await agent.run(
@@ -169,6 +170,7 @@ async def test_script_grader_collects_and_copies_task_machine_outputs_before_gra
     assert collected.stdout == b"collected\n"
 
 
+@pytest.mark.asyncio
 async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths():
     report = (
         "import json\n"
@@ -285,6 +287,7 @@ DETAIL = {"cases": [{"passed": True}]}
         ),
     ],
 )
+@pytest.mark.asyncio
 async def test_script_grader_reward_kinds(reward, script, expected):
     grader = ScriptGrader(argv=("sh", "-c", script), environment=GRADER_ENVIRONMENT, reward=reward)
     task = arithmetic_task(grader)
@@ -295,6 +298,7 @@ async def test_script_grader_reward_kinds(reward, script, expected):
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+@pytest.mark.asyncio
 async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_machine(answer, reward):
     package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=GRADER_ENVIRONMENT)
     task = arithmetic_task(package.grader)

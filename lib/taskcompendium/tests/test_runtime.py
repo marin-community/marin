@@ -268,6 +268,7 @@ def trusted_bootstrap_task(shell_task):
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])
+@pytest.mark.asyncio
 async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
     tmp_path, trusted_bootstrap_task, candidate, expected
 ):
@@ -278,6 +279,7 @@ async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
 
 
 @pytest.mark.parametrize("remove_exit_code", [0, 1])
+@pytest.mark.asyncio
 async def test_private_fixture_archive_removed_before_grading_or_grader_never_runs(
     tmp_path, trusted_bootstrap_task, remove_exit_code
 ):
@@ -377,6 +379,7 @@ def test_no_grader_task_is_unavailable_without_a_grading_machine(shell_task):
     assert not machines.machines
 
 
+@pytest.mark.asyncio
 async def test_shell_uploads_public_files_without_oracle_and_captures_submission(shell_task):
     task = shell_task
     machines = FileMachines()
@@ -404,6 +407,7 @@ class UnavailableFactory:
         raise RuntimeError("Machine service unavailable")
 
 
+@pytest.mark.asyncio
 async def test_environment_failure_is_recorded_without_reward(script_grading_task):
     rollout = await run_episode(
         script_grading_task, ScriptedActor(()), UnavailableFactory(), max_steps=2, control="failure"

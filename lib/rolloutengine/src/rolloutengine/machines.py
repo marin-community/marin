@@ -12,7 +12,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from harbor_config.env import resolve_env_vars
-from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
@@ -26,7 +25,7 @@ from shellbox.machine import (
     ShellSimBuiltins,
 )
 from taskcompendium.models import EnvironmentRequirements, TaskResource, require_resolved_environment
-from taskcompendium.runtime.local import local_factory, local_runtime
+from taskcompendium.runtime.local import local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
@@ -107,11 +106,15 @@ async def _acquire_machine(
         machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
     factory = factories[runtime.backend]
     if requirements.packages_lock is not None and requirements.docker_image is None:
-        assert isinstance(factory, LocalMachineFactory)
+        if factory.backend != Backend.LOCAL:
+            raise ValueError("Lock-only graders require a local machine factory")
         environment = await asyncio.to_thread(local_runtime, requirements.packages_lock)
         await asyncio.to_thread(environment.ensure_built)
-        factory = await asyncio.to_thread(local_factory, environment, factory)
-        spec = replace(spec, env={**environment.variables, **spec.env})
+        spec = replace(
+            spec,
+            source=HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,)),
+            env={**environment.variables, **spec.env},
+        )
     creation = asyncio.create_task(factory.create(spec))
     try:
         machine = await asyncio.shield(creation)

@@ -112,6 +112,7 @@ def directory_task(executable_task, tmp_path):
     return TaskSpec.model_validate_json(task.model_dump_json())
 
 
+@pytest.mark.asyncio
 async def test_directory_evidence_round_trip_preserves_valid_names_and_skips_links(directory_task, tmp_path):
     nested = tmp_path / "nested:dir"
     nested.mkdir()
@@ -143,6 +144,7 @@ async def test_directory_evidence_round_trip_preserves_valid_names_and_skips_lin
 
 
 @pytest.mark.parametrize("budget", [{"max_files": 1}, {"max_bytes": 3}])
+@pytest.mark.asyncio
 async def test_directory_over_budget_never_returns_partial_evidence(directory_task, tmp_path, budget):
     (tmp_path / "first.yml").write_bytes(b"aa")
     (tmp_path / "second.yml").write_bytes(b"bb")
@@ -163,6 +165,7 @@ async def test_directory_over_budget_never_returns_partial_evidence(directory_ta
 
 
 @pytest.mark.parametrize("root", ["/tests", "/logs", "/solution", "/unrelated"])
+@pytest.mark.asyncio
 async def test_directory_grader_mount_or_outside_root_rejected_before_capture_and_upload(executable_task, root):
     task = executable_task.model_copy(
         update={"output_directories": (OutputDirectory(root=root, patterns=("*.yml",), max_files=2, max_bytes=100),)}
@@ -177,6 +180,7 @@ async def test_directory_grader_mount_or_outside_root_rejected_before_capture_an
     assert not machines.machines
 
 
+@pytest.mark.asyncio
 async def test_directory_traversal_candidate_cannot_overwrite_grader_files(directory_task, tmp_path):
     machines = GradingMachines()
     files = {str(tmp_path) + "/../tests/reference.yml": b"tampered"}
@@ -187,6 +191,7 @@ async def test_directory_traversal_candidate_cannot_overwrite_grader_files(direc
     assert not machines.machines
 
 
+@pytest.mark.asyncio
 async def test_directory_order_matches_original_find_discovery(directory_task, tmp_path):
     (tmp_path / "nested").mkdir()
     (tmp_path / "workflow-later.yml").write_bytes(b"later")
@@ -227,6 +232,7 @@ async def test_directory_order_matches_original_find_discovery(directory_task, t
     assert list((await environment.evidence()).files) == [path.decode() for path in found.split(b"\0") if path]
 
 
+@pytest.mark.asyncio
 async def test_directory_capture_cannot_claim_shellsim_python_support(directory_task):
     machines = FileMachines()
     machines.backend = Backend.SHELLSIM
@@ -242,6 +248,7 @@ async def test_directory_capture_cannot_claim_shellsim_python_support(directory_
     assert not machines.machines
 
 
+@pytest.mark.asyncio
 async def test_directory_capture_python_free_image_fails_explicitly_and_closes(directory_task, monkeypatch):
     async def missing_interpreter(self, command):
         return Result(127, b"", b"python3: not found", False, False, ExitReason.EXITED)

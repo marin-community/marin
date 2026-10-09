@@ -236,6 +236,7 @@ def test_archive_files_take_their_resource_roles(executable_task):
     }
 
 
+@pytest.mark.asyncio
 async def test_agent_machine_receives_only_public_files(executable_task):
     machines = GradingMachines()
     factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 30.0, 1024)
@@ -280,6 +281,7 @@ def test_ungraded_zero_reward_cannot_pass_the_empty_control(executable_task, ver
 
 
 @pytest.mark.parametrize("program, reward", [(b"print(7)\n", 1.0), (b"print(0)\n", 0.0)])
+@pytest.mark.asyncio
 async def test_captured_submission_cannot_supply_its_own_reward(executable_task, program, reward):
     machines = GradingMachines()
     files = {
@@ -305,6 +307,7 @@ def incompatible(task: TaskSpec, role: str) -> TaskSpec:
     return TaskSpec.model_validate_json(json.dumps(data))
 
 
+@pytest.mark.asyncio
 async def test_agent_machine_rejects_an_incompatible_backend_before_start(executable_task):
     machines = GradingMachines()
     factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 1, 1024)
