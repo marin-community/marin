@@ -3,7 +3,13 @@
 
 """Sandbox graders score attempts in fresh ShellSim machines that stand in for a pinned grader image."""
 
+import asyncio
+import errno
 import json
+import os
+import re
+import shutil
+import tarfile
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -23,6 +29,7 @@ from shellbox.machine import (
 from verifyit.grade import main as verifyit_main
 from verifyit.spec import NumericSpec
 
+import taskcompendium.runtime.grading as grading
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
@@ -38,6 +45,7 @@ from taskcompendium.models import (
     JsonAnswer,
     MissingArtifactPolicy,
     PlainText,
+    ResourceGroups,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
@@ -49,6 +57,7 @@ from taskcompendium.models import (
     VerifierCommand,
 )
 from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.resources import inline_resource
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=FIXTURE_IMAGE, compatible_backends=(Backend.DOCKER,))
@@ -120,6 +129,240 @@ def answered(task: TaskSpec, answer: str) -> GradingAttempt:
     return GradingAttempt(
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
     )
+
+
+@pytest.fixture
+def local_artifact_factory(tmp_path):
+    class Machine:
+        def __init__(self, root, spec, archive_members, archive_failure):
+            self.root = root
+            self.spec = spec
+            self.archive_members = archive_members
+            self.archive_failure = archive_failure
+            self.closed = False
+            (root / "workspace").mkdir(parents=True)
+            (root / "tmp").mkdir()
+
+        def path(self, value):
+            assert value == "/" or value.split("/")[1] in {"workspace", "tests", "logs", "tmp"}
+            return self.root / value.lstrip("/")
+
+        async def run(self, command):
+            if self.archive_failure == "inspect_timeout" and command.argv[:2] == ("sh", "-c"):
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            if command.argv[0] == "tar" and self.archive_failure:
+                if self.archive_failure == "tar_timeout":
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                return Result(
+                    2,
+                    b"",
+                    b"Archive failed",
+                    False,
+                    False,
+                    ExitReason.EXITED,
+                )
+
+            def rewrite(value):
+                for path in re.findall(r"(?<![\w/%*])/[^\s'\";)}]*", value):
+                    self.path(path)
+                return re.sub(r"/(workspace|tests|logs|tmp)(?=/|$)", lambda match: str(self.path(match[0])), value)
+
+            process = await asyncio.create_subprocess_exec(
+                *(rewrite(value) for value in command.argv),
+                cwd=self.path(command.cwd or "/workspace"),
+                env={**os.environ, **self.spec.env, **command.env},
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(command.stdin), timeout=command.timeout)
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            limit = command.output_limit_bytes
+            return Result(
+                process.returncode,
+                stdout[:limit],
+                stderr[:limit],
+                len(stdout) > limit,
+                len(stderr) > limit,
+                ExitReason.EXITED,
+            )
+
+        async def upload(self, source, target):
+            destination = self.path(target)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source, destination, follow_symlinks=False)
+
+        async def download(self, source, target):
+            origin = self.path(source)
+            if source.startswith("/tmp/taskcompendium-artifact-"):
+                if self.archive_members:
+                    with tarfile.open(origin, "w") as archive:
+                        for member in self.archive_members:
+                            archive.addfile(member)
+            if origin.is_dir():
+                shutil.copytree(origin, target, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(origin, target, follow_symlinks=False)
+
+        async def close(self):
+            self.closed = True
+
+    class Factory:
+        def __init__(self, prepare_artifacts, *, archive_members=(), archive_failure=None):
+            self.machines = []
+            self.prepare_artifacts = prepare_artifacts
+            self.archive_members = archive_members
+            self.archive_failure = archive_failure
+
+        async def create(self, spec):
+            machine = Machine(tmp_path / str(len(self.machines)), spec, self.archive_members, self.archive_failure)
+            self.machines.append(machine)
+            if spec.env.get("ARTIFACT_TASK_MACHINE") == "1":
+                self.prepare_artifacts(machine)
+            return machine
+
+    return Factory
+
+
+@pytest.mark.parametrize(
+    "artifact_case",
+    [
+        "directory",
+        "file",
+        "relative_private",
+        "absolute_private",
+        "in_tree",
+        "hardlink",
+        "directory_root",
+        "file_root",
+        "parent_link",
+        "missing",
+        "kind_mismatch",
+        "excluded_link",
+        "oversized_expanded",
+        "too_many_members",
+        "long_member",
+        "conflicting_member",
+        "directory_file_conflict",
+        "file_directory_conflict",
+        "host_enospc",
+        "inspect_timeout",
+        "tar_timeout",
+        "tar_failed",
+    ],
+)
+async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
+    local_artifact_factory, artifact_case, monkeypatch
+):
+    def prepare_artifacts(machine):
+        if artifact_case == "missing":
+            return
+        artifacts = machine.path("/logs/artifacts")
+        artifacts.mkdir(parents=True)
+        answer = artifacts / "answer"
+        if artifact_case in {"directory_root", "parent_link"}:
+            artifacts.rename(artifacts.with_name("real"))
+            artifacts.symlink_to("real", target_is_directory=True)
+        if artifact_case in {"relative_private", "absolute_private"}:
+            answer.symlink_to("../../tests/expected" if artifact_case == "relative_private" else "/tests/expected")
+        elif artifact_case in {"in_tree", "hardlink", "file_root"}:
+            submitted = artifacts / "submitted"
+            submitted.write_bytes(b"secret")
+            if artifact_case == "hardlink":
+                os.link(submitted, answer)
+            else:
+                answer.symlink_to("submitted")
+        else:
+            answer.write_bytes(b"secret")
+        if artifact_case == "excluded_link":
+            (artifacts / "cache").mkdir()
+            (artifacts / "cache/private").symlink_to("../../../tests/expected")
+        if artifact_case == "too_many_members":
+            for index in range(5):
+                (artifacts / str(index)).touch()
+
+    archive_members = []
+    if artifact_case in {"conflicting_member", "file_directory_conflict", "directory_file_conflict"}:
+        first = tarfile.TarInfo("file")
+        if artifact_case == "directory_file_conflict":
+            first.type = tarfile.DIRTYPE
+        archive_members.append(first)
+        second = tarfile.TarInfo("file/child" if artifact_case == "conflicting_member" else "file")
+        if artifact_case == "file_directory_conflict":
+            second.type = tarfile.DIRTYPE
+        archive_members.append(second)
+    elif artifact_case == "long_member":
+        archive_members.append(tarfile.TarInfo("x" * 256))
+    root = local_artifact_factory(
+        prepare_artifacts,
+        archive_members=archive_members,
+        archive_failure=artifact_case if artifact_case in {"inspect_timeout", "tar_failed", "tar_timeout"} else None,
+    )
+    if artifact_case == "oversized_expanded":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_EXPANDED_BYTES", 1)
+    if artifact_case == "too_many_members":
+        monkeypatch.setattr(grading, "MAX_ARTIFACT_MEMBERS", 3)
+    is_file = artifact_case in {"file", "file_root", "parent_link"}
+    source = "/logs/artifacts/answer" if is_file else "/logs/artifacts"
+    artifact = VerifierArtifact(
+        source=source,
+        target=source,
+        kind=ArtifactKind.FILE if is_file or artifact_case == "kind_mismatch" else ArtifactKind.DIRECTORY,
+        exclude=("cache",) if artifact_case == "excluded_link" else (),
+    )
+    grader = ScriptGrader(
+        argv=("sh", "-c", "cmp /logs/artifacts/answer /tests/expected"),
+        cwd="/workspace",
+        environment=GRADER_ENVIRONMENT,
+        answer_path=None,
+        reward=ExitCodeReward(),
+        artifacts=(artifact,),
+    )
+    task = arithmetic_task(grader).model_copy(
+        update={"resources": ResourceGroups(verifier=(inline_resource("expected", b"secret"),))}
+    )
+    agent = await root.create(MachineSpec(RegistryImage(FIXTURE_IMAGE), env={"ARTIFACT_TASK_MACHINE": "1"}))
+    host_errors = {
+        "host_enospc": errno.ENOSPC,
+    }
+    if artifact_case in host_errors:
+
+        def failed_extract(*args, **kwargs):
+            raise OSError(host_errors[artifact_case], "Host artifact extraction failed")
+
+        monkeypatch.setattr(tarfile.TarFile, "extract", failed_extract)
+    try:
+        if artifact_case in host_errors:
+            with pytest.raises(OSError) as caught:
+                await grade_in_sandbox(
+                    task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+                )
+            assert caught.value.errno == host_errors[artifact_case]
+            return
+        result = await grade_in_sandbox(
+            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+        )
+        if artifact_case in {"inspect_timeout", "tar_failed", "tar_timeout"}:
+            assert (result.status, result.reward, result.failure) == (
+                Outcome.INFRA_ERROR,
+                None,
+                GradingFailure.EXECUTION if artifact_case == "tar_failed" else GradingFailure.TIMEOUT,
+            )
+        else:
+            valid = artifact_case in {"directory", "file", "excluded_link"}
+            assert (result.status, result.reward) == (
+                (Outcome.GRADED, 1.0) if valid else (Outcome.SUBMISSION_FAILURE, 0.0)
+            ), result.error
+        assert not list(agent.path("/tmp").glob("taskcompendium-artifact-*"))
+    finally:
+        await agent.close()
 
 
 @pytest.mark.asyncio
