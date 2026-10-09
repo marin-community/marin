@@ -74,13 +74,17 @@ Launch the checkout or bundle pinned by `source_revision` on every JAX process
 with the same YAML. Use [Iris launch procedures](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md):
 
 ```bash
-uv run --package marin-levanter --extra gpu python -m \
+TMPDIR=/cache uv run --package marin-levanter --extra gpu python -m \
   experiments.grug.moe_hero_ep.ops.export_vllm --config_path export.yaml
 ```
 
+For remote output, use writable disk-backed scratch (`/cache` in Iris containers)
+with space for the largest serialized layer. Iris Docker's `/tmp` uses RAM.
+Local output is written directly to the destination.
+
 Keep the checkpoint immutable. Run one exporting gang per destination. The
 global device count must be divisible by `expert_axis_size * replica_axis_size`;
-both axes default to one. Every device must fit the largest expert bank.
+both axes default to one. Every device must fit the largest expert bank in full.
 Process zero needs host RAM for one layer plus serialization buffers.
 
 Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).

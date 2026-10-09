@@ -1211,7 +1211,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 local_path,
                 files=[shard_name],
                 commit_message=f"Upload shard {shard_name} from Levanter",
-                source_is_temp=True,
+                source_is_temp=StoragePath(path).is_remote,
             )
 
         save_hf_shards(

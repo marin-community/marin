@@ -8,6 +8,7 @@ import json
 from collections import deque
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,6 +21,7 @@ from fsspec.asyn import sync as fsspec_sync
 from jax.experimental import multihost_utils
 from jax.sharding import PartitionSpec as P
 from rigging.filesystem.conditional_object import conditional_object
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save_file
 
@@ -177,8 +179,14 @@ class _HFShardWriter:
 
     def _write_shard(self, filename: str, tensors: dict[str, np.ndarray], reserved_bytes: int) -> HFShardRecord | None:
         try:
-            with TemporaryDirectory(prefix="hf-export-") as directory:
+            staging = (
+                nullcontext(url_to_fs(str(self._root))[1])
+                if self._root.is_local
+                else TemporaryDirectory(prefix="hf-export-")
+            )
+            with staging as directory:
                 local = Path(directory) / filename
+                local.parent.mkdir(parents=True, exist_ok=True)
                 save_file(tensors, local, metadata={"format": "pt"})
                 record = None
                 if self._resume is not None:
@@ -189,7 +197,8 @@ class _HFShardWriter:
                         _sha256(StoragePath(str(local))),
                         sorted(tensors),
                     )
-                (self._root / filename).upload_from(str(local))
+                if self._root.is_remote:
+                    (self._root / filename).upload_from(str(local))
                 if self._upload_to_hf is not None:
                     self._upload_to_hf(directory, filename)
                 if self._resume is not None and record is not None:
@@ -215,9 +224,10 @@ def save_hf_shards(
     All ranks use matching shard/key order, shapes and dtypes. tensor_names names
     slices along each tensor's first axis. Device staging needs one full tensor.
     Reserve twice each shard's payload; oversized shards run alone. With one worker,
-    finish each shard before loading the next. upload_to_hf(directory, filename)
-    receives one locally staged shard on a worker and must avoid collectives. Writer errors propagate when
-    observed by a main thread; intervening gathers may finish first.
+    finish each shard before loading the next. Local destinations are written directly;
+    remote shards stage under TMPDIR. upload_to_hf(directory, filename) runs on a worker,
+    must avoid collectives, and must upload only the named file. Writer errors propagate
+    when observed by a main thread; intervening gathers may finish first.
 
     Resume verifies receipts before skipping gathers and returns ordered receipts
     on process zero. Without resume, overwrite existing shards. Return [] elsewhere

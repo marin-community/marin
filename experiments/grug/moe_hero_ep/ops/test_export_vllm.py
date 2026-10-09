@@ -8,6 +8,7 @@ from pathlib import Path
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import levanter.compat.hf_export as hf_export
 import numpy as np
 import pytest
 from jax.sharding import PartitionSpec as P
@@ -109,17 +110,17 @@ def test_native_export_preserves_all_weights_and_config(tmp_path):
 def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path, monkeypatch):
     request, _ = native_fixture(str(tmp_path / "checkpoint"))
     root = Path(request.destination)
-    original_upload = StoragePath.upload_from
+    original_save = hf_export.save_file
 
-    def interrupt_upload(path, local_path, **kwargs):
+    def interrupt_write(tensors, path, **kwargs):
         if path.name == "model-layer-000.safetensors":
             path.write_bytes(b"interrupted")
-            raise OSError("upload interrupted")
-        original_upload(path, local_path, **kwargs)
+            raise OSError("write interrupted")
+        original_save(tensors, path, **kwargs)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(StoragePath, "upload_from", interrupt_upload)
-        with pytest.raises(OSError, match="upload interrupted"):
+        scoped.setattr(hf_export, "save_file", interrupt_write)
+        with pytest.raises(OSError, match="write interrupted"):
             export(request)
     assert not (root / "export-manifest.json").exists()
     global_shard = root / "model-global.safetensors"

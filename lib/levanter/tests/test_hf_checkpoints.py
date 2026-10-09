@@ -9,10 +9,12 @@ import sys
 import tempfile
 import threading
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import equinox as eqx
 import fsspec
+import huggingface_hub
 import jax
 import jax.numpy as jnp
 import jmp
@@ -30,11 +32,11 @@ from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
-from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
 import levanter.compat.hf_export as hf_export
+import levanter.compat.hf_checkpoints as hf_checkpoints
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
@@ -62,7 +64,18 @@ def test_conversion_to_jnp_bfloat16():
     assert_trees_all_close(x_jnp, jnp.arange(10, dtype=jnp.bfloat16) / 3.14)
 
 
-def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
+def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
+    uploaded = {}
+
+    def upload_file(*, path_or_fileobj, path_in_repo, **kwargs):
+        uploaded[path_in_repo] = Path(path_or_fileobj).read_bytes()
+
+    def upload_folder(*, folder_path, **kwargs):
+        uploaded.update({path.name: path.read_bytes() for path in Path(folder_path).iterdir() if path.is_file()})
+
+    monkeypatch.setattr(hf_checkpoints, "repo_exists", lambda *args, **kwargs: True)
+    monkeypatch.setattr(huggingface_hub, "upload_file", upload_file)
+    monkeypatch.setattr(huggingface_hub, "upload_folder", upload_folder)
     nano_config = Gpt2Config(
         hidden_dim=64,
         num_heads=2,
@@ -76,11 +89,16 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
     mp = jmp.get_policy("f32")
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "unrelated.txt").write_text("Keep existing files out of HF uploads.")
         with use_test_mesh():
             nano_model = Gpt2LMHeadModel.init(converter.Vocab, nano_config, key=PRNGKey(3))
             nano_model = mp.cast_to_param(nano_model)
 
-            converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024)
+            converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024, upload_to_hf="test/export")
+
+        assert uploaded == {
+            path.name: path.read_bytes() for path in Path(tmpdir).iterdir() if path.name != "unrelated.txt"
+        }
 
         # make sure we saved a few different files
 
@@ -100,7 +118,8 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
         )
 
 
-def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch):
+def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     config = Gpt2Config(
         hidden_dim=32, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
@@ -122,6 +141,7 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
 
         def concurrent_put(self, *args, **kwargs):
             nonlocal upload_count
+            assert Path(args[0]).parent.parent == tmp_path
             with upload_lock:
                 upload_count += 1
                 this_upload = upload_count
@@ -158,20 +178,24 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
         budget_files = {os.path.basename(name): fs.cat(name) for name in fs.find(budget_path)}
         assert budget_files == serial_files
         assert budgets[0].peak_bytes == 2 * max(shard_payloads)
+        assert not list(tmp_path.iterdir())
 
 
-def test_hf_export_preserves_scalar_and_singleton_shapes(tmp_path):
+@pytest.mark.parametrize("scheme", ["", "file://"])
+def test_hf_export_preserves_scalar_and_singleton_shapes_without_scratch(tmp_path, monkeypatch, scheme):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "unavailable-scratch"))
+    destination = tmp_path / "export"
     weights = {"scalar": jnp.asarray(0.5, dtype=jnp.bfloat16), "singleton": jnp.asarray([0.5], dtype=jnp.bfloat16)}
     with use_test_mesh():
         hf_export.save_hf_shards(
             {SAFE_TENSORS_MODEL: weights},
             lambda _keys: weights,
-            str(tmp_path),
+            scheme + str(destination),
             export_host_budget_bytes=8,
             max_concurrent_shards=1,
         )
 
-    with safetensors.safe_open(tmp_path / SAFE_TENSORS_MODEL, framework="np") as shard:
+    with safetensors.safe_open(destination / SAFE_TENSORS_MODEL, framework="np") as shard:
         for key, value in weights.items():
             exported = shard.get_tensor(key)
             assert exported.shape == value.shape
@@ -198,7 +222,7 @@ def _export_on_cpu_rank(coordinator, destination, expected):
             max_concurrent_shards=2,
             tensor_names={"bank": tuple(f"expert.{i}" for i in range(4))},
         )
-        with patch.object(StoragePath, "upload_from", side_effect=OSError("upload interrupted")):
+        with patch.object(hf_export, "save_file", side_effect=OSError("write interrupted")):
             with pytest.raises((OSError, RuntimeError)):
                 hf_export.save_hf_shards(shards, lambda _keys: weights, destination, **options)
         multihost_utils.sync_global_devices("after-failed-export")
