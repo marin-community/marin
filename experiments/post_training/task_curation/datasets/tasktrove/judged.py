@@ -12,7 +12,7 @@ sources have no controls and their kept rows are admitted without them.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
@@ -28,6 +28,47 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+TASKTROVE_METADATA = DataSourceMetadata(
+    id="",
+    name="",
+    origin="Task Trove",
+    url="https://huggingface.co/datasets/open-athena/task-trove",
+    dataset_id="open-athena/task-trove",
+    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+    revised_at="2026-10-08T09:34:47.000Z",
+    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+    verifier_revision=None,
+    family="llm-judge-freeform",
+    environment="Harbor",
+    type="Agentic",
+    turns="Multi-turn",
+    count_basis="Released Harbor tasks: manifest by_source.converted",
+    count_precision="exact",
+    count_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    benchmark_basis="Release manifest does not designate benchmarks",
+    family_basis="Task Trove release manifest source_verdicts.family",
+    family_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
+    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
+    provenance_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
+        "03e826563f5718dbf/manifest.json"
+    ),
+    verification="judge",
+    snapshot_safe=True,
+    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
+    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
+    modes=("judge",),
+    recorded_at="2026-10-08",
+)
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
@@ -176,34 +217,189 @@ class JudgedSource:
     name: str
     config: str
     rubric: str
+    metadata: DataSourceMetadata = field(kw_only=True)
 
 
 SOURCES = (
-    JudgedSource("tasktrove-codereview", "laion__stackexchange-codereview-sandboxes-verified-v2", CODEREVIEW_RUBRIC),
-    JudgedSource("tasktrove-glaive_code", "laion__glaive-code-assistant-sandboxes-verified-v2", GLAIVE_CODE_RUBRIC),
-    JudgedSource("tasktrove-safety", "laion__nemotron-gym-safety-v3", SAFETY_RUBRIC),
     JudgedSource(
-        "tasktrove-stack_overflow", "laion__stackexchange-overflow-sandboxes-verified-v2", STACK_OVERFLOW_RUBRIC
+        "tasktrove-codereview",
+        "laion__stackexchange-codereview-sandboxes-verified-v2",
+        CODEREVIEW_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2",
+            name="laion__stackexchange-codereview-sandboxes-verified-v2",
+            display_name="laion/stackexchange-codereview-sandboxes-verified-v2",
+            task_count=10000,
+            notes=(
+                "Judge-only code review with a four-criterion rubric and no reference; the rubric "
+                "ships under tests/, which the agent never sees. Kept as rubric-only (tag "
+                "no-reference)."
+            ),
+            canonical_source="laion/stackexchange-codereview-sandboxes-verified-v2",
+            upstream_repository="laion/stackexchange-codereview-sandboxes-verified-v2",
+            upstream_url="https://huggingface.co/datasets/laion/stackexchange-codereview-sandboxes-verified-v2",
+            input_count=10000,
+        ),
     ),
-    JudgedSource("tasktrove-superuser", "laion__stackexchange-superuser-sandboxes-verified-v2", SUPERUSER_RUBRIC),
-    JudgedSource("tasktrove-tezos", "laion__stackexchange-tezos-sandboxes-verified-v2", TEZOS_RUBRIC),
-    JudgedSource("tasktrove-unix", "laion__stackexchange-unix-sandboxes-verified-v2", UNIX_RUBRIC),
-    JudgedSource("tasktrove-wizard_orca", "laion__wizardlm-orca-v4", WIZARD_ORCA_RUBRIC),
+    JudgedSource(
+        "tasktrove-glaive_code",
+        "laion__glaive-code-assistant-sandboxes-verified-v2",
+        GLAIVE_CODE_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
+            name="laion__glaive-code-assistant-sandboxes-verified-v2",
+            display_name="laion/glaive-code-assistant-sandboxes-verified-v2",
+            task_count=9994,
+            notes=(
+                "Judge-only over code that is never run, four-criterion rubric, no reference. Kept "
+                "as rubric-only (tag no-reference)."
+            ),
+            canonical_source="laion/glaive-code-assistant-sandboxes-verified-v2",
+            upstream_repository="laion/glaive-code-assistant-sandboxes-verified-v2",
+            upstream_url="https://huggingface.co/datasets/laion/glaive-code-assistant-sandboxes-verified-v2",
+            input_count=10000,
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-safety",
+        "laion__nemotron-gym-safety-v3",
+        SAFETY_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__nemotron-gym-safety-v3",
+            name="laion__nemotron-gym-safety-v3",
+            display_name="laion/nemotron-gym-safety-v3",
+            task_count=44884,
+            notes=(
+                "Judge-only against a two-line safety principle, no reference. Kept as rubric-only "
+                "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
+                "ones, help with the benign ones)."
+            ),
+            canonical_source="laion/nemotron-gym-safety-v3",
+            upstream_repository="laion/nemotron-gym-safety-v3",
+            upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-safety-v3",
+            input_count=89066,
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-stack_overflow",
+        "laion__stackexchange-overflow-sandboxes-verified-v2",
+        STACK_OVERFLOW_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
+            name="laion__stackexchange-overflow-sandboxes-verified-v2",
+            display_name="laion/stackexchange-overflow-sandboxes-verified-v2",
+            task_count=10000,
+            notes=(
+                "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
+                "rubric-only (tag no-reference)."
+            ),
+            canonical_source="laion/stackexchange-overflow-sandboxes-verified-v2",
+            upstream_repository="laion/stackexchange-overflow-sandboxes-verified-v2",
+            upstream_url="https://huggingface.co/datasets/laion/stackexchange-overflow-sandboxes-verified-v2",
+            input_count=10000,
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-superuser",
+        "laion__stackexchange-superuser-sandboxes-verified-v2",
+        SUPERUSER_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2",
+            name="laion__stackexchange-superuser-sandboxes-verified-v2",
+            display_name="laion/stackexchange-superuser-sandboxes-verified-v2",
+            task_count=10000,
+            notes=(
+                "Judge-only Super User answers, four-criterion rubric, no reference. Kept as "
+                "rubric-only (tag no-reference)."
+            ),
+            canonical_source="laion/stackexchange-superuser-sandboxes-verified-v2",
+            upstream_repository="laion/stackexchange-superuser-sandboxes-verified-v2",
+            upstream_url="https://huggingface.co/datasets/laion/stackexchange-superuser-sandboxes-verified-v2",
+            input_count=10000,
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-tezos",
+        "laion__stackexchange-tezos-sandboxes-verified-v2",
+        TEZOS_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
+            name="laion__stackexchange-tezos-sandboxes-verified-v2",
+            display_name="laion/stackexchange-tezos-sandboxes-verified-v2",
+            task_count=997,
+            notes=(
+                "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN "
+                "duplicates fall to the dedup step. Kept as rubric-only (tag no-reference)."
+            ),
+            canonical_source="laion/stackexchange-tezos-sandboxes-verified-v2",
+            upstream_repository="laion/stackexchange-tezos-sandboxes-verified-v2",
+            upstream_url="https://huggingface.co/datasets/laion/stackexchange-tezos-sandboxes-verified-v2",
+            input_count=10000,
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-unix",
+        "laion__stackexchange-unix-sandboxes-verified-v2",
+        UNIX_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
+            name="laion__stackexchange-unix-sandboxes-verified-v2",
+            display_name="laion/stackexchange-unix-sandboxes-verified-v2",
+            task_count=10000,
+            notes=(
+                "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as "
+                "rubric-only (tag no-reference)."
+            ),
+            canonical_source="laion/stackexchange-unix-sandboxes-verified-v2",
+            upstream_repository="laion/stackexchange-unix-sandboxes-verified-v2",
+            upstream_url="https://huggingface.co/datasets/laion/stackexchange-unix-sandboxes-verified-v2",
+            input_count=10000,
+        ),
+    ),
+    JudgedSource(
+        "tasktrove-wizard_orca",
+        "laion__wizardlm-orca-v4",
+        WIZARD_ORCA_RUBRIC,
+        metadata=replace(
+            TASKTROVE_METADATA,
+            id="Task Trove:laion__wizardlm-orca-v4",
+            name="laion__wizardlm-orca-v4",
+            display_name="laion/wizardlm-orca-v4",
+            task_count=9999,
+            notes=(
+                "Judge-only over Orca-style instructions, three-criterion rubric, no reference. "
+                "Kept as rubric-only (tag no-reference)."
+            ),
+            canonical_source="laion/wizardlm-orca-v4",
+            upstream_repository="laion/wizardlm-orca-v4",
+            upstream_url="https://huggingface.co/datasets/laion/wizardlm-orca-v4",
+            input_count=10000,
+        ),
+    ),
 )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name=source.name,
-            source=tasktrove_source(source.config),
-            convert=convert_judged,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=source.rubric,
-            atlas_id=f"Task Trove:{source.config}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            metadata=source.metadata,
+            pipeline=RlDataPipeline(
+                name=source.name,
+                source=tasktrove_source(source.config),
+                convert=convert_judged,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=source.rubric,
+                grader=GRADER_PACKAGES,
+            ),
         )
         for source in SOURCES
     ]

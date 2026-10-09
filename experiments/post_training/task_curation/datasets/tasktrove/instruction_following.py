@@ -10,6 +10,7 @@ reject tasks that no answer can satisfy, which the in-process graders cannot det
 
 import json
 import re
+from dataclasses import replace
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
@@ -25,6 +26,45 @@ from verifyit.spec import Constraint, SchemaFormat
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+TASKTROVE_METADATA = DataSourceMetadata(
+    id="",
+    name="",
+    origin="Task Trove",
+    url="https://huggingface.co/datasets/open-athena/task-trove",
+    dataset_id="open-athena/task-trove",
+    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+    revised_at="2026-10-08T09:34:47.000Z",
+    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+    verifier_revision=None,
+    family="instruction-following",
+    environment="Harbor",
+    type="Agentic",
+    turns="Multi-turn",
+    count_basis="Released Harbor tasks: manifest by_source.converted",
+    count_precision="exact",
+    count_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    benchmark_basis="Release manifest does not designate benchmarks",
+    family_basis="Task Trove release manifest source_verdicts.family",
+    family_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
+    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
+    provenance_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
+        "03e826563f5718dbf/manifest.json"
+    ),
+    snapshot_safe=True,
+    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
+    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
+    recorded_at="2026-10-08",
+)
 
 SHELL_PREAMBLE = "You are running in a shell-based sandbox."
 PREAMBLE_SEPARATOR = "\n---\n"
@@ -202,27 +242,60 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-ifeval",
-            source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
-            convert=convert_ifeval,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=IFEVAL_RUBRIC,
-            atlas_id="Task Trove:laion__nemotron-gym-instruction-following-v3",
+        RlDataSource(
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-instruction-following-v3",
+                name="laion__nemotron-gym-instruction-following-v3",
+                display_name="laion/nemotron-gym-instruction-following-v3",
+                task_count=46391,
+                notes=(
+                    "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
+                    "(vacuous pass) at conversion."
+                ),
+                canonical_source="laion/nemotron-gym-instruction-following-v3",
+                verification="ifeval",
+                upstream_repository="laion/nemotron-gym-instruction-following-v3",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-instruction-following-v3",
+                input_count=46391,
+                modes=("ifeval",),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-ifeval",
+                source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
+                convert=convert_ifeval,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=IFEVAL_RUBRIC,
+            ),
         ),
-        RlDataPipeline(
-            name="tasktrove-structured",
-            source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
-            convert=convert_structured,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=STRUCTURED_RUBRIC,
-            controls=Controls(),
-            atlas_id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
+        RlDataSource(
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
+                name="laion__nemotron-gym-instruction-following-structured-v3",
+                display_name="laion/nemotron-gym-instruction-following-structured-v3",
+                task_count=9167,
+                notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
+                canonical_source="laion/nemotron-gym-instruction-following-structured-v3",
+                verification="json-schema",
+                upstream_repository="laion/nemotron-gym-instruction-following-structured-v3",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-instruction-following-structured-v3",
+                input_count=9437,
+                modes=("json-schema",),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-structured",
+                source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
+                convert=convert_structured,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=STRUCTURED_RUBRIC,
+                controls=Controls(),
+            ),
         ),
     ]

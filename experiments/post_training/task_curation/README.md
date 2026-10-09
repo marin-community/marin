@@ -5,14 +5,52 @@ dataset is declared once, in [datasets/](datasets/README.md), and listed in the
 catalog [sources.py](sources.py):
 
 ```python
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.sources import all_sources
 
-pipelines = all_pipelines()  # name -> RlDataPipeline
+sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
+
+## Atlas export
+
+Build the Atlas input from the same declarations without downloading data or
+running converters:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog \
+  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+```
+
+The applet build runs this command and bundles the resulting JSON. Its digest
+covers the complete source inventory. Metadata is reviewed in the repository;
+`recorded_at` identifies the metadata capture date. The Atlas no longer scrapes
+upstream catalogs on refresh.
+
+Inventory counts and reviews refer to the declared release population. For
+TaskTrove, that release can differ from the native archive used for conversion.
+The export retains both the inventory revision and the recipe's input revision
+under `pipeline`.
 
 ## Declaring a dataset
 
-A declaration is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
+An `RlDataSource` ([source.py](source.py)) combines inventory metadata, an optional
+review and a conversion recipe:
+
+```python
+RlDataSource(
+    metadata=DataSourceMetadata(id="MarinSkyRL:math500", name="math500", origin="MarinSkyRL"),
+    pipeline=math500_pipeline,
+    review=DataSourceReview(),
+)
+```
+
+The metadata ID preserves Atlas review links. Optional fields record counts,
+classifications and pinned evidence. Presentation defaults come from the recipe's
+source when omitted. A review remains unrated until an assessment is supplied;
+executed reviews and difficulty measurements remain in the Atlas database.
+Sources without a recipe remain in [datasets/unconverted.py](datasets/unconverted.py).
+`all_pipelines()` projects the runnable recipes for the campaign driver.
+
+A conversion recipe is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
 
 ```python
 RlDataPipeline(
@@ -24,7 +62,6 @@ RlDataPipeline(
     intended_use=IntendedUse.EVAL,
     rubric=MATH500_RUBRIC,               # optional model review; one criterion per paragraph
     controls=MATH_CONTROLS,              # optional grader verification
-    atlas_id="MarinSkyRL:math500",       # join key into atlas_catalog.json
     grader=None,                         # GRADER_PACKAGES, or another Environment, when a grade script needs packages
     ships=(),                            # directories whose files the converter packages into tasks
     resource_budget_bytes=1_000_000,     # tasks carrying more resource bytes are deferred
@@ -82,7 +119,7 @@ RlDataPipeline(
 
 To add a dataset, copy the closest declaration, set its source, converter,
 environment and rubric, add a fixture row to the family test's `ROWS`, and add
-the module's `pipelines()` to [sources.py](sources.py).
+the module's `sources()` to [sources.py](sources.py).
 
 ## Outputs
 

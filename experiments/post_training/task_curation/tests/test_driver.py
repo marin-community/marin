@@ -40,7 +40,9 @@ GRADER = "ghcr.io/marin-community/task-curation-grader@sha256:" + "b" * 64
 
 
 def math500():
-    return next(pipeline for pipeline in skyrl_math.pipelines() if pipeline.name == "math500")
+    return next(
+        source.pipeline for source in skyrl_math.sources() if source.name == "math500" and source.pipeline is not None
+    )
 
 
 @pytest.fixture

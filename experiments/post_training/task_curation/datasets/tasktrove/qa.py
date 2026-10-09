@@ -10,6 +10,7 @@ multiple-choice source grades the option letter in process.
 """
 
 import re
+from dataclasses import replace
 
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
@@ -26,6 +27,44 @@ from verifyit.spec import JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+TASKTROVE_METADATA = DataSourceMetadata(
+    id="",
+    name="",
+    origin="Task Trove",
+    url="https://huggingface.co/datasets/open-athena/task-trove",
+    dataset_id="open-athena/task-trove",
+    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+    revised_at="2026-10-08T09:34:47.000Z",
+    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+    verifier_revision=None,
+    environment="Harbor",
+    type="Agentic",
+    turns="Multi-turn",
+    count_basis="Released Harbor tasks: manifest by_source.converted",
+    count_precision="exact",
+    count_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    benchmark_basis="Release manifest does not designate benchmarks",
+    family_basis="Task Trove release manifest source_verdicts.family",
+    family_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
+    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
+    provenance_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
+        "03e826563f5718dbf/manifest.json"
+    ),
+    snapshot_safe=True,
+    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
+    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
+    recorded_at="2026-10-08",
+)
 
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 MCQA_REWRITE_REASON = "Replace the source's answer-file wrapper with a request for one option letter"
@@ -176,35 +215,98 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
     return rewritten_task(task, original=instruction, reason=MCQA_REWRITE_REASON)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     openqa = (
-        ("knowledge-openqa", "laion__nemotron-gym-knowledge-openqa-v4"),
-        ("science-openqa", "laion__nemotron-gym-science-so-openq-v3"),
+        (
+            "knowledge-openqa",
+            "laion__nemotron-gym-knowledge-openqa-v4",
+            replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-knowledge-openqa-v4",
+                name="laion__nemotron-gym-knowledge-openqa-v4",
+                display_name="laion/nemotron-gym-knowledge-openqa-v4",
+                family="qa-short-answer",
+                task_count=121961,
+                notes=(
+                    "Exact gate then reference-based judge. Reference answers are real; needs the "
+                    "judge in the new grader."
+                ),
+                canonical_source="laion/nemotron-gym-knowledge-openqa-v4",
+                verification="judge",
+                upstream_repository="laion/nemotron-gym-knowledge-openqa-v4",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-knowledge-openqa-v4",
+                input_count=122357,
+                modes=("judge",),
+            ),
+        ),
+        (
+            "science-openqa",
+            "laion__nemotron-gym-science-so-openq-v3",
+            replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-science-so-openq-v3",
+                name="laion__nemotron-gym-science-so-openq-v3",
+                display_name="laion/nemotron-gym-science-so-openq-v3",
+                family="llm-judge-freeform",
+                task_count=150468,
+                notes=(
+                    "Reference answer plus judge. Move the reference out of the criterion text into a "
+                    "data field at conversion."
+                ),
+                canonical_source="laion/nemotron-gym-science-so-openq-v3",
+                verification="judge",
+                upstream_repository="laion/nemotron-gym-science-so-openq-v3",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-science-so-openq-v3",
+                input_count=150644,
+                modes=("judge",),
+            ),
+        ),
     )
     return [
         *(
-            RlDataPipeline(
-                name=name,
-                source=tasktrove_source(config),
-                convert=convert_openqa,
+            RlDataSource(
+                metadata=metadata,
+                pipeline=RlDataPipeline(
+                    name=name,
+                    source=tasktrove_source(config),
+                    convert=convert_openqa,
+                    version="1",
+                    environment=ShellSim(),
+                    intended_use=IntendedUse.TRAIN,
+                    rubric=OPENQA_RUBRIC,
+                    grader=GRADER_PACKAGES,
+                ),
+            )
+            for name, config, metadata in openqa
+        ),
+        RlDataSource(
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
+                name="laion__nemotron-gym-knowledge-mcqa-v2",
+                display_name="laion/nemotron-gym-knowledge-mcqa-v2",
+                family="qa-short-answer",
+                task_count=23860,
+                notes=(
+                    "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at "
+                    "conversion and subsample hard: 617k rows is a third of the corpus."
+                ),
+                canonical_source="laion/nemotron-gym-knowledge-mcqa-v2",
+                verification="mcq",
+                upstream_repository="laion/nemotron-gym-knowledge-mcqa-v2",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-knowledge-mcqa-v2",
+                input_count=616888,
+                modes=("mcq",),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-knowledge_mcqa",
+                source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
+                convert=convert_knowledge_mcqa,
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
-                rubric=OPENQA_RUBRIC,
-                atlas_id=f"Task Trove:{config}",
-                grader=GRADER_PACKAGES,
-            )
-            for name, config in openqa
-        ),
-        RlDataPipeline(
-            name="tasktrove-knowledge_mcqa",
-            source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
-            convert=convert_knowledge_mcqa,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=KNOWLEDGE_MCQA_RUBRIC,
-            controls=Controls(golden=reference_reply),
-            atlas_id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
+                rubric=KNOWLEDGE_MCQA_RUBRIC,
+                controls=Controls(golden=reference_reply),
+            ),
         ),
     ]

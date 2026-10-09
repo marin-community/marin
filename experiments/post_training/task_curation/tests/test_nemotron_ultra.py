@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.components 
     SKYWORK,
     SWE_GYM,
     pipeline_name,
-    pipelines,
+    sources,
 )
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     CODE_CONTROLS,
@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
-PIPELINES = {pipeline.name: pipeline for pipeline in pipelines()}
+PIPELINES = {source.name: source.pipeline for source in sources() if source.pipeline is not None}
 SWE_GYM_INSTANCE = "gym-1"
 SWE_REBENCH_INSTANCE = "rebench-1"
 DAPO_QUESTION = "What is 2 + 3?"
@@ -366,7 +366,7 @@ def staged(tmp_path_factory) -> dict[str, StoragePath]:
 
 
 def component_path(name: str) -> str:
-    return PIPELINES[name].atlas_id.split("/", 1)[1]
+    return next(source.metadata.id for source in sources() if source.name == name).split("/", 1)[1]
 
 
 @pytest.mark.parametrize("name", sorted(ROWS))

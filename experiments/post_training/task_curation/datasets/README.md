@@ -1,7 +1,8 @@
 # Dataset declarations
 
-Every RL dataset is one `RlDataPipeline` declared here, and every declaring module
-exports `pipelines()`, which [sources.py](../sources.py) collects into the catalog.
+Every RL dataset is one `RlDataSource` declared here, and every declaring module
+exports `sources()`, which [sources.py](../sources.py) collects into the catalog.
+Each source combines Atlas metadata and an optional `RlDataPipeline` recipe.
 A declaration names the pinned source, the converter that builds each task with
 its grader, the agent environment, and an optional review rubric and grader
 controls. See the [experiment overview](../README.md) for the fields and the
@@ -30,7 +31,8 @@ artifact each declaration produces.
    its compiled lock [grader.lock](grader.lock); regenerate the lock after
    changing `grader.in` (see [images/](../images/README.md)).
 4. Add a representative raw row to the family test's `ROWS` and add the module's
-   `pipelines()` to [sources.py](../sources.py).
+   `sources()` to [sources.py](../sources.py). Add counts, classification and
+   evidence to the same source declaration; reuse the family's metadata template.
 
 A rubric and controls can come later: without a rubric rows are kept
 unreviewed, and without controls sandbox-graded rows other than judge-graded
@@ -53,7 +55,7 @@ ones stay out of `final/`.
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |
 | [tasktrove/repositories.py](tasktrove/repositories.py) | TaskTrove SWE repositories; no agent image covers their per-task repositories. |
 | [tasktrove/structured_outputs.py](tasktrove/structured_outputs.py), [tasktrove/instruction_following.py](tasktrove/instruction_following.py) | Structured-output and instruction-following tasks, graded in process. |
-| [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by each archive's SymPy scorer and `test.sh`. |
+| [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by verifyit's `math` mode in the grader sandbox; source scorer parity is not guaranteed. |
 | [tasktrove/judged.py](tasktrove/judged.py), [tasktrove/qa.py](tasktrove/qa.py) | Judged responses and open QA (verifyit judge, admitted without controls), and knowledge MCQA. |
 | [tasktrove/calendar.py](tasktrove/calendar.py), [tasktrove/multichallenge.py](tasktrove/multichallenge.py), [tasktrove/puzzles.py](tasktrove/puzzles.py) | Calendar scheduling (the archive's checker), multi-turn challenges (verifyit judge) and puzzles. |
 
@@ -67,10 +69,9 @@ reach an endpoint. Their verification stage is therefore empty: no task is sampl
 yet`, and kept rows are admitted to `final/`. Choosing where the judge runs and how
 it receives the endpoint and credentials is follow-up work.
 
-## Sources not declared
+## Sources without conversion recipes
 
-Seven Atlas sources read `open-athena/task-trove`, the output of the retired
-TaskTrove cleanup, and have no archive in `open-thoughts/TaskTrove`; they are not
-declared: AweAI-Team__CalibForge, GAIR__OpenSWE__openswe_oss,
-GAIR__OpenSWE__openswe_other, R2E-Gym__R2E-Gym-V1, SWE-Gym__SWE-Gym,
-XiaomiMiMo__MiMo-V2.6-RL-oss__code and XiaomiMiMo__MiMo-V2.6-RL-oss__music.
+[unconverted.py](unconverted.py) retains excluded sources and available releases
+whose TaskSpec conversions are unfinished. These entries remain visible in the
+Atlas and are omitted from campaign execution. Add a recipe when a source's
+conversion is implemented, retaining its stable metadata ID.

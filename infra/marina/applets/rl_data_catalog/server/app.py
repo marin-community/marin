@@ -1,37 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent source inventory with atomic, independently recoverable upstream refreshes."""
+"""Generated task-curation inventory with persistent reviews and revision checks."""
 
 import json
-import logging
 from dataclasses import asdict
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any
 
-import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .catalog import (
-    SKYRL,
-    SKYRL_ORIGIN,
-    TASKTROVE,
-    TASKTROVE_CLASSIFICATION,
-    TASKTROVE_ORIGIN,
-    Snapshot,
-    annotate_source,
-    get_json,
-    merge_gym_sources,
-    skyrl_snapshot,
-    tasktrove_snapshot,
-)
-from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
+from .catalog import CATALOG_PATH, Snapshot, catalog_snapshots
 from .verifier_policy import migrate_verifier_policy
 
-logger = logging.getLogger(__name__)
 DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
 JUDGE_VERIFIER_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-judge-verifier-nonthinking"
 CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-checklist-judge"
@@ -170,7 +155,7 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     row = dict(record["payload"])
     row.update(
         {
-            key: record[key]
+            key: record[key] if record["review_id"] or record[key] is not None else row.get(key)
             for key in (
                 "difficulty",
                 "quality",
@@ -216,7 +201,7 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def migrate(connection: Connection) -> None:
+def migrate(connection: Connection, catalog_path: Path = CATALOG_PATH) -> None:
     connection.execute(
         text(
             """
@@ -268,30 +253,8 @@ def migrate(connection: Connection) -> None:
         )
     )
 
-    connection.execute(
-        text("UPDATE catalog_sources SET payload = payload || CAST(:classification AS JSONB) WHERE origin = :origin"),
-        {"classification": json.dumps(TASKTROVE_CLASSIFICATION), "origin": TASKTROVE_ORIGIN},
-    )
     migrate_verifier_policy(connection)
-    rows = [
-        dict(payload)
-        for payload in connection.execute(
-            text("SELECT payload FROM catalog_sources WHERE active AND payload ? 'name'")
-        ).scalars()
-    ]
-    rows = merge_gym_sources(rows)
-    for row in rows:
-        annotate_source(row)
-    connection.execute(text("UPDATE catalog_sources SET active = FALSE WHERE payload->>'kind' = 'Environment'"))
-    for row in rows:
-        connection.execute(
-            text("UPDATE catalog_sources SET payload = CAST(:payload AS JSONB), active = :active WHERE id = :id"),
-            {
-                "id": row["id"],
-                "payload": json.dumps(row),
-                "active": True,
-            },
-        )
+    refresh_catalog(connection, catalog_path)
 
 
 def save_snapshot(connection: Connection, snapshot: Snapshot) -> None:
@@ -304,7 +267,7 @@ def save_snapshot(connection: Connection, snapshot: Snapshot) -> None:
                 """
             INSERT INTO catalog_sources (id, origin, payload, active)
             VALUES (:id, :origin, CAST(:payload AS JSONB), TRUE)
-            ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, active = TRUE
+            ON CONFLICT (id) DO UPDATE SET origin = EXCLUDED.origin, payload = EXCLUDED.payload, active = TRUE
         """
             ),
             {"id": row["id"], "origin": snapshot.origin, "payload": json.dumps(row)},
@@ -324,68 +287,33 @@ def save_snapshot(connection: Connection, snapshot: Snapshot) -> None:
     )
 
 
-def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -> dict[str, Any]:
+def refresh_catalog(connection: Connection, catalog_path: Path = CATALOG_PATH, force: bool = False) -> dict[str, Any]:
+    """Reconcile a complete generated catalog without changing stored reviews."""
+    snapshots = catalog_snapshots(catalog_path)
     lock = connection.execute(
         text("SELECT pg_try_advisory_xact_lock(hashtext(current_schema() || '/catalog-refresh'))")
     ).scalar_one()
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
     results = []
-    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
+    for snapshot in snapshots:
         previous = connection.execute(
-            text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": origin}
+            text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": snapshot.origin}
         ).scalar_one_or_none()
-        try:
-            if origin == SKYRL_ORIGIN:
-                head = get_json(client, f"https://api.github.com/repos/{SKYRL}/commits/main")
-                revision = head["sha"]
-                cached_rows = [
-                    dict(row)
-                    for row in connection.execute(
-                        text("SELECT payload FROM catalog_sources WHERE origin = :origin AND active"), {"origin": origin}
-                    ).scalars()
-                ]
-                snapshot = skyrl_snapshot(client, head, cached_rows, force=force)
-            else:
-                info = get_json(client, f"https://huggingface.co/api/datasets/{TASKTROVE}")
-                revision = info["sha"]
-                manifest = (
-                    get_json(client, f"https://huggingface.co/datasets/{TASKTROVE}/raw/{revision}/manifest.json")
-                    if force or revision != previous
-                    else None
-                )
-                snapshot = tasktrove_snapshot(manifest, info) if manifest is not None else None
-        except (
-            httpx.HTTPError,
-            HFCredentialError,
-            ValueError,
-            KeyError,
-            TypeError,
-            SyntaxError,
-            StopIteration,
-        ) as error:
-            # Preserve the last successful upstream snapshot and expose refresh failures.
-            logger.exception("Catalog refresh failed for %s", origin)
-            message = str(error) or type(error).__name__
-            connection.execute(
-                text(
-                    """
-                INSERT INTO catalog_refreshes (origin, error) VALUES (:origin, :error)
-                ON CONFLICT (origin) DO UPDATE SET checked_at = NOW(), error = EXCLUDED.error
-            """
-                ),
-                {"origin": origin, "error": message},
-            )
-            results.append({"origin": origin, "error": message})
-            continue
-        if snapshot is not None:
+        changed = force or snapshot.revision != previous
+        if changed:
             save_snapshot(connection, snapshot)
         else:
             connection.execute(
                 text("UPDATE catalog_refreshes SET checked_at = NOW(), error = NULL WHERE origin = :origin"),
-                {"origin": origin},
+                {"origin": snapshot.origin},
             )
-        results.append({"origin": origin, "revision": revision, "changed": snapshot is not None})
+        results.append({"origin": snapshot.origin, "revision": snapshot.revision, "changed": changed})
+    origins = {snapshot.origin for snapshot in snapshots}
+    existing = connection.execute(text("SELECT DISTINCT origin FROM catalog_sources")).scalars()
+    for origin in set(existing) - origins:
+        connection.execute(text("UPDATE catalog_sources SET active = FALSE WHERE origin = :origin"), {"origin": origin})
+        connection.execute(text("DELETE FROM catalog_refreshes WHERE origin = :origin"), {"origin": origin})
     return {"busy": False, "results": results}
 
 
@@ -525,22 +453,8 @@ def create_api(services: AppletServices) -> FastAPI:
         return Response(record["content"], media_type="text/plain", headers={"ETag": record["sha256"]})
 
     @api.post("/refresh")
-    def refresh(request: Request, force: bool = False, hf_auth: Literal["auto", "runtime"] = "auto") -> dict[str, Any]:
-        caller_token = request.headers.get("X-HuggingFace-Token")
-        auth = HuggingFaceAuth(runtime_hf_token() if hf_auth == "runtime" else caller_token)
-        with httpx.Client(
-            timeout=15,
-            follow_redirects=True,
-            headers={"User-Agent": "Marina-RL-Data-Atlas"},
-            auth=auth,
-        ) as client:
-            with engine.begin() as connection:
-                result = refresh_catalog(connection, client, force)
-        credential_source = (
-            "runtime_secret"
-            if hf_auth == "runtime"
-            else "caller" if caller_token else ("runtime_secret" if auth.token else "anonymous")
-        )
-        return {**result, "hf_authentication": credential_source}
+    def refresh(force: bool = False) -> dict[str, Any]:
+        with engine.begin() as connection:
+            return refresh_catalog(connection, force=force)
 
     return api

@@ -12,6 +12,7 @@ golden control; an archive whose witness is not a nonempty JSON list of events i
 """
 
 import json
+from dataclasses import replace
 from typing import Any
 
 from taskcompendium.convert.answers import source_defect
@@ -40,6 +41,46 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+TASKTROVE_METADATA = DataSourceMetadata(
+    id="",
+    name="",
+    origin="Task Trove",
+    url="https://huggingface.co/datasets/open-athena/task-trove",
+    dataset_id="open-athena/task-trove",
+    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+    revised_at="2026-10-08T09:34:47.000Z",
+    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+    verifier_revision=None,
+    environment="Harbor",
+    type="Agentic",
+    turns="Multi-turn",
+    count_basis="Released Harbor tasks: manifest by_source.converted",
+    count_precision="exact",
+    count_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    benchmark_basis="Release manifest does not designate benchmarks",
+    family_basis="Task Trove release manifest source_verdicts.family",
+    family_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
+    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
+    provenance_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
+        "03e826563f5718dbf/manifest.json"
+    ),
+    verification="script",
+    snapshot_safe=True,
+    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
+    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
+    modes=("script",),
+    recorded_at="2026-10-08",
+)
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
@@ -150,23 +191,62 @@ def calendar_golden(task: TaskSpec) -> Reply | None:
     return None if witness is None else answer_reply(task, witness)
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     sources = (
-        ("tasktrove-calendar", "laion__nemotron-gym-agent-calendar-v2", CALENDAR_RUBRIC),
-        ("tasktrove-if_calendar", "laion__nemotron-gym-instruction-following-calendar-v3", IF_CALENDAR_RUBRIC),
+        (
+            "tasktrove-calendar",
+            "laion__nemotron-gym-agent-calendar-v2",
+            CALENDAR_RUBRIC,
+            replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-agent-calendar-v2",
+                name="laion__nemotron-gym-agent-calendar-v2",
+                display_name="laion/nemotron-gym-agent-calendar-v2",
+                family="tool-use",
+                task_count=2699,
+                notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
+                canonical_source="laion/nemotron-gym-agent-calendar-v2",
+                upstream_repository="laion/nemotron-gym-agent-calendar-v2",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-agent-calendar-v2",
+                input_count=2699,
+            ),
+        ),
+        (
+            "tasktrove-if_calendar",
+            "laion__nemotron-gym-instruction-following-calendar-v3",
+            IF_CALENDAR_RUBRIC,
+            replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-instruction-following-calendar-v3",
+                name="laion__nemotron-gym-instruction-following-calendar-v3",
+                display_name="laion/nemotron-gym-instruction-following-calendar-v3",
+                family="instruction-following",
+                task_count=5673,
+                notes=(
+                    "Deterministic overlap and constraint check. Synthetic and templated; dedupe "
+                    "against agent-calendar-v2."
+                ),
+                canonical_source="laion/nemotron-gym-instruction-following-calendar-v3",
+                upstream_repository="laion/nemotron-gym-instruction-following-calendar-v3",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-instruction-following-calendar-v3",
+                input_count=5673,
+            ),
+        ),
     )
     return [
-        RlDataPipeline(
-            name=name,
-            source=tasktrove_source(config),
-            convert=convert_calendar,
-            version="1",
-            environment=ShellSim(),
-            intended_use=IntendedUse.TRAIN,
-            rubric=rubric,
-            controls=Controls(golden=calendar_golden),
-            atlas_id=f"Task Trove:{config}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            metadata=metadata,
+            pipeline=RlDataPipeline(
+                name=name,
+                source=tasktrove_source(config),
+                convert=convert_calendar,
+                version="1",
+                environment=ShellSim(),
+                intended_use=IntendedUse.TRAIN,
+                rubric=rubric,
+                controls=Controls(golden=calendar_golden),
+                grader=GRADER_PACKAGES,
+            ),
         )
-        for name, config, rubric in sources
+        for name, config, rubric, metadata in sources
     ]

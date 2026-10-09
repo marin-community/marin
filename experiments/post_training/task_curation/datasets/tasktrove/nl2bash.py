@@ -9,6 +9,8 @@ recorded output as an order-insensitive multiset of normalized lines. The oracle
 source's ``solution/solve.sh``.
 """
 
+from dataclasses import replace
+
 from taskcompendium.convert.executable import solve_script, tasktrove_archive_task
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bash
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -19,6 +21,9 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+TASKTROVE_METADATA = DataSourceMetadata(id="", name="", origin="Task Trove", recorded_at="2026-10-08")
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
@@ -52,18 +57,65 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
-        RlDataPipeline(
-            name="tasktrove-nl2bash",
-            source=tasktrove_source(CONFIG),
-            convert=convert_nl2bash_task,
-            version="1",
-            environment=AGENT_IMAGE,
-            intended_use=IntendedUse.TRAIN,
-            rubric=NL2BASH_RUBRIC,
-            controls=Controls(golden=solve_script),
-            atlas_id=f"Task Trove:{CONFIG}",
-            grader=GRADER_PACKAGES,
+        RlDataSource(
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                name="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                display_name="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                url="https://huggingface.co/datasets/open-athena/task-trove",
+                dataset_id="open-athena/task-trove",
+                revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+                revised_at="2026-10-08T09:34:47.000Z",
+                dataset_revision="8c85912822da0a77978e285af923eecc48ae34a3",
+                verifier_revision=None,
+                family="shell-cmd",
+                environment="Harbor",
+                type="Agentic",
+                turns="Multi-turn",
+                task_count=1497,
+                count_basis="Released Harbor tasks: manifest by_source.converted",
+                count_precision="exact",
+                count_url=(
+                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bb"
+                    "ccb803e826563f5718dbf/manifest.json"
+                ),
+                notes="Semantic output comparison against an oracle command run in the same sandbox.",
+                benchmark_basis="Release manifest does not designate benchmarks",
+                family_basis="Task Trove release manifest source_verdicts.family",
+                family_url=(
+                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bb"
+                    "ccb803e826563f5718dbf/manifest.json"
+                ),
+                classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
+                canonical_source="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
+                provenance_url=(
+                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5"
+                    "bbccb803e826563f5718dbf/manifest.json"
+                ),
+                verification="script",
+                snapshot_safe=True,
+                snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
+                upstream_repository="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                upstream_url="https://huggingface.co/datasets/DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
+                input_count=1498,
+                languages=("bash",),
+                modes=("script",),
+            ),
+            pipeline=RlDataPipeline(
+                name="tasktrove-nl2bash",
+                source=tasktrove_source(CONFIG),
+                convert=convert_nl2bash_task,
+                version="1",
+                environment=AGENT_IMAGE,
+                intended_use=IntendedUse.TRAIN,
+                rubric=NL2BASH_RUBRIC,
+                controls=Controls(golden=solve_script),
+                grader=GRADER_PACKAGES,
+            ),
         )
     ]

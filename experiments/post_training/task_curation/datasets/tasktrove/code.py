@@ -9,6 +9,8 @@ run the source's ``solution/solve.sh`` oracle when the archive ships one, and ot
 submission.
 """
 
+from dataclasses import replace
+
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
     solve_script,
@@ -30,6 +32,46 @@ from experiments.post_training.task_curation.datasets.environments import COMPIL
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+TASKTROVE_METADATA = DataSourceMetadata(
+    id="",
+    name="",
+    origin="Task Trove",
+    url="https://huggingface.co/datasets/open-athena/task-trove",
+    dataset_id="open-athena/task-trove",
+    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+    revised_at="2026-10-08T09:34:47.000Z",
+    verifier_revision=None,
+    environment="Harbor",
+    type="Agentic",
+    turns="Multi-turn",
+    count_basis="Released Harbor tasks: manifest by_source.converted",
+    count_precision="exact",
+    count_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    benchmark_basis="Release manifest does not designate benchmarks",
+    family_basis="Task Trove release manifest source_verdicts.family",
+    family_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
+        "e826563f5718dbf/manifest.json"
+    ),
+    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
+    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
+    provenance_url=(
+        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
+        "03e826563f5718dbf/manifest.json"
+    ),
+    verification="stdio",
+    snapshot_safe=True,
+    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
+    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
+    languages=("python",),
+    modes=("stdio",),
+    recorded_at="2026-10-08",
+)
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
@@ -142,32 +184,111 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     )
 
 
-def stdio_pipeline(name: str, config: str, convert: Converter, rubric: str) -> RlDataPipeline:
-    return RlDataPipeline(
-        name=f"tasktrove-{name}",
-        source=tasktrove_source(config),
-        convert=convert,
-        version="1",
-        environment=AGENT_IMAGE,
-        intended_use=IntendedUse.TRAIN,
-        rubric=rubric,
-        controls=EXECUTABLE_CONTROLS,
-        atlas_id=f"Task Trove:{config}",
-        grader=COMPILER_GRADER_PACKAGES,
+def stdio_pipeline(
+    name: str, config: str, convert: Converter, rubric: str, metadata: DataSourceMetadata
+) -> RlDataSource:
+    return RlDataSource(
+        metadata=metadata,
+        pipeline=RlDataPipeline(
+            name=f"tasktrove-{name}",
+            source=tasktrove_source(config),
+            convert=convert,
+            version="1",
+            environment=AGENT_IMAGE,
+            intended_use=IntendedUse.TRAIN,
+            rubric=rubric,
+            controls=EXECUTABLE_CONTROLS,
+            grader=COMPILER_GRADER_PACKAGES,
+        ),
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [
         stdio_pipeline(
-            "code_contests", "DCAgent__code-contests-noblock", convert_code_contests_task, CODE_CONTESTS_RUBRIC
+            "code_contests",
+            "DCAgent__code-contests-noblock",
+            convert_code_contests_task,
+            CODE_CONTESTS_RUBRIC,
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:DCAgent__code-contests-noblock",
+                name="DCAgent__code-contests-noblock",
+                display_name="DCAgent/code-contests-noblock",
+                dataset_revision="dcda4effa776640a0b85e0c4b6797921edb03c76",
+                family="competitive-programming",
+                task_count=8222,
+                notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                canonical_source="DCAgent/code-contests-noblock",
+                upstream_repository="DCAgent/code-contests-noblock",
+                upstream_url="https://huggingface.co/datasets/DCAgent/code-contests-noblock",
+                input_count=8728,
+            ),
         ),
-        stdio_pipeline("codeforces", "laion__codeforces-v3", convert_codeforces_task, CODEFORCES_RUBRIC),
+        stdio_pipeline(
+            "codeforces",
+            "laion__codeforces-v3",
+            convert_codeforces_task,
+            CODEFORCES_RUBRIC,
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__codeforces-v3",
+                name="laion__codeforces-v3",
+                display_name="laion/codeforces-v3",
+                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+                family="competitive-programming",
+                task_count=9697,
+                notes=(
+                    "Keep rows with at least 5 test files; drop the zero-test fallback (currently "
+                    "full credit for not crashing)."
+                ),
+                canonical_source="laion/codeforces-v3",
+                upstream_repository="laion/codeforces-v3",
+                upstream_url="https://huggingface.co/datasets/laion/codeforces-v3",
+                input_count=10000,
+            ),
+        ),
         stdio_pipeline(
             "competitive_coding",
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
+                name="laion__nemotron-gym-competitive-coding-v2",
+                display_name="laion/nemotron-gym-competitive-coding-v2",
+                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+                family="competitive-programming",
+                task_count=13973,
+                notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
+                canonical_source="laion/nemotron-gym-competitive-coding-v2",
+                upstream_repository="laion/nemotron-gym-competitive-coding-v2",
+                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-competitive-coding-v2",
+                input_count=15713,
+            ),
         ),
-        stdio_pipeline("taco", "laion__exp_rpt_taco-v2", convert_taco_task, TACO_RUBRIC),
+        stdio_pipeline(
+            "taco",
+            "laion__exp_rpt_taco-v2",
+            convert_taco_task,
+            TACO_RUBRIC,
+            metadata=replace(
+                TASKTROVE_METADATA,
+                id="Task Trove:laion__exp_rpt_taco-v2",
+                name="laion__exp_rpt_taco-v2",
+                display_name="laion/exp_rpt_taco-v2",
+                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+                family="stdin-stdout",
+                task_count=5116,
+                notes=(
+                    "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add "
+                    "tolerance-aware compare where the prompt promises one."
+                ),
+                canonical_source="laion/exp_rpt_taco-v2",
+                upstream_repository="laion/exp_rpt_taco-v2",
+                upstream_url="https://huggingface.co/datasets/laion/exp_rpt_taco-v2",
+                input_count=10000,
+            ),
+        ),
     ]

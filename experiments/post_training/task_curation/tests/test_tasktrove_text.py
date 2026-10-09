@@ -53,9 +53,10 @@ from experiments.post_training.task_curation.tests.conversion import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PIPELINES = {
-    pipeline.name: pipeline
+    source.name: source.pipeline
     for module in (math_sources, judged, qa, calendar_sources, instruction_following, multichallenge, puzzles)
-    for pipeline in module.pipelines()
+    for source in module.sources()
+    if source.pipeline is not None
 }
 
 

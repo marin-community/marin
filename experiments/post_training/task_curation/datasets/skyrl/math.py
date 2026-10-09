@@ -10,7 +10,7 @@ and numeric answers use the numeric comparator, which the structural checks alre
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
@@ -22,6 +22,32 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
+
+SKYRL_METADATA = DataSourceMetadata(
+    id="",
+    name="",
+    origin="MarinSkyRL",
+    revision="e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
+    family="math-answer",
+    type="RLVR",
+    turns="Single-turn",
+    family_basis="Upstream card/schema and selected SkyRL loader audited 2026-09-28",
+    classification_basis="Inferred from SkyRL environment contract; blended sources may contain multiple task types",
+    provenance_url=(
+        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c8"
+        "83aaf0d2/infra/rl_data/sources.py"
+    ),
+    verification="two_sided",
+    snapshot_safe=True,
+    gym_url=(
+        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c883a"
+        "af0d2/skyrl-gym/skyrl_gym/envs/__init__.py"
+    ),
+    registry_revised_at="2026-10-01T14:18:17Z",
+    revision_basis="Latest upstream dataset repository or MarinSkyRL verifier change",
+    recorded_at="2026-10-08",
+)
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -277,6 +303,7 @@ class MathSource:
     intended_use: IntendedUse
     rubric: str
     controls: Controls | None = MATH_CONTROLS
+    metadata: DataSourceMetadata = field(kw_only=True)
 
 
 SOURCES = (
@@ -292,6 +319,42 @@ SOURCES = (
         IntendedUse.EVAL,
         AIME24_RUBRIC,
         controls=None,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:aime24",
+            name="aime24",
+            display_name="HuggingFaceH4/aime_2024",
+            url="https://huggingface.co/datasets/HuggingFaceH4/aime_2024",
+            dataset_id="HuggingFaceH4/aime_2024",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="2fe88a2f1091d5048c0f36abc874fb997b3dd99a",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=30,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/HuggingFaceH4/aime_2024/blob/2fe88a2f1091d5048c0f"
+                "36abc874fb997b3dd99a/README.md"
+            ),
+            is_benchmark=True,
+            benchmark_basis="Upstream dataset card explicitly describes a benchmark",
+            family_url=(
+                "https://huggingface.co/datasets/HuggingFaceH4/aime_2024/blob/2fe88a2f1091d5048c0f"
+                "36abc874fb997b3dd99a/README.md"
+            ),
+            canonical_source="HuggingFaceH4/aime_2024",
+            canonical_url="https://huggingface.co/datasets/HuggingFaceH4/aime_2024",
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-01-26T16:17:13.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "aime_1983_2024",
@@ -304,6 +367,40 @@ SOURCES = (
         convert_aime_1983_2024,
         IntendedUse.EVAL,
         AIME_1983_2024_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:aime_1983_2024",
+            name="aime_1983_2024",
+            display_name="di-zhang-fdu/AIME_1983_2024",
+            url="https://huggingface.co/datasets/di-zhang-fdu/AIME_1983_2024",
+            dataset_id="di-zhang-fdu/AIME_1983_2024",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="3e2cc86390666c5c756622afc0eeb9e6194496bc",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=933,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url="https://datasets-server.huggingface.co/size?dataset=di-zhang-fdu/AIME_1983_2024",
+            is_benchmark=True,
+            benchmark_basis="Upstream dataset card explicitly describes a benchmark",
+            family_url=(
+                "https://huggingface.co/datasets/di-zhang-fdu/AIME_1983_2024/blob/3e2cc86390666c5c"
+                "756622afc0eeb9e6194496bc/README.md"
+            ),
+            canonical_source="di-zhang-fdu/AIME_1983_2024",
+            canonical_url="https://huggingface.co/datasets/di-zhang-fdu/AIME_1983_2024",
+            license=("mit",),
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-03-03T11:37:13.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "asdiv",
@@ -317,6 +414,41 @@ SOURCES = (
         convert_asdiv,
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:asdiv",
+            name="asdiv",
+            display_name="chaochun/nlu-asdiv-dataset",
+            url="https://github.com/chaochun/nlu-asdiv-dataset",
+            dataset_id="chaochun/nlu-asdiv-dataset",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="883f90a9a65bf00304ba8f37423910fe743abc47",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=2305,
+            count_basis="Original GitHub README: complete ASDiv problem collection",
+            count_precision="reported",
+            count_url=(
+                "https://github.com/chaochun/nlu-asdiv-dataset/blob/883f90a9a65bf00304ba8f37423910"
+                "fe743abc47/README.md"
+            ),
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://github.com/chaochun/nlu-asdiv-dataset/blob/883f90a9a65bf00304ba8f37423910"
+                "fe743abc47/README.md"
+            ),
+            canonical_source="chaochun/nlu-asdiv-dataset",
+            canonical_url="https://github.com/chaochun/nlu-asdiv-dataset",
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2022-12-07T01:25:37Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "dapo_math",
@@ -329,6 +461,39 @@ SOURCES = (
         convert_dapo_math,
         IntendedUse.TRAIN,
         DAPO_MATH_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:dapo_math",
+            name="dapo_math",
+            display_name="BytedTsinghua-SIA/DAPO-Math-17k",
+            url="https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k",
+            dataset_id="BytedTsinghua-SIA/DAPO-Math-17k",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="65877096c24ffa7abc4e4fa5edb95cf3413a5674",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=1791700,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url="https://datasets-server.huggingface.co/size?dataset=BytedTsinghua-SIA/DAPO-Math-17k",
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k/blob/65877096c24f"
+                "fa7abc4e4fa5edb95cf3413a5674/README.md"
+            ),
+            canonical_source="BytedTsinghua-SIA/DAPO-Math-17k",
+            canonical_url="https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k",
+            license=("apache-2.0",),
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-04-18T11:20:51.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "deepscaler",
@@ -341,6 +506,39 @@ SOURCES = (
         convert_deepscaler,
         IntendedUse.TRAIN,
         DEEPSCALER_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:deepscaler",
+            name="deepscaler",
+            display_name="agentica-org/DeepScaleR-Preview-Dataset",
+            url="https://huggingface.co/datasets/agentica-org/DeepScaleR-Preview-Dataset",
+            dataset_id="agentica-org/DeepScaleR-Preview-Dataset",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="b6ae8c60f5c1f2b594e2140b91c49c9ad0949e29",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=40315,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url="https://datasets-server.huggingface.co/size?dataset=agentica-org/DeepScaleR-Preview-Dataset",
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/agentica-org/DeepScaleR-Preview-Dataset/blob/b6ae"
+                "8c60f5c1f2b594e2140b91c49c9ad0949e29/README.md"
+            ),
+            canonical_source="agentica-org/DeepScaleR-Preview-Dataset",
+            canonical_url="https://huggingface.co/datasets/agentica-org/DeepScaleR-Preview-Dataset",
+            license=("mit",),
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-02-10T09:51:18.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "gsm8k",
@@ -353,6 +551,40 @@ SOURCES = (
         convert_gsm8k,
         IntendedUse.TRAIN,
         GSM8K_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:gsm8k",
+            name="gsm8k",
+            display_name="openai/gsm8k",
+            url="https://huggingface.co/datasets/openai/gsm8k",
+            dataset_id="openai/gsm8k",
+            revised_at="2026-10-08T02:13:45Z",
+            dataset_revision="740312add88f781978c0658806c59bc2815b9866",
+            verifier_revision="60e40a6f794fad7e9527298d901ff35a7dc57f2e3d061661f386fbbea24293bc",
+            environment="gsm8k",
+            task_count=7473,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/openai/gsm8k/blob/740312add88f781978c0658806c59bc" "2815b9866/README.md"
+            ),
+            is_benchmark=True,
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/openai/gsm8k/blob/740312add88f781978c0658806c59bc" "2815b9866/README.md"
+            ),
+            canonical_source="openai/gsm8k",
+            canonical_url="https://huggingface.co/datasets/openai/gsm8k",
+            license=("mit",),
+            gym_alias="gym/gsm8k",
+            gym_entrypoint="skyrl_gym.envs.gsm8k.env:GSM8kEnv",
+            dataset_revised_at="2026-03-23T10:18:13.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/gsm8k"
+            ),
+            verifier_revised_at="2026-10-08T02:13:45Z",
+        ),
     ),
     MathSource(
         "hardmath",
@@ -365,6 +597,41 @@ SOURCES = (
         convert_hardmath,
         IntendedUse.TRAIN,
         HARDMATH_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:hardmath",
+            name="hardmath",
+            display_name="pafitis/HARDMath_processed_training",
+            url="https://huggingface.co/datasets/pafitis/HARDMath_processed_training",
+            dataset_id="pafitis/HARDMath_processed_training",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="937e9f10356e31e854f6efb9a2507f1e200c8b25",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=702,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/pafitis/HARDMath_processed_training/blob/937e9f10"
+                "356e31e854f6efb9a2507f1e200c8b25/README.md"
+            ),
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/pafitis/HARDMath_processed_training/blob/937e9f10"
+                "356e31e854f6efb9a2507f1e200c8b25/README.md"
+            ),
+            canonical_source="pafitis/HARDMath_processed_training",
+            canonical_url="https://huggingface.co/datasets/pafitis/HARDMath_processed_training",
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-02-12T12:50:13.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "hendrycks_math",
@@ -377,6 +644,42 @@ SOURCES = (
         convert_hendrycks_math,
         IntendedUse.TRAIN,
         HENDRYCKS_MATH_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:hendrycks_math",
+            name="hendrycks_math",
+            display_name="EleutherAI/hendrycks_math",
+            url="https://huggingface.co/datasets/EleutherAI/hendrycks_math",
+            dataset_id="EleutherAI/hendrycks_math",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="21a5633873b6a120296cce3e2df9d5550074f4a3",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=7500,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/EleutherAI/hendrycks_math/blob/21a5633873b6a12029"
+                "6cce3e2df9d5550074f4a3/README.md"
+            ),
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/EleutherAI/hendrycks_math/blob/21a5633873b6a12029"
+                "6cce3e2df9d5550074f4a3/README.md"
+            ),
+            canonical_source="EleutherAI/hendrycks_math",
+            canonical_url="https://huggingface.co/datasets/EleutherAI/hendrycks_math",
+            license=("mit",),
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-01-12T19:39:12.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "math500",
@@ -386,6 +689,40 @@ SOURCES = (
         convert_math500,
         IntendedUse.EVAL,
         MATH500_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:math500",
+            name="math500",
+            display_name="HuggingFaceH4/MATH-500",
+            url="https://huggingface.co/datasets/HuggingFaceH4/MATH-500",
+            dataset_id="HuggingFaceH4/MATH-500",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=500,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url="https://datasets-server.huggingface.co/size?dataset=HuggingFaceH4/MATH-500",
+            split="test",
+            is_benchmark=True,
+            benchmark_basis="Upstream dataset card explicitly describes a benchmark",
+            family_url=(
+                "https://huggingface.co/datasets/HuggingFaceH4/MATH-500/blob/6e4ed1a2a79af7d8630a6"
+                "b768ec859cb5af4d3be/README.md"
+            ),
+            canonical_source="HuggingFaceH4/MATH-500",
+            canonical_url="https://huggingface.co/datasets/HuggingFaceH4/MATH-500",
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2025-12-15T11:01:40.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "numina_math",
@@ -398,6 +735,42 @@ SOURCES = (
         convert_numina_math,
         IntendedUse.TRAIN,
         NUMINA_MATH_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:numina_math",
+            name="numina_math",
+            display_name="AI-MO/NuminaMath-CoT",
+            url="https://huggingface.co/datasets/AI-MO/NuminaMath-CoT",
+            dataset_id="AI-MO/NuminaMath-CoT",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="9d8d210c9f6a36c8f3cd84045668c9b7800ef517",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=859494,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/AI-MO/NuminaMath-CoT/blob/9d8d210c9f6a36c8f3cd840"
+                "45668c9b7800ef517/README.md"
+            ),
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/AI-MO/NuminaMath-CoT/blob/9d8d210c9f6a36c8f3cd840"
+                "45668c9b7800ef517/README.md"
+            ),
+            canonical_source="AI-MO/NuminaMath-CoT",
+            canonical_url="https://huggingface.co/datasets/AI-MO/NuminaMath-CoT",
+            license=("apache-2.0",),
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2024-11-25T05:31:43.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
     MathSource(
         "rlvr_math",
@@ -410,6 +783,40 @@ SOURCES = (
         convert_rlvr_math,
         IntendedUse.TRAIN,
         RLVR_MATH_RUBRIC,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:rlvr_math",
+            name="rlvr_math",
+            display_name="allenai/RLVR-MATH",
+            url="https://huggingface.co/datasets/allenai/RLVR-MATH",
+            dataset_id="allenai/RLVR-MATH",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="bd2a93551b503a395fadd1a740d957559cfe6f3c",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=7500,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/allenai/RLVR-MATH/blob/bd2a93551b503a395fadd1a740"
+                "d957559cfe6f3c/README.md"
+            ),
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/allenai/RLVR-MATH/blob/bd2a93551b503a395fadd1a740"
+                "d957559cfe6f3c/README.md"
+            ),
+            canonical_source="allenai/RLVR-MATH",
+            canonical_url="https://huggingface.co/datasets/allenai/RLVR-MATH",
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2024-11-20T22:05:26.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+        ),
     ),
     MathSource(
         "svamp",
@@ -420,23 +827,61 @@ SOURCES = (
         IntendedUse.TRAIN,
         SVAMP_RUBRIC,
         controls=None,
+        metadata=replace(
+            SKYRL_METADATA,
+            id="MarinSkyRL:svamp",
+            name="svamp",
+            display_name="ChilleD/SVAMP",
+            url="https://huggingface.co/datasets/ChilleD/SVAMP",
+            dataset_id="ChilleD/SVAMP",
+            revised_at="2026-10-08T05:59:25Z",
+            dataset_revision="5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef",
+            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            environment="aime",
+            task_count=700,
+            count_basis="HF card / viewer selected split rows, before filtering / deduplication",
+            count_precision="exact",
+            count_url=(
+                "https://huggingface.co/datasets/ChilleD/SVAMP/blob/5e0bf1e5e7c0e9c4bc39180d224f41"
+                "f3f801b7ef/README.md"
+            ),
+            benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
+            family_url=(
+                "https://huggingface.co/datasets/ChilleD/SVAMP/blob/5e0bf1e5e7c0e9c4bc39180d224f41"
+                "f3f801b7ef/README.md"
+            ),
+            canonical_source="ChilleD/SVAMP",
+            canonical_url="https://huggingface.co/datasets/ChilleD/SVAMP",
+            license=("mit",),
+            gym_alias="gym/aime",
+            gym_entrypoint="skyrl_gym.envs.aime.env:AIMEEnv",
+            dataset_revised_at="2024-06-05T03:08:36.000Z",
+            verifier_url=(
+                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
+                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
+            ),
+            verifier_revised_at="2026-10-08T05:59:25Z",
+            grading_revision="7ff1884486078cb34e260e6c745a5753c4d0523af6117e797c2e3c587b58a913",
+        ),
     ),
 )
 
 
-def math_pipeline(source: MathSource) -> RlDataPipeline:
-    return RlDataPipeline(
-        name=source.name,
-        source=source.source,
-        convert=source.convert,
-        version="1",
-        environment=ShellSim(),
-        intended_use=source.intended_use,
-        rubric=source.rubric,
-        controls=source.controls,
-        atlas_id=f"MarinSkyRL:{source.name}",
+def math_pipeline(source: MathSource) -> RlDataSource:
+    return RlDataSource(
+        metadata=source.metadata,
+        pipeline=RlDataPipeline(
+            name=source.name,
+            source=source.source,
+            convert=source.convert,
+            version="1",
+            environment=ShellSim(),
+            intended_use=source.intended_use,
+            rubric=source.rubric,
+            controls=source.controls,
+        ),
     )
 
 
-def pipelines() -> list[RlDataPipeline]:
+def sources() -> list[RlDataSource]:
     return [math_pipeline(source) for source in SOURCES]

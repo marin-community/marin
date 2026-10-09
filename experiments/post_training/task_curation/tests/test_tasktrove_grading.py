@@ -22,7 +22,12 @@ from experiments.post_training.task_curation.tests.test_tasktrove_text import fi
 pytestmark = pytest.mark.docker
 
 GRADING_MEMORY_MB = 2048
-PIPELINES = {pipeline.name: pipeline for module in (calendar, math, python_tests) for pipeline in module.pipelines()}
+PIPELINES = {
+    source.name: source.pipeline
+    for module in (calendar, math, python_tests)
+    for source in module.sources()
+    if source.pipeline is not None
+}
 ARCHIVE_GRADERS = [
     ("tasktrove-math_gym", "math_gym"),
     ("tasktrove-math_prism", "math_prism"),
