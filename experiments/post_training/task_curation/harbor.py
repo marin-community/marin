@@ -90,6 +90,16 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     if PINNED_IMAGE.fullmatch(grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])
+    environment = task.environment_requirements
+    grader = task.grader
+    if environment.docker_build is not None:
+        raise UnsupportedHarborTask("Actor Docker build contexts require native Harbor build lowering")
+    if (
+        isinstance(grader, ScriptGrader | VerifyitGrader)
+        and grader.environment is not None
+        and grader.environment.docker_build is not None
+    ):
+        raise UnsupportedHarborTask("Verifier Docker build contexts require native Harbor build lowering")
     if len(task.context.events) != 1 or not isinstance(task.context.events[0], TextMessage):
         raise UnsupportedHarborTask("Only a single public text instruction is supported")
     if task.answer_type not in (AnswerType.TEXT, AnswerType.FILE):
@@ -98,12 +108,10 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
     if task.output_directories or task.final_tools:
         raise UnsupportedHarborTask("Directory capture and final tool calls require dedicated Harbor lowering")
-    environment = task.environment_requirements
     if environment.setup_commands or environment.packages_lock:
         raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
     if set(environment.tool_providers) - {"shell"}:
         raise UnsupportedHarborTask("Only shell tool providers have Harbor lowering")
-    grader = task.grader
     files, modes = {}, {}
     answer_path = None
     if isinstance(grader, VerifyitGrader):

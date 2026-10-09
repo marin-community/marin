@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineSpec, Result
+from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineSpec, Result, UnsupportedMachineSpec
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
@@ -23,6 +23,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
+    DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
     GradingAttempt,
@@ -40,7 +41,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
-from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_in_sandbox
+from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import BASH, CONTROL_PATH, INTERFACE, OUTPUT_PATH, ShellFactory
@@ -123,6 +124,41 @@ class FileMachines:
         machine = FileMachine()
         self.machines.append(machine)
         return machine
+
+
+@pytest.mark.parametrize("entrypoint", ["factory", "episode"])
+def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
+    requirements = shell_task.environment_requirements.model_copy(
+        update={"docker_build": DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))}
+    )
+    task = shell_task.model_copy(update={"environment_requirements": requirements})
+    machines = FileMachines()
+    factory = ShellFactory(machines, GRADER_MACHINE, {}, 10, 1024)
+    with pytest.raises(UnsupportedMachineSpec):
+        if entrypoint == "factory":
+            asyncio.run(factory.create(task))
+        else:
+            asyncio.run(run_episode(task, ScriptedActor(()), factory, max_steps=1, control="fixture"))
+    assert machines.machines == []
+
+
+@pytest.mark.parametrize("entrypoint", ["grade", "empty", "no_machine_spec"])
+def test_unresolved_grader_build_never_creates_a_machine(shell_task, entrypoint):
+    environment = EnvironmentRequirements(
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))
+    )
+    task = shell_task.model_copy(
+        update={"grader": ScriptGrader(argv=("true",), answer_path=None, environment=environment)}
+    )
+    machines = FileMachines()
+    with pytest.raises(UnsupportedMachineSpec):
+        if entrypoint == "grade":
+            asyncio.run(grade_in_sandbox(task, GradingAttempt(finished(task)), machines, GRADER_MACHINE))
+        elif entrypoint == "empty":
+            asyncio.run(grade_empty_in_sandbox(task, machines, GRADER_MACHINE))
+        else:
+            grade_task(task, GradingAttempt(finished(task)))
+    assert machines.machines == []
 
 
 @dataclass(kw_only=True)

@@ -6,7 +6,14 @@
 import hashlib
 import json
 
-from taskcompendium.models import ResourceGroups, Source, TaskSpec
+from taskcompendium.models import (
+    DockerBuildContext,
+    EnvironmentRequirements,
+    ResourceGroups,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review import completion_body
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
@@ -41,6 +48,33 @@ def test_review_marks_omitted_fixture_content_and_retains_full_task():
     assert preview["truncated"] and preview["byte_count"] == 100_000
     assert 0 < len(preview["text"]) < preview["byte_count"]
     assert resource_bytes(task.resources.verifier[0]) == b"a" * 100_000
+
+
+def test_review_bounds_actor_and_grader_build_files_without_changing_the_recipe():
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    task = svamp_row_task(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
+    build = DockerBuildContext(
+        files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"), inline_resource("large", b"x" * 100_000))
+    )
+    environment = EnvironmentRequirements(docker_build=build)
+    task = task.model_copy(
+        update={
+            "environment_requirements": environment,
+            "grader": ScriptGrader(environment=environment, argv=("true",)),
+        }
+    )
+    original = task.model_dump_json()
+    payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
+    assert "content_base64" not in json.dumps(payload)
+    assert {resource["role"] for resource in payload["resources"]} == {"actor_build", "grader_build"}
+    for resource in payload["resources"]:
+        if resource["path"] == "large":
+            assert resource["truncated"] and resource["byte_count"] == 100_000
+            assert len(resource["text"]) < resource["byte_count"]
+    assert payload["resource_manifest"]["total_count"] == 4
+    assert task.model_dump_json() == original
 
 
 def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result
+from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result, UnsupportedMachineSpec
 from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
@@ -20,6 +20,7 @@ from taskcompendium.convert.answers import (
 )
 from taskcompendium.models import (
     AnswerType,
+    DockerBuildContext,
     EnvironmentRequirements,
     NoGrader,
     ResourceGroups,
@@ -144,6 +145,23 @@ def test_graders_without_offline_grading_have_unsupported_controls(grader):
     task = in_process_task("numeric").model_copy(update={"grader": grader})
     report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
+
+
+@pytest.mark.parametrize("role", ["actor", "grader"])
+def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fallback(role):
+    task = file_task()
+    build = EnvironmentRequirements(
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))
+    )
+    if role == "actor":
+        task = task.model_copy(update={"environment_requirements": build})
+    else:
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": build})})
+    # No machine provider is supplied: unresolved recipes must be rejected before
+    # providers are required, and must never use the grader image for an oracle.
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), None)
+    with pytest.raises(UnsupportedMachineSpec):
+        suite.run(task)
 
 
 @pytest.mark.parametrize(

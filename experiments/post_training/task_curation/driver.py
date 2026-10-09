@@ -18,7 +18,7 @@ from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Backend, DockerImage, MachineFactory, MachineSpec, NetworkPolicy
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.models import FilterPolicy
@@ -97,6 +97,7 @@ class GvisorMachines:
 
 
 def _sandbox_image(environment: EnvironmentRequirements) -> str:
+    require_resolved_environment(environment)
     if environment.docker_image is None:
         raise ValueError("A sandbox machine requires an environment with a digest-pinned image")
     return environment.docker_image
@@ -113,6 +114,7 @@ class CampaignMachines:
         return {**self.sandbox.identity(), "local": self.local.identity()}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+        require_resolved_environment(environment)
         if Backend.LOCAL in environment.compatible_backends:
             return self.local.machine(environment, memory_mb)
         return self.sandbox.machine(environment, memory_mb)

@@ -34,6 +34,7 @@ from taskcompendium.models import (
     TaskSpec,
     grader_workspace,
     require_compatible_backend,
+    require_resolved_environment,
 )
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.output_capture import (
@@ -72,6 +73,7 @@ def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
 
 def require_environment_source(machine_spec: MachineSpec, environment: EnvironmentRequirements) -> None:
     """Check the machine against the environment: the host for a local environment, otherwise its pinned image."""
+    require_resolved_environment(environment)
     if isinstance(machine_spec.source, HostImage) and Backend.LOCAL in environment.compatible_backends:
         return
     if environment.docker_image is None:

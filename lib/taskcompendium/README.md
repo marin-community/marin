@@ -109,6 +109,7 @@ criteria and the distinction between declarations and sampled runtime evidence.
 | `capabilities` | Unique operation names, such as `shell`, `network`, `filesystem`, `process`, or `browser`. Names are open so future capabilities can be represented. |
 | `compatible_backends` | Unique Shellbox backend names permitted by the source author; empty declares none. |
 | `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
+| `docker_build` | Optional `DockerBuildContext(files=...)` containing inline regular files relative to the build-context root, including `Dockerfile`. The recipe is unresolved data. |
 | `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
 | `environment_variables` | String values required in the worker or grading machine environment. |
@@ -117,7 +118,21 @@ criteria and the distinction between declarations and sampled runtime evidence.
 
 Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
-The task's `docker_image` and worker file mounts describe worker initial state. A grader that runs in its own machine declares that machine's image, capabilities, setup commands, and environment variables in `grader.environment`. A grader environment must pin a `docker_image` or, when it runs on the `local` backend, carry a `packages_lock`, and it cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment.
+The task's environment and worker file mounts describe worker initial state. A grader that runs in its own machine declares that machine's image or build recipe, capabilities, setup commands, and environment variables in `grader.environment`. A grader environment requires a `docker_image`, `docker_build`, or local `packages_lock`, and cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment.
+
+`docker_image`, `docker_build`, and `packages_lock` are mutually exclusive.
+A build context preserves each file's bytes, mode, and timestamp through
+`TaskResource`; paths must be unique and cannot overlap as files and directories.
+Build files are separate from role-specific workspace mounts. Resource budgets
+count actor and grader contexts separately, including duplicated bytes.
+
+QUICK can retain recipes without executing them. A preserved recipe does not
+make mutable base tags or build-time downloads reproducible. Before execution,
+an external resolver must replace the context with a digest-pinned image and
+declare supported backends. Current runtimes and SAMPLE/FULL controls reject
+unresolved contexts before selecting or creating machines. Local and ShellSim
+backends cannot be declared for a Docker build context. Native Harbor build
+import and export remain unsupported.
 
 ## Resource mounts
 

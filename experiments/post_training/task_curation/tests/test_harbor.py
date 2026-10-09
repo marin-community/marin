@@ -14,13 +14,21 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
-from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader, verifyit_answer_file, verifyit_spec
+from taskcompendium.models import (
+    DockerBuildContext,
+    EnvironmentRequirements,
+    NoGrader,
+    ScriptGrader,
+    VerifyitGrader,
+    verifyit_answer_file,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.models import NormalizedTask
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
-from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, harbor_record, main
+from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, UnsupportedHarborTask, harbor_record, main
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tests.conversion import convert_row
@@ -89,6 +97,27 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     if oracle:
         assert record.solution_binary is not None
         assert oracle <= archive_files(record.solution_binary).keys()
+
+
+@pytest.mark.parametrize("role", ["actor", "grader"])
+def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(normalized_row, role):
+    row, converted = normalized_row
+    environment = EnvironmentRequirements(
+        docker_build=DockerBuildContext(
+            files=(
+                inline_resource("Dockerfile", b"FROM source:latest\nCOPY required.bin /required.bin\n"),
+                inline_resource("required.bin", b"source environment data"),
+            )
+        )
+    )
+    if role == "actor":
+        task = converted.task.model_copy(update={"environment_requirements": environment})
+    else:
+        task = converted.task.model_copy(
+            update={"grader": converted.task.grader.model_copy(update={"environment": environment})}
+        )
+    with pytest.raises(UnsupportedHarborTask, match="Docker build contexts"):
+        harbor_record({**row, "task_json": task.model_dump_json()}, grader_image=GRADER_IMAGE, family="fixture")
 
 
 def test_harbor_comparison_reports_population_difference_without_claiming_runtime_parity(

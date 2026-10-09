@@ -64,6 +64,7 @@ def shell_environment(image: EnvironmentRequirements) -> EnvironmentRequirements
     """The agent's shell in ``image``, on the backends that can run it."""
     return EnvironmentRequirements(
         docker_image=image.docker_image,
+        docker_build=image.docker_build,
         compatible_backends=image.compatible_backends,
         capabilities=SHELL_CAPABILITIES,
         tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},

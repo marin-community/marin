@@ -135,7 +135,10 @@ ROWS: dict[str, dict] = {
     "tasktrove-stack_pytest": python_row(),
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
     "tasktrove-swe_rebench": repository_row(),
-    "tasktrove-swesmith": repository_row(),
+    "tasktrove-swesmith": {
+        "path": "swesmith-fixture",
+        "task_binary": (Path(__file__).parent / "fixtures/swesmith.tar.gz").read_bytes(),
+    },
 }
 
 PYTHON_FILE = ("/app/solution.py",)
@@ -157,12 +160,12 @@ EXPECTED = {
     "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, python_tests.STACK_PYTEST_AGENT_IMAGE),
     "tasktrove-structured_outputs": ("json-schema", (), None),
     "tasktrove-swe_rebench": ("none", (), None),
-    "tasktrove-swesmith": ("none", (), None),
+    "tasktrove-swesmith": ("script", (), None),
 }
 """Each declaration's grader mode (``none`` for an ungraded task), captured files and agent image.
 
-A task with an agent image is graded in a fresh machine of the grader image; the others are graded
-in process or not at all.
+A task with an agent image is graded in a fresh machine of the grader image. SWE-smith instead
+carries an unresolved build recipe; the others are graded in process or not at all.
 """
 
 

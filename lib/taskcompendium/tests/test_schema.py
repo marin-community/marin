@@ -20,6 +20,7 @@ from taskcompendium.models import (
     Boxed,
     ConversationInput,
     ConversationTrace,
+    DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
     FinalAction,
@@ -40,7 +41,7 @@ from taskcompendium.models import (
     VerifierArtifact,
     VerifierCommand,
 )
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.submission import chat_request
 
 IMAGE = "private/grader@sha256:" + "a" * 64
@@ -73,6 +74,11 @@ def specification():
     [
         {"environment_requirements": EnvironmentRequirements(capabilities=("browser",))},
         {"environment_requirements": EnvironmentRequirements(docker_image="org/image@sha256:" + "a" * 64)},
+        {
+            "environment_requirements": EnvironmentRequirements(
+                docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"),))
+            )
+        },
         {"environment_requirements": EnvironmentRequirements(working_directory="/app")},
         {"environment_requirements": EnvironmentRequirements(setup_commands=("initialize",))},
         {"environment_requirements": EnvironmentRequirements(environment_variables={"TASK_MODE": "repair"})},
@@ -146,6 +152,37 @@ def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(specifi
     assert base64.b64decode(resources["worker"][0]["source"]["content_base64"]) == b"public"
     assert base64.b64decode(resources["oracle"][0]["source"]["content_base64"]) == b"gold"
     assert base64.b64decode(resources["verifier"][0]["source"]["content_base64"]) == b"hidden test"
+
+
+def test_build_context_roundtrip_keeps_bytes_metadata_and_role_boundaries(specification):
+    dockerfile = inline_resource("Dockerfile", b"FROM mutable:latest\nCOPY payload.bin /input\n")
+    payload = inline_resource("payload.bin", b"\x00\xff\x80").model_copy(update={"mode": "0755", "mtime_ns": 123456789})
+    environment = EnvironmentRequirements(docker_build=DockerBuildContext(files=(dockerfile, payload)))
+    wire = specification.model_dump()
+    wire["environment_requirements"] = environment.model_dump()
+    wire["grader"] = ScriptGrader(argv=("true",), environment=environment).model_dump()
+    task = TaskSpec.model_validate_json(json.dumps(wire))
+    assert isinstance(task.grader, ScriptGrader)
+    for restored in (task.environment_requirements, task.grader.environment):
+        assert restored.docker_image is None
+        assert restored.docker_build is not None
+        files = {resource.path: resource for resource in restored.docker_build.files}
+        assert resource_bytes(files["Dockerfile"]) == b"FROM mutable:latest\nCOPY payload.bin /input\n"
+        assert resource_bytes(files["payload.bin"]) == b"\x00\xff\x80"
+        assert (files["payload.bin"].mode, files["payload.bin"].mtime_ns) == ("0755", 123456789)
+    assert task.resources == ResourceGroups()
+
+
+@pytest.mark.parametrize("path", ["Dockerfile", "Dockerfile/child", "../outside", "/absolute"])
+def test_build_context_wire_rejects_ambiguous_or_escaping_files(path):
+    wire = {
+        "files": [
+            inline_resource("Dockerfile", b"FROM scratch").model_dump(),
+            {"path": path, "source": {"kind": "inline_file", "content_base64": "eA=="}},
+        ]
+    }
+    with pytest.raises(ValidationError):
+        DockerBuildContext.model_validate_json(json.dumps(wire))
 
 
 @pytest.mark.parametrize("initial_state", [None, "company-snapshot", {"inbox": [], "counter": 3}])
