@@ -202,19 +202,37 @@ def parse(text: str) -> TaskProposal:
     return TaskProposal(header=header, body=_canonical_body(body))
 
 
-def _headings(body: str) -> list[str]:
-    """Level-two headings of ``body``, ignoring lines inside fenced code blocks."""
+def _heading_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Index and text of each level-two heading in ``lines``, ignoring lines inside fenced code blocks."""
     headings = []
     fence: str | None = None
-    for line in body.split("\n"):
+    for i, line in enumerate(lines):
         marker = line.lstrip()[:3]
         if fence is None and marker in CODE_FENCES:
             fence = marker
         elif fence is not None and marker == fence:
             fence = None
         elif fence is None and line.startswith("## "):
-            headings.append(line[3:].strip())
+            headings.append((i, line[3:].strip()))
     return headings
+
+
+def _headings(body: str) -> list[str]:
+    return [heading for _, heading in _heading_lines(body.split("\n"))]
+
+
+def body_sections(body: str) -> dict[str, str]:
+    """Map each level-two heading in ``body`` to the text under it, up to the next level-two heading.
+
+    Uses the same fence-aware boundaries as ``parse``; a repeated heading's sections are joined.
+    """
+    lines = body.split("\n")
+    headings = _heading_lines(lines)
+    ends = [i for i, _ in headings[1:]] + [len(lines)]
+    sections: dict[str, list[str]] = {}
+    for (start, heading), end in zip(headings, ends, strict=True):
+        sections.setdefault(heading, []).extend(lines[start + 1 : end])
+    return {heading: "\n".join(text).strip() for heading, text in sections.items()}
 
 
 def _check_headings(body: str) -> None:
