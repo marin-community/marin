@@ -70,11 +70,11 @@ For example, a task asking “What is 7 + 5?” can have `answer_type=number` an
 
 ### Text answers
 
-A text task uses `answer_type=text`. `PlainText`, `Boxed`, `JsonAnswer`, and `AnswerCall` can carry its answer. The `exact` mode compares normalized text; `mcq` grades a single option letter. Invalid MCQ option text scores zero through verifyit. Both modes grade the answer extracted by any of these formats.
+A text task uses `answer_type=text`. `PlainText`, `Boxed`, `JsonAnswer`, and `AnswerCall` can carry its answer. The `exact` mode compares normalized text; `mcq` grades a single option letter. Invalid MCQ option text scores zero through verifyit. Both modes grade the answer extracted by any of these formats. `JsonAnswer` also reads an object wrapped in a Markdown code fence that encloses the whole reply; a fenced object after other text is a `submission_failure`.
 
 ### Numeric answers
 
-A numeric task uses `answer_type=number` and can use the same answer formats as text. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` mode reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
+A numeric task uses `answer_type=number` and can use the same answer formats as text. Under `JsonAnswer`, a numeric task also accepts a finite JSON number such as `{"answer": 12}` and passes its string form to the grader; any other non-string `answer` is a `submission_failure`. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` mode reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
 
 `taskcompendium.grading.grade_result` maps verifyit rewards to `GradeResult` the same way for in-process grading and for the verdict the verifyit command writes in a grading machine. Malformed numeric text is `submission_failure` with reward `0.0` in both.
 
@@ -88,7 +88,7 @@ For text and numeric tasks, the `AnswerCall` format adds `submit_answer(answer: 
 
 `answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with an environment. In-process grading uses supplied evidence; the optional TaskCompendium episode runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
 
-`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. `structured_exact` accepts either. The `JsonAnswer` format instead unwraps an `answer` string for text or numeric tasks. Both formats reject duplicate keys at every nesting level and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
+`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text, unwrapping a Markdown code fence that encloses all of it, into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. `structured_exact` accepts either. The `JsonAnswer` format instead unwraps an `answer` string for text or numeric tasks. Both formats reject duplicate keys at every nesting level and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
 
 Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The grader checks those expectations. The answer format chooses how the result is delivered and extracted. `answer_type` identifies the answer’s semantic kind.
 
@@ -250,7 +250,7 @@ A grader scores one acquired answer. Comparative scoring across several attempts
 | --- | --- | --- | --- |
 | `PlainText` | `plain_text` | The whole final message | `text`, `number` |
 | `Boxed` | `boxed` | The content of the last `\boxed{...}`, else the whole final message | `text`, `number` |
-| `JsonAnswer` | `json_answer` | The nonempty string `answer` field of a JSON object | `text`, `number` |
+| `JsonAnswer` | `json_answer` | The nonempty string `answer` field of a JSON object, or a JSON number for a `number` task | `text`, `number` |
 | `JsonValueAnswer` | `json_value` | The whole final message as one JSON value | `json` |
 | `AnswerCall` | `answer_call` | The `answer` argument of one `submit_answer` call | `text`, `number` |
 | `FinalAction` | `final_action` | The final message: calls to `final_tools`, or text | `native_action` |
