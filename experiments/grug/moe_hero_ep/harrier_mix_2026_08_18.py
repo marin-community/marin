@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from levanter.data.text.datasets import BlockShuffleConfig, DatasetComponent, LmDataConfig, ContextPhaseConfig
+from levanter.data.text.datasets import BlockShuffleConfig, ContextPhaseConfig, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -103,7 +103,7 @@ _validate_spec(_SPEC)
 
 
 @dataclass(frozen=True)
-class HarrierPriorContext:
+class HarrierContextPhase:
     """A context length the run trained at, with its batch size, until ``end_step``."""
 
     end_step: int
@@ -141,7 +141,7 @@ def harrier_mix_2026_08_18_data_config(
     max_seq_len: int,
     experiment_flops: float,
     validation: Sequence[ArtifactStep[TokenizedCache]],
-    prior_contexts: Sequence[HarrierPriorContext] = (),
+    prior_context_phases: Sequence[HarrierContextPhase] = (),
 ) -> LmDataConfig:
     """Start on Harrier, switch to the selected September mixture at 108000/390251 of training.
 
@@ -151,7 +151,7 @@ def harrier_mix_2026_08_18_data_config(
     training-FLOP budget) exceeds ``SIMULATED_EPOCHING_MAX_FLOPS``, so an expensive run trains on the
     raw mixture rather than a simulated larger budget.
 
-    ``prior_contexts`` lists earlier context lengths of a resumed run, oldest first. Each Harrier bucket
+    ``prior_context_phases`` lists earlier context lengths of a resumed run, oldest first. Each Harrier bucket
     then skips the unread rest of its current shuffle window instead of repeating data.
     """
     available_tokens = dict(_SPEC.available_tokens)
@@ -184,7 +184,7 @@ def harrier_mix_2026_08_18_data_config(
     )
 
     val_zero_weights = {name: 0.0 for name in val_components}
-    prior_context_phases = [
+    context_phase_configs = [
         ContextPhaseConfig(
             end_step=prior.end_step,
             seq_len=prior.seq_len,
@@ -192,7 +192,7 @@ def harrier_mix_2026_08_18_data_config(
             train_weights=_stage_weights(total_steps, prior.batch_size, val_zero_weights),
             shuffle=_shuffle_config(prior.seq_len),
         )
-        for prior in prior_contexts
+        for prior in prior_context_phases
     ]
     return LmDataConfig(
         tokenizer=marin_tokenizer,
@@ -201,7 +201,7 @@ def harrier_mix_2026_08_18_data_config(
         train_weights=_stage_weights(total_steps, batch_size, val_zero_weights),
         auto_build_caches=False,
         shuffle=_shuffle_config(max_seq_len),
-        prior_context_phases=prior_context_phases,
+        prior_context_phases=context_phase_configs,
         # Keep the per-cell rounding of mixture weights unchanged. Rescaling this block with
         # context length changes realized weights; prior_context_phases absorb the shifted stage boundaries.
         mixture_block_size=_MIXTURE_BLOCK_SIZE,

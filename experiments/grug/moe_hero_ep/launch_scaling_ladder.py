@@ -57,7 +57,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
     SIMULATED_EPOCHING_MAX_FLOPS,
-    HarrierPriorContext,
+    HarrierContextPhase,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -228,9 +228,9 @@ def build_ladder_run(
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
-    prior_contexts = (
+    prior_context_phases = (
         (
-            HarrierPriorContext(
+            HarrierContextPhase(
                 end_step=context_switch_step,
                 seq_len=HERO_REFERENCE_SEQ_LEN,
                 batch_size=global_tokens_per_step // HERO_REFERENCE_SEQ_LEN,
@@ -369,7 +369,7 @@ def build_ladder_run(
                 max_seq_len=model.max_seq_len,
                 experiment_flops=run_flops,
                 validation=validation,
-                prior_contexts=prior_contexts,
+                prior_context_phases=prior_context_phases,
             ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
