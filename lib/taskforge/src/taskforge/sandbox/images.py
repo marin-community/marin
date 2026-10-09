@@ -26,8 +26,6 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 # linux/amd64 and pinned by manifest digest. Publish it with
 #   uv run scripts/build_image_job.py --context docker/grader-base --repository capability-infra/taskforge-grader-base
 # and put the printed reference here.
-# TODO(user): this digest is a local build that has not been pushed to the task registry yet; pushing it
-# (or publishing a new build and replacing the reference) needs the capability-registry-publisher credential.
 GRADER_BASE_IMAGE = (
     "envreg.208261-marin-gpu.coreweave.app/capability-infra/taskforge-grader-base"
     "@sha256:63eb0b5c3efb5b2e3def1e81f9e076a4c62a077ad5f631cfef95ea9f441240b3"
