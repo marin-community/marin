@@ -1424,7 +1424,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=549e94d0ab98154197780592d48e3ffab4a6547e" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=c96f6d25f59959096c3b179a51e67c0af6c99536" }]
 
 [[package]]
 name = "marin-finelog"
