@@ -129,14 +129,45 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
     task = conversation_task(row, events=(prompt,), package=package)
+    subject = "knowledge" if isinstance(data.get("expected_answers"), list) else "science"
+    task = task.model_copy(update={"tags": ("qa", "openqa", "judge", "reference", "nemotron", subject)})
     return rewritten_task(task, original=instruction, reason=OPENQA_REWRITE_REASON)
 
 
 def mcqa_option_labels(problem: str) -> tuple[str, ...]:
-    """Choice labels beginning with A, excluding preceding Roman-numbered premises."""
+    """Choice labels beginning with A, excluding preceding labeled premises."""
     matches = list(OPTION_LINE.finditer(problem))
     start = next((index for index, match in enumerate(matches) if match.group(1) == "A"), len(matches))
-    return tuple(match.group(1) for match in matches[start:])
+    # Source questions can repeat a complete choice list, then append a revised
+    # list. Use the final list, without hiding duplicate labels within one list.
+    for index in range(start + 1, len(matches)):
+        if matches[index].group(1) != "A":
+            continue
+        preceding = {match.group(1) for match in matches[start:index]}
+        maximum = max(preceding)
+        complete = preceding == {chr(letter) for letter in range(65, ord(maximum) + 1)} and maximum != "A"
+        following = {match.group(1) for match in matches[index:]}
+        complete = complete and "B" in following
+        gap = problem[matches[index - 1].end() : matches[index].start()]
+        premise = maximum == "A" and ("\n\n" in gap or len(gap.strip().splitlines()) > 1 or "?" in gap)
+        if complete or premise:
+            start = index
+    end = len(matches)
+    for index in range(start + 1, len(matches)):
+        gap = problem[matches[index - 1].end() : matches[index].start()]
+        if gap.partition("\n\n")[2].lstrip().startswith("(Note:"):
+            end = index
+            break
+    choices = dict.fromkeys(
+        (
+            matches[index].group(1),
+            problem[matches[index].end() : matches[index + 1].start() if index + 1 < end else len(problem)]
+            .partition("\n\n(Note:")[0]
+            .strip(),
+        )
+        for index in range(start, end)
+    )
+    return tuple(label for label, _ in choices)
 
 
 def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
@@ -146,26 +177,20 @@ def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
         raise ValueError("Unrecognized MCQA delivery wrapper")
     if not problem.strip():
         raise ValueError("Missing MCQA question/options")
-    original_labels = tuple(match.group(1) for match in OPTION_LINE.finditer(problem))
     # Some archives contain literal backslash-n separators. Decode only option boundaries,
     # preserving mathematical escapes and any literal backslashes in the question.
     problem = ESCAPED_OPTION_NEWLINE.sub("\n", problem)
     labels = mcqa_option_labels(problem)
     options = max((ord(label) - 64 for label in labels), default=0)
     letters = tuple(chr(65 + index) for index in range(options))
-    if not labels or (set(labels) != set(letters) and len(set(labels)) != len(labels)):
-        raise ValueError("Options must have distinct labels beginning at A")
-    # Complete choice sets can also mention labels in premises, as the source parser allowed.
-    if set(labels) == set(letters):
-        labels = letters
+    if not labels:
+        raise ValueError("Missing labeled options beginning at A")
     first, separator, rest = problem.partition("\n\n")
     if first.startswith(MCQA_FORMAT_PREFIX):
-        option_lists = {"/".join(labels)}
         listed = LISTED_OPTIONS.search(first)
-        # The source's generated wrapper also captures premise labels, and misses choices
-        # after escaped newlines. Recognize it while deriving choices from the question.
-        if listed is not None and set(listed.group(1).split("/")) in (set(labels), set(original_labels)):
-            option_lists.add(listed.group(1))
+        # The generated delivery wrapper can contain stale labels. Its syntax identifies
+        # the wrapper; the actual question determines which answers are available.
+        option_lists = (listed.group(1),) if listed is not None else ()
         valid_formats = {
             f"{MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
             f"(e.g. 'Answer: {wrapper.format(example)}')."
@@ -176,7 +201,8 @@ def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
         if first not in valid_formats or not separator or not rest.strip():
             raise ValueError("Unsupported MCQA format wrapper")
         problem = rest
-    choices = f"A through {chr(64 + options)}" if labels == letters else ", ".join(labels)
+    unique_labels = tuple(dict.fromkeys(labels))
+    choices = f"A through {chr(64 + options)}" if unique_labels == letters else ", ".join(unique_labels)
     return f"{problem.strip()}\n\nReturn one option letter from {choices}.", labels
 
 
@@ -193,9 +219,12 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
     answer = data.get("expected_answer")
     if not isinstance(answer, str) or answer.strip().upper() not in labels:
         return source_defect("invalid_reference", f"The key must name a listed option: {answer!r}")
+    if labels.count(answer.strip().upper()) > 1:
+        return unsupported("unsupported_answer_contract", "The reference names multiple listed options")
     task = mcq_task(row, prompt=question, answer=answer, options=max(ord(label) - 64 for label in labels))
     if isinstance(task, ImportRejection):
         return task
+    task = task.model_copy(update={"tags": ("qa", "mcq", "nemotron")})
     return rewritten_task(task, original=instruction, reason=MCQA_REWRITE_REASON)
 
 
@@ -268,7 +297,7 @@ def sources() -> list[RlDataSource]:
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source(MCQA_CONFIG),
                 convert=TaskTroveConverter(MCQA_CONFIG, convert_knowledge_mcqa),
-                version="4",
+                version="5",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,

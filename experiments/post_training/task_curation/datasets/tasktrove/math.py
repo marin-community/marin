@@ -186,6 +186,7 @@ class MathConverter:
             answer_type=AnswerType.TEXT,
             answer_format=PlainText(),
             grader=package.grader,
+            tags=("math", "nemotron"),
         )
         return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 

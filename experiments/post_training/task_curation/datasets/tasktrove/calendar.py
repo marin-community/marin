@@ -136,6 +136,7 @@ def convert_calendar(row: RawRow, context: ConversionContext) -> TaskSpec | Norm
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=grader,
+        tags=("tool-use", "calendar", "scheduling", "state-tracking", "nemotron"),
     )
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 

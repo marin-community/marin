@@ -40,7 +40,7 @@ from verifyit.spec import (
 )
 
 from taskcompendium.convert.script_grader import GRADE_ARGV
-from taskcompendium.convert.tasktrove import TEST_SH
+from taskcompendium.convert.tasktrove import DOCKERFILE, TASKTROVE_REPO, TEST_SH
 from taskcompendium.convert.verifyit_build import VERIFYIT_CONTEXT
 from taskcompendium.harbor.tasktrove import source_actor_build
 from taskcompendium.models import (
@@ -179,6 +179,8 @@ class _VerifierProgram:
 
 
 def _environment_mode(task: TaskSpec) -> VerifierEnvironmentMode:
+    if task.source.dataset == TASKTROVE_REPO and any(resource.path == DOCKERFILE for resource in task.resources.oracle):
+        return VerifierEnvironmentMode.SHARED
     if task.answer_type == AnswerType.WORKSPACE_STATE:
         return VerifierEnvironmentMode.SHARED
     grader = task.grader
@@ -307,7 +309,7 @@ def _verifier_program(
         mode, timeout, grader_env, grader_cwd = "script", grader.timeout, grader.env, grader.cwd
     else:
         raise UnsupportedHarborTask(f"Unsupported grader: {grader.kind}")
-    if grader.environment is None:
+    if grader.environment is None and environment_mode == VerifierEnvironmentMode.SEPARATE:
         if not isinstance(grader, VerifyitGrader) or grader.mode not in IN_PROCESS_FILE_MODES:
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
         if task.answer_type != AnswerType.TEXT or answer_path is None:
@@ -319,7 +321,7 @@ def _verifier_program(
             f"--answer {shlex.quote(answer_path)} --workspace {shlex.quote(DEFAULT_WORKSPACE)} "
             f"--logs-dir /logs/verifier --resources-manifest /{VERIFIER_RESOURCES_PATH}\n"
         ).encode()
-    elif grader.environment.setup_commands:
+    elif grader.environment is not None and grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
     return _VerifierProgram(
         files=files,
@@ -372,7 +374,7 @@ def harbor_payload(
     fallback_actor_image: str,
     verifyit_package_root: Path | None = None,
 ) -> HarborPayload:
-    """Assemble shared repository/stdio graders and separate graders for other tasks."""
+    """Lower tasks to Harbor, retaining TaskTrove's shared actor and grader environment."""
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])
@@ -397,7 +399,7 @@ def harbor_payload(
     if leak := _reference_leak(prompt, verifier.spec):
         raise UnsupportedHarborTask(f"gold_leak: {leak}")
     files["instruction.md"] = prompt.encode()
-    public = () if environment_mode == VerifierEnvironmentMode.SHARED else (*task.resources.all, *task.resources.worker)
+    public = () if environment.docker_build is not None else (*task.resources.all, *task.resources.worker)
     actor_build = environment.docker_build
     if actor_build is None:
         actor_build = source_actor_build(
@@ -505,12 +507,14 @@ def harbor_payload(
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
     }
     if environment_mode == VerifierEnvironmentMode.SHARED:
-        assert grader.environment is not None
         config["verifier"]["environment_mode"] = "shared"
         config["verifier"].pop("environment")
         config["artifacts"] = []
-        config["verifier"]["env"] = {**grader.environment.environment_variables, **verifier.env}
-        metadata["execution_policy"] = "tasktrove_shared_repository" if repository_state else "tasktrove_shared_stdio"
+        config["verifier"]["env"] = {
+            **(grader.environment.environment_variables if grader.environment is not None else {}),
+            **verifier.env,
+        }
+        metadata["execution_policy"] = "tasktrove_shared"
     if environment.working_directory is not None:
         config["environment"]["workdir"] = environment.working_directory
     files["task.toml"] = tomlkit.dumps(config).encode()

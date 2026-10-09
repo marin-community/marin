@@ -3,6 +3,7 @@
 
 import io
 import json
+import os
 import shlex
 import subprocess
 import tarfile
@@ -16,6 +17,7 @@ from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.verifyit_build import verifyit_build_context
+from taskcompendium.grader import verifyit_package
 from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
     AnswerType,
@@ -28,6 +30,7 @@ from taskcompendium.models import (
     RewardFile,
     ScriptGrader,
     Source,
+    StdoutReward,
     TaskSpec,
     VerifierArtifact,
     VerifyitGrader,
@@ -35,7 +38,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import read_output
-from verifyit.spec import ExactSpec, JsonSchemaSpec, PytestSpec, parse_spec, render_spec
+from verifyit.spec import ExactSpec, JsonSchemaSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
@@ -100,10 +103,10 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     files = archive_files(record.task_binary)
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
     assert files["environment/Dockerfile"].decode().startswith("FROM python:3.12-slim\nWORKDIR /app\n")
-    assert config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE
-    # Native separate verification skips tests upload, so tests must be baked in.
-    assert config.verifier.environment.docker_image is None
-    assert files["tests/Dockerfile"].decode() == f"FROM {GRADER_IMAGE}\nCOPY . /tests\n"
+    assert config.verifier.environment_mode == VerifierEnvironmentMode.SHARED
+    assert config.verifier.environment is None
+    assert "tests/Dockerfile" not in files
+    assert not any(path.startswith("tests/public/") for path in files)
     assert not any(path.startswith("solution/") for path in files)
     assert not any(path.startswith(("environment/files/tests/", "environment/files/solution/")) for path in files)
     # Harbor's reserved spec filename bypasses our bundled runtime wrapper.
@@ -111,7 +114,7 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     assert files["tests/private.txt"] == b"private reference"
     assert files["environment/files/app/input.txt"] == b"public input"
     assert b"/app/answer.txt" in files["instruction.md"]
-    assert [artifact.source for artifact in config.artifacts] == ["/app/answer.txt"]
+    assert not config.artifacts
     assert archive_files(record.solution_binary)["solution/solve.sh"] == b"echo gold > /app/answer.txt\n"
 
 
@@ -131,6 +134,7 @@ def test_source_recipe_provenance_does_not_override_other_datasets(normalized_ro
 @pytest.mark.parametrize("role", ["actor", "grader"])
 def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(normalized_row, role):
     row, converted = normalized_row
+    converted = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     environment = EnvironmentRequirements(
         docker_build=DockerBuildContext(
             files=(
@@ -156,7 +160,7 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
 @pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.FILE])
 def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type) -> None:
     row, converted = normalized_row
-    task = converted
+    task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     output = "app/answer.txt"
     if answer_type == AnswerType.FILE:
         output = "app/solution.py"
@@ -229,7 +233,8 @@ def test_harbor_emitted_wrapper_grades_text_and_private_resources(
     normalized_row, spec, resources, valid, invalid, tmp_path
 ):
     _, original = normalized_row
-    task = answer_task(RawRow("fixture", original.source, {}), prompt="Give the answer.", spec=spec, resources=resources)
+    source = original.source.model_copy(update={"dataset": "generic"})
+    task = answer_task(RawRow("fixture", source, {}), prompt="Give the answer.", spec=spec, resources=resources)
     record = harbor_record(
         {"task_json": task.model_dump_json(), "source_row": task.source.row, "original_path": "fixture-task"},
         fallback_actor_image=BASE_IMAGE,
@@ -322,6 +327,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
                 "instruction.md": original.encode(),
                 "tests/test.sh": b"#!/bin/bash\nexit 99\n",
                 "tests/sitecustomize.py": b"raise RuntimeError('archived runtime')\n",
+                "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /app\n",
                 "tests/verifier_data.json": json.dumps({"instruction": question, "expected_answers": ["Mars"]}).encode(),
             }
         ),
@@ -351,7 +357,8 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     workspace = tmp_path / "app"
     workspace.mkdir()
     candidate = "Mars, with a complete explanation.\n"
-    transferred = workspace / Path(config.artifacts[0].source).relative_to("/app")
+    assert not config.artifacts
+    transferred = workspace / Path(answer_path).relative_to("/app")
     transferred.write_text(candidate)
     # Exercise the judge's file-read boundary without calling any judge model.
     spec = parse_spec(files["tests/taskcompendium-verifier.toml"].decode())
@@ -383,7 +390,7 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     for path, content in files.items():
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        if path.endswith((".py", ".sh")):
+        if path.endswith((".py", ".sh", ".toml")):
             content = (
                 content.decode()
                 .replace("/tests", str(tmp_path / "tests"))
@@ -398,7 +405,8 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
     for candidate, expected in [(positive, 1), (negative, 0)]:
         # Inductive grading removes hidden config before executing the candidate.
-        (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
+        if mode == "inductive":
+            (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
         answer_path.write_text(candidate)
         result = subprocess.run(["bash", str(tmp_path / "tests/test.sh")], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
@@ -416,7 +424,13 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     )
     task = task.model_copy(
         update={
-            "resources": task.resources.model_copy(update={"verifier": (inline_resource("grade.py", script.encode()),)})
+            "resources": task.resources.model_copy(update={"verifier": (inline_resource("grade.py", script.encode()),)}),
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/grade.py"),
+                answer_path=None,
+                environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                reward=StdoutReward(),
+            ),
         }
     )
     files = archive_files(
@@ -576,3 +590,57 @@ def test_openqa_keeps_conversion_but_filters_disclosed_reference():
             family=source.info.family,
             fallback_actor_image=BASE_IMAGE,
         )
+
+
+def test_harbor_nonrepository_shared_wrapper_reads_actor_edits_and_dependencies(normalized_row, tmp_path):
+    row, original = normalized_row
+    workspace = tmp_path / "actor"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text("edited answer")
+    dependencies = tmp_path / "installed"
+    dependencies.mkdir()
+    (dependencies / "actor_dependency.py").write_text('expected = "edited answer"\n')
+    checker = b"""import os
+from pathlib import Path
+import actor_dependency
+answer = (Path(os.environ["VERIFYIT_WORKSPACE"]) / "answer.txt").read_text()
+print(float(answer == actor_dependency.expected))
+"""
+    package = verifyit_package(
+        ScriptSpec(path="check.py", workspace=str(workspace)),
+        (inline_resource("check.py", checker),),
+        environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+    )
+    task = original.model_copy(
+        update={
+            "grader": package.grader,
+            "resources": original.resources.model_copy(update={"verifier": package.resources}),
+        }
+    )
+    files = archive_files(
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
+            grader_image=None,
+            family="fixture",
+        ).task_binary
+    )
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert config.verifier.environment_mode == VerifierEnvironmentMode.SHARED
+    assert not config.artifacts
+    tests = tmp_path / "tests"
+    for name, content in files.items():
+        if name.startswith("tests/"):
+            target = tmp_path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+    logs = tmp_path / "logs"
+    script = files["tests/test.sh"].decode().replace("/tests/", str(tests) + "/").rstrip()
+    script += " --logs-dir " + shlex.quote(str(logs))
+    environment = {**os.environ, "PYTHONPATH": str(dependencies)}
+    for candidate, expected in [("edited answer", 1.0), ("initial answer", 0.0)]:
+        (workspace / "answer.txt").write_text(candidate)
+        result = subprocess.run(["bash", "-c", script], env=environment, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert float((logs / "reward.txt").read_text()) == expected

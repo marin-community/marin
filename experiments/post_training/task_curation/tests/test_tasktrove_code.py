@@ -17,10 +17,9 @@ from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, u
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
 from taskcompendium.harbor.export import harbor_record
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.pipeline.controls import run_controls
-from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
-from verifyit.grade import grade
+from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import (
@@ -36,6 +35,8 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+
+pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
 PIPELINES = {
     source.name: source.pipeline
@@ -312,7 +313,8 @@ def test_structured_outputs_ask_for_the_answer_in_the_reply():
     )
     assert isinstance(result, NormalizedTask)
     prompt = cast(str, result.task.context.events[-1].content)
-    assert prompt.endswith("Return your final JSON in the assistant response.")
+    assert "Return your final JSON in the assistant response." in prompt
+    assert "Missing data convention" in prompt
     assert "/app/answer.txt" not in prompt
     assert [change.field for change in result.changes] == ["instruction"]
 
@@ -329,13 +331,46 @@ def test_structured_outputs_reject_a_required_field_the_schema_forbids():
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "unsatisfiable_schema")
 
 
-@pytest.mark.parametrize("schema_type, control", [("json", "empty"), ("xml", "golden"), ("csv", "golden")])
-def test_structured_outputs_controls_grade_as_expected(schema_type, control):
+@pytest.mark.parametrize(
+    "schema_type,candidate",
+    [
+        ("json", '{"name":"Ada"}'),
+        ("yaml", "name: Ada"),
+        ("toml", 'name="Ada"'),
+        ("xml", "<person><name>Ada</name></person>"),
+        ("csv", "name\nAda\n"),
+    ],
+)
+@pytest.mark.parametrize("label,reward", [("PASS", 1.0), ("FAIL", 0.0)])
+def test_structured_outputs_require_grounding_after_valid_format(
+    tmp_path, fake_judge, monkeypatch, schema_type, candidate, label, reward
+):
     pipeline = PIPELINES["tasktrove-structured_outputs"]
     task = converted_task(pipeline, structured_row(NAME_SCHEMA, schema_type))
-    assert pipeline.controls is not None
-    report = run_controls(task, controls=pipeline.controls, machines=None)
-    assert {check.check: check.status for check in report.checks} == {control: CheckStatus.PASS}
+    tests = tmp_path / "tests"
+    write_verifier(task, tests)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text(candidate)
+    for name in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    fake_judge.replies = [label]
+    verdict = grade(verifyit_spec(task.grader), tests, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, reward), verdict.detail
+    assert "Ada wrote this." in fake_judge.prompts[0]
+    assert candidate in fake_judge.prompts[0]
+
+
+def test_structured_outputs_invalid_format_scores_zero_before_grounding(tmp_path, fake_judge):
+    task = converted_task(PIPELINES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json"))
+    tests = tmp_path / "tests"
+    write_verifier(task, tests)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text("not JSON")
+    verdict = grade(verifyit_spec(task.grader), tests, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
+    assert fake_judge.requests == []
 
 
 @pytest.mark.parametrize("name", ["code_contests", "taco"])

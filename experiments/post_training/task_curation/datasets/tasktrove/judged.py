@@ -33,6 +33,15 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
+DOMAIN_TAGS = (
+    ("Stack Overflow", ("stackexchange", "stackoverflow", "code")),
+    ("Super User", ("stackexchange", "superuser")),
+    ("Unix & Linux", ("stackexchange", "unix", "shell")),
+    ("Tezos", ("stackexchange", "tezos")),
+    ("Code Review", ("stackexchange", "codereview", "code")),
+    ("Glaive", ("code-assistant", "code")),
+    ("general instruction-following", ("general-assistant",)),
+)
 DELIVERY_SENTENCE = (
     "After you have completed your analysis and formulated your answer, you MUST write your final, "
     "comprehensive response into a file named 'response.txt' in the current directory.",
@@ -169,6 +178,14 @@ def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
+    domain = (
+        ("safety",)
+        if isinstance(data.get("principle"), str)
+        else next(
+            (tags for name, tags in DOMAIN_TAGS if name in str(data.get("judge_system_prompt", ""))), ("freeform",)
+        )
+    )
+    task = task.model_copy(update={"tags": ("judge", "rubric", "no-reference", *domain)})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 

@@ -4,8 +4,8 @@
 """TaskTrove instruction-following sources, graded in process by verifyit.
 
 The IFEval source's constraints map directly to verifyit's IFEval checks, which score the fraction
-satisfied. The structured-output source accepts any instance valid under its JSON Schema. Both
-reject tasks that no answer can satisfy, which the in-process graders cannot detect themselves.
+satisfied. Structured tasks accept any schema-valid instance. Conversion excludes malformed,
+vacuous or contradictory schemas and conflicting public language requirements.
 """
 
 import json
@@ -16,6 +16,7 @@ from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
+from taskcompendium.convert.tasktrove_json_schemas import is_trivial
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -178,6 +179,7 @@ def convert_ifeval(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
     task = ifeval_task(row, prompt=prompt.strip(), constraints=constraints)
     if isinstance(task, ImportRejection):
         return task
+    task = task.model_copy(update={"tags": ("instruction-following", "ifeval", "nemotron")})
     return rewritten_task(task, original=instruction, reason=IFEVAL_REWRITE_REASON)
 
 
@@ -192,6 +194,8 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
         validator_for(schema).check_schema(schema)
     except SchemaError as error:
         return source_defect("invalid_schema", str(error))
+    if is_trivial(schema):
+        return source_defect("null_grader", "Schema has no properties or required fields to check")
     conflicts = required_object_conflicts(schema)
     if conflicts:
         return source_defect("unsatisfiable_schema", "; ".join(conflicts))
@@ -203,6 +207,7 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     )
     if isinstance(task, ImportRejection):
         return task
+    task = task.model_copy(update={"tags": ("instruction-following", "structured-output", "json-schema", "nemotron")})
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 

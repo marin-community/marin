@@ -69,6 +69,8 @@ def convert_puzzle(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
     task = answer_task(
         row, prompt=replace_phrases(instruction, ANSWER_FILE_DELIVERY), spec=puzzle_spec(expected, answer_type)
     )
+    puzzle_type = str(data.get("ptype", "")).strip().lower().replace("_", "-") or "unknown"
+    task = task.model_copy(update={"tags": ("puzzle", "laion", puzzle_type)})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 

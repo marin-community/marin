@@ -81,6 +81,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
+    task = task.model_copy(update={"tags": ("instruction-following", "multi-turn", "judge", "checklist", "nemotron")})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 

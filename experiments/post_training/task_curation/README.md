@@ -48,16 +48,14 @@ preserving source, original archive path, task ID and rejection accounting.
 Hidden tests stay private; oracles go in `solution_binary`. Unsupported contracts
 and reference leaks become explicit lowering rejections.
 
-SWEsmith, SWE-rebench, Code Contests and TACO use the actor's shared Harbor
-environment and can omit `--grader-image`. Other supported tasks use a separate
-verifier image with the declared grader dependencies. Actor-installed packages
-and changes outside submission files do not transfer to separate verifiers.
+TaskTrove tasks retain the actor's shared Harbor environment and can omit
+`--grader-image`. Other supported tasks use a separate verifier image.
 Export restores source actor recipes and bundles current Verifyit; use
 `--verifyit-package-root` to select its source package.
 
-Export builds no images and runs no graders. Native configuration parsing and
-content comparisons do not establish runtime equivalence or make mutable image
-tags and build-time downloads reproducible.
+Export builds no images and runs no graders. Comparisons cover the emitted
+recipes, files and execution settings; image tags and build-time downloads
+retain the source's reproducibility limits.
 
 [`harbor_export_step`](tasktrove/export.py) binds this export to a normalized
 artifact and records verifier payload identity. For the smoke input, first run

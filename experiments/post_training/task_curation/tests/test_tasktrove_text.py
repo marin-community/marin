@@ -575,6 +575,44 @@ def test_mcqa_accepts_gaps_in_choice_labels_without_accepting_absent_references(
     assert rejection_of("tasktrove-knowledge_mcqa", absent).reason == "invalid_reference"
 
 
+@pytest.mark.parametrize("listed_options", ["A", "A/B/C", "A/B/C/D/E/F"])
+def test_mcqa_uses_question_choices_when_generated_wrapper_is_stale(listed_options):
+    question = "Which number is even?\nA: One\n B: Two\n C: Three\n D: Five"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options=listed_options))
+    assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
+
+
+def test_mcqa_duplicate_distractor_labels_keep_unique_gold_answer():
+    question = "Which number is even?\nA: One\nB: Two\nC: Three\nC: Five"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options="A/B/C/C"))
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "C")) == 0.0
+    ambiguous = mcqa_row(question=question, listed_options="A/B/C/C", expected_answer="C")
+    assert rejection_of("tasktrove-knowledge_mcqa", ambiguous).reason == "unsupported_answer_contract"
+    multiline = (
+        "Which statement holds?\nA: First\nB: Same prefix\nFirst meaning\nB: Same prefix\nSecond meaning\nC: Last"
+    )
+    assert rejection_of("tasktrove-knowledge_mcqa", mcqa_row(question=multiline)).reason == "unsupported_answer_contract"
+
+
+@pytest.mark.parametrize(
+    "appendix",
+    [
+        "\nA: One\nB: Two\nC: Three\nD: Five",
+        "\nB: Two",
+        "\nB: Two\n\n(Note: Two is even.)",
+        "\n\n(Note: Option B is translated below.)\nB: Deux",
+    ],
+)
+def test_mcqa_repeated_choices_and_translation_notes_do_not_make_gold_ambiguous(appendix):
+    question = "Which number is even?\nA: One\nB: Two\nC: Three\nD: Five" + appendix
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question))
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "C")) == 0.0
+
+
 @pytest.mark.parametrize("wrapper", ["{}", "\\boxed{{{}}}"])
 def test_mcqa_recovers_escaped_option_separators_without_decoding_question_escapes(wrapper):
     # The source wrapper lists only A when B-D are separated by literal backslash-n.
@@ -593,6 +631,9 @@ def test_mcqa_recovers_escaped_option_separators_without_decoding_question_escap
         ("I. Two is even.\nII. Three is even.\nIV. Four is even.", "I/A/B/C/D"),
         ("Mass balance:\nB: v1 - v2 = 0\nE: v2 - v3 = 0", "B/E/A/B/C/D"),
         ("A: Consider an earlier scenario.", "A/B/C/D"),
+        ("A: Earlier scenario.\nB: Earlier consequence.", "A/B/A/B/C/D"),
+        ("A: Earlier scenario. Which conclusion follows?", "A/A/B/C/D"),
+        ("Enolate\n\nA: CH3CH2COCH-", "A/A/B/C/D"),
     ],
 )
 def test_mcqa_preserves_labeled_premises_without_counting_them_as_choices(premise, listed_options):
@@ -677,6 +718,12 @@ def test_structured_output_grades_schema_validity():
     assert "Return your final JSON in the assistant response." in prompt_of(task)
     assert grade_reply(task, Reply(TextMessage(role="assistant", content='{"file": "part.gcode"}'))) == 1.0
     assert grade_reply(task, Reply(TextMessage(role="assistant", content="[}"))) == 0.0
+
+
+def test_structured_output_excludes_a_content_free_closed_object():
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    rejection = rejection_of("tasktrove-structured", structured_row(schema))
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "null_grader")
 
 
 @pytest.mark.parametrize(

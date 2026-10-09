@@ -68,4 +68,5 @@ def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path 
         dockerfile = pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
     # Legacy text converters retained only the source Dockerfile.
     # Declared executable build contexts are handled before this compatibility path.
-    return verifyit_build_context(dockerfile, (recipe,), package=package, extras=MODE_EXTRAS.get(mode, ()))
+    extras = ("schema", "judge") if source == "laion__nemotron-gym-structured-outputs-v4" else MODE_EXTRAS.get(mode, ())
+    return verifyit_build_context(dockerfile, (recipe,), package=package, extras=extras)
