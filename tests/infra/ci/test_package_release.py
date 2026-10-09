@@ -235,14 +235,19 @@ def test_shared_requirement_path_is_emitted_once() -> None:
     assert requirement_paths_for_packages(["finelog", "iris"]) == (Path("lib/iris/pyproject.toml"),)
 
 
-def test_latest_native_releases_follow_the_consumed_wheel_distributions() -> None:
+def _release_files(wheels: int, sdists: int) -> list[dict[str, str]]:
+    return [{"packagetype": "bdist_wheel"}] * wheels + [{"packagetype": "sdist"}] * sdists
+
+
+def test_latest_native_releases_skip_partially_published_versions() -> None:
+    complete = _release_files(wheels=4, sdists=1)
     published = {
-        "marin-dupekit-native": "0.1.4.dev1",
-        "marin-finelog-server": "0.2.13.dev2",
-        "marin-iris-native": "0.1.4.dev3",
+        "marin-dupekit-native": {"0.1.4.dev1": complete},
+        "marin-finelog-server": {"0.2.13.dev2": complete, "0.2.14.dev9": _release_files(wheels=1, sdists=0)},
+        "marin-iris-native": {"0.1.3": complete, "0.1.4.dev3": complete},
     }
 
-    versions = latest_native_release_versions(published.get)
+    versions = latest_native_release_versions(published.__getitem__)
 
     assert dict(versions) == {
         "dupekit": "0.1.4.dev1",
