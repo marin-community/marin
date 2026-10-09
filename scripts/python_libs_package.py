@@ -2,11 +2,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the pure-Python marin-* library wheels for PyPI publication.
+"""Build the pure-Python Marin library wheels for PyPI publication.
 
-Builds the pure-Python marin-* lib packages (marin-core, marin-iris,
+Builds the pure-Python Marin library packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finestore, marin-shellbox) into dist/. The package release engine passes one exact
+marin-finestore, marin-shellbox, verifyit, taskcompendium,
+marin-rolloutengine) into dist/. The package release engine passes one exact
 version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
@@ -65,6 +66,9 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
     "marin-shellbox": {"path": "lib/shellbox", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "verifyit": {"path": "lib/verifyit", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "taskcompendium": {"path": "lib/taskcompendium", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-rolloutengine": {"path": "lib/rolloutengine", "version_file": "pyproject.toml", "kind": "pyproject"},
 }
 
 
@@ -114,8 +118,7 @@ def _set_version(text: str, kind: str, new_version: str) -> str:
 
 # Match dependency list items: lines that are indented and start with a quoted
 # sibling name. Anchored on `^\s+"` so we never touch metadata lines like
-# `name = "marin-core"` (no leading whitespace) or single-line `gpu = ["..."]`
-# entries (no marin siblings appear in those today; verified by grep).
+# `name = "marin-core"` (no leading whitespace) or single-line extras.
 _SIBLING_ALT = "|".join(re.escape(s) for s in sorted(PACKAGES, key=len, reverse=True))
 _SIBLING_ITEM_RE = re.compile(
     rf'^(?P<indent>\s+)"(?P<name>{_SIBLING_ALT})(?![-\w])(?P<extras>\[[^\]]*\])?[^"]*"(?P<tail>.*)$',
@@ -289,18 +292,18 @@ def build_wheels(version: str) -> None:
 
 
 def vendor_copy(target: Path) -> None:
-    """Drop freshly-built wheels into target/, replacing any prior marin-* wheels.
+    """Drop freshly-built wheels into target/, replacing prior bundle wheels.
 
-    Cleans only files matching marin*-*.whl so unrelated files in the target
-    directory (e.g. .gitkeep, README) are left alone. Used by --mode vendor
-    to feed local wheels into a downstream experiment's find-links.
+    Files for unrelated distributions in the target directory are left alone.
+    Used by --mode vendor to feed local wheels into a downstream experiment's
+    find-links.
     """
     target.mkdir(parents=True, exist_ok=True)
-    stale = sorted(target.glob("marin*-*.whl"))
+    stale = sorted(wheel for package in PACKAGES for wheel in target.glob(f"{package.replace('-', '_')}-*.whl"))
     for s in stale:
         s.unlink()
     if stale:
-        print(f"\nRemoved {len(stale)} stale marin-* wheel(s) from {target}")
+        print(f"\nRemoved {len(stale)} stale library wheel(s) from {target}")
     print(f"\nCopying wheels to {target}:")
     for wheel in sorted(DIST_DIR.glob("*.whl")):
         dest = target / wheel.name

@@ -300,6 +300,34 @@ def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
     assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
 
 
+def test_rl_release_keeps_registry_dependencies_and_pins_siblings() -> None:
+    version = "0.3.0.dev30194118926"
+    taskcompendium = tomllib.loads(_rewrite_sibling_pins(Path("lib/taskcompendium/pyproject.toml").read_text(), version))
+    rolloutengine = tomllib.loads(_rewrite_sibling_pins(Path("lib/rolloutengine/pyproject.toml").read_text(), version))
+    verifyit = tomllib.loads(Path("lib/verifyit/pyproject.toml").read_text())
+
+    assert taskcompendium["project"]["dependencies"] == [
+        f"marin-rigging=={version}",
+        "pydantic>=2.0",
+        f"verifyit[answer,judge,reasoning-gym,schema]=={version}",
+        f"marin-shellbox=={version}",
+    ]
+    assert taskcompendium["project"]["optional-dependencies"]["pipeline"] == [
+        "datasets>=3.1.0,<5.0.0",
+        f"marin-zephyr=={version}",
+        f"marin-finestore=={version}",
+        "numpy>=1.26",
+        "pyarrow>=15.0",
+    ]
+    assert rolloutengine["project"]["dependencies"] == [
+        "pydantic>=2",
+        f"taskcompendium=={version}",
+        f"marin-shellbox=={version}",
+        "harbor-config>=0.1.0",
+    ]
+    assert verifyit["project"]["dependencies"] == ["tomlkit>=0.13", "harbor-config>=0.1.0"]
+
+
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
 def test_native_release_expectations_track_the_build_legs(package: str) -> None:
     """Native families must expect exactly the distributions and wheels their legs build.

@@ -232,6 +232,8 @@ marin-zephyr = { workspace = true }
 verifyit = { workspace = true }
 taskcompendium = { workspace = true }
 marin-finestore = { workspace = true }
+# Remove after harbor-config's first PyPI cut; the workspace lock still needs a source before publication.
+harbor-config = { git = "https://github.com/marin-community/harbor", rev = "6b2e76e1dae5c084eed05edefefffcec8c0c1ad9", subdirectory = "packages/harbor-config" }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
 torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]

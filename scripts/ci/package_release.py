@@ -118,6 +118,9 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/haliax/src/haliax/__about__.py"),
                 Path("lib/finestore/pyproject.toml"),
                 Path("lib/shellbox/pyproject.toml"),
+                Path("lib/verifyit/pyproject.toml"),
+                Path("lib/taskcompendium/pyproject.toml"),
+                Path("lib/rolloutengine/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -132,6 +135,9 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-haliax",
                         "marin-finestore",
                         "marin-shellbox",
+                        "verifyit",
+                        "taskcompendium",
+                        "marin-rolloutengine",
                     )
                 }
             ),
@@ -143,6 +149,12 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 "lib/shellbox/src/**",
                 "lib/shellbox/pyproject.toml",
                 "lib/shellbox/README.md",
+                "lib/verifyit/src/**",
+                "lib/verifyit/pyproject.toml",
+                "lib/taskcompendium/src/**",
+                "lib/taskcompendium/pyproject.toml",
+                "lib/rolloutengine/src/**",
+                "lib/rolloutengine/pyproject.toml",
             ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
