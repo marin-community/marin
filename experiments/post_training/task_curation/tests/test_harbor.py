@@ -165,6 +165,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
             "Defect, Salt, chair",
             "chair, Salt, Defect",
         ),
+        ("exact", {"gold": "gold", "answer_type": "exact"}, "gold", r"\boxed{gold}"),
         ("math", {"gold": "3", "answer_type": "number"}, r"\boxed{3}", r"\boxed{4}"),
         (
             "json-schema",
@@ -195,7 +196,9 @@ def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, 
     }
     record = harbor_record(row, grader_image=GRADER_IMAGE, family=source.info.family)
     files = archive_files(record.task_binary)
-    assert files["instruction.md"].decode() == prompt
+    instruction = files["instruction.md"].decode()
+    assert instruction.startswith(converted.task.context.events[0].content)
+    assert "/app/answer.txt" in instruction
     assert not any(path.startswith("environment/files/") for path in files)
     for name, data in files.items():
         path = tmp_path / name

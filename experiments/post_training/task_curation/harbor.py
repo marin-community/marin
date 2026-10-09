@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import io
 import json
+import shlex
 import tarfile
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -139,20 +140,39 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     if grader.environment is None:
         if not isinstance(grader, VerifyitGrader) or grader.mode not in IN_PROCESS_FILE_MODES:
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
+        if task.answer_type != AnswerType.TEXT or answer_path is None:
+            raise UnsupportedHarborTask("In-process graders require a plain-text answer file")
+        files["tests/grade_candidate.py"] = Path(__file__).with_name("harbor_candidate.py").read_bytes()
+        files["tests/taskcompendium-resources.json"] = json.dumps(
+            [resource.path for resource in task.resources.verifier]
+        ).encode()
+        files["tests/test.sh"] = (
+            "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
+            "exec python3 /tests/grade_candidate.py /tests/taskcompendium-verifier.toml "
+            f"{shlex.quote(answer_path)}\n"
+        ).encode()
     elif grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
     prompt = task.context.events[0].content
     if task.answer_type == AnswerType.TEXT:
         if answer_path is None:
             raise UnsupportedHarborTask("Text grader has no answer-file destination")
-        rewrites = [change for change in row["normalization_changes"] if change["field"] == "instruction"]
-        if (
-            len(rewrites) != 1
-            or rewrites[0]["replacement"].strip() != prompt.strip()
-            or answer_path not in rewrites[0]["original"]
-        ):
-            raise UnsupportedHarborTask("Text delivery requires a recorded original instruction naming the answer file")
-        prompt = rewrites[0]["original"]
+        if grader.environment is None:
+            prompt += (
+                f"\n\nWrite your final answer to `{answer_path}`. "
+                "The contents of this file are graded as your final response."
+            )
+        else:
+            rewrites = [change for change in row["normalization_changes"] if change["field"] == "instruction"]
+            if (
+                len(rewrites) != 1
+                or rewrites[0]["replacement"].strip() != prompt.strip()
+                or answer_path not in rewrites[0]["original"]
+            ):
+                raise UnsupportedHarborTask(
+                    "Text delivery requires a recorded original instruction naming the answer file"
+                )
+            prompt = rewrites[0]["original"]
     files["instruction.md"] = prompt.encode()
     public = (*task.resources.all, *task.resources.worker)
     dockerfile = f"FROM {environment.docker_image or BASE_IMAGE}\n"
