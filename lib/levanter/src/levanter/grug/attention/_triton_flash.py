@@ -73,8 +73,8 @@ class TritonFlashBlockSizes:
     num_stages_dkv: int = 2
 
 
-# Tile sweeps at the June per-GPU shape (8 x 4096 tokens, 20 query heads, 5 KV heads, head_dim 128, bf16) set the
-# defaults, which are the fastest found on MI300X (gfx942). On MI350X (gfx950), a second pipeline stage runs the
+# Tile sweeps at 8 x 4096 tokens per GPU, 20 query heads, 5 KV heads, head_dim 128 and bf16 set the defaults,
+# which are the fastest found on MI300X (gfx942). On MI350X (gfx950), a second pipeline stage runs the
 # forward 14% (window 2048) to 19% (causal) faster; on MI300X it nearly doubles the forward's time.
 _TUNED_BLOCK_SIZES = {"gfx950": TritonFlashBlockSizes(num_stages=2)}
 # Untuned tiles small enough for float32 inputs in MI300X's 64 KiB of shared memory, which the bf16 tiles overflow.
@@ -155,6 +155,16 @@ def _clip(x, lo, hi):
 
 
 @triton.jit
+def _key_block_band(q_lower, q_start, block_q: tl.constexpr, block_k: tl.constexpr):
+    """Key-block bounds ``(lo, full_lo, full_hi, hi)`` of one query tile of the forward and dQ kernels."""
+    lo = tl.maximum(tl.min(q_lower, axis=0), 0) // block_k
+    hi = (q_start + block_q + block_k - 1) // block_k
+    full_lo = _clip((tl.max(q_lower, axis=0) + block_k - 1) // block_k, lo, hi)
+    full_hi = _clip((q_start + 1) // block_k, full_lo, hi)
+    return lo, full_lo, full_hi, hi
+
+
+@triton.jit
 def _forward_key_blocks(
     acc,
     m_i,
@@ -227,10 +237,7 @@ def _forward_kernel(
 
     q = tl.load(q_ptr + q_offsets)
     q_lower = tl.load(lower_ptr + q_pos)
-    lo = tl.maximum(tl.min(q_lower, axis=0), 0) // block_k
-    hi = (q_start + block_q + block_k - 1) // block_k
-    full_lo = _clip((tl.max(q_lower, axis=0) + block_k - 1) // block_k, lo, hi)
-    full_hi = _clip((q_start + 1) // block_k, full_lo, hi)
+    lo, full_lo, full_hi, hi = _key_block_band(q_lower, q_start, block_q, block_k)
 
     acc = tl.zeros((block_q, head_dim), tl.float32)
     m_i = tl.full((block_q,), _MASK_VALUE, tl.float32)
@@ -328,10 +335,7 @@ def _dq_kernel(
     lse = tl.load(lse_ptr + q_pos)
     delta = tl.load(delta_ptr + q_pos)
     q_lower = tl.load(lower_ptr + q_pos)
-    lo = tl.maximum(tl.min(q_lower, axis=0), 0) // block_k
-    hi = (q_start + block_q + block_k - 1) // block_k
-    full_lo = _clip((tl.max(q_lower, axis=0) + block_k - 1) // block_k, lo, hi)
-    full_hi = _clip((q_start + 1) // block_k, full_lo, hi)
+    lo, full_lo, full_hi, hi = _key_block_band(q_lower, q_start, block_q, block_k)
 
     dq = tl.zeros((block_q, head_dim), tl.float32)
     dq = _dq_key_blocks(
