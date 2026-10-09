@@ -560,6 +560,18 @@ def test_mcqa_accepts_gaps_in_choice_labels_without_accepting_absent_references(
     assert grade_reply(task, answer_reply(task, "J")) == 0.0
     absent = mcqa_row(question=question, listed_options="/".join(labels), expected_answer="I")
     assert rejection_of("tasktrove-knowledge_mcqa", absent).reason == "invalid_reference"
+    ambiguous = mcqa_row(question=question + "\nA: Another choice", listed_options="/".join(labels))
+    assert rejection_of("tasktrove-knowledge_mcqa", ambiguous).reason == "unsupported_answer_contract"
+
+
+def test_mcqa_retains_complete_choices_with_repeated_label_mentions():
+    # Pinned TaskTrove row 27 (546227d1d7f0) includes an A: scenario before its A-J choices.
+    row = tasktrove_row(fixture_files("mcqa_repeated_labels"))
+    task = task_of("tasktrove-knowledge_mcqa", row)
+    question = row_instruction(row).split("\n---\n\n", 1)[1].split("\n\n", 1)[1]
+    assert prompt_of(task) == f"{question.strip()}\n\nReturn one option letter from A through J."
+    assert grade_reply(task, answer_reply(task, "D")) == 1.0
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
 
 
 @pytest.mark.parametrize("wrapper", ["{}", "\\boxed{{{}}}"])

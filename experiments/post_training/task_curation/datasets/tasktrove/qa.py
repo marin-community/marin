@@ -154,8 +154,11 @@ def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
     labels = mcqa_option_labels(problem)
     options = max((ord(label) - 64 for label in labels), default=0)
     letters = tuple(chr(65 + index) for index in range(options))
-    if not labels or len(set(labels)) != len(labels):
+    if not labels or (set(labels) != set(letters) and len(set(labels)) != len(labels)):
         raise ValueError("Options must have distinct labels beginning at A")
+    # Complete choice sets can also mention labels in premises, as the source parser allowed.
+    if set(labels) == set(letters):
+        labels = letters
     first, separator, rest = problem.partition("\n\n")
     if first.startswith(MCQA_FORMAT_PREFIX):
         option_lists = {"/".join(labels)}
@@ -266,7 +269,7 @@ def sources() -> list[RlDataSource]:
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
                 convert=TaskTroveConverter("laion__nemotron-gym-knowledge-mcqa-v2", convert_knowledge_mcqa),
-                version="3",
+                version="4",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,
