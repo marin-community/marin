@@ -73,32 +73,34 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
-def test_default_setup_rust_dev_without_maturin_members_succeeds(tmp_path):
+def test_default_setup_with_editable_python_dependency_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
-    member = workdir / "lib" / "python-member"
-    member.mkdir(parents=True)
-    (workdir / "pyproject.toml").write_text("[tool.uv.sources]\npython-member = { workspace = true, editable = true }\n")
-    (member / "pyproject.toml").write_text('[build-system]\nbuild-backend = "hatchling.build"\n')
+    package = workdir / "lib" / "payload"
+    package.mkdir(parents=True)
+    (package / "pyproject.toml").write_text('[project]\nname = "setup-payload"\nversion = "0.1.0"\n')
+    (package / "setup_payload.py").write_text("value = 42\n")
+    (workdir / "pyproject.toml").write_text(
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        'dependencies = ["setup-payload"]\n'
+        "[tool.uv]\npackage = false\n"
+        "[tool.uv.sources]\n"
+        'setup-payload = { path = "lib/payload", editable = true }\n'
+    )
+    venv = tmp_path / "venv"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    uv = bin_dir / "uv"
-    uv.write_text("#!/bin/sh\nexit 0\n")
-    uv.chmod(0o755)
     completed = subprocess.run(
-        ["bash", "-c", default_setup_script()],
-        env={
-            **os.environ,
-            "IRIS_VENV": str(tmp_path / "venv"),
-            "IRIS_WORKDIR": str(workdir),
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
+        ["bash", "-c", default_setup_script()], env=env, capture_output=True, text=True, check=False
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    subprocess.run([venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 42"], check=True)
 
 
 @pytest.mark.parametrize("link_mode", ["copy", "symlink"])

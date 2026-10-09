@@ -14,18 +14,13 @@ Two sources share this template but ship different ``tests/verifier_data.json`` 
 
 import json
 
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, Converter, ConverterKey, Rejected
+from taskcompendium.convert.tasktrove_json_schemas import usable_schema
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
 from verifyit.spec import JsonSchemaSpec, SchemaFormat
 
 from experiments.post_training.tasktrove.converters.agent_calendar import convert_agent_calendar
-from experiments.post_training.tasktrove.converters.converted_task import (
-    ConvertedTask,
-    Converter,
-    ConverterKey,
-    Rejected,
-)
-from experiments.post_training.tasktrove.converters.json_schemas import usable_schema
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 
 def convert_nemotron_if_structured(task: TaskFiles) -> ConvertedTask | Rejected:

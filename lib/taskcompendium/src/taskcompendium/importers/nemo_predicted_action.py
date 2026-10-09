@@ -7,15 +7,19 @@ import hashlib
 import json
 from typing import Any
 
-from pydantic import Json, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
+from verifyit.json_objects import unique_object
+from verifyit.spec import FunctionCall as CandidateCall
+from verifyit.spec import PredictedActionSpec
 
-from taskcompendium.grading import predicted_action_verifier
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
+    FinalAction,
     FunctionCall,
     FunctionDefinition,
     Source,
@@ -23,13 +27,16 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.submission import FinalAction, Submission
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
 IMPORTER_REVISION = "taskcompendium-nemo-predicted-action-v3"
 FUNCTION_CALL_TYPE = "function_call"
-ARGUMENTS = TypeAdapter(Json[dict[str, JsonValue]])
+ARGUMENTS = TypeAdapter(dict[str, JsonValue], config=ConfigDict(strict=True, allow_inf_nan=False))
+
+
+def _arguments(value: str) -> dict[str, JsonValue]:
+    return ARGUMENTS.validate_python(json.loads(value, object_pairs_hook=unique_object))
 
 
 def canonical_sha256(row: dict[str, Any]) -> str:
@@ -47,7 +54,7 @@ def _expected_calls(value: Any) -> tuple[FunctionCall, ...]:
         and isinstance(value.get("name"), str)
         and isinstance(value.get("arguments"), str)
     ):
-        return (FunctionCall(name=value["name"], arguments=ARGUMENTS.validate_python(value["arguments"])),)
+        return (FunctionCall(name=value["name"], arguments=_arguments(value["arguments"])),)
     if value.get("type") == "function_call_batch" and isinstance(value.get("calls"), list) and value["calls"]:
         calls = value["calls"]
         if all(
@@ -57,9 +64,7 @@ def _expected_calls(value: Any) -> tuple[FunctionCall, ...]:
             and isinstance(call.get("arguments"), str)
             for call in calls
         ):
-            return tuple(
-                FunctionCall(name=call["name"], arguments=ARGUMENTS.validate_python(call["arguments"])) for call in calls
-            )
+            return tuple(FunctionCall(name=call["name"], arguments=_arguments(call["arguments"])) for call in calls)
     raise ValueError("unsupported expected_action")
 
 
@@ -104,9 +109,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
             if not all(isinstance(item.get(key), str) and item[key] for key in ("call_id", "name", "arguments")):
                 raise ValueError("source function calls require call_id, name, and arguments")
             pending_calls.append(
-                ConversationToolCall(
-                    call_id=item["call_id"], name=item["name"], arguments=ARGUMENTS.validate_python(item["arguments"])
-                )
+                ConversationToolCall(call_id=item["call_id"], name=item["name"], arguments=_arguments(item["arguments"]))
             )
             reasoning_without_visible_result = False
             continue
@@ -147,8 +150,8 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
     return tuple(events)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Submission]:
-    """Verify row identity and retain the expected action only in private TaskSpec data."""
+def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpec:
+    """Verify row identity and keep the expected action only in the grader's predicted-action spec."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")
     request = row.get("responses_create_params")
@@ -178,18 +181,20 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     if any(call.name not in advertised for call in expected_calls):
         raise ValueError("expected function call is absent from source tools")
     source = Source(dataset=DATASET, revision=REVISION, row=expected_sha256, importer_revision=IMPORTER_REVISION)
-    specification = TaskSpec(
+    return TaskSpec(
         id=f"nemo-predicted-action-{expected_sha256}",
         context=ConversationInput(events=events),
         environment_requirements=EnvironmentRequirements(),
         final_tools=functions,
         answer_type=AnswerType.NATIVE_ACTION,
-        verifier=predicted_action_verifier(expected_calls),
+        answer_format=FinalAction(
+            require_call=tool_choice == "required",
+            max_calls=1 if parallel_tool_calls is False else None,
+        ),
+        grader=verifyit_package(
+            PredictedActionSpec(
+                expected_calls=tuple(CandidateCall(call.name, call.arguments) for call in expected_calls)
+            )
+        ).grader,
         source=source,
     )
-    convention = FinalAction(
-        id="native-final-action",
-        require_call=tool_choice == "required",
-        max_calls=1 if parallel_tool_calls is False else None,
-    )
-    return specification, convention

@@ -129,8 +129,11 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     def xla_loss(lhs, rhs):
         return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation="xla"))
 
-    triton_value, triton_grads = jax.value_and_grad(triton_loss, argnums=(0, 1))(lhs, rhs)
-    xla_value, xla_grads = jax.value_and_grad(xla_loss, argnums=(0, 1))(lhs, rhs)
+    # At default precision, ROCm may run f32 dots in reduced-precision xf32 on MI300X, and its choice can
+    # differ between the two paths and between processes, giving ~7e-4 relative error on either side.
+    with jax.default_matmul_precision("highest"):
+        triton_value, triton_grads = jax.value_and_grad(triton_loss, argnums=(0, 1))(lhs, rhs)
+        xla_value, xla_grads = jax.value_and_grad(xla_loss, argnums=(0, 1))(lhs, rhs)
 
     assert jnp.allclose(triton_value, xla_value, rtol=1e-5, atol=1e-5)
     assert jnp.allclose(triton_grads[0], xla_grads[0], rtol=1e-5, atol=1e-5)

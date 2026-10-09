@@ -8,8 +8,31 @@ import shutil
 from pathlib import Path
 
 import pytest
-from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory
-from shellbox.machine import Command, DockerImage, MachineSpec
+from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
+from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
+
+
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
+def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_leader(monkeypatch):
+    async def docker_exec(*args, stdin=b"", timeout=None):
+        process = await asyncio.create_subprocess_exec(
+            *args[args.index("shellbox-test-container") + 1 :],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(stdin), timeout=timeout)
+        return DockerCommandResult(process.returncode, stdout, stderr)
+
+    monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker_exec)
+    machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")))
+    result = asyncio.run(
+        machine.run(
+            Command(("sh", "-c", 'read -r value; printf "%s\\n" "$value"; exit 23'), stdin=b"answer\n", timeout=5)
+        )
+    )
+    assert (result.exit_code, result.stdout, result.reason) == (23, b"answer\n", ExitReason.EXITED)
 
 
 def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_path, monkeypatch):
@@ -79,10 +102,10 @@ def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch
     launch = requests[0]
     limits = {flag: launch[launch.index(flag) + 1] for flag in ("--cpus", "--memory", "--storage-opt", "--gpus")}
     assert limits == {"--cpus": "2", "--memory": "1536m", "--storage-opt": "size=1024M", "--gpus": "1"}
-    assert requests[1][requests[1].index("--user") + 1] == "1001"
-    assert requests[2][requests[2].index("--user") + 1] == "1002"
-    assert "--user" not in requests[3]
-    assert "-w" not in requests[3]
+    assert requests[2][requests[2].index("--user") + 1] == "1001"
+    assert requests[3][requests[3].index("--user") + 1] == "1002"
+    assert "--user" not in requests[4]
+    assert "-w" not in requests[4]
     assert requests[-1][0:2] == ("rm", "-f")
 
 
@@ -108,5 +131,110 @@ def test_cancelled_docker_start_removes_a_container_before_returning(monkeypatch
         with pytest.raises(asyncio.CancelledError):
             await pending
         assert containers == set()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interruption):
+    async def scenario():
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/tmp"))
+        try:
+            await machine.run(Command(("sh", "-c", "echo 12 > answer")))
+            await machine.run(Command(("sh", "-c", "sleep 7200 >/dev/null 2>&1 & echo $! > service.pid")))
+            async with asyncio.TaskGroup() as commands:
+                pending = commands.create_task(
+                    machine.run(
+                        Command(
+                            ("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"),
+                            timeout=5 if interruption == "timeout" else None,
+                        )
+                    )
+                )
+                async with asyncio.timeout(10):
+                    while True:
+                        observed = await machine.run(Command(("cat", "child.pid")))
+                        # The shell creates child.pid before echo writes the pid into it.
+                        if observed.exit_code == 0 and observed.stdout.strip():
+                            break
+                child = int(observed.stdout)
+                if interruption == "cancel":
+                    pending.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await pending
+                else:
+                    result = await pending
+                    assert result.reason == ExitReason.TIMED_OUT
+            answer = await machine.run(Command(("cat", "answer")))
+            assert (answer.exit_code, answer.stdout) == (0, b"12\n")
+            stopped = await machine.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
+                        'test "$state" = Z; fi',
+                        "child-state",
+                        str(child),
+                    )
+                )
+            )
+            assert stopped.exit_code == 0
+            service = await machine.run(Command(("sh", "-c", 'kill -0 "$(cat service.pid)"')))
+            assert service.exit_code == 0
+        finally:
+            await machine.close()
+        inspected = await docker("inspect", machine.name)
+        assert inspected.exit_code != 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.docker
+def test_docker_commands_run_in_a_working_directory_the_image_lacks():
+    async def scenario():
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/work/nested"))
+        try:
+            return await machine.run(Command(("pwd",)))
+        finally:
+            await machine.close()
+
+    result = asyncio.run(scenario())
+    assert (result.exit_code, result.stdout) == (0, b"/work/nested\n")
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+def test_interrupted_docker_command_without_a_pid_disposes_the_container(monkeypatch, interruption):
+    containers = set()
+
+    async def scenario():
+        started = asyncio.Event()
+
+        async def docker(*args, **_kwargs):
+            if args[0] == "run":
+                containers.add(args[args.index("--name") + 1])
+            elif args[:2] == ("exec", "-i"):
+                started.set()
+                if interruption == "timeout":
+                    raise TimeoutError("Docker exec startup timed out")
+                await asyncio.Future()
+            elif args[:3] == ("exec", "--user", "0") and "stop-command" in args:
+                return DockerCommandResult(1, b"", b"Command PID is not available")
+            elif args[:2] == ("rm", "-f"):
+                containers.remove(args[2])
+            return DockerCommandResult(0, b"", b"")
+
+        monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker)
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("fixture")))
+        pending = asyncio.create_task(machine.run(Command(("true",))))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        if interruption == "cancel":
+            pending.cancel()
+        with pytest.raises(asyncio.CancelledError if interruption == "cancel" else TimeoutError):
+            await pending
+        assert containers == set()
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
 
     asyncio.run(scenario())

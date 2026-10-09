@@ -5,10 +5,9 @@
 
 import shlex
 
+from taskcompendium.convert.tasktrove import SOLVE_SH
 from verifyit.grade import positive_candidate
 from verifyit.spec import Spec
-
-from experiments.post_training.tasktrove.taskbinary import SOLVE_SH
 
 
 def answer_solution(spec: Spec) -> dict[str, bytes]:

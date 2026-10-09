@@ -18,6 +18,7 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.rpc import job_pb2
 
 
 def dummy_entrypoint():
@@ -30,10 +31,12 @@ class _RecordingClusterClient:
 
     captured_env: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
+    captured_setup_scripts: list = field(default_factory=list)
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
         if environment:
             self.captured_env = dict(environment.env_vars)
+            self.captured_setup_scripts = list(environment.setup_scripts)
         if constraints:
             self.captured_constraints = list(constraints)
         return job_id or JobName.root("test", "dummy")
@@ -219,3 +222,26 @@ def test_child_any_region_marker_clears_inherited_region_constraint(capturing_cl
 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
     assert region_constraints == []
+
+
+def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_context, monkeypatch):
+    """A sandbox child gets neither the parent's env and setup nor the submitter's tokens."""
+    client, stub = capturing_client
+    monkeypatch.setenv("HF_TOKEN", "submitter-token")
+    parent = _parent_job_info({"PARENT_SECRET": "parent"})
+    parent.setup_scripts = ["uv sync"]
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=parent),
+    ):
+        client.submit(
+            Entrypoint.from_command("sleep", "infinity"),
+            "sandbox",
+            ResourceSpec(cpu=1, memory="1g"),
+            environment=EnvironmentSpec(env_vars={"TASK_VAR": "1"}),
+            container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
+        )
+
+    assert stub.captured_env == {"TASK_VAR": "1"}
+    assert stub.captured_setup_scripts == []

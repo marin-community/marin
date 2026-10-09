@@ -19,6 +19,15 @@ class NetworkPolicy(StrEnum):
     ALLOW = "allow"
 
 
+class Backend(StrEnum):
+    DOCKER = "docker"
+    GVISOR = "gvisor"
+    QEMU = "qemu"
+    SHELLSIM = "shellsim"
+    DAYTONA = "daytona"
+    LOCAL = "local"
+
+
 class ExitReason(StrEnum):
     EXITED = "exited"
     TIMED_OUT = "timed_out"
@@ -82,6 +91,11 @@ class ShellSimBuiltins:
 
 
 @dataclass(frozen=True)
+class HostImage:
+    """The host's own programs and filesystem, used by the local backend instead of an image."""
+
+
+@dataclass(frozen=True)
 class MachineSpec:
     """Machine inputs, with a provider startup timeout for Daytona.
 
@@ -89,7 +103,7 @@ class MachineSpec:
     deadline for the complete create operation.
     """
 
-    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins
+    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins | HostImage
     workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
@@ -131,6 +145,10 @@ class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
 
 
+class MachineTerminated(RuntimeError):
+    """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
@@ -145,5 +163,8 @@ class Machine(Protocol):
 
 class MachineFactory(Protocol):
     """Create a fresh machine from an image source."""
+
+    @property
+    def backend(self) -> Backend: ...
 
     async def create(self, spec: MachineSpec) -> Machine: ...

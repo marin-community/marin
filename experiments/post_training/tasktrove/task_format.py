@@ -14,10 +14,10 @@ import hashlib
 import re
 
 import tomlkit
+from taskcompendium.convert.tasktrove import TESTS_MOUNT
 from verifyit.spec import Mode
 
 VERIFIER_TOML = "tests/verifier.toml"
-TESTS_MOUNT = "/tests"
 RESPONSE_OUTPUT = "/app/response.txt"
 """Answer path used by rubric-based source tasks."""
 

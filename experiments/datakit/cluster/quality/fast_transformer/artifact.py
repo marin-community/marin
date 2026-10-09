@@ -15,6 +15,7 @@ from pydantic import BaseModel
 # 0.2-wide buckets are quality-coherent across content types; `score.py` buckets
 # with np.digitize against these edges, giving quality_bucket 0..len(BUCKET_EDGES).
 BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
+MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 
 
 class QualityScores(BaseModel):
@@ -26,8 +27,8 @@ class QualityScores(BaseModel):
     Attributes:
         main_output_dir: Directory of lean scored parquet
             (``source``/``id``/``score``/``quality_bucket``), one file per input
-            shard, co-partitioned with the source ``NormalizedData`` by basename
-            and row order.
+            shard, co-partitioned with the source ``NormalizedData`` and its
+            tokenize shards by basename and row order.
         samples_output_dir: Directory of the ~``sample_pct`` systematic sample
             side output (same columns plus truncated ``text``) the stage report
             reads for spot-checks.

@@ -12,18 +12,18 @@ reproducing the gate and the tool's own judge replacing ``rewardkit``.
 """
 
 
-from verifyit.spec import JudgeSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from verifyit.spec import JudgeSpec
+
 from experiments.post_training.tasktrove.task_format import OLD_GRADER_LINE, RESPONSE_OUTPUT, drop_dockerfile_lines
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 
 def _clean(answer: str) -> str:

@@ -19,10 +19,11 @@ from dataclasses import asdict, dataclass
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TEST_SH
+from taskcompendium.convert.tasktrove_converted_task import ConverterKey
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_jsonl
 
-from experiments.post_training.tasktrove.converters.converted_task import ConverterKey
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import (
     WORKER_RESOURCES,
@@ -31,13 +32,7 @@ from experiments.post_training.tasktrove.dataset import (
     load_source_verdicts,
     raw_rows,
 )
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    TEST_SH,
-    read_task_binary,
-    template_fingerprint,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, template_fingerprint
 
 logger = logging.getLogger(__name__)
 

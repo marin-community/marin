@@ -17,7 +17,7 @@ The commands below are for manual runs.
 The ferry reads two inputs from the region-local `MARIN_PREFIX`. They must be
 present in the region where the ferry runs:
 
-- the quality model: `datakit/models/quality/pooled_junkgate2`
+- the quality model: `datakit/models/quality/pooled_junkgate2_marin` (the marin-tokenizer retrain; the e5-era `pooled_junkgate2` dir is refused by the quality step)
 - the decontamination eval corpus: `datakit/decontam/evals/<EVAL_CORPUS_VERSION>`
 
 Both are present in `gs://marin-us-west4` and `gs://marin-eu-west4`. To run a

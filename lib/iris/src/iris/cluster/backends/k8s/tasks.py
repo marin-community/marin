@@ -34,7 +34,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -57,9 +57,11 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
@@ -100,7 +102,6 @@ from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     OUTPUT_MOUNT,
-    STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
     WORKDIR_MOUNT,
@@ -121,7 +122,8 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
+from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
@@ -455,14 +457,17 @@ def _lookup_pod(
 
 
 def _build_volumes_and_mounts(
+    mount_specs: Sequence[MountSpec],
     cache_dir: str,
     shm_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
-    """Build standard pod volumes and container volume mounts.
+    """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
-    they persist across pods on the same node. /dev/shm is memory-backed and
-    shares the task container's memory limit when one is set.
+    ``mount_specs`` comes from the task's ``TaskIsolation.mounts``; for a
+    sandbox task it has no CACHE entries, so no hostPath volume is created.
+    Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
+    cache_dir so they persist across pods on the same node. /dev/shm is
+    memory-backed and shares the task container's memory limit when one is set.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -471,7 +476,7 @@ def _build_volumes_and_mounts(
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
-    for spec in STANDARD_MOUNTS:
+    for spec in mount_specs:
         if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
@@ -829,9 +834,15 @@ def _build_pod_manifest(
     # job needs no special image and iris does not inspect the resource request.
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
-    service_account = config.service_account
-    host_network = config.host_network
     managed_label = config.managed_label
+    isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
+    service_account = config.service_account if isolation.include_service_account else ""
+    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
+    host_network = (
+        config.host_network
+        and isolation.network is TaskNetwork.CLUSTER
+        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
+    )
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -840,13 +851,14 @@ def _build_pod_manifest(
         attempt_uid=run_req.attempt_uid,
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
-        controller_address=config.controller_address,
+        controller_address=config.controller_address if isolation.include_controller_address else None,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
-    combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
+    cluster_env = config.task_env if isolation.include_cluster_env else {}
+    combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -908,7 +920,7 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, shm_limit_bytes=shm_limit_bytes)
+    volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     container: dict = {
         "name": "task",
@@ -927,7 +939,7 @@ def _build_pod_manifest(
     }
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
-    if config.env_secret_name:
+    if config.env_secret_name and isolation.include_cluster_env:
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
@@ -948,6 +960,8 @@ def _build_pod_manifest(
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
+    if isolation.network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = isolation.network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1012,20 +1026,26 @@ def _build_pod_manifest(
     # excluded from pod-phase computation, so completion detection (which keys on
     # pod.status.phase) is unaffected. The hostPath volume gives it read-only
     # access to the node's pod log directory.
-    logship = _build_logship_sidecar(
-        iris_env["IRIS_TASK_ID"],
-        config.controller_address,
-        config.logship_image,
-    )
-    volumes.append(
-        {
-            "name": _LOGSHIP_VOLUME_NAME,
-            "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
-        }
-    )
+    #
+    # A sandbox pod gets neither this nor the output uploader. Containers in a
+    # pod share its network, so the task can use any route a sidecar has: a
+    # finelog route exposes every job's logs, and the uploader needs the env
+    # Secret's object-store keys and a route to the object store.
+    sidecars = isolation.network is TaskNetwork.CLUSTER
+    init_containers: list[dict] = []
+    if sidecars:
+        init_containers.append(
+            _build_logship_sidecar(iris_env["IRIS_TASK_ID"], config.controller_address, config.logship_image)
+        )
+        volumes.append(
+            {
+                "name": _LOGSHIP_VOLUME_NAME,
+                "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
+            }
+        )
 
     containers = [container]
-    if config.task_outputs is not None:
+    if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         containers.append(
             _build_output_uploader(
@@ -1041,14 +1061,16 @@ def _build_pod_manifest(
     spec: dict = {
         "restartPolicy": "Never",
         "containers": containers,
-        "initContainers": [logship],
+        "initContainers": init_containers,
         "volumes": volumes,
     }
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
-    if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
+    if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
         spec["runtimeClassName"] = "gvisor"
+    if not isolation.include_service_account:
+        spec["automountServiceAccountToken"] = False
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -2332,6 +2354,7 @@ class K8sTaskProvider:
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
+    node_health: NodeHealthConfig | None = None
     cluster_scan_interval: float = 5.0
     _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
@@ -2481,6 +2504,8 @@ class K8sTaskProvider:
         if now - self._last_cluster_scan < self.cluster_scan_interval:
             return apply_failures
         self._last_cluster_scan = now
+        if self.node_health is not None and self.node_health.storage is not None:
+            reconcile_storage_health(self.kubectl, self.node_health.storage, self.node_health.max_cordoned_nodes)
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(
@@ -2956,10 +2981,13 @@ class K8sTaskProvider:
         policy = self.pods.task_outputs
         if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
             return None
+        # A running pod reports every container, so no status means no uploader (a sandbox pod).
+        uploader = _output_container_status(pod)
+        if uploader is None:
+            return None
 
         started = self._output_finalization_started.setdefault(entry, time.monotonic())
-        uploader = _output_container_status(pod)
-        uploader_running = uploader is not None and "running" in uploader.get("state", {})
+        uploader_running = "running" in uploader.get("state", {})
         if uploader_running and entry not in self._released_output_attempts:
             try:
                 release = self.kubectl.exec(

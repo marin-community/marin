@@ -8,21 +8,51 @@ import json
 
 import pytest
 from pydantic import ValidationError
+from shellbox.machine import Backend
+from verifyit.spec import ExactSpec, ScriptSpec
 
-from taskcompendium.grading import exact_answer, grade_answer
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
-from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
+from taskcompendium.grader import verifyit_package
+from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
+    AnswerCall,
     AnswerType,
+    ArtifactKind,
+    Boxed,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
+    FileReward,
+    FinalAction,
+    FunctionDefinition,
+    GradingAttempt,
+    JsonAnswer,
+    MissingArtifactPolicy,
+    NoGrader,
+    PlainText,
+    ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    SessionGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
+    VerifierArtifact,
+    VerifierCommand,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention, chat_request
+from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.submission import chat_request
+
+IMAGE = "private/grader@sha256:" + "a" * 64
+GRADING_ENVIRONMENT = EnvironmentRequirements(
+    docker_image=IMAGE,
+    compatible_backends=(Backend.DOCKER,),
+    setup_commands=("pip install --no-index /tests/wheels/*.whl",),
+    environment_variables={"CHECK_MODE": "strict"},
+)
+EXACT_DONE = verifyit_package(ExactSpec(expected=("done",))).grader
+EXACT_DONE_IN_ENVIRONMENT = verifyit_package(ExactSpec(expected=("done",)), environment=GRADING_ENVIRONMENT).grader
+LOOKUP = FunctionDefinition(name="lookup", parameters={"type": "object"})
 
 
 @pytest.fixture
@@ -32,7 +62,8 @@ def specification():
         context=ConversationInput(events=(TextMessage(role="user", content="Repair the project."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=exact_answer("done"),
+        answer_format=PlainText(),
+        grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
 
@@ -74,34 +105,20 @@ def specification():
                 ]
             }
         },
-        {"answer_type": AnswerType.FILE},
+        {"answer_type": AnswerType.FILE, "output_paths": ("/app/answer.txt",), "grader": EXACT_DONE_IN_ENVIRONMENT},
         {"answer_type": AnswerType.STATE},
-        {"answer_type": AnswerType.WORKSPACE_STATE},
-        {
-            "verifier": VerifierSpec(
-                kind="exact",
-                parameters_json='{"expected":"done"}',
-                environment_requirements=EnvironmentRequirements(capabilities=("process",)),
-            ),
-        },
+        {"answer_type": AnswerType.WORKSPACE_STATE, "grader": EXACT_DONE_IN_ENVIRONMENT},
+        {"grader": EXACT_DONE_IN_ENVIRONMENT},
     ],
 )
-def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path, specification, update):
+def test_direct_chat_rejects_semantics_it_cannot_preserve_before_request(specification, update):
     record = TaskSpec.model_validate({**specification.model_dump(), **update})
-    path = tmp_path / "specification.json"
-    path.write_text(record.model_dump_json())
-    task = read_specification(path)
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-    assert compatible_lowerings(task, (convention,), (HarborEnvironmentConfig(),)) == ()
+    task = TaskSpec.model_validate_json(record.model_dump_json())
     with pytest.raises(NotImplementedError):
-        chat_request(task, convention)
-    destination = tmp_path / "task"
-    with pytest.raises(NotImplementedError):
-        lower_to_harbor(task, convention, HarborEnvironmentConfig(), destination)
-    assert not destination.exists()
+        chat_request(task)
 
 
-@pytest.mark.parametrize("second_path", ["data", "DATA", "data/input.txt"])
+@pytest.mark.parametrize("second_path", ["data", "data/input.txt"])
 @pytest.mark.parametrize("role", ["worker", "oracle", "verifier"])
 def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification, second_path, role):
     wire = specification.model_dump()
@@ -113,7 +130,7 @@ def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification
         TaskSpec.model_validate(wire)
 
 
-def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_path, specification):
+def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(specification):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         role: [
@@ -124,9 +141,7 @@ def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_pat
         ]
         for role, content in (("worker", "public"), ("oracle", "gold"), ("verifier", "hidden test"))
     }
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    resources = read_specification(path).model_dump(mode="json")["resources"]
+    resources = TaskSpec.model_validate_json(json.dumps(wire)).model_dump(mode="json")["resources"]
     assert resources["all"] == []
     assert base64.b64decode(resources["worker"][0]["source"]["content_base64"]) == b"public"
     assert base64.b64decode(resources["oracle"][0]["source"]["content_base64"]) == b"gold"
@@ -134,112 +149,72 @@ def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_pat
 
 
 @pytest.mark.parametrize("initial_state", [None, "company-snapshot", {"inbox": [], "counter": 3}])
-def test_reader_keeps_literal_provider_state_but_direct_chat_cannot_export_it(tmp_path, specification, initial_state):
+def test_reader_keeps_literal_provider_state_but_direct_chat_cannot_request_it(specification, initial_state):
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"]["tool_providers"] = {
         "company": {"action_interface": "workplace:v1", "initial_state": initial_state}
     }
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    task = read_specification(path)
+    task = TaskSpec.model_validate_json(json.dumps(wire))
+    assert task.environment_requirements.tool_providers["company"].initial_state == initial_state
     with pytest.raises(NotImplementedError):
-        lower_to_harbor(
-            task,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-            HarborEnvironmentConfig(),
-            tmp_path / "export",
-        )
-    assert not (tmp_path / "export").exists()
+        chat_request(task)
 
 
-def test_reader_rejects_nested_nonfinite_provider_state(tmp_path, specification):
+def test_reader_rejects_nested_nonfinite_provider_state(specification):
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"]["tool_providers"] = {
         "company": {"action_interface": "workplace:v1", "initial_state": {"counters": [float("nan")]}}
     }
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
     with pytest.raises(ValidationError):
-        read_specification(path)
+        TaskSpec.model_validate_json(json.dumps(wire))
 
 
-@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e309"])
-def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path, specification, number):
-    # JsonValue previously allowed nonfinite values despite allow_inf_nan=False.
-    path = tmp_path / "specification.json"
-    wire = specification.model_dump(mode="json")
-    valid_parameters = ' {"checks": [{"tolerance": 0.125}], "label": "NaN"} '
-    wire["verifier"] = {"kind": "future_grader", "parameters_json": valid_parameters}
-    path.write_text(json.dumps(wire))
-    assert read_specification(path).verifier.parameters_json == valid_parameters
-    wire["verifier"]["parameters_json"] = '{"checks": [{"tolerance": ' + number + "}]} "
-    path.write_text(json.dumps(wire))
-    with pytest.raises(ValidationError):
-        read_specification(path)
-
-
-def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
-    wire = specification.model_dump(mode="json")
-    wire["verifier"]["environment_requirements"] = {"docker_image": "private/grader@sha256:" + "a" * 64}
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    task = read_specification(path)
-    conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
-    # This correct answer must not earn credit without the required private runtime.
-    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
-    assert (result.status, result.reward) == ("invalid_task", None)
-
-
-@pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
-def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specification, kind):
-    specification = specification.model_copy(update={"verifier": VerifierSpec(kind=kind, parameters_json="{}")})
-    path = tmp_path / "specification.json"
-    path.write_text(specification.model_dump_json())
-    task = read_specification(path)
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-    assert compatible_lowerings(task, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(NotImplementedError):
-        lower_to_harbor(task, convention, HarborEnvironmentConfig(), tmp_path / "export")
-    assert not (tmp_path / "export").exists()
-    conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
-    with pytest.raises(ValueError):
-        grade_answer(task, convention, conversation)
-
-
-@pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
-async def test_launch_rejects_schema_only_verifier_before_starting_a_trial(tmp_path, specification, kind):
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
-    unsupported = specification.model_copy(update={"verifier": VerifierSpec(kind=kind, parameters_json="{}")})
-    (task / "specification.json").write_text(unsupported.model_dump_json())
-    with pytest.raises(NotImplementedError):
-        await run_trial(
-            task,
-            HarborEnvironmentConfig(),
-            ChatLaunch(model="unused", api_base="https://example.invalid"),
-            tmp_path / "trials",
-            "unsupported",
-        )
-    assert not (tmp_path / "trials").exists()
+GRADER_CONFIGURATION = {"checks": [{"tolerance": 0.125}], "label": "NaN"}
 
 
 @pytest.mark.parametrize(
-    "base_path,alias", [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup")]
+    "grader",
+    [
+        {
+            "kind": "verifyit",
+            "mode": "structured_exact",
+            "parameters": {"expected": GRADER_CONFIGURATION},
+            "environment": None,
+        },
+        {"kind": "none", "reason": "Source evaluator is unavailable", "contract": GRADER_CONFIGURATION},
+    ],
 )
-def test_resource_groups_reject_portable_path_aliases_before_mounts_can_overwrite_inputs(
-    specification, base_path, alias
-):
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e309"])
+def test_grader_configuration_rejects_nested_nonfinite_json_numbers(specification, grader, number):
+    # JsonValue alone accepts nonfinite numbers despite allow_inf_nan=False.
+    wire = {**specification.model_dump(mode="json"), "answer_type": "json", "answer_format": {"kind": "json_value"}}
+    text = json.dumps({**wire, "grader": grader})
+    assert TaskSpec.model_validate_json(text).model_dump(mode="json")["grader"] == grader
+    with pytest.raises(ValidationError):
+        TaskSpec.model_validate_json(text.replace("0.125", number))
+
+
+@pytest.mark.parametrize(
+    "base_path,alias",
+    [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup"), ("foo", "FOO"), ("a/b", "a\\b")],
+)
+def test_resource_groups_preserve_distinct_linux_files(tmp_path, specification, base_path, alias):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         "all": [{"path": base_path, "source": {"kind": "inline_file", "content_base64": "cHVibGlj"}}],
         "worker": [{"path": alias, "source": {"kind": "inline_file", "content_base64": "b3ZlcndyaXRl"}}],
     }
-    with pytest.raises(ValidationError):
-        TaskSpec.model_validate(wire)
+    task = TaskSpec.model_validate(wire)
+    for resource in task.resources.all + task.resources.worker:
+        target = tmp_path / resource.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(resource.source.content_base64))
+    assert (tmp_path / base_path).read_bytes() == b"public"
+    assert (tmp_path / alias).read_bytes() == b"overwrite"
 
 
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])
-def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
+def test_in_process_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"] = {"capabilities": ["shell", "filesystem"], "working_directory": "/app"}
     wire["resources"] = {
@@ -247,43 +222,12 @@ def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace
     }
     task = TaskSpec.model_validate(wire)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
-    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+    result = grade_answer(task, GradingAttempt(conversation))
     assert (result.status, result.reward) == ("graded", reward)
 
 
-def test_reader_preserves_private_schema_contracts_before_unsupported_export_is_rejected(tmp_path, specification):
-    wire = specification.model_dump(mode="json")
-    wire["environment_requirements"] = {"environment_variables": {"TASK_MODE": "repair"}}
-    wire["verifier"] = {
-        "kind": "private_script",
-        "parameters_json": '{"entrypoint":"checks/grade.py"}',
-        "environment_requirements": {"environment_variables": {"CHECK_MODE": "strict"}},
-    }
-    wire["resources"] = {
-        "worker": [
-            {"path": "project/input.txt", "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"}}
-        ],
-        "verifier": [
-            {"path": "checks/grade.py", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="}}
-        ],
-    }
-    task = TaskSpec.model_validate(wire)
-    path = tmp_path / "specification.json"
-    path.write_text(task.model_dump_json())
-    restored = read_specification(path)
-    assert restored == task
-    with pytest.raises(NotImplementedError):
-        lower_to_harbor(
-            restored,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-            HarborEnvironmentConfig(),
-            tmp_path / "export",
-        )
-    assert not (tmp_path / "export").exists()
-
-
 @pytest.mark.parametrize("payload", [b"UTF-8 text: \xe2\x98\x83\n", b"\x00\xff\x80\n"])
-def test_inline_file_bytes_and_metadata_survive_json_reader(tmp_path, specification, payload):
+def test_inline_file_bytes_and_metadata_survive_json_reader(specification, payload):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         "worker": [
@@ -296,9 +240,197 @@ def test_inline_file_bytes_and_metadata_survive_json_reader(tmp_path, specificat
         ]
     }
     task = TaskSpec.model_validate(wire)
-    path = tmp_path / "specification.json"
-    path.write_text(task.model_dump_json())
-    restored = read_specification(path).resources.worker[0]
+    restored = TaskSpec.model_validate_json(task.model_dump_json()).resources.worker[0]
     assert base64.b64decode(restored.source.content_base64) == payload
     assert restored.mode == "0500"
     assert restored.mtime_ns == 1_725_555_600_123_456_789
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        pytest.param(
+            {"answer_type": AnswerType.TEXT, "answer_format": JsonAnswer(), "grader": EXACT_DONE},
+            id="verifyit-in-process",
+        ),
+        pytest.param(
+            {
+                "answer_type": AnswerType.FILE,
+                "output_paths": ("/app/solution.py",),
+                "grader": (
+                    verifyit_package(
+                        ScriptSpec(path="grade.py", verdict_file="verdict.json", timeout=60),
+                        environment=GRADING_ENVIRONMENT,
+                    ).grader
+                ),
+            },
+            id="verifyit-environment",
+        ),
+        pytest.param(
+            {
+                "answer_type": AnswerType.WORKSPACE_STATE,
+                "grader": ScriptGrader(
+                    argv=("python3", "/tests/grade.py"),
+                    cwd="/workspace",
+                    env={"GRADE_MODE": "strict"},
+                    environment=GRADING_ENVIRONMENT,
+                    collect=(VerifierCommand(argv=("sh", "-c", "git diff > /tmp/patch.diff"), cwd="/workspace"),),
+                    artifacts=(
+                        VerifierArtifact(
+                            source="/tmp/patch.diff", target="/workspace/patch.diff", kind=ArtifactKind.FILE
+                        ),
+                        VerifierArtifact(
+                            source="/workspace/build",
+                            target="/workspace/build",
+                            kind=ArtifactKind.DIRECTORY,
+                            exclude=("*.o",),
+                            missing=MissingArtifactPolicy.SKIP,
+                        ),
+                    ),
+                    answer_path=None,
+                    reward=FileReward(
+                        files=(
+                            RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON, key="score"),
+                            RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),
+                        ),
+                        pass_above=0.5,
+                    ),
+                    timeout=120.0,
+                ),
+            },
+            id="script",
+        ),
+        pytest.param(
+            {
+                "answer_type": AnswerType.NATIVE_ACTION,
+                "answer_format": FinalAction(require_call=True, max_calls=2),
+                "final_tools": (LOOKUP,),
+                "grader": SessionGrader(),
+            },
+            id="session",
+        ),
+        pytest.param(
+            {
+                "answer_format": Boxed(),
+                "grader": NoGrader(
+                    reason="Source evaluator is unavailable",
+                    contract={"evaluator": "llm_judge", "rubric": ["cites a source", "states 12"], "weight": 0.5},
+                ),
+            },
+            id="none",
+        ),
+        pytest.param({"answer_format": AnswerCall()}, id="answer-call"),
+    ],
+)
+def test_task_json_round_trip_preserves_grader_and_answer_format(specification, update):
+    task = TaskSpec.model_validate(
+        {
+            **dict(specification),
+            "environment_requirements": EnvironmentRequirements(environment_variables={"TASK_MODE": "repair"}),
+            "resources": ResourceGroups(
+                worker=(inline_resource("project/input.txt", b"public input"),),
+                verifier=(inline_resource("grade.py", b"print(1.0)\n"), inline_resource("config.json", b"{}")),
+            ),
+            **update,
+        }
+    )
+    assert TaskSpec.model_validate_json(task.model_dump_json()) == task
+
+
+SCRIPT = {"kind": "script", "argv": ["python3", "/tests/grade.py"], "environment": {"docker_image": IMAGE}}
+VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAGE}}
+LOOKUP_WIRE = [{"name": "lookup", "parameters": {"type": "object"}}]
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        pytest.param({"answer_type": "json"}, id="plain-text-cannot-carry-json"),
+        pytest.param({"answer_format": {"kind": "json_value"}}, id="json-value-cannot-carry-text"),
+        pytest.param(
+            {"answer_type": "file", "output_paths": ["/tests/answer.txt"], "grader": SCRIPT | {"answer_path": None}},
+            id="output-path-under-tests",
+        ),
+        pytest.param(
+            {
+                "answer_type": "file",
+                "environment_requirements": {"capabilities": ["python3"]},
+                "output_directories": [{"root": "/logs/verifier", "patterns": ["*"], "max_files": 1, "max_bytes": 1}],
+                "grader": SCRIPT | {"answer_path": None},
+            },
+            id="output-directory-under-verifier-logs",
+        ),
+        pytest.param(
+            {"answer_type": "file", "output_paths": ["/app/answer.txt"]}, id="in-process-grader-with-file-answer"
+        ),
+        pytest.param({"answer_type": "workspace_state"}, id="in-process-grader-with-workspace-answer"),
+        pytest.param(
+            {"grader": SCRIPT | {"environment": {"compatible_backends": ["docker"]}}}, id="script-without-image"
+        ),
+        pytest.param(
+            {"answer_type": "file", "output_paths": ["/app/answer.txt"], "grader": SCRIPT},
+            id="script-answer-path-for-file-answer",
+        ),
+        pytest.param({"grader": SCRIPT | {"answer_path": "/tests/answer.txt"}}, id="script-answer-path-under-tests"),
+        pytest.param(
+            {
+                "grader": SCRIPT | {"conversation_path": "/tests/grade.py"},
+                "resources": {
+                    "verifier": [{"path": "grade.py", "source": {"kind": "inline_file", "content_base64": "eA=="}}]
+                },
+            },
+            id="script-conversation-path-replaces-resource",
+        ),
+        pytest.param(
+            {"grader": {"kind": "verifyit", "mode": "script", "parameters": {"path": "grade.py"}}},
+            id="verifyit-mode-without-in-process-grader",
+        ),
+        pytest.param(
+            {
+                "answer_type": "native_action",
+                "answer_format": {"kind": "final_action"},
+                "final_tools": LOOKUP_WIRE,
+                "grader": VERIFYIT_ENVIRONMENT | {"mode": "exact", "parameters": {"expected": ["done"]}},
+            },
+            id="verifyit-environment-with-native-action",
+        ),
+        pytest.param(
+            {"grader": VERIFYIT_ENVIRONMENT | {"mode": "pytest", "parameters": {}}},
+            id="verifyit-workspace-mode-with-text-answer",
+        ),
+        pytest.param(
+            {
+                "grader": (
+                    VERIFYIT_ENVIRONMENT
+                    | {"mode": "exact", "parameters": {"expected": ["done"], "output": "/tests/answer.txt"}}
+                )
+            },
+            id="verifyit-answer-file-under-tests",
+        ),
+        pytest.param(
+            {
+                "answer_type": "number",
+                "grader": {
+                    "kind": "verifyit",
+                    "mode": "numeric",
+                    "parameters": {"expected": "bad", "tolerance_abs": 0, "tolerance_rel": 0},
+                },
+            },
+            id="verifyit-invalid-numeric-reference",
+        ),
+        pytest.param(
+            {"grader": {"kind": "verifyit", "mode": "exact", "parameters": {}}}, id="verifyit-missing-reference"
+        ),
+    ],
+)
+def test_task_validation_rejects_invalid_grading_contracts(specification, update):
+    wire = specification.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        TaskSpec.model_validate({**wire, **update})
+
+
+def test_task_json_rejects_prior_schema_version(specification):
+    payload = json.loads(specification.model_dump_json())
+    payload["schema_version"] = "0.24"
+    with pytest.raises(ValidationError):
+        TaskSpec.model_validate_json(json.dumps(payload))

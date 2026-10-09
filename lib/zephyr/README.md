@@ -49,6 +49,7 @@ Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_pa
 - `ZephyrContext(max_workers=N)` — auto-detects the backend (Iris inside an Iris job, local otherwise) via `fray.current_client()`
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
+- `ctx.execute(pipeline, name="rlvr-ifeval-review")` — prefixes the execution ID shown in logs and the dashboard. Names become lowercase ASCII alphanumerics and dashes, capped at 64 characters. Omitted or empty normalized names keep the timestamp/hash format.
 
 ## Real Usage
 
@@ -136,5 +137,9 @@ Zephyr consolidates ad-hoc distributed and Hugging Face dataset processing patte
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
+
+Shuffle ingestion bounds its input buffer by serialized payload bytes and item
+count before passing frames to the memory-aware writer. This also applies when
+each item is itself a batch. A single item must still fit in task memory.
 
 See `AGENTS.md` for execution internals and source layout.
