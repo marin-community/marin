@@ -25,6 +25,8 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     math,
     puzzles,
     python_tests,
+    qa,
+    structured_outputs,
 )
 from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, harbor_record, main
 from experiments.post_training.task_curation.pipeline import HfSource
@@ -173,6 +175,16 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
             '{"name":"Ada"}',
             '{"name":3}',
         ),
+        ("mcq", {"expected_answer": "B", "output_regex": qa.MCQA_REGEX}, "B", "A"),
+        ("mcq", {"expected_answer": "B", "output_regex": qa.MCQA_REGEX}, "B", "Answer: B"),
+        ("ifeval", {"instruction_id_list": ["keywords:existence"], "kwargs": [{"keywords": ["mars"]}]}, "mars", "venus"),
+        (
+            "xml-elements",
+            {"type": "object", "required": ["name"]},
+            "<root><name>Ada</name></root>",
+            "<root><age>2</age></root>",
+        ),
+        ("csv-columns", {"type": "object", "required": ["name"]}, "name\nAda\n", "age\n2\n"),
     ],
 )
 def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, invalid, tmp_path) -> None:
@@ -180,6 +192,29 @@ def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, 
         source = next(source for source in instruction_following.sources() if source.name == "tasktrove-structured")
         prompt = "Produce JSON with a string name. Write your final JSON to `/app/answer.txt`."
         private = {"tests/verifier_data.json": json.dumps({"schema_type": "json", "schema": reference}).encode()}
+    elif mode in ("xml-elements", "csv-columns"):
+        source = structured_outputs.sources()[0]
+        serialization = "xml" if mode == "xml-elements" else "csv"
+        prompt = f"Extract Ada's name as {serialization.upper()}. Write your final answer to `/app/answer.txt`."
+        private = {
+            "tests/verifier_data.json": json.dumps({"schema_type": serialization, "schema": reference}).encode(),
+            "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /app\n",
+        }
+    elif mode == "mcq":
+        source = next(source for source in qa.sources() if source.name == "tasktrove-knowledge_mcqa")
+        prompt = (
+            "Write your final answer to `/app/answer.txt`.\n---\n\n"
+            + qa.MCQA_FORMAT_PREFIX
+            + "'Answer: A/B' (e.g. 'Answer: B').\n\nWhat is 1+1?\nA. 1\nB. 2"
+        )
+        private = {"tests/verifier_data.json": json.dumps(reference).encode()}
+    elif mode == "ifeval":
+        source = next(source for source in instruction_following.sources() if source.name == "tasktrove-ifeval")
+        prompt = (
+            "You are running in a shell-based sandbox. Read the instruction below and write your final, complete "
+            "answer text to the file `/app/answer.txt`.\n\n---\n\nMention mars."
+        )
+        private = {"tests/verifier_data.json": json.dumps(reference).encode()}
     else:
         source = puzzles.sources()[0]
         prompt = "Solve the puzzle. Write ONLY your final answer to **`/app/answer.txt`**."

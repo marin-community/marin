@@ -282,16 +282,18 @@ runtime input. It must contain the dependencies required by the task's grader
 package lock. Export does not build or run images;
 its manifest records that dependency parity and runtime behavior remain
 unverified. Current verifyit code is bundled under the hidden `tests/` directory.
-The exporter supports plain-text answers with recorded original file-delivery
-instructions, and file submissions graded by verifyit or an archived Harbor
-`test.sh` emitting `reward.txt`. Exact, math, and JSON-schema graders declared
-without a separate environment also run in the supplied verifier image after
-export. This covers `tasktrove-puzzles` and `tasktrove-structured`: the canonical
+The exporter supports file submissions graded by verifyit or an archived Harbor
+`test.sh` emitting `reward.txt`. Text tasks whose grader declares an environment
+require recorded original file-delivery instructions.
+
+In-process exact, math, JSON-schema, MCQ, IFEval, XML-element, and CSV-column
+graders also run in the supplied verifier image after export. Their canonical
 TaskSpec prompt gains an explicit answer-file instruction, and the complete
-file is passed to the same candidate grader used in process. Reference answers
-and schema files remain private verifier resources. Other
-contracts produce explicit rejection records. Rejections from normalization
-remain in the export manifest.
+file is passed to the same candidate grader used in process. An MCQ answer file
+contains the bare option letter requested by the TaskSpec. Reference answers
+and schema files remain private verifier resources. Other contracts produce
+explicit rejection records. Rejections from normalization remain in the export
+manifest.
 
 Each task keeps its source, original archive path, and TaskSpec ID. The agent image
 contains only public resources; the verifier runs separately and receives the
