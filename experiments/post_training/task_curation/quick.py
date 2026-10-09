@@ -16,6 +16,8 @@ import click
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import SourceStatus
@@ -30,31 +32,48 @@ from experiments.post_training.task_curation.campaign import (
     CampaignStatus,
     OutcomeStatus,
     SourceOutcome,
-    campaign_report,
     error_chain,
+    write_campaign_report,
 )
 from experiments.post_training.task_curation.pipeline import (
-    HfSource,
-    UrlSource,
-    download_step,
+    RlDataPipeline,
     run_curation,
+    source_downloads,
     source_files,
 )
-from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.sources import selected_pipelines
 
 logger = logging.getLogger(__name__)
 
 
-def stage_local_source(source: HfSource | UrlSource, cache_root: Path, campaign: CampaignRuntime) -> str:
+def stage_local_download(download: ArtifactStep[Artifact], cache_root: Path) -> str:
     """Download pinned source files into the local artifact cache, reusing successful downloads."""
-    step = replace(download_step(source, campaign).lower(), output_path_prefix=str(cache_root))
+    step = replace(download.lower(), output_path_prefix=str(cache_root))
     StepRunner().run([step], max_concurrent=1)
     return step.output_path
 
 
+def stage_local_inputs(
+    pipeline: RlDataPipeline,
+    cache_root: Path,
+    campaign: CampaignRuntime,
+    *,
+    source_input: str | None,
+    inputs: Mapping[str, str],
+) -> tuple[str, dict[str, str]]:
+    """Stage declared pins unless a primary root or auxiliary override is supplied."""
+    primary, auxiliary = source_downloads(pipeline, campaign)
+    if source_input is None:
+        source_input = stage_local_download(primary, cache_root)
+    staged_inputs = dict(inputs)
+    for name, download in auxiliary.items():
+        if name not in staged_inputs:
+            staged_inputs[name] = stage_local_download(download, cache_root)
+    return source_input, staged_inputs
+
+
 def run_local_sources(
-    sources: Mapping[str, RlDataSource],
+    sources: Mapping[str, RlDataPipeline],
     input_root: Path | None,
     output_root: Path,
     *,
@@ -79,8 +98,8 @@ def run_local_sources(
     outcomes = {name: SourceOutcome(name, str(output_root / name), OutcomeStatus.QUEUED) for name in sources}
 
     def report(status: CampaignStatus) -> None:
-        report_path.write_text(
-            json.dumps(campaign_report(status, mode="quick", outcomes=list(outcomes.values())), indent=2)
+        write_campaign_report(
+            str(report_path), status, mode=SourceProcessingMode.QUICK, outcomes=list(outcomes.values())
         )
 
     report(CampaignStatus.RUNNING)
@@ -99,27 +118,22 @@ def run_local_sources(
         ExitStack() as process_pools,
     ):
         process_context: ZephyrContext | None = None
-        for name, source in sources.items():
+        for name, pipeline in sources.items():
             outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.RUNNING)
             report(CampaignStatus.RUNNING)
             try:
-                if source.pipeline is None:
-                    raise ValueError(f"{source.name} has no conversion pipeline")
                 started = time.monotonic()
                 if source_overrides:
                     source_input = str(output_root)
                 elif input_root is not None:
                     source_input = str(input_root)
                 else:
-                    source_input = stage_local_source(source.pipeline.source, download_cache, campaign)
-                staged_inputs = dict(inputs)
-                for key, auxiliary in source.pipeline.inputs.items():
-                    if key not in staged_inputs:
-                        staged_inputs[key] = stage_local_source(auxiliary, download_cache, campaign)
-                logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
-                shards = conversion_shards(
-                    source_input, source_files(source.pipeline.source), overrides=source_overrides
+                    source_input = None
+                source_input, staged_inputs = stage_local_inputs(
+                    pipeline, download_cache, campaign, source_input=source_input, inputs=inputs
                 )
+                logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
+                shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
                 conversion_context = context
                 if max_workers > 1 and any(shard.row_end is not None and shard.parts > 1 for shard in shards):
                     # Process startup dominates small conversions; reserve it for split Parquet files.
@@ -136,8 +150,7 @@ def run_local_sources(
                         )
                     conversion_context = process_context
                 result = run_curation(
-                    source.pipeline,
-                    mode=SourceProcessingMode.QUICK,
+                    pipeline,
                     context=conversion_context,
                     source_input=source_input,
                     output_path=str(output_root / name),
@@ -191,10 +204,10 @@ def main(
     auxiliary: tuple[tuple[str, str], ...],
     max_workers: int,
 ) -> None:
-    catalog = {source.name: source for source in all_sources().values() if source.pipeline is not None}
-    unknown = set(sources) - catalog.keys()
-    if unknown:
-        raise click.UsageError(f"Unknown sources: {', '.join(sorted(unknown))}")
+    try:
+        catalog = selected_pipelines(sources)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
     inputs = {name: str(Path(path).resolve()) for name, path in auxiliary}
     run_local_sources(
         {name: catalog[name] for name in dict.fromkeys(sources)},

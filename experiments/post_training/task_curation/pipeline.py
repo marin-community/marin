@@ -255,7 +255,6 @@ def source_recipe(
 def run_curation(
     pipeline: RlDataPipeline,
     *,
-    mode: SourceProcessingMode,
     context: ZephyrContext,
     source_input: str,
     output_path: str,
@@ -266,15 +265,16 @@ def run_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
-    Quick conversion records the declared grader lock without building or running it.
-    Sample and full runs require the campaign's review configuration and resolved grader.
+    Without a config, QUICK records the declared grader lock without building or running it.
+    A config selects SAMPLE or FULL and requires the campaign's resolved grader.
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
         raise ValueError(f"Missing staged auxiliary inputs for {pipeline.name}: {sorted(missing)}")
+    mode = config.mode if config is not None else SourceProcessingMode.QUICK
+    if config is not None and mode == SourceProcessingMode.QUICK:
+        raise ValueError("QUICK conversion does not take review or verification settings")
     if mode == SourceProcessingMode.QUICK:
-        if config is not None:
-            raise ValueError("QUICK conversion does not take review or verification settings")
         if grader_environment is None and pipeline.grader is not None:
             environment = pipeline.grader
             if environment.image is not None:
@@ -426,6 +426,15 @@ def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> Ar
     )
 
 
+def source_downloads(
+    pipeline: RlDataPipeline, campaign: CampaignRuntime
+) -> tuple[ArtifactStep[Artifact], dict[str, ArtifactStep[Artifact]]]:
+    """Pinned primary and auxiliary downloads shared by local and reviewed runs."""
+    return download_step(pipeline.source, campaign), {
+        name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())
+    }
+
+
 @dataclass(frozen=True)
 class SourceRun:
     identity: dict[str, Any]
@@ -460,7 +469,6 @@ def _run_source(
         grader_environment = environment_requirements(pipeline.grader, built)
     result = run_curation(
         pipeline,
-        mode=config.mode,
         context=campaign.context,
         source_input=run.source_input,
         output_path=run.output_path,
@@ -484,8 +492,7 @@ def source_step(
     """
     if config.mode == SourceProcessingMode.QUICK:
         raise ValueError("QUICK conversion uses run_curation with staged inputs; it does not build reviewed artifacts")
-    downloaded = download_step(pipeline.source, campaign)
-    inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
+    downloaded, inputs = source_downloads(pipeline, campaign)
     grader_step = None
     grader_built = None
     if pipeline.grader is not None and placement(pipeline.grader) != Placement.IMAGE:

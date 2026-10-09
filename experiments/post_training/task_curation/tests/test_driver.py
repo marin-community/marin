@@ -48,7 +48,7 @@ def math500():
 @pytest.fixture
 def catalog(monkeypatch):
     pipelines = {name: replace(math500(), name=name) for name in ("first", "second", "third")}
-    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_pipelines", lambda: pipelines)
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_pipelines", lambda: pipelines)
     return pipelines
 
 

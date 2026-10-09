@@ -31,8 +31,8 @@ from taskcompendium.runtime.local import LocalGraderMachines
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, source_step
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.pipeline import source_step
+from experiments.post_training.task_curation.sources import selected_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
 IRIS_SCHEDULING_TIMEOUT = 600
@@ -143,15 +143,6 @@ def _controller_url(backend: VerificationBackend, controller_url: str | None) ->
     if job_url is None:
         raise click.UsageError("--verification-backend iris outside an Iris job requires --controller-url")
     return job_url
-
-
-def _selected_pipelines(sources: tuple[str, ...]) -> dict[str, RlDataPipeline]:
-    """The named catalog sources in catalog order, or the whole catalog when none is named."""
-    catalog = all_pipelines()
-    unknown = set(sources) - catalog.keys()
-    if unknown:
-        raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
 
 
 def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_concurrency: int) -> Reviewer:
@@ -271,7 +262,10 @@ def main(
 ) -> None:
     backend = VerificationBackend(verification_backend)
     controller_url = _controller_url(backend, controller_url)
-    pipelines = _selected_pipelines(sources)
+    try:
+        pipelines = selected_pipelines(sources)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
     review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
     reviewer = None
     if do_run:
@@ -304,7 +298,7 @@ def main(
     if not do_run:
         click.echo(json.dumps(campaign_plan(steps, pool), indent=2))
         return
-    run_campaign(steps, runtime=runtime, pool=pool, report_path=report_path, mode=mode)
+    run_campaign(steps, runtime=runtime, pool=pool, report_path=report_path, mode=config.mode)
 
 
 if __name__ == "__main__":

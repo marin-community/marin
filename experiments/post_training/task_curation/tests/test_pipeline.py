@@ -3,6 +3,7 @@
 
 import hashlib
 import importlib.util
+import json
 import re
 import sys
 import threading
@@ -11,6 +12,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
@@ -22,6 +25,8 @@ from taskcompendium.pipeline.source_processing import SourcePipelineConfig, Sour
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+from zephyr.context import ZephyrContext
+from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -34,10 +39,12 @@ from experiments.post_training.task_curation.images.build import (
 )
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
+    HfSource,
     UrlSource,
     download_source,
     download_step,
     environment_requirements,
+    run_curation,
     source_recipe,
     source_step,
 )
@@ -254,6 +261,45 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     pipeline = math500()
     selected = replace(pipeline.source, select=lambda row, context: True)
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
+
+
+@pytest.mark.parametrize("mode, expected_rows", [(SourceProcessingMode.SAMPLE, 2), (SourceProcessingMode.FULL, 5)])
+def test_reviewed_invocation_uses_config_mode_for_panel_or_full_conversion(
+    tmp_path, fixture_converter, config, mode, expected_rows
+):
+    _, convert = fixture_converter
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "rows.jsonl").write_text(
+        "".join(json.dumps({"prompt": f"Question {index}?", "answer": str(index)}) + "\n" for index in range(5))
+    )
+    pipeline = replace(
+        math500(),
+        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        rubric=None,
+        controls=None,
+        grader=None,
+    )
+    config = replace(config, mode=mode, quality_policy=SourceQualityPolicy(sample_size=2))
+    client = LocalClient()
+    with (
+        set_current_client(client),
+        ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+    ):
+        result = run_curation(
+            pipeline,
+            context=context,
+            source_input=str(source),
+            output_path=str(tmp_path / "output"),
+            inputs={},
+            config=config,
+        )
+    rows = [row for shard in (tmp_path / "output/normalize").glob("*.parquet") for row in load_parquet(str(shard))]
+    assert len(rows) == expected_rows
+    assert {row["source_row"] for row in rows} <= {f"rows.jsonl:{index}" for index in range(5)}
+    manifest = json.loads(StoragePath(result.manifest_path).read_text())
+    assert manifest["mode"] == mode
 
 
 @pytest.fixture

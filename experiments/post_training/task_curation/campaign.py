@@ -137,6 +137,14 @@ def campaign_report(status: CampaignStatus, *, mode: str, outcomes: Sequence[Sou
     }
 
 
+def write_campaign_report(
+    report_path: str, status: CampaignStatus, *, mode: str, outcomes: Sequence[SourceOutcome]
+) -> None:
+    """Persist the current source outcomes for local or reviewed runs."""
+    report = campaign_report(status, mode=mode, outcomes=outcomes)
+    StoragePath(report_path).write_text(json.dumps(report, indent=2))
+
+
 def run_campaign(
     steps: Sequence[ArtifactStep[CampaignArtifact]],
     *,
@@ -158,8 +166,7 @@ def run_campaign(
     report_lock = Lock()
 
     def write_report(status: CampaignStatus) -> None:
-        report = campaign_report(status, mode=mode, outcomes=[outcomes[step.name] for step in steps])
-        StoragePath(report_path).write_text(json.dumps(report, indent=2))
+        write_campaign_report(report_path, status, mode=mode, outcomes=list(outcomes.values()))
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:

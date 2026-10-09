@@ -198,6 +198,7 @@ are admitted like rows of in-process graders.
 ## Conversion modes
 
 `pipeline.run_curation` is the common entry point for local and campaign runs.
+Omit `config` for QUICK; a reviewed config selects its mode through `config.mode`.
 All modes share conversion and the normalized schema. QUICK retains TaskSpecs
 and typed rejections, skipping admission, fingerprints, review, deduplication
 and grading. It records declared images or locks without building environments.
