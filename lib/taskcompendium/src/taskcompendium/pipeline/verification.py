@@ -3,45 +3,102 @@
 
 """Apply positive and negative controls to task graders."""
 
-from verifyit.grade import negative_candidate
-from verifyit.modes.extract import extract_boxed
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec
+import json
 
-from taskcompendium.grading import grade_task, resolve_verifier
+from verifyit.grade import negative_candidate, positive_candidate
+from verifyit.modes.extract import extract_boxed
+from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, NumericSpec, PredictedActionSpec
+
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    ANSWER_CALL_NAME,
+    ANSWER_FIELD,
+    AnswerCall,
     AssistantToolCalls,
     ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    GradingAttempt,
+    JsonAnswer,
+    NoGrader,
+    SessionGrader,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
-from taskcompendium.submission import AnswerFormat, FinalAction, SubmissionConvention
+from taskcompendium.runtime.task_grading import grade_task
 
-PLAIN = SubmissionConvention(id="pipeline-plain", answer_format=AnswerFormat.PLAIN)
+MALFORMED_JSON = "[}"
+"""A reply no JSON parser accepts."""
+
+DIAGNOSTIC_TAIL_CHARS = 1500
+"""Characters of grader stdout and stderr kept in a failed control's detail."""
+
+
+def control_result(grade: GradeResult, name: str, expected_reward: float) -> CheckResult:
+    """Require the expected reward, counting a rejected submission as zero, while retaining runtime errors.
+
+    A positive reward where zero is expected is a ``DEFECT``: the grader ran, and the task accepts a
+    submission that should earn nothing. A result that is not a pass keeps the grader's exit code and
+    the tails of its stdout and stderr.
+    """
+    if grade.status == Outcome.UNAVAILABLE:
+        status = CheckStatus.UNSUPPORTED
+    elif grade.status == Outcome.INFRA_ERROR:
+        status = CheckStatus.INFRA_ERROR
+    elif (grade.status == Outcome.GRADED and grade.reward == expected_reward) or (
+        grade.status == Outcome.SUBMISSION_FAILURE and expected_reward == 0.0
+    ):
+        status = CheckStatus.PASS
+    elif grade.status == Outcome.GRADED and expected_reward == 0.0 and grade.reward is not None and grade.reward > 0.0:
+        status = CheckStatus.DEFECT
+    else:
+        status = CheckStatus.FAIL
+    detail = f"{grade.status}: reward={grade.reward}; expected={expected_reward}"
+    if grade.error is not None:
+        detail += f"; error={grade.error}"
+    if grade.detail and status != CheckStatus.PASS:
+        detail += f"; detail={grade.detail}"
+    if grade.diagnostics and status != CheckStatus.PASS:
+        diagnostics = grade.diagnostics
+        detail += (
+            f"; exit_code={diagnostics['exit_code']}"
+            f"; stdout_tail={diagnostics['stdout'][-DIAGNOSTIC_TAIL_CHARS:]}"
+            f"; stderr_tail={diagnostics['stderr'][-DIAGNOSTIC_TAIL_CHARS:]}"
+        )
+    return CheckResult(check=name, status=status, detail=detail)
 
 
 def grader_readiness(checks: list[CheckResult]) -> GraderReadiness:
-    """Summarize control coverage independently of the static quality decision."""
+    """Summarize control coverage independently of the static quality decision.
+
+    A ``DEFECT`` check leaves the grader ready: the grader ran and produced a reward, and the filter
+    rejects the defective task's row on its own.
+    """
     if any(check.status == CheckStatus.FAIL for check in checks):
         return GraderReadiness.FAILED
-    if not checks or any(check.status != CheckStatus.PASS for check in checks):
+    if not checks or any(check.status not in (CheckStatus.PASS, CheckStatus.DEFECT) for check in checks):
         return GraderReadiness.UNVERIFIED
     return GraderReadiness.READY
 
 
 def verify_task(task: TaskSpec) -> list[CheckResult]:
     """Check the answer grader and record unsupported runtime requirements."""
-    if task.verifier.environment_requirements != EnvironmentRequirements():
+    grader = task.grader
+    if isinstance(grader, NoGrader):
+        return [CheckResult(check="source_evaluator", status=CheckStatus.UNSUPPORTED, detail=grader.reason)]
+    if isinstance(grader, SessionGrader):
         return [
             CheckResult(
-                check="runtime", status=CheckStatus.UNSUPPORTED, detail="A private grading environment is required"
+                check="runtime", status=CheckStatus.UNSUPPORTED, detail="A session grader runs in its rollout session"
             )
         ]
+    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
+        return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="A grading environment is required")]
     try:
-        verifier = resolve_verifier(task.verifier)
+        verifier = verifyit_spec(grader)
     except ValueError as error:
         return [CheckResult(check="verifier_contract", status=CheckStatus.FAIL, detail=str(error))]
 
@@ -50,52 +107,62 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
 
     if isinstance(verifier, PredictedActionSpec):
         return _action_checks(task, verifier)
+    if isinstance(verifier, JsonSchemaSpec):
+        return [
+            *answer_checks(task, (("empty", "", 0.0), ("malformed", MALFORMED_JSON, 0.0))),
+            CheckResult(check="reference", status=CheckStatus.SKIPPED, detail="No schema-valid reference supplied"),
+        ]
     if isinstance(verifier, NumericSpec):
         perturbed = negative_candidate(verifier)
         assert perturbed is not None
         negative = extract_boxed(perturbed) or perturbed
-        positive = repr(verifier.expected)
+        positive = verifier.expected
     elif isinstance(verifier, McqSpec):
         positive = verifier.expected
         negative = "B" if positive != "B" else "A"
     elif isinstance(verifier, ExactSpec):
-        positive = verifier.expected[0]
+        positive = positive_candidate(verifier)
+        assert positive is not None
         negative = f"{positive}\n__incorrect_answer__"
     else:
-        return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=task.verifier.kind)]
+        return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=grader.mode)]
 
     return answer_checks(task, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0)))
 
 
+def answer_event(task: TaskSpec, answer: str) -> TextMessage | AssistantToolCalls:
+    """Present a control answer in the task's answer format."""
+    if isinstance(task.answer_format, AnswerCall):
+        call = ConversationToolCall(call_id="control", name=ANSWER_CALL_NAME, arguments={ANSWER_FIELD: answer})
+        return AssistantToolCalls(calls=(call,))
+    if isinstance(task.answer_format, JsonAnswer):
+        return TextMessage(role="assistant", content=json.dumps({ANSWER_FIELD: answer}))
+    return TextMessage(role="assistant", content=answer)
+
+
 def _grade_control(task: TaskSpec, answer: str) -> GradeResult:
-    events = (*task.context.events, TextMessage(role="assistant", content=answer))
-    return grade_task(task, PLAIN, ConversationTrace(events=events))
+    events = (*task.context.events, answer_event(task, answer))
+    return grade_task(task, GradingAttempt(ConversationTrace(events=events)))
 
 
 def answer_checks(task: TaskSpec, controls: tuple[tuple[str, str, float], ...]) -> list[CheckResult]:
-    """Grade plain-response controls while retaining unavailable graders as unsupported."""
+    """Grade control answers while retaining unavailable graders as unsupported."""
     results = []
     for name, answer, expected in controls:
         result = _grade_control(task, answer)
         passed = (
             result.reward == expected
             if result.status == Outcome.GRADED
-            else (expected == 0.0 and result.status == Outcome.EXTRACTION_ERROR)
+            else (expected == 0.0 and result.status == Outcome.SUBMISSION_FAILURE)
         )
         status = CheckStatus.PASS if passed else CheckStatus.FAIL
-        if result.status == Outcome.INFRA_ERROR:
+        if result.status in (Outcome.UNAVAILABLE, Outcome.INFRA_ERROR):
             status = CheckStatus.UNSUPPORTED
         results.append(CheckResult(check=name, status=status, detail=f"{result.status}: reward={result.reward}"))
     return results
 
 
-def verify_witness(task: TaskSpec, witness: str, negative: str) -> list[CheckResult]:
-    """Check a separately supplied feasible answer and two failing submissions."""
-    return answer_checks(task, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
-
-
 def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckResult]:
-    convention = FinalAction(id="pipeline-action", require_call=True, max_calls=len(verifier.expected_calls))
     calls = tuple(
         ConversationToolCall(call_id=f"control-{index}", name=call.name, arguments=call.arguments)
         for index, call in enumerate(verifier.expected_calls)
@@ -108,12 +175,17 @@ def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckR
         ("reference", reference, 1.0),
         ("perturbed", wrong, 0.0),
     ):
-        grade = grade_task(task, convention, ConversationTrace(events=(*task.context.events, response)))
-        passed = grade.reward == expected or (expected == 0.0 and grade.status == Outcome.EXTRACTION_ERROR)
+        grade = grade_task(task, GradingAttempt(ConversationTrace(events=(*task.context.events, response))))
+        passed = grade.status == Outcome.GRADED and grade.reward == expected
+        passed = passed or (expected == 0.0 and grade.status == Outcome.SUBMISSION_FAILURE)
         results.append(
             CheckResult(
                 check=name,
-                status=CheckStatus.PASS if passed else CheckStatus.FAIL,
+                status=(
+                    CheckStatus.UNSUPPORTED
+                    if grade.status == Outcome.UNAVAILABLE
+                    else CheckStatus.PASS if passed else CheckStatus.FAIL
+                ),
                 detail=f"{grade.status}: reward={grade.reward}",
             )
         )

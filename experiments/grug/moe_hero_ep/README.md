@@ -316,6 +316,30 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
+### Profile-guided scheduling
+
+With collective overlap limited to 1, where XLA's latency-hiding scheduler places each collective
+decides how much communication hides under compute. Its default estimator gives every collective
+the same small latency, so it hides a multi-millisecond transport under a single GEMM. A PGLE profile
+gives it measured costs instead. On one rack restored from `step-180000`, a profile built from the
+program's own trace shortened the step from 12.61 to 12.52 s.
+
+Trace the program once, build its profile, then rerun with it:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.pgle_profile \
+  s3://hero-checkpoints/tmp/ttl=30d/xprof/<run-id>/plugins/profile/<steps>/<host>.xplane.pb \
+  experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt
+# then submit the same program with
+#   -e XLA_FLAGS "--xla_gpu_pgle_profile_file_or_directory_path=/app/experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt"
+```
+
+The profile matches instructions by name, so it applies only to the program it was traced from:
+rebuild it after any change to the model, mesh, or XLA flags, and build the production profile from
+a trace of the production mesh. The job bundle carries the file from the working tree, and `/app` is
+the task's working directory. The launcher keeps its other XLA defaults when `XLA_FLAGS` names only
+the profile. Automatic PGLE (`JAX_ENABLE_PGLE`) stays off: with one process per GPU it cannot profile.
+
 ### Long-context diagnostics
 
 For 262,144-token sequences on one rack, use `--seq-len 262144 --batch-size 16

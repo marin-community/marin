@@ -5,10 +5,11 @@ import json
 from pathlib import Path
 
 import pytest
-from verifyit.grade import InvalidTask, Status, negative_candidate
+from verifyit.candidate import grade_candidate
+from verifyit.grade import Status, negative_candidate
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
-from verifyit.spec import NumericSpec
+from verifyit.spec import NumericSpec, parse_spec, render_spec
 
 
 def _answer(workspace: Path, text: str) -> None:
@@ -16,90 +17,129 @@ def _answer(workspace: Path, text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "expected, text, reward",
+    "expected,text,reward",
     [
-        (42.0, "42", 1.0),
-        (42.0, "The answer is 42.\n", 1.0),
-        (42.0, "43", 0.0),
-        (-1234.5, "Total: -1,234.5\n", 1.0),
-        (6.02e23, "6.02e23 molecules\n", 1.0),
-        (0.5, ".5", 1.0),
-        # The result the model states last is the one graded.
-        (12.0, "First I guessed 7, then 9, but the answer is 12\n", 1.0),
-        # A boxed result wins over numbers written after it.
-        (42.0, "\\boxed{42}\nchecked against 999 samples\n", 1.0),
-        (999.0, "\\boxed{42}\nchecked against 999 samples\n", 0.0),
-        # A malformed final box cannot expose an earlier number to the parser.
-        (42.0, "\\boxed{42}\nthat was wrong, actually \\boxed{\n", 0.0),
-        (42.0, "\\boxed{42}\nthat was wrong, actually \\boxed{}\n", 0.0),
+        ("42", "42", 1),
+        ("42", "The answer is 42.\n", 1),
+        ("42", "My calculation gives 42.", 1),
+        ("42", "43", 0),
+        ("-1234.5", "Answer: -1,234.5", 1),
+        ("6.02e23", "6.02e23", 1),
+        ("0.5", ".5", 1),
+        ("12", "First I guessed 7, then 9.\nThe answer is 12", 1),
+        ("42", r"\boxed{42}" + "\nchecked against 999 samples", 1),
+        ("999", r"\boxed{42}" + "\nchecked against 999 samples", 0),
+        ("1/2", "1/2", 1),
+        ("1/2", "The result is 1 / 2.", 1),
+        ("1/2", "0.5", 1),
+        ("1", ("1" + ",000" * 1365) + " / " + ("1" + ",000" * 1365), 1),
+        ("2", "1/2", 0),
+        ("1000", "1,000", 1),
+        ("3/10", "0.3", 1),
+        ("3/10", "Approximately 3e-1 units", 1),
+        ("9007199254740993", "9007199254740993", 1),
+        ("9007199254740993", "9007199254740992", 0),
+        (str(10**400), str(10**400), 1),
+        (str(10**400), str(10**400 + 1), 0),
     ],
 )
-def test_numeric_reads_the_final_number(tmp_path, expected, text, reward):
+def test_numeric_file_and_candidate_paths_grade_the_same_exact_value(tmp_path, expected, text, reward):
+    spec = parse_spec(render_spec(NumericSpec(expected, tolerance_abs=0.0, tolerance_rel=0.0)))
     _answer(tmp_path, text)
-    assert grade_math.grade(NumericSpec(expected=expected), tmp_path, tmp_path).reward == reward
+    direct = grade_candidate(spec, text, {})
+    file_result = grade_math.grade(spec, tmp_path, tmp_path)
+    assert (direct.status, direct.reward) == (Status.SCORED, reward)
+    assert file_result == direct
+    json.dumps(direct.detail, allow_nan=False)
 
 
 @pytest.mark.parametrize(
-    "spec, text, reward",
+    "spec,text,reward",
     [
-        (NumericSpec(expected=3.14159), "3.1416", 0.0),
-        (NumericSpec(expected=3.14159, tolerance_abs=1e-3), "3.1416", 1.0),
-        (NumericSpec(expected=3.14159, tolerance_abs=1e-3), "3.2", 0.0),
-        (NumericSpec(expected=1e6, tolerance_rel=1e-5), "1000001", 1.0),
-        (NumericSpec(expected=1e6, tolerance_rel=1e-5), "1000100", 0.0),
+        (NumericSpec("3.14159", tolerance_abs=0.0, tolerance_rel=0.0), "3.1416", 0),
+        (NumericSpec("3.14159", tolerance_abs=1e-3, tolerance_rel=0.0), "3.1416", 1),
+        (NumericSpec("3.14159", tolerance_abs=1e-3, tolerance_rel=0.0), "3.2", 0),
+        (NumericSpec("1e6", tolerance_abs=0.0, tolerance_rel=1e-5), "1000001", 1),
+        (NumericSpec("1e6", tolerance_abs=0.0, tolerance_rel=1e-5), "1000100", 0),
+        (NumericSpec("0.3", tolerance_abs=0.01, tolerance_rel=0.0), "0.31", 1),
+        (NumericSpec("0.3", tolerance_abs=0.01, tolerance_rel=0.0), "0.31000000000000001", 0),
+        (NumericSpec("1/3", tolerance_abs=0.0003333333333333334, tolerance_rel=0.0), "0.333", 1),
+        (NumericSpec("1/3", tolerance_abs=0.0003333333333333333, tolerance_rel=0.0), "0.333", 0),
+        (NumericSpec("1/3", tolerance_abs=0.0, tolerance_rel=0.0), "0.333", 0),
+        (NumericSpec("1e3000", tolerance_abs=0.0, tolerance_rel=1.0), "0", 1),
     ],
 )
-def test_numeric_tolerances_bound_the_match(tmp_path, spec, text, reward):
+def test_numeric_explicit_tolerances_bound_exact_differences(tmp_path, spec, text, reward):
     _answer(tmp_path, text)
     assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
+    direct = grade_candidate(spec, text, {})
+    assert direct.reward == reward
+    json.dumps(direct.detail, allow_nan=False)
 
 
 @pytest.mark.parametrize(
-    "text, reason",
-    [("I could not work it out.\n", "no_number"), ("", "no_output"), ("  \n", "no_output")],
-)
-def test_numeric_output_without_a_number_scores_zero(tmp_path, text, reason):
-    _answer(tmp_path, text)
-    result = grade_math.grade(NumericSpec(expected=42.0), tmp_path, tmp_path)
-    assert (result.status, result.reward, result.detail["reason"]) == (Status.SCORED, 0.0, reason)
-
-
-def test_numeric_reward_detail_carries_the_extracted_value(tmp_path):
-    _answer(tmp_path, "after rounding, 17.5\n")
-    detail = grade_math.grade(NumericSpec(expected=42.0), tmp_path, tmp_path).detail
-    assert detail["extracted"] == 17.5
-
-
-@pytest.mark.parametrize(
-    "spec",
+    "text",
     [
-        NumericSpec(expected=float("nan")),
-        NumericSpec(expected=float("inf")),
-        NumericSpec(expected=42.0, tolerance_abs=-1.0),
-        NumericSpec(expected=42.0, tolerance_rel=-1.0),
-        NumericSpec(expected=42.0, tolerance_abs=float("inf")),
-        NumericSpec(expected=1e308, tolerance_rel=1e308),
+        "not a number",
+        "",
+        "  \n",
+        "12 or 13",
+        "2 + 2",
+        "1,00",
+        "Answer: 1,00 then 42",
+        "Answer: 42 then 1,00",
+        "Answer: 1efoo then 42",
+        "Result: 1efoo",
+        "Result: value42",
+        "1/0",
+        "nan",
+        "inf",
+        "0.2+0.1",
+        "1e999999999",
+        r"\boxed{42}" + "\n" + r"\boxed{",
+        r"\boxed{42}" + "\n" + r"\boxed{}",
     ],
 )
-def test_numeric_invalid_contract_is_an_invalid_task(tmp_path, spec):
-    _answer(tmp_path, "42")
-    assert dispatch(spec, tmp_path, tmp_path).status == Status.INVALID_TASK
+def test_malformed_numeric_submission_cannot_expose_a_partial_value(tmp_path, text):
+    spec = NumericSpec("42", tolerance_abs=0.0, tolerance_rel=0.0)
+    _answer(tmp_path, text)
+    for result in (grade_math.grade(spec, tmp_path, tmp_path), grade_candidate(spec, text, {})):
+        assert (result.status, result.reward) == (Status.SCORED, 0)
+        assert "extracted" not in result.detail
 
 
 def test_numeric_negative_candidate_exceeds_the_configured_tolerance(tmp_path):
-    spec = NumericSpec(expected=42.0, tolerance_abs=2.0)
+    spec = NumericSpec("42", tolerance_abs=2.0, tolerance_rel=0.0)
     candidate = negative_candidate(spec)
     assert candidate is not None
     _answer(tmp_path, candidate)
-    assert grade_math.grade(spec, tmp_path, tmp_path).reward == 0.0
+    assert grade_math.grade(spec, tmp_path, tmp_path).reward == 0
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
-def test_nonfinite_numeric_candidate_is_wrong_with_serializable_detail(value):
-    result = grade_math.grade_numeric_candidate(NumericSpec(2), value)
-    assert result.reward == 0
-    assert result.detail["reason"] == "nonfinite_candidate"
-    json.dumps(result.detail, allow_nan=False)
+@pytest.mark.parametrize(
+    "expected,absolute,relative", [("nan", 0.0, 0.0), ("1/0", 0.0, 0.0), ("42", -1.0, 0.0), ("42", 0.0, float("inf"))]
+)
+def test_invalid_private_numeric_contract_is_checked_before_malformed_candidate(tmp_path, expected, absolute, relative):
+    spec = NumericSpec(expected, tolerance_abs=absolute, tolerance_rel=relative)
+    _answer(tmp_path, "not a number")
+    assert dispatch(spec, tmp_path, tmp_path).status == Status.INVALID_TASK
+    assert grade_candidate(spec, "not a number", {}).status == Status.INVALID_TASK
+
+
+@pytest.mark.parametrize(
+    "expected,candidate,tolerance,reward",
+    [
+        (0.3, 0.2 + 0.1, 0.0, 0),
+        (0.3, 0.2 + 0.1, 1e-15, 1),
+        (1.0, 1.01, 0.01, 0),
+        (0.01, 0.02, 0.01, 1),
+        (1e308, -1e308, 0.01, 0),
+    ],
+)
+def test_float_numeric_grader_preserves_binary_subtraction(expected, candidate, tolerance, reward):
+    result = grade_math.grade_numeric_candidate_float(expected, candidate, tolerance_abs=tolerance)
+    assert (result.status, result.reward) == (Status.SCORED, reward)
+    assert result.detail == {"extracted": candidate, "expected": expected}
 
 
 def test_regression_multioutput_fraction_matches_exact_reference():
@@ -145,12 +185,3 @@ def test_regression_cannot_hide_missing_group_rows_with_extra_rows_elsewhere():
     result = grade_math.grade_regression_candidate(truth, shifted, variance_floor=0)
     assert (result.status, result.reward) == (Status.SCORED, 0)
     assert grade_math.grade_regression_candidate(truth, truth, variance_floor=0).reward == 1
-
-
-@pytest.mark.parametrize("value", [10**400, -(10**400)])
-def test_oversized_integer_candidate_scores_zero_after_reference_validation(value):
-    result = grade_math.grade_numeric_candidate(NumericSpec(0.5), value)
-    assert (result.status, result.reward) == (Status.SCORED, 0.0)
-    json.dumps(result.detail, allow_nan=False)
-    with pytest.raises(InvalidTask):
-        grade_math.grade_numeric_candidate(NumericSpec(float("nan")), value)

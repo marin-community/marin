@@ -5,9 +5,8 @@ isolated runtime environments.
 
 The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
-training and serving dependencies. Each `pyproject.toml` follows the external
-repository by branch or immutable revision, and its adjacent `uv.lock` records
-the exact commit Marin uses.
+training and serving dependencies. Each `pyproject.toml` selects an external
+source. Its adjacent `uv.lock` records the exact commit that Marin uses.
 
 Verified evaluation cohorts select revisions from `RUNTIME_COMMITS` in
 `lib/marin/src/marin/evaluation/eval_policy.py`. The `harbor/pins/<Harbor commit>/`
@@ -80,6 +79,12 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
+  The lock overrides Rigging's source because a pinned Marin Git workspace
+  advertises its development version while the launcher needs published Marin
+  wheels. After each MarinSkyRL update, the updater installs the frozen base
+  lock in a temporary environment and runs `uv pip check`. This catches
+  requirements hidden by the override, including exact Rigging versions
+  required by published Iris and Finestore wheels.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.

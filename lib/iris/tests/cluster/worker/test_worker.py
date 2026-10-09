@@ -19,8 +19,10 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import EGRESS_NETWORK, DockerRuntime
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -812,6 +814,94 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
     assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
+
+
+def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_store, mock_runtime, tmp_path):
+    """A SANDBOX task sees neither worker task_env nor the controller, and mounts no node cache."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        controller_address="http://controller:10000",
+        task_env={"MARIN_PREFIX": "gs://bucket/prefix"},
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.environment.env_vars["TASK_VAR"] = "1"
+
+    task = w.get_task(w.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.env["TASK_VAR"] == "1"
+    assert "MARIN_PREFIX" not in container_config.env
+    assert "IRIS_CONTROLLER_ADDRESS" not in container_config.env
+    assert not [m for m in container_config.mounts if m.kind is MountKind.CACHE]
+
+
+@pytest.mark.parametrize(
+    "profile, egress, network_mode",
+    [
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, NETWORK_MODE_NONE),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, NETWORK_MODE_HOST),
+    ],
+)
+def test_egress_policy_selects_the_docker_network(
+    mock_worker, mock_runtime, monkeypatch, tmp_path, profile, egress, network_mode
+):
+    """Only CLUSTER uses the host network; INTERNET joins the filtered egress network once bootstrap installed it."""
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("nameserver 8.8.8.8\n")
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(resolv_conf))
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = egress
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
+
+
+def test_docker_worker_refuses_internet_egress_without_the_host_filter(mock_worker, mock_runtime, monkeypatch, tmp_path):
+    """Without the bootstrap filter a bridge container reaches the VPC, so the task fails before any container starts."""
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(tmp_path / "missing"))
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert task.status != job_pb2.TASK_STATE_SUCCEEDED
+    assert "internet" in (task.error or "")
+    mock_runtime.create_container.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "profile, egress, expected_token",
+    [
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, "task-token"),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, None),
+    ],
+)
+def test_task_token_reaches_every_task_but_a_sandbox(mock_worker, mock_runtime, profile, egress, expected_token):
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = egress
+    request.task_token = "task-token"
+    request.environment.env_vars["IRIS_TASK_TOKEN"] = "stale-token"
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].env.get("IRIS_TASK_TOKEN") == expected_token
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):

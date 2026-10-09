@@ -38,6 +38,7 @@ _COMPRESSION_LEVEL = 0
 ROW_GROUP_ROWS = 16_384
 ROW_GROUP_TARGET_BYTES = 100 * 1024 * 1024
 BLOB_PART_ROW_GROUP_ROWS = 1
+BLOB_DESCRIPTOR_ROW_GROUP_ROWS = 1024
 
 
 def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -> Iterator[pa.Table]:
@@ -61,7 +62,12 @@ def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -
 
 def table_row_groups(table: str, row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
     """Apply the row-group policy for ``table`` to retained Arrow rows."""
-    max_rows = BLOB_PART_ROW_GROUP_ROWS if table == BlobTables.PARTS else None
+    if table == BlobTables.PARTS:
+        max_rows = BLOB_PART_ROW_GROUP_ROWS
+    elif table == BlobTables.DESCRIPTORS:
+        max_rows = BLOB_DESCRIPTOR_ROW_GROUP_ROWS
+    else:
+        max_rows = None
     yield from row_groups(row_tables, max_rows=max_rows)
 
 

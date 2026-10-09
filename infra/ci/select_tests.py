@@ -123,10 +123,10 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
-# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
-# extra runners; every other scope finishes well under the workflow's per-leg budget. A
-# sharded scope splits its selected files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4}
+# The Levanter and Marin suites run long enough to be worth spreading over extra runners;
+# every other scope finishes in a few minutes on one. A sharded scope splits its selected
+# files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -151,13 +151,38 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites outside the root workspace's import-selected Python matrix.
-# TaskCompendium has its own uv lock and pinned Harbor dependency; Iris smoke
+# Suites outside the import-selected Python matrix.
+# TaskCompendium and Shellbox use the root lock; RolloutEngine uses a separate
+# uv lock. Iris smoke
 # drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
-    "taskcompendium-unit": ("lib/taskcompendium/", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"),
+    "shellbox-unit": (
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskcompendium-unit": (
+        "lib/taskcompendium/",
+        "lib/shellbox/",
+        "lib/rigging/",
+        "lib/verifyit/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "rolloutengine-unit": (
+        "lib/rolloutengine/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (

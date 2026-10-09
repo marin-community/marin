@@ -14,17 +14,16 @@ contract without importing the old grader, and a synthesized ``solution/solve.sh
 
 import json
 
-from verifyit.spec import ScriptSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from verifyit.spec import ScriptSpec
 
 CHECKER_NAME = "prompt_injection_checker.py"
 DATA_NAME = "injected_call.json"

@@ -30,9 +30,9 @@ from itertools import batched
 from pathlib import Path
 
 import click
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TESTS_MOUNT
 
-from experiments.post_training.tasktrove.task_format import TESTS_MOUNT
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, read_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 logger = logging.getLogger(__name__)
 

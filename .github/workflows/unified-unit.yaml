@@ -213,10 +213,34 @@ jobs:
           uv pip install \
             "https://download.pytorch.org/whl/cpu/torch-${TORCH_CPU_VERSION/+/%2B}-${CP_TAG}-${CP_TAG}-manylinux_2_28_x86_64.whl"
 
-      - name: Install FFmpeg runtime
+      - name: Resolve FFmpeg package cache
+        id: apt-cache
         run: |
+          echo "key=apt-ffmpeg-$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+          echo "dir=$HOME/apt-archives" >> "$GITHUB_OUTPUT"
+
+      # The Ubuntu mirror sometimes serves the ~100 MB of FFmpeg packages at a few
+      # hundred kB/s, which alone can push this job past its timeout. Packages already
+      # in the cached archive directory are not downloaded again.
+      - name: Cache FFmpeg packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.apt-cache.outputs.dir }}
+          key: ${{ steps.apt-cache.outputs.key }}
+          restore-keys: apt-ffmpeg-
+
+      - name: Install FFmpeg runtime
+        env:
+          APT_ARCHIVES: ${{ steps.apt-cache.outputs.dir }}
+        run: |
+          mkdir -p "$APT_ARCHIVES/partial"
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y -o Dir::Cache::Archives="$APT_ARCHIVES" -o APT::Sandbox::User=root ffmpeg
+          # Drop packages superseded since an older runner image's cache was restored.
+          sudo apt-get autoclean -o Dir::Cache::Archives="$APT_ARCHIVES"
+          # apt leaves root-owned lock and partial files that the cache step cannot archive.
+          sudo rm -rf "$APT_ARCHIVES/lock" "$APT_ARCHIVES/partial"
+          sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
 
       - name: Test torch-marked suite
         # Run directly on CPU to avoid GPU dependency issues.
@@ -236,7 +260,7 @@ jobs:
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [tpu-ci]
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
 
@@ -248,8 +272,15 @@ jobs:
           bash infra/tpu-ci/clean-tpu.sh
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
-          mkdir -p /tmp/uv-cache
-          chmod 777 /tmp/uv-cache
+          # The runner's startup script (infra/tpu-ci/vm_manager.py) creates this cache,
+          # owned by the container user, and pre-populates it with the locked TPU
+          # dependencies, so a fresh VM's first job does not download every package.
+          UV_CACHE_HOST=/var/cache/uv
+          if [ ! -d "$UV_CACHE_HOST" ]; then
+            echo "::error::$UV_CACHE_HOST is missing; the runner VM was not set up by infra/tpu-ci/vm_manager.py"
+            exit 1
+          fi
+          du -sh "$UV_CACHE_HOST"
           TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
           # The selector includes only files with tpu-marked tests, including full runs.
           # Never fall back to repeating the entire CPU suite on the TPU runner.
@@ -257,6 +288,9 @@ jobs:
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
+          # The venv lives on the uv cache mount so uv can hardlink packages instead of
+          # copying them across filesystems. Each run deletes it first, so a crashed or
+          # cancelled run never leaves a partial venv behind.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -274,20 +308,40 @@ jobs:
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
             -e UV_CACHE_DIR=/tmp/uv-cache \
+            -e UV_PROJECT_ENVIRONMENT=/tmp/uv-cache/levanter-tpu-venv \
             -v ${{ github.workspace }}:/workspace-src:ro \
-            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -v "$UV_CACHE_HOST":/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
+              rm -rf \"\$UV_PROJECT_ENVIRONMENT\" && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               ( status=0; \
-                timeout --kill-after=5 --signal=TERM 1490 \
+                timeout --kill-after=5 --signal=TERM 2090 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
                 -m 'tpu and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
+
+  shellbox:
+    name: shellbox-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'shellbox-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      # TaskCompendium supplies the locked Shellbox base package. Backend extras
+      # remain optional; tests skip the SDK-dependent adapters when absent.
+      - name: Test Shellbox
+        run: uv run --package taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 
   taskcompendium:
     name: taskcompendium-unit
@@ -301,12 +355,44 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          cache-dependency-glob: "lib/taskcompendium/uv.lock"
-      - name: Test TaskCompendium and Harbor adapters
-        run: uv run --project lib/taskcompendium --frozen --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
+          cache-dependency-glob: "uv.lock"
+      - name: Test TaskCompendium
+        run: uv run --package taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
       - name: Type-check TaskCompendium
         working-directory: lib/taskcompendium
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
+  rolloutengine:
+    name: rolloutengine-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'rolloutengine-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "lib/rolloutengine/uv.lock"
+      - name: Test rollout execution and private grading
+        run: >-
+          uv run --project lib/rolloutengine --frozen --group test pytest
+          -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
+          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
+
+      - name: Test Docker and Daytona guest execution
+        run: |
+          docker pull busybox:1.36
+          docker pull ubuntu:24.04
+          uv run --project lib/rolloutengine --frozen --group test pytest \
+            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/shellbox/tests/test_daytona_machine.py \
+            lib/rolloutengine/tests/test_rollout.py -m docker -q
+
+      - name: Type-check RolloutEngine
+        working-directory: lib/rolloutengine
         run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 
   iris_e2e_smoke:
@@ -364,7 +450,7 @@ jobs:
 
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, shellbox, taskcompendium, rolloutengine, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -374,7 +460,9 @@ jobs:
             "${{ needs.unit.result }}" \
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
+            "${{ needs.shellbox.result }}" \
             "${{ needs.taskcompendium.result }}" \
+            "${{ needs.rolloutengine.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

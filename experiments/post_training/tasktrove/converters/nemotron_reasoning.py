@@ -25,18 +25,18 @@ shapes, so this converter routes on that shape:
 import json
 import re
 
-from verifyit.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from verifyit.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
+
 from experiments.post_training.tasktrove.task_format import drop_dockerfile_lines
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 # reasoning-gym's own scorer for these two datasets compares a JSON-deserialized ``list`` (the
 # entry's ``metadata["output"]``) against ``parse_board()``'s ``tuple``-of-``tuple``s return; the

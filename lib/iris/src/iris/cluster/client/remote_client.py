@@ -167,14 +167,17 @@ class RemoteClusterClient:
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device if resources.HasField("device") else None, replicas)
 
+        # A sandbox runs its image as-is: no submitter env defaults, no workspace bundle.
+        sandboxed = container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
         if environment is None:
-            environment = EnvironmentSpec().to_proto()
+            environment = EnvironmentSpec().to_sandbox_proto() if sandboxed else EnvironmentSpec().to_proto()
         env_config = with_slice_topology_env(environment, resources, replicas)
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
@@ -195,12 +198,13 @@ class RemoteClusterClient:
             task_image=task_image or "",
             priority_band=priority_band,
             container_profile=container_profile,
+            egress_policy=egress_policy,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )
-        if self._bundle_id:
+        if self._bundle_id and not sandboxed:
             request.bundle_id = self._bundle_id
-        else:
+        elif not sandboxed:
             if self._bundle_blob is None and self._workspace is not None:
                 self._bundle_blob = create_workspace_zip(
                     self._workspace, exclude=self._bundle_exclude, extra_includes=self._extra_bundle_includes

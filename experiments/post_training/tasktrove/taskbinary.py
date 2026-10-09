@@ -15,16 +15,10 @@ import hashlib
 import io
 import re
 import tarfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 
-INSTRUCTION = "instruction.md"
-TASK_TOML = "task.toml"
-DOCKERFILE = "environment/Dockerfile"
-TEST_SH = "tests/test.sh"
-SOLUTION_DIR = "solution/"
-SOLVE_SH = "solution/solve.sh"
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH, TaskFiles
 
 # Files under tests/ or environment/ that carry per-task data rather than template code.
 DATA_FILE_PATTERNS = (
@@ -76,34 +70,6 @@ _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 _QUOTED_RE = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
 _DIGITS_RE = re.compile(r"\d+")
 _PATH_TOKEN_RE = re.compile(r"\S*/\S*")
-
-
-@dataclass
-class TaskFiles:
-    """Decoded contents of one task binary, keyed by path relative to the tarball root."""
-
-    files: dict[str, bytes] = field(default_factory=dict)
-
-    def text(self, path: str) -> str:
-        return self.files[path].decode("utf-8", errors="replace")
-
-    def get_text(self, path: str) -> str | None:
-        blob = self.files.get(path)
-        return None if blob is None else blob.decode("utf-8", errors="replace")
-
-    @property
-    def has_solution(self) -> bool:
-        return any(p.startswith(SOLUTION_DIR) for p in self.files)
-
-    def under(self, prefix: str) -> dict[str, bytes]:
-        return {p: b for p, b in self.files.items() if p.startswith(prefix)}
-
-    def write_to(self, root: Path) -> None:
-        """Materialize every file under ``root``, creating directories as needed."""
-        for path, data in self.files.items():
-            target = root / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
 
 
 @dataclass(frozen=True)

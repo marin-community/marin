@@ -16,8 +16,11 @@ consumed by ``np.interp`` in ``score.py``.
 
     python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \\
         --labels    s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \\
-        --model-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2 \\
-        --out       s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/calib_bme.json
+        --model-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2_marin \\
+        --out       s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2_marin/calib_bme.json
+
+``train.py`` runs :func:`calibrate_model` right after training, so this CLI is for
+recalibrating an existing model dir.
 """
 
 import argparse
@@ -30,6 +33,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.data import encode_texts
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
 
 logger = logging.getLogger(__name__)
@@ -58,21 +62,18 @@ def calibration_knots(raw: np.ndarray, levels: np.ndarray) -> dict:
     return {"xk": xk, "yk": YK}
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--labels", default=DEFAULT_LABELS, help="labels parquet (source/text/quality/score_normalized)")
-    p.add_argument("--model-dir", required=True, help="dir with the scorer artifacts to calibrate")
-    p.add_argument("--out", required=True, help="output calibration json path")
-    args = p.parse_args()
-    configure_logging(logging.INFO)
-
-    with StoragePath(args.labels).open("rb") as fh:
+def calibrate_model(labels_path: str, model_dir: str, out_path: str) -> dict:
+    """Score the labels with the model in ``model_dir`` (encoding the label text the
+    way the tokenize stage does), fit the knots, write them to ``out_path`` and
+    return them."""
+    with StoragePath(labels_path).open("rb") as fh:
         table = pq.read_table(fh, columns=["text", "quality"])
     texts = [t or "" for t in table.column("text").to_pylist()]
     levels = np.array(table.column("quality").to_pylist(), dtype=float)
 
-    scorer = load_pooled_scorer(args.model_dir)
-    raw = score_bme(scorer, texts)
+    scorer = load_pooled_scorer(model_dir)
+    docs = [np.asarray(ids, dtype=np.int32) for ids in encode_texts(scorer.tokenizer_name, texts)]
+    raw = score_bme(scorer, docs)
     knots = calibration_knots(raw, levels)
 
     cal = np.interp(raw, knots["xk"], knots["yk"])
@@ -83,9 +84,20 @@ def main() -> None:
         "calibrated-bucket vs oracle-level: exact %.3f  within-1 %.3f", np.mean(cb == ob), np.mean(np.abs(cb - ob) <= 1)
     )
 
-    with StoragePath(args.out).open("w") as fh:
+    with StoragePath(out_path).open("w") as fh:
         json.dump(knots, fh)
-    logger.info("wrote calibration -> %s", args.out)
+    logger.info("wrote calibration -> %s", out_path)
+    return knots
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--labels", default=DEFAULT_LABELS, help="labels parquet (source/text/quality/score_normalized)")
+    p.add_argument("--model-dir", required=True, help="dir with the scorer artifacts to calibrate")
+    p.add_argument("--out", required=True, help="output calibration json path")
+    args = p.parse_args()
+    configure_logging(logging.INFO)
+    calibrate_model(args.labels, args.model_dir, args.out)
 
 
 if __name__ == "__main__":
