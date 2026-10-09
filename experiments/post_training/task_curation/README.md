@@ -282,8 +282,11 @@ runtime input. It must contain the dependencies required by the task's grader
 package lock. Export does not build or run images;
 its manifest records that dependency parity and runtime behavior remain
 unverified. Current verifyit code is bundled under the hidden `tests/` directory.
-The exporter supports file submissions graded by verifyit or an archived Harbor
-`test.sh` emitting `reward.txt`. Text tasks retain their canonical TaskSpec
+The exporter supports file submissions graded by verifyit, an archived Harbor
+`test.sh` emitting `reward.txt`, or the canonical `python3 /tests/grade.py` script
+contract used by ARC. For that script contract, a successful command must end
+its stdout with a finite numeric reward; failed commands and invalid rewards
+remain grading errors. Text tasks retain their canonical TaskSpec
 prompt and gain a file-delivery instruction using the grader's declared answer
 path. Export does not need the archived instruction or its delivery filename.
 
