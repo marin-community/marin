@@ -689,9 +689,9 @@ def skip_to_window_offsets(
         # already have served any of its sequences. Count the old block as fully served and measure the new
         # phase from the start of its current block; every post-switch index is then past the old reads.
         previous_index = previous.batch_schedule.global_data_offset_by_step(phase.start_step)
-        served = previous_mixture.counts_before(-(-previous_index // block_size) * block_size)
+        served = previous_mixture.sequence_counts_before_block(-(-previous_index // block_size))
         index = phase.batch_schedule.global_data_offset_by_step(phase.start_step)
-        replayed = mixture.counts_before(index // block_size * block_size)
+        replayed = mixture.sequence_counts_before_block(index // block_size)
         offsets = {
             name: _next_window_start(
                 position=count + offsets[name],
